@@ -25,7 +25,7 @@ afterEach((): void => {
 });
 
 function workspaceFetchMock(_clipboard: { writeText: (text: string) => Promise<void> }): typeof fetch {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   return mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
@@ -43,7 +43,9 @@ function workspaceFetchMock(_clipboard: { writeText: (text: string) => Promise<v
 }
 
 test("copies the workspace ID to the clipboard on success", async () => {
-  const writeText = mock(async (text: string): Promise<void> => { expect(text).toBe("ws-1"); });
+  const writeText = mock(async (text: string): Promise<void> => {
+    expect(text).toBe("ws-1");
+  });
   const clipboard = { writeText };
   Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
 
@@ -58,17 +60,25 @@ test("copies the workspace ID to the clipboard on success", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByLabelText("Copy workspace ID")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByLabelText("Copy workspace ID")).toBeTruthy();
+  });
 
   fireEvent.click(view.getByLabelText("Copy workspace ID"));
 
-  await waitFor((): void => { expect(writeText).toHaveBeenCalledWith("ws-1"); });
-  await waitFor((): void => { expect(view.getByText("Workspace ID copied")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(writeText).toHaveBeenCalledWith("ws-1");
+  });
+  await waitFor((): void => {
+    expect(view.getByText("Workspace ID copied")).toBeTruthy();
+  });
 });
 
 test("shows an error toast when copying the workspace id fails", async () => {
   const clipboard = {
-    writeText: mock(async (): Promise<void> => { throw new Error("Clipboard blocked"); }),
+    writeText: mock(async (): Promise<void> => {
+      throw new Error("Clipboard blocked");
+    }),
   };
   Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
 
@@ -83,15 +93,19 @@ test("shows an error toast when copying the workspace id fails", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByLabelText("Copy workspace ID")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByLabelText("Copy workspace ID")).toBeTruthy();
+  });
 
   fireEvent.click(view.getByLabelText("Copy workspace ID"));
 
-  await waitFor((): void => { expect(view.getByText("Could not copy workspace ID")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Could not copy workspace ID")).toBeTruthy();
+  });
 });
 
 test("links the configured GitHub repository and shows its working directory", async () => {
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
@@ -113,7 +127,7 @@ test("links the configured GitHub repository and shows its working directory", a
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -123,7 +137,9 @@ test("links the configured GitHub repository and shows its working directory", a
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Workspace details")).toBeTruthy();
+  });
   const repositoryLink = view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" });
   expect(repositoryLink.getAttribute("href")).toBe("https://github.com/acme/infrastructure");
   expect(repositoryLink.getAttribute("target")).toBe("_blank");

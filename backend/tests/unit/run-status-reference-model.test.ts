@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  RUN_STATUSES,
-  canTransitionRunStatus,
-  isTerminalRunStatus,
-} from "../../src/lib/run-status";
+import { RUN_STATUSES, canTransitionRunStatus, isTerminalRunStatus } from "../../src/lib/run-status";
 import type { RunStatus } from "../../src/lib/run-status";
 
 // Deliberately duplicated as a small review model.  This must not call
@@ -17,22 +13,54 @@ const REFERENCE_EDGES: Readonly<Record<RunStatus, readonly RunStatus[]>> = {
   pre_plan_completed: ["queuing", "errored", "canceled", "discarded", "force_canceled"],
   queuing: ["plan_queued", "errored", "canceled", "discarded", "force_canceled"],
   plan_queued: ["planning", "pending", "errored", "canceled", "discarded", "force_canceled"],
-  planning: ["planned", "planned_and_saved", "planned_and_finished", "policy_soft_failed", "apply_queued", "errored", "canceled", "discarded", "force_canceled"],
+  planning: [
+    "planned",
+    "planned_and_saved",
+    "planned_and_finished",
+    "policy_soft_failed",
+    "apply_queued",
+    "errored",
+    "canceled",
+    "discarded",
+    "force_canceled",
+  ],
   planned: ["cost_estimating", "confirmed", "apply_queued", "errored", "canceled", "discarded", "force_canceled"],
   cost_estimating: ["cost_estimated", "errored", "canceled", "discarded", "force_canceled"],
   cost_estimated: ["policy_checking", "errored", "canceled", "discarded", "force_canceled"],
-  policy_checking: ["policy_checked", "policy_override", "policy_soft_failed", "errored", "canceled", "discarded", "force_canceled"],
+  policy_checking: [
+    "policy_checked",
+    "policy_override",
+    "policy_soft_failed",
+    "errored",
+    "canceled",
+    "discarded",
+    "force_canceled",
+  ],
   policy_override: ["policy_soft_failed", "errored", "canceled", "discarded", "force_canceled"],
   policy_soft_failed: ["planned", "errored", "canceled", "discarded", "force_canceled"],
   policy_checked: ["post_plan_running", "errored", "canceled", "discarded", "force_canceled"],
   post_plan_running: ["post_plan_completed", "errored", "canceled", "discarded", "force_canceled"],
-  post_plan_completed: ["confirmed", "planned_and_saved", "planned_and_finished", "planned", "errored", "canceled", "discarded", "force_canceled"],
+  post_plan_completed: [
+    "confirmed",
+    "planned_and_saved",
+    "planned_and_finished",
+    "planned",
+    "errored",
+    "canceled",
+    "discarded",
+    "force_canceled",
+  ],
   planned_and_saved: ["confirmed", "apply_queued", "errored", "canceled", "discarded", "force_canceled"],
   planned_and_finished: [],
   confirmed: ["apply_queued", "errored", "canceled", "discarded", "force_canceled"],
   apply_queued: ["applying", "pending", "errored", "canceled", "discarded", "force_canceled"],
   applying: ["applied", "errored", "canceled", "discarded", "force_canceled"],
-  applied: [], errored: [], canceled: ["pending"], discarded: [], force_canceled: [], unreachable: [],
+  applied: [],
+  errored: [],
+  canceled: ["pending"],
+  discarded: [],
+  force_canceled: [],
+  unreachable: [],
 };
 
 const rand32 = (seed: number): (() => number) => {
@@ -75,7 +103,11 @@ describe("independent run lifecycle model", () => {
     const statuses = [...RUN_STATUSES];
     for (let seed = 1; seed <= runs; seed += 1) {
       const random = rand32(seed);
-      let state: { status: RunStatus; sequence: number; owner: string } = { status: "pending", sequence: 0, owner: `owner-${seed}` };
+      let state: { status: RunStatus; sequence: number; owner: string } = {
+        status: "pending",
+        sequence: 0,
+        owner: `owner-${seed}`,
+      };
       for (let step = 0; step < 40; step += 1) {
         const sequence = Math.floor(random() * (step + 2));
         const status = statuses[Math.floor(random() * statuses.length)]!;

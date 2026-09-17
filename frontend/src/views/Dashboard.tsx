@@ -36,29 +36,60 @@ type MetadataDocument = Readonly<{ version?: unknown }>;
 
 const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin", "docs"]);
 
-function WelcomeSection({ onCreate }: Readonly<{
+function WelcomeSection({
+  onCreate,
+}: Readonly<{
   onCreate: () => void;
 }>): React.JSX.Element {
   return (
-    <section aria-labelledby="getting-started-heading" className="grid items-center gap-8 rounded-xl border bg-card p-6 sm:p-10 md:grid-cols-[1fr_auto]">
+    <section
+      aria-labelledby="getting-started-heading"
+      className="grid items-center gap-8 rounded-xl border bg-card p-6 sm:p-10 md:grid-cols-[1fr_auto]"
+    >
       <div className="max-w-xl space-y-6">
         <div>
-          <h2 id="getting-started-heading" className="text-xl font-semibold tracking-tight">Start small. Make room as you grow.</h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">An organization is simply a home for your workspaces. One is enough for most homelabs and small teams.</p>
+          <h2 id="getting-started-heading" className="text-xl font-semibold tracking-tight">
+            Start small. Make room as you grow.
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            An organization is simply a home for your workspaces. One is enough for most homelabs and small teams.
+          </p>
         </div>
         <ol className="space-y-4 text-sm">
-          <li><span className="font-medium">1. Name your organization</span><p className="mt-1 text-muted-foreground">Use your lab or business name, such as homelab.</p></li>
-          <li><span className="font-medium">2. Create a workspace</span><p className="mt-1 text-muted-foreground">Keep one set of infrastructure together: your network, servers, or an application.</p></li>
-          <li><span className="font-medium">3. Review your first plan</span><p className="mt-1 text-muted-foreground">Connect your code, check the proposed changes, and choose when to apply them.</p></li>
+          <li>
+            <span className="font-medium">1. Name your organization</span>
+            <p className="mt-1 text-muted-foreground">Use your lab or business name, such as homelab.</p>
+          </li>
+          <li>
+            <span className="font-medium">2. Create a workspace</span>
+            <p className="mt-1 text-muted-foreground">
+              Keep one set of infrastructure together: your network, servers, or an application.
+            </p>
+          </li>
+          <li>
+            <span className="font-medium">3. Review your first plan</span>
+            <p className="mt-1 text-muted-foreground">
+              Connect your code, check the proposed changes, and choose when to apply them.
+            </p>
+          </li>
         </ol>
-        <Button onClick={onCreate}>Create your organization<ArrowRight data-icon="inline-end" /></Button>
+        <Button onClick={onCreate}>
+          Create your organization
+          <ArrowRight data-icon="inline-end" />
+        </Button>
       </div>
       <Terrence pose="guide" className="hidden w-48 md:block" />
     </section>
   );
 }
 
-function OrganizationTableBody({ loading, loadError, organizations, visibleOrganizations, onRetry }: Readonly<{
+function OrganizationTableBody({
+  loading,
+  loadError,
+  organizations,
+  visibleOrganizations,
+  onRetry,
+}: Readonly<{
   loading: boolean;
   loadError: string;
   organizations: Organization[];
@@ -76,7 +107,9 @@ function OrganizationTableBody({ loading, loadError, organizations, visibleOrgan
       ) : loadError !== "" && organizations.length === 0 ? (
         <TableRow>
           <TableCell colSpan={3} className="h-28 text-center">
-            <p role="alert" className="font-medium text-destructive">Could not load organizations</p>
+            <p role="alert" className="font-medium text-destructive">
+              Could not load organizations
+            </p>
             <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
             <Button className="mt-3" size="sm" variant="outline" onClick={onRetry}>
               Try again
@@ -86,7 +119,11 @@ function OrganizationTableBody({ loading, loadError, organizations, visibleOrgan
       ) : visibleOrganizations.length === 0 ? (
         <TableRow>
           <TableCell colSpan={3} className="h-28 text-center text-muted-foreground">
-            {organizations.length === 0 ? <Terrence pose="empty" animated className="mx-auto mb-2 w-40" /> : <Building2 aria-hidden="true" className="mx-auto mb-2 size-5" />}
+            {organizations.length === 0 ? (
+              <Terrence pose="empty" animated className="mx-auto mb-2 w-40" />
+            ) : (
+              <Building2 aria-hidden="true" className="mx-auto mb-2 size-5" />
+            )}
             <p className="font-medium text-foreground">
               {organizations.length === 0 ? "No organizations yet" : "No organizations found"}
             </p>
@@ -95,30 +132,34 @@ function OrganizationTableBody({ loading, loadError, organizations, visibleOrgan
             </p>
           </TableCell>
         </TableRow>
-      ) : visibleOrganizations.map((organization): React.JSX.Element => (
-        <TableRow key={organization.id}>
-          <TableCell>
-            <Link
-              to={`/app/${encodeURIComponent(organization.attributes.name)}`}
-              className="font-semibold text-primary hover:underline"
-            >
-              {organization.attributes.name}
-            </Link>
-          </TableCell>
-          <TableCell className="capitalize text-muted-foreground">
-            {organization.attributes["default-iac-binary"] === "tofu" ? "OpenTofu" : "Terraform"}
-          </TableCell>
-          <TableCell className="text-right">
-            <Link
-              to={`/app/${encodeURIComponent(organization.attributes.name)}`}
-              className={buttonVariants({ variant: "ghost", size: "sm" })}
-            >
-              Open
-              <ArrowRight data-icon="inline-end" />
-            </Link>
-          </TableCell>
-        </TableRow>
-      ))}
+      ) : (
+        visibleOrganizations.map(
+          (organization): React.JSX.Element => (
+            <TableRow key={organization.id}>
+              <TableCell>
+                <Link
+                  to={`/app/${encodeURIComponent(organization.attributes.name)}`}
+                  className="font-semibold text-primary hover:underline"
+                >
+                  {organization.attributes.name}
+                </Link>
+              </TableCell>
+              <TableCell className="capitalize text-muted-foreground">
+                {organization.attributes["default-iac-binary"] === "tofu" ? "OpenTofu" : "Terraform"}
+              </TableCell>
+              <TableCell className="text-right">
+                <Link
+                  to={`/app/${encodeURIComponent(organization.attributes.name)}`}
+                  className={buttonVariants({ variant: "ghost", size: "sm" })}
+                >
+                  Open
+                  <ArrowRight data-icon="inline-end" />
+                </Link>
+              </TableCell>
+            </TableRow>
+          ),
+        )
+      )}
     </TableBody>
   );
 }
@@ -182,8 +223,7 @@ export function Dashboard(): React.JSX.Element {
     const needle = search.trim().toLowerCase();
     return needle === ""
       ? organizations
-      : organizations.filter((organization): boolean =>
-        organization.attributes.name.toLowerCase().includes(needle));
+      : organizations.filter((organization): boolean => organization.attributes.name.toLowerCase().includes(needle));
   }, [organizations, search]);
 
   const openOrganization = (organizationName: string): void => {
@@ -198,8 +238,8 @@ export function Dashboard(): React.JSX.Element {
     setCreateError("");
     setSaving(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/api/v2/organizations", {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi("/api/v2/organizations", {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -210,7 +250,7 @@ export function Dashboard(): React.JSX.Element {
             },
           },
         }),
-      }) as { data?: Organization };
+      })) as { data?: Organization };
       const createdName = response.data?.attributes.name ?? organizationName;
       setCreateOpen(false);
       setName("");
@@ -230,15 +270,19 @@ export function Dashboard(): React.JSX.Element {
     const controller = new AbortController();
     fetchApi("/api/v1/metadata", { signal: controller.signal })
       .then((response): void => {
-// SAFETY: /api/v2/metadata returns the MetadataDocument per contract.
+        // SAFETY: /api/v2/metadata returns the MetadataDocument per contract.
         const version = (response as MetadataDocument).version;
         if (isString(version)) {
           const safe = version.replace(/[^A-Za-z0-9._-]/g, "");
           if (safe !== "") setAppVersion(safe);
         }
       })
-      .catch((): void => { /* ignore */ });
-    return (): void => { controller.abort(); };
+      .catch((): void => {
+        /* ignore */
+      });
+    return (): void => {
+      controller.abort();
+    };
   }, []);
 
   const firstRun = !loading && loadError === "" && organizations.length === 0;
@@ -248,68 +292,104 @@ export function Dashboard(): React.JSX.Element {
       <PageHeader
         eyebrow="Terrence"
         title={firstRun ? "Welcome to Terrence" : "Organizations"}
-        description={firstRun
-          ? "A home for your infrastructure, from the first plan to the next change."
-          : "Open your infrastructure or create a separate space for another team."}
-        action={!firstRun && (
-          <Button onClick={(): void => { setCreateError(""); setCreateOpen(true); }}>
-            <Plus data-icon="inline-start" />
-            New organization
-          </Button>
-        )}
+        description={
+          firstRun
+            ? "A home for your infrastructure, from the first plan to the next change."
+            : "Open your infrastructure or create a separate space for another team."
+        }
+        action={
+          !firstRun && (
+            <Button
+              onClick={(): void => {
+                setCreateError("");
+                setCreateOpen(true);
+              }}
+            >
+              <Plus data-icon="inline-start" />
+              New organization
+            </Button>
+          )
+        }
       />
 
       {firstRun ? (
-        <WelcomeSection onCreate={(): void => { setCreateError(""); setCreateOpen(true); }} />
-      ) : (
-      <>
-      <div className="relative max-w-md">
-        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          id="organization-search"
-          name="organization-search"
-          type="search"
-          autoComplete="off"
-          aria-label="Search organizations"
-          className="pl-9"
-          placeholder="Search organizations…"
-          value={search}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setSearch(event.target.value); }}
+        <WelcomeSection
+          onCreate={(): void => {
+            setCreateError("");
+            setCreateOpen(true);
+          }}
         />
-      </div>
+      ) : (
+        <>
+          <div className="relative max-w-md">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              id="organization-search"
+              name="organization-search"
+              type="search"
+              autoComplete="off"
+              aria-label="Search organizations"
+              className="pl-9"
+              placeholder="Search organizations…"
+              value={search}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                setSearch(event.target.value);
+              }}
+            />
+          </div>
 
-      {loadError !== "" && organizations.length > 0 && (
-        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          <span>Organizations could not be refreshed. Showing the last loaded results.</span>
-          <Button size="sm" variant="outline" onClick={(): void => { void loadOrganizations(); }}>Try again</Button>
-        </div>
-      )}
+          {loadError !== "" && organizations.length > 0 && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+            >
+              <span>Organizations could not be refreshed. Showing the last loaded results.</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(): void => {
+                  void loadOrganizations();
+                }}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
 
-      <div className="overflow-hidden rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Organization</TableHead>
-              <TableHead>Default engine</TableHead>
-              <TableHead className="w-28 text-right">Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <OrganizationTableBody
-            loading={loading}
-            loadError={loadError}
-            organizations={organizations}
-            visibleOrganizations={visibleOrganizations}
-            onRetry={(): void => { void loadOrganizations(); }}
-          />
-        </Table>
-      </div>
-
-      </>
+          <div className="overflow-hidden rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Organization</TableHead>
+                  <TableHead>Default engine</TableHead>
+                  <TableHead className="w-28 text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <OrganizationTableBody
+                loading={loading}
+                loadError={loadError}
+                organizations={organizations}
+                visibleOrganizations={visibleOrganizations}
+                onRetry={(): void => {
+                  void loadOrganizations();
+                }}
+              />
+            </Table>
+          </div>
+        </>
       )}
 
       <p className="mt-auto text-xs text-muted-foreground">Terrence{appVersion === "" ? "" : ` v${appVersion}`}</p>
 
-      <Dialog open={createOpen} onOpenChange={(open): void => { if (!saving) setCreateOpen(open); }}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open): void => {
+          if (!saving) setCreateOpen(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create an organization</DialogTitle>
@@ -329,23 +409,43 @@ export function Dashboard(): React.JSX.Element {
                   placeholder="homelab…"
                   spellCheck={false}
                   value={name}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setName(event.currentTarget.value);
+                  }}
                 />
                 {reservedName && (
-                  <p role="alert" className="text-sm text-destructive">This name is already used by Terrence. Choose a name other than account, admin, or docs.</p>
+                  <p role="alert" className="text-sm text-destructive">
+                    This name is already used by Terrence. Choose a name other than account, admin, or docs.
+                  </p>
                 )}
               </Field>
               <Field>
                 <FieldLabel htmlFor="organization-engine">Default engine</FieldLabel>
-                <Select id="organization-engine" name="default-iac-binary" value={iacBinary} onValueChange={setIacBinary}>
+                <Select
+                  id="organization-engine"
+                  name="default-iac-binary"
+                  value={iacBinary}
+                  onValueChange={setIacBinary}
+                >
                   <option value="tofu">OpenTofu</option>
                   <option value="terraform">Terraform</option>
                 </Select>
               </Field>
             </FieldGroup>
-            {createError !== "" && <p role="alert" className="mt-4 text-sm text-destructive">{createError}</p>}
+            {createError !== "" && (
+              <p role="alert" className="mt-4 text-sm text-destructive">
+                {createError}
+              </p>
+            )}
             <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" disabled={saving} onClick={(): void => { setCreateOpen(false); }}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={saving}
+                onClick={(): void => {
+                  setCreateOpen(false);
+                }}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={name.trim() === "" || reservedName || saving}>

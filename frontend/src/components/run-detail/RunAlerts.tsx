@@ -1,7 +1,12 @@
 import { sectionLabel, type AuxKind } from "@/lib/run-view-state";
 import { DegradedBanner } from "../DegradedBanner";
 
-export function RunAlerts({ fresh, loadError, failedSections, onRetry }: Readonly<{
+export function RunAlerts({
+  fresh,
+  loadError,
+  failedSections,
+  onRetry,
+}: Readonly<{
   fresh: boolean;
   loadError: string;
   failedSections: readonly AuxKind[];

@@ -1,10 +1,5 @@
 import { deploymentSecret } from "./runtime-config";
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  scryptSync,
-} from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -134,7 +129,10 @@ const SYNC_READ_RETRY_DELAY_MS = 25;
 
 async function readExistingKeyWithRetry(keyPath: string): Promise<Buffer> {
   for (let attempt = 0; attempt < KEY_READ_RETRIES; attempt += 1) {
-    if (attempt > 0) await new Promise<void>((resolveDelay): void => { setTimeout(resolveDelay, KEY_READ_RETRY_DELAY_MS); });
+    if (attempt > 0)
+      await new Promise<void>((resolveDelay): void => {
+        setTimeout(resolveDelay, KEY_READ_RETRY_DELAY_MS);
+      });
     try {
       const key = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
       if (key.length === KEY_LENGTH) return key;
@@ -147,7 +145,10 @@ async function readExistingKeyWithRetry(keyPath: string): Promise<Buffer> {
 
 async function readExistingSaltWithRetry(saltPath: string): Promise<Buffer> {
   for (let attempt = 0; attempt < SALT_READ_RETRIES; attempt += 1) {
-    if (attempt > 0) await new Promise<void>((resolveDelay): void => { setTimeout(resolveDelay, SALT_READ_RETRY_DELAY_MS); });
+    if (attempt > 0)
+      await new Promise<void>((resolveDelay): void => {
+        setTimeout(resolveDelay, SALT_READ_RETRY_DELAY_MS);
+      });
     try {
       const salt = Buffer.from((await readFile(saltPath, "utf8")).trim(), "base64");
       if (salt.length >= SALT_LENGTH) return salt;
@@ -258,8 +259,7 @@ export function isEncryptedSecret(value: string): boolean {
   // Do not classify arbitrary user plaintext beginning with `enc:v1:` as a
   // ciphertext envelope. GCM envelopes always carry a 12-byte IV and 16-byte
   // authentication tag; an empty ciphertext is valid for an empty secret.
-  return Buffer.from(parts[2] ?? "", "base64").length === 12
-    && Buffer.from(parts[3] ?? "", "base64").length === 16;
+  return Buffer.from(parts[2] ?? "", "base64").length === 12 && Buffer.from(parts[3] ?? "", "base64").length === 16;
 }
 
 export async function encryptSecret(value: string, options: Readonly<{ force?: boolean }> = {}): Promise<string> {
@@ -269,12 +269,7 @@ export async function encryptSecret(value: string, options: Readonly<{ force?: b
   const cipher = createCipheriv("aes-256-gcm", await loadEncryptionKey(), iv);
   const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return [
-    ENCRYPTED_PREFIX,
-    iv.toString("base64"),
-    tag.toString("base64"),
-    ciphertext.toString("base64"),
-  ].join(":");
+  return [ENCRYPTED_PREFIX, iv.toString("base64"), tag.toString("base64"), ciphertext.toString("base64")].join(":");
 }
 
 export async function decryptSecret(value: string): Promise<string> {
@@ -293,10 +288,7 @@ export async function decryptSecret(value: string): Promise<string> {
   const decrypt = (key: Buffer): string => {
     const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(tag);
-    return Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]).toString("utf8");
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
   };
 
   const primaryKey = await loadEncryptionKey();
@@ -340,10 +332,7 @@ export function decryptSecretSync(value: string, storageDir: string): string {
   const decrypt = (key: Buffer): string => {
     const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(tag);
-    return Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]).toString("utf8");
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
   };
 
   const resolvedDir = resolve(storageDir);
@@ -363,7 +352,11 @@ export function decryptSecretSync(value: string, storageDir: string): string {
 
 type MaterialLengthMode = "minimum" | "exact";
 
-function readBase64MaterialSync(path: string, expectedLength: number, lengthMode: MaterialLengthMode): Buffer | undefined {
+function readBase64MaterialSync(
+  path: string,
+  expectedLength: number,
+  lengthMode: MaterialLengthMode,
+): Buffer | undefined {
   let material: Buffer | undefined;
   for (let attempt = 0; attempt < SYNC_READ_RETRIES; attempt += 1) {
     try {
@@ -395,7 +388,7 @@ function loadPasswordDerivedKeySync(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         `Cannot decrypt storage secret: KDF salt not found at ${saltPath}. ` +
-        "Persist STORAGE_DIR whenever ENCRYPTION_PASSWORD is configured.",
+          "Persist STORAGE_DIR whenever ENCRYPTION_PASSWORD is configured.",
       );
     }
     throw error;
@@ -420,7 +413,7 @@ function loadFileEncryptionKeySync(resolvedDir: string): Buffer {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         `Cannot decrypt storage secret: encryption key not found at ${keyPath}. ` +
-        "The boot config references a URL secret, but no key exists in storage.",
+          "The boot config references a URL secret, but no key exists in storage.",
       );
     }
     throw error;
@@ -442,9 +435,10 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
   }
 
   const password = deploymentSecret("ENCRYPTION_PASSWORD");
-  const key = password !== undefined && password !== ""
-    ? loadPasswordDerivedKeySync(resolvedDir, password)
-    : loadFileEncryptionKeySync(resolvedDir);
+  const key =
+    password !== undefined && password !== ""
+      ? loadPasswordDerivedKeySync(resolvedDir, password)
+      : loadFileEncryptionKeySync(resolvedDir);
   cachedKey = key;
   cachedStorageDir = resolvedDir;
   return key;

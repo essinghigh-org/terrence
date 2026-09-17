@@ -56,7 +56,7 @@ test("only shows state and variable navigation for the current workspace permiss
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/private"]}>
@@ -65,15 +65,22 @@ test("only shows state and variable navigation for the current workspace permiss
       <Routes>
         <Route
           path="/app/:orgName/workspaces/:workspaceName"
-          element={<Layout><p>Workspace content</p></Layout>}
+          element={
+            <Layout>
+              <p>Workspace content</p>
+            </Layout>
+          }
         />
       </Routes>
     </MemoryRouter>,
   );
 
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]): boolean =>
-      getUrl(input) === "/api/v2/organizations/acme/workspaces/private")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]): boolean => getUrl(input) === "/api/v2/organizations/acme/workspaces/private",
+      ),
+    ).toBe(true);
   });
   expect(view.queryByRole("link", { name: "States" })).toBeNull();
   expect(view.queryByRole("link", { name: "Variables" })).toBeNull();
@@ -93,8 +100,8 @@ test("only shows state and variable navigation for the current workspace permiss
 
 test("does not mount state-derived workspace sections without read permissions", async () => {
   const requestedUrls: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrl(input);
     requestedUrls.push(url);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
@@ -113,15 +120,12 @@ test("does not mount state-derived workspace sections without read permissions",
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   let view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -133,10 +137,7 @@ test("does not mount state-derived workspace sections without read permissions",
   view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/states"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/states"
-          element={<WorkspaceDetail section="states" />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/states" element={<WorkspaceDetail section="states" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -155,12 +156,18 @@ test("does not mount state-derived workspace sections without read permissions",
   );
   await view.findByText("Workspace data access required");
   await act(async (): Promise<void> => {
-    await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
+    await new Promise<void>((resolve): void => {
+      window.setTimeout(resolve, 0);
+    });
   });
 
-  expect(requestedUrls.some((url): boolean =>
-    url.includes("/resources")
-    || url.includes("/current-state-version")
-    || url.includes("/state-versions")
-    || url.includes("/vars"))).toBe(false);
+  expect(
+    requestedUrls.some(
+      (url): boolean =>
+        url.includes("/resources") ||
+        url.includes("/current-state-version") ||
+        url.includes("/state-versions") ||
+        url.includes("/vars"),
+    ),
+  ).toBe(false);
 });

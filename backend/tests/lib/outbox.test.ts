@@ -9,10 +9,7 @@ import {
   runs,
   workspaces,
 } from "../../src/db/schema";
-import {
-  DURABLE_MAX_ATTEMPTS,
-  claimDurableJob,
-} from "../../src/lib/durable-jobs";
+import { DURABLE_MAX_ATTEMPTS, claimDurableJob } from "../../src/lib/durable-jobs";
 import {
   enqueueOutboxEvent,
   enqueueOutboxEventTx,
@@ -33,10 +30,9 @@ beforeEach(async (): Promise<void> => {
 
 afterEach(async (): Promise<void> => {
   if (createdEventIds.length > 0) {
-    await db.delete(durableJobs).where(and(
-      eq(durableJobs.kind, "outbox-delivery"),
-      inArray(durableJobs.dedupeKey, createdEventIds),
-    ));
+    await db
+      .delete(durableJobs)
+      .where(and(eq(durableJobs.kind, "outbox-delivery"), inArray(durableJobs.dedupeKey, createdEventIds)));
     await db.delete(outboxEvents).where(inArray(outboxEvents.id, createdEventIds));
     createdEventIds.length = 0;
   }
@@ -45,7 +41,11 @@ afterEach(async (): Promise<void> => {
   }
 });
 
-function event(id: string, topic = "test.outbox", payload: Record<string, unknown> = { id }): {
+function event(
+  id: string,
+  topic = "test.outbox",
+  payload: Record<string, unknown> = { id },
+): {
   id: string;
   topic: string;
   payload: Record<string, unknown>;
@@ -56,10 +56,17 @@ function event(id: string, topic = "test.outbox", payload: Record<string, unknow
 
 describe("transactional outbox", () => {
   test("idempotency compares payload contents regardless of JSON object key order", async () => {
-    const input = event(`outbox-key-order-${crypto.randomUUID()}`, "test.outbox", { runId: "run-1", details: { status: "planned", count: 1 } });
+    const input = event(`outbox-key-order-${crypto.randomUUID()}`, "test.outbox", {
+      runId: "run-1",
+      details: { status: "planned", count: 1 },
+    });
     await enqueueOutboxEvent(input);
-    expect(enqueueOutboxEvent({ ...input, payload: { details: { count: 1, status: "planned" }, runId: "run-1" } })).resolves.toMatchObject({ id: input.id });
-    expect(enqueueOutboxEvent({ ...input, payload: { runId: "run-2", details: { status: "planned", count: 1 } } })).rejects.toThrow("different payload");
+    expect(
+      enqueueOutboxEvent({ ...input, payload: { details: { count: 1, status: "planned" }, runId: "run-1" } }),
+    ).resolves.toMatchObject({ id: input.id });
+    expect(
+      enqueueOutboxEvent({ ...input, payload: { runId: "run-2", details: { status: "planned", count: 1 } } }),
+    ).rejects.toThrow("different payload");
   });
   test("commits the event and durable job with the domain transaction", async () => {
     const id = `outbox-atomic-${crypto.randomUUID()}`;
@@ -77,9 +84,11 @@ describe("transactional outbox", () => {
       id,
       status: "pending",
     });
-    expect(await db.query.durableJobs.findFirst({
-      where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, id)),
-    })).toMatchObject({ status: "queued", attempts: 0 });
+    expect(
+      await db.query.durableJobs.findFirst({
+        where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, id)),
+      }),
+    ).toMatchObject({ status: "queued", attempts: 0 });
 
     const rolledBackId = `outbox-rollback-${crypto.randomUUID()}`;
     createdEventIds.push(rolledBackId);
@@ -95,22 +104,23 @@ describe("transactional outbox", () => {
     expect(rollbackError).toBeInstanceOf(Error);
     expect((rollbackError as Error).message).toBe("simulate domain transaction crash");
     expect(await db.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, rolledBackId) })).toBeUndefined();
-    expect(await db.query.durableJobs.findFirst({
-      where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, rolledBackId)),
-    })).toBeUndefined();
+    expect(
+      await db.query.durableJobs.findFirst({
+        where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, rolledBackId)),
+      }),
+    ).toBeUndefined();
   });
 
   test("repeated enqueue uses one stable event and one durable job", async () => {
     const input = event(`outbox-dedupe-${crypto.randomUUID()}`);
-    const [first, second] = await Promise.all([
-      enqueueOutboxEvent(input),
-      enqueueOutboxEvent(input),
-    ]);
+    const [first, second] = await Promise.all([enqueueOutboxEvent(input), enqueueOutboxEvent(input)]);
     expect(first.id).toBe(second.id);
     expect(await db.query.outboxEvents.findMany({ where: eq(outboxEvents.id, input.id) })).toHaveLength(1);
-    expect(await db.query.durableJobs.findMany({
-      where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, input.id)),
-    })).toHaveLength(1);
+    expect(
+      await db.query.durableJobs.findMany({
+        where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, input.id)),
+      }),
+    ).toHaveLength(1);
   });
 
   test("lease expiry reclaims the same event after a worker crash", async () => {
@@ -144,17 +154,25 @@ describe("transactional outbox", () => {
       expect(deliveryError).toBeInstanceOf(Error);
       expect((deliveryError as Error).message).toContain("No outbox handler registered");
       if (attempt < DURABLE_MAX_ATTEMPTS) {
-        await db.update(durableJobs).set({ status: "queued", runAfter: Date.now() - 1 }).where(eq(durableJobs.id, job!.id));
+        await db
+          .update(durableJobs)
+          .set({ status: "queued", runAfter: Date.now() - 1 })
+          .where(eq(durableJobs.id, job!.id));
       } else {
         await db.update(durableJobs).set({ status: "failed" }).where(eq(durableJobs.id, job!.id));
       }
     }
 
-    expect((await db.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, failing.id) }))?.status).toBe("dead_letter");
+    expect((await db.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, failing.id) }))?.status).toBe(
+      "dead_letter",
+    );
     const unrelatedJob = await db.query.durableJobs.findFirst({
       where: and(eq(durableJobs.kind, "outbox-delivery"), eq(durableJobs.dedupeKey, unrelated.id)),
     });
-    await db.update(durableJobs).set({ runAfter: Date.now() - 1 }).where(eq(durableJobs.id, unrelatedJob!.id));
+    await db
+      .update(durableJobs)
+      .set({ runAfter: Date.now() - 1 })
+      .where(eq(durableJobs.id, unrelatedJob!.id));
     const next = await claimDurableJob("outbox-unrelated-worker", ["outbox-delivery"]);
     expect(next?.dedupeKey).toBe(unrelated.id);
     expect(await retryDeadLetterOutboxEvent(failing.id)).toBe(true);
@@ -177,7 +195,7 @@ describe("transactional outbox", () => {
       port: 0,
       async fetch(request): Promise<Response> {
         calls += 1;
-        received = await request.json() as Record<string, unknown>;
+        received = (await request.json()) as Record<string, unknown>;
         return new Response(null, { status: 204 });
       },
     });
@@ -205,7 +223,9 @@ describe("transactional outbox", () => {
       await handleOutboxDeliveryJob(job!);
       expect(calls).toBe(1);
       expect(received?.["event_id"]).toBe(eventId);
-      expect((await db.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, eventId) }))?.status).toBe("delivered");
+      expect((await db.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, eventId) }))?.status).toBe(
+        "delivered",
+      );
 
       // A redelivery after the durable job itself was acknowledged is a no-op
       // because the outbox result is already terminal.

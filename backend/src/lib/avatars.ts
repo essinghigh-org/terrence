@@ -134,9 +134,17 @@ function ensureRecorded(providerId: string, url: string): string {
   if (pendingWrites.size >= 128) throw new Error("Avatar metadata queue is full");
   const write = (async (): Promise<void> => {
     const meta: AvatarMeta = {
-      key, providerId, url, state: "pending",
-      contentType: null, etag: null, lastModified: null,
-      fetchedAt: null, expiresAt: null, bytes: null, contentHash: null,
+      key,
+      providerId,
+      url,
+      state: "pending",
+      contentType: null,
+      etag: null,
+      lastModified: null,
+      fetchedAt: null,
+      expiresAt: null,
+      bytes: null,
+      contentHash: null,
     };
     await writeMeta(meta);
   })();
@@ -175,7 +183,9 @@ function resolveUrl(providerId: string, url: string | null | undefined): string 
   try {
     const key = ensureRecorded(providerId, url);
     return `/api/v2/avatars/${key}`;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -272,7 +282,10 @@ function isNonPublicRange(a: number, b: number, c: number): boolean {
 export function isNonPublicIpv4(ip: string): boolean {
   const m = IPV4_RE.exec(ip);
   if (m === null) return true;
-  const a = Number(m[1]); const b = Number(m[2]); const c = Number(m[3]); const d = Number(m[4]);
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  const c = Number(m[3]);
+  const d = Number(m[4]);
   if (a > 255 || b > 255 || c > 255 || d > 255) return true;
   if (a === 0) return true;
   if (a === 10) return true;
@@ -317,9 +330,7 @@ function buildHextetsWithoutCompression(addr: string): string[] {
 /** Parse an IPv6 literal into a 128-bit bigint (throws on invalid). */
 function parseV6(host: string): bigint {
   const addr = expandEmbeddedIpv4(host);
-  const hextets = addr.includes("::")
-    ? buildHextetsWithCompression(addr)
-    : buildHextetsWithoutCompression(addr);
+  const hextets = addr.includes("::") ? buildHextetsWithCompression(addr) : buildHextetsWithoutCompression(addr);
   if (hextets.some((h: string): boolean => !/^[0-9a-fA-F]{4}$/.test(h))) throw new Error("bad hextet");
   return BigInt(`0x${hextets.join("")}`);
 }
@@ -334,18 +345,16 @@ export function isNonPublicIpv6(ip: string): boolean {
   }
   const topByte = Number((big >> 120n) & 0xffn);
   const group6 = Number((big >> 112n) & 0xffffn);
-  if (big === 0n) return true;                                      // ::
-  if (big === 1n) return true;                                      // ::1 loopback
+  if (big === 0n) return true; // ::
+  if (big === 1n) return true; // ::1 loopback
   // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (IPv4-compatible) in hex form.
-  if ((big >> 32n) === 0xffffn || (big >> 32n) === 0n) {
+  if (big >> 32n === 0xffffn || big >> 32n === 0n) {
     const v4 = Number(big & 0xffffffffn);
-    return isNonPublicIpv4(
-      `${(v4 >>> 24) & 0xff}.${(v4 >>> 16) & 0xff}.${(v4 >>> 8) & 0xff}.${v4 & 0xff}`,
-    );
+    return isNonPublicIpv4(`${(v4 >>> 24) & 0xff}.${(v4 >>> 16) & 0xff}.${(v4 >>> 8) & 0xff}.${v4 & 0xff}`);
   }
-  if (topByte === 0xff) return true;                              // ff00::/8 multicast
-  if (group6 >= 0xfe80 && group6 <= 0xfeff) return true;          // fe80::/10 link-local + fec0::/10 site-local (deprecated)
-  if (topByte === 0xfc || topByte === 0xfd) return true;          // fc00::/7 ULA
+  if (topByte === 0xff) return true; // ff00::/8 multicast
+  if (group6 >= 0xfe80 && group6 <= 0xfeff) return true; // fe80::/10 link-local + fec0::/10 site-local (deprecated)
+  if (topByte === 0xfc || topByte === 0xfd) return true; // fc00::/7 ULA
   return false;
 }
 
@@ -414,7 +423,9 @@ async function resolveHost(hostname: string): Promise<string[] | null> {
     const result = await Promise.race([
       lookup(hostname, { all: true, verbatim: true }),
       new Promise<null>((resolvePromise): void => {
-        setTimeout(() => { resolvePromise(null); }, DNS_TIMEOUT_MS);
+        setTimeout(() => {
+          resolvePromise(null);
+        }, DNS_TIMEOUT_MS);
       }),
     ]);
     if (result === null) return null;
@@ -483,17 +494,19 @@ type RawResponse = Readonly<{
   truncated: boolean;
 }>;
 
-async function requestPinned(target: DeepReadonly<{
-  scheme: "http" | "https";
-  address: string;  // validated IP / literal host to connect to
-  hostname: string; // original hostname (no port) for Host + TLS SNI
-  port: number;
-  path: string;     // pathname + search
-  headers: Record<string, string>;
-  timeoutMs: number;
-  maxBytes: number;
-  signal: Readonly<AbortSignal>;
-}>): Promise<RawResponse> {
+async function requestPinned(
+  target: DeepReadonly<{
+    scheme: "http" | "https";
+    address: string; // validated IP / literal host to connect to
+    hostname: string; // original hostname (no port) for Host + TLS SNI
+    port: number;
+    path: string; // pathname + search
+    headers: Record<string, string>;
+    timeoutMs: number;
+    maxBytes: number;
+    signal: Readonly<AbortSignal>;
+  }>,
+): Promise<RawResponse> {
   return new Promise((resolvePromise, rejectPromise): void => {
     const { scheme, address, hostname, port, path, headers, timeoutMs, maxBytes } = target;
     const mod = scheme === "https" ? https : http;
@@ -514,42 +527,60 @@ async function requestPinned(target: DeepReadonly<{
       headers: { ...headers, Host: hostHeader },
       signal: AbortSignal.any([target.signal, AbortSignal.timeout(timeoutMs)]),
     };
-    const request = mod.request(options, (
-      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Node http callback contract; the stream is consumed (destroy on cap) not structurally mutated
-      res: Readonly<http.IncomingMessage>,
-    ): void => {
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      let settled = false;
-      res.on("data", (
-        // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Node http callback contract; the chunk reference is stored unmutated for Buffer.concat
-        chunk: Readonly<Uint8Array>,
+    const request = mod.request(
+      options,
+      (
+        // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Node http callback contract; the stream is consumed (destroy on cap) not structurally mutated
+        res: Readonly<http.IncomingMessage>,
       ): void => {
-        total += chunk.length;
-        if (total > maxBytes) {
-          // Exceeded the cap: settle immediately with the 413 signal instead of
-          // waiting for the socket (destroy() does not emit end/error).
-          res.destroy();
-          if (!settled) {
-            settled = true;
-            resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.alloc(0), truncated: true });
-          }
-          return;
-        }
-        chunks.push(chunk);
-      });
-      res.on("end", (): void => {
-        if (settled) return;
-        settled = true;
-        resolvePromise({ status: res.statusCode ?? 0, headers: res.headers, bytes: Buffer.concat(chunks), truncated: false });
-      });
-      res.on("error", (error: Readonly<Error>): void => {
-        if (settled) return;
-        settled = true;
-        rejectPromise(error);
-      });
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        let settled = false;
+        res.on(
+          "data",
+          (
+            // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Node http callback contract; the chunk reference is stored unmutated for Buffer.concat
+            chunk: Readonly<Uint8Array>,
+          ): void => {
+            total += chunk.length;
+            if (total > maxBytes) {
+              // Exceeded the cap: settle immediately with the 413 signal instead of
+              // waiting for the socket (destroy() does not emit end/error).
+              res.destroy();
+              if (!settled) {
+                settled = true;
+                resolvePromise({
+                  status: res.statusCode ?? 0,
+                  headers: res.headers,
+                  bytes: Buffer.alloc(0),
+                  truncated: true,
+                });
+              }
+              return;
+            }
+            chunks.push(chunk);
+          },
+        );
+        res.on("end", (): void => {
+          if (settled) return;
+          settled = true;
+          resolvePromise({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            bytes: Buffer.concat(chunks),
+            truncated: false,
+          });
+        });
+        res.on("error", (error: Readonly<Error>): void => {
+          if (settled) return;
+          settled = true;
+          rejectPromise(error);
+        });
+      },
+    );
+    request.on("error", (error: Readonly<Error>): void => {
+      rejectPromise(error);
     });
-    request.on("error", (error: Readonly<Error>): void => { rejectPromise(error); });
     request.end();
   });
 }
@@ -573,8 +604,11 @@ function isGifMagic(bytes: DeepReadonly<Uint8Array>): boolean {
 }
 
 function isWebpMagic(bytes: DeepReadonly<Uint8Array>): boolean {
-  return bytes.length >= 12 && Buffer.from(bytes.subarray(0, 4)).toString("latin1") === "RIFF"
-    && Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP";
+  return (
+    bytes.length >= 12 &&
+    Buffer.from(bytes.subarray(0, 4)).toString("latin1") === "RIFF" &&
+    Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP"
+  );
 }
 
 function sniffImageKind(bytes: DeepReadonly<Uint8Array>): string | null {
@@ -607,7 +641,7 @@ function parseAvatarUrl(urlStr: string): { scheme: "http" | "https"; hostname: s
   const parsed = new URL(urlStr);
   const scheme = parsed.protocol === "https:" ? "https" : "http";
   const hostname = unbracketHostname(parsed.hostname);
-  const port = parsed.port !== "" ? Number(parsed.port) : (scheme === "https" ? 443 : 80);
+  const port = parsed.port !== "" ? Number(parsed.port) : scheme === "https" ? 443 : 80;
   return { scheme, hostname, port, path: `${parsed.pathname}${parsed.search}` };
 }
 
@@ -619,9 +653,7 @@ function validateAvatarStatus(raw: DeepReadonly<RawResponse>): string | null {
 }
 
 function validateAvatarContentType(raw: DeepReadonly<RawResponse>): string | null {
-  const contentType = typeof raw.headers["content-type"] === "string"
-    ? (raw.headers["content-type"]).toLowerCase()
-    : "";
+  const contentType = typeof raw.headers["content-type"] === "string" ? raw.headers["content-type"].toLowerCase() : "";
   if (!contentType.startsWith("image/")) return "upstream returned a non-image content type";
   return null;
 }
@@ -644,7 +676,13 @@ async function storeAvatarImage(
   await rename(tmpImg, imgPath(key));
 }
 
-function buildFetchedAvatarMeta(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonly<RawResponse>, mime: string, contentHash: string, now: number): AvatarMeta {
+function buildFetchedAvatarMeta(
+  meta: DeepReadonly<AvatarMeta>,
+  raw: DeepReadonly<RawResponse>,
+  mime: string,
+  contentHash: string,
+  now: number,
+): AvatarMeta {
   return {
     ...meta,
     state: "fetched",
@@ -659,15 +697,24 @@ function buildFetchedAvatarMeta(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonl
 }
 
 async function handleAvatarNotModified(meta: AvatarMeta, now: number): Promise<AvatarFetchResult> {
-  const refreshed: AvatarMeta = { ...meta, state: "fetched", fetchedAt: now, expiresAt: now + (meta.providerId === "provider-icon" ? PROVIDER_ICON_REVALIDATE_MS : AVATAR_REVALIDATE_MS) };
+  const refreshed: AvatarMeta = {
+    ...meta,
+    state: "fetched",
+    fetchedAt: now,
+    expiresAt: now + (meta.providerId === "provider-icon" ? PROVIDER_ICON_REVALIDATE_MS : AVATAR_REVALIDATE_MS),
+  };
   await writeMeta(refreshed);
   return { ok: true, status: 304, message: null, meta: refreshed };
 }
 
-async function handleAvatarSuccess(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonly<RawResponse>, now: number): Promise<AvatarFetchResult> {
+async function handleAvatarSuccess(
+  meta: DeepReadonly<AvatarMeta>,
+  raw: DeepReadonly<RawResponse>,
+  now: number,
+): Promise<AvatarFetchResult> {
   const statusError = validateAvatarStatus(raw);
   if (statusError !== null) {
-    const status = raw.truncated ? 413 : (raw.status < 200 || raw.status >= 300 ? raw.status : 0);
+    const status = raw.truncated ? 413 : raw.status < 200 || raw.status >= 300 ? raw.status : 0;
     return { ok: false, status, message: statusError, meta };
   }
   const ctError = validateAvatarContentType(raw);
@@ -724,18 +771,26 @@ const refreshFailures = new Map<string, Readonly<{ until: number; status: number
 /** Fetch/revalidate with bounded admission; failures use a short negative cache. */
 async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
   const failure = refreshFailures.get(meta.key);
-  if (failure !== undefined && failure.until > Date.now()) return { ok: false, status: failure.status, message: failure.message, meta };
+  if (failure !== undefined && failure.until > Date.now())
+    return { ok: false, status: failure.status, message: failure.message, meta };
   refreshFailures.delete(meta.key);
   const running = refreshInFlight.get(meta.key);
   if (running !== undefined) return running;
   let host: string;
-  try { host = new URL(meta.url).hostname; }
-  catch { return { ok: false, status: 422, message: "Invalid avatar URL", meta }; }
+  try {
+    host = new URL(meta.url).hostname;
+  } catch {
+    return { ok: false, status: 422, message: "Invalid avatar URL", meta };
+  }
   const discovery = discover(host, async (signal): Promise<AvatarFetchResult> => doRefreshAvatar(meta, signal));
   if (discovery === null) return { ok: false, status: 503, message: "Avatar refresh temporarily unavailable", meta };
   const run = (async (): Promise<AvatarFetchResult> => {
-    const result = await discovery
-      ?? { ok: false, status: 503, message: "Avatar refresh temporarily unavailable", meta };
+    const result = (await discovery) ?? {
+      ok: false,
+      status: 503,
+      message: "Avatar refresh temporarily unavailable",
+      meta,
+    };
     if (!result.ok) {
       if (refreshFailures.size >= 512) {
         const oldest = refreshFailures.keys().next().value;
@@ -746,8 +801,11 @@ async function refreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
     return result;
   })();
   refreshInFlight.set(meta.key, run);
-  try { return await run; }
-  finally { if (refreshInFlight.get(meta.key) === run) refreshInFlight.delete(meta.key); }
+  try {
+    return await run;
+  } finally {
+    if (refreshInFlight.get(meta.key) === run) refreshInFlight.delete(meta.key);
+  }
 }
 
 async function readCachedImageBytes(key: string): Promise<Buffer | null> {
@@ -762,7 +820,6 @@ async function readCachedImageBytes(key: string): Promise<Buffer | null> {
 // Cache garbage collection (bounded: storage/avatars is not append-only)
 // ---------------------------------------------------------------------------
 
-
 async function collectAvatarShardNames(dir: string): Promise<string[] | null> {
   try {
     return (await readdir(dir, { withFileTypes: true }))
@@ -776,7 +833,10 @@ async function collectAvatarShardNames(dir: string): Promise<string[] | null> {
 /** Mutable avatar cache entry; readers take DeepReadonly views, hydration mutates in place. */
 type AvatarCacheEntry = { img?: string; json?: string; size: number; last: number };
 
-async function collectAvatarEntries(dir: string, shardNames: readonly string[]): Promise<Map<string, AvatarCacheEntry>> {
+async function collectAvatarEntries(
+  dir: string,
+  shardNames: readonly string[],
+): Promise<Map<string, AvatarCacheEntry>> {
   const entries = new Map<string, AvatarCacheEntry>();
   for (const shard of shardNames) {
     const shardPath = join(dir, shard);
@@ -839,7 +899,11 @@ async function hydrateAvatarEntries(
   }
 }
 
-function selectAgeBasedRemovals(entries: DeepReadonly<Map<string, AvatarCacheEntry>>, now: number, maxAgeMs: number): Set<string> {
+function selectAgeBasedRemovals(
+  entries: DeepReadonly<Map<string, AvatarCacheEntry>>,
+  now: number,
+  maxAgeMs: number,
+): Set<string> {
   const removals = new Set<string>();
   for (const [key, record] of entries) {
     const orphan = record.img === undefined;
@@ -915,8 +979,12 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
   // Provider artwork has its own one-year retention, independent of avatar budgets.
   for (const key of entries.keys()) {
     const meta = await readAvatarMeta(key);
-    if (meta?.providerId === "provider-icon" && meta.fetchedAt !== null
-      && now < meta.fetchedAt + PROVIDER_ICON_REVALIDATE_MS) entries.delete(key);
+    if (
+      meta?.providerId === "provider-icon" &&
+      meta.fetchedAt !== null &&
+      now < meta.fetchedAt + PROVIDER_ICON_REVALIDATE_MS
+    )
+      entries.delete(key);
   }
   const removals = selectAgeBasedRemovals(entries, now, maxAgeMs);
   selectBudgetRemovals(entries, removals, maxBytes, maxEntries);

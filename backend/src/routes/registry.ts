@@ -41,10 +41,7 @@ import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
 import { authPlugin } from "../auth";
 import { signedApiURL, validSignedApiURL } from "../lib/utils";
-import {
-  ingestModuleArchive,
-  MAX_MODULE_ARCHIVE_BYTES,
-} from "../lib/registry-module-archive";
+import { ingestModuleArchive, MAX_MODULE_ARCHIVE_BYTES } from "../lib/registry-module-archive";
 import { inspectRegistryModule } from "../lib/registry-module-metadata";
 import { synchronizeRegistryModule, validateRegistryModuleRepository } from "../lib/registry-module-sync";
 import { highestUsableModuleVersion, isModuleVersion, sortModuleVersionsDescending } from "../lib/registry-version";
@@ -58,27 +55,52 @@ import {
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { isUniqueConstraintError } from "../lib/validation";
 import { cancelDurableJobs, enqueueDurableJob } from "../lib/durable-jobs";
-import { moduleTestIdentityEnvironment, revokeWorkloadIdentityTokens, type CredentialProvider } from "../lib/workload-identity";
+import {
+  moduleTestIdentityEnvironment,
+  revokeWorkloadIdentityTokens,
+  type CredentialProvider,
+} from "../lib/workload-identity";
 
 const CV_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "cv");
-const REGISTRY_MODULE_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "modules");
+const REGISTRY_MODULE_STORAGE_DIR = join(
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
+  "modules",
+);
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
-async function moduleTestEnvironmentFactory(moduleId: string, moduleName: string, orgId: string, runId: string): Promise<ModuleTestEnvironmentFactory> {
+async function moduleTestEnvironmentFactory(
+  moduleId: string,
+  moduleName: string,
+  orgId: string,
+  runId: string,
+): Promise<ModuleTestEnvironmentFactory> {
   const [configuration, organization] = await Promise.all([
     db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.moduleId, moduleId) }),
     db.query.organizations.findFirst({ where: eq(organizations.id, orgId) }),
   ]);
   return async (stagingDirectory: string): Promise<Readonly<Record<string, string>>> => {
-    if (configuration?.oidcEnabled !== true || configuration.oidcProvider === null || organization === undefined || !["aws", "gcp", "azure", "vault"].includes(configuration.oidcProvider)) return {};
-    const values = configuration.oidcConfiguration !== null && typeof configuration.oidcConfiguration === "object" ? configuration.oidcConfiguration : {};
-    const identity = await moduleTestIdentityEnvironment({
-      organizationId: organization.id,
-      organizationName: organization.name,
-      moduleName,
-      runId,
-      ttlSeconds: organization.moduleTestTokenTtl,
-    }, { provider: configuration.oidcProvider as CredentialProvider, values }, stagingDirectory);
+    if (
+      configuration?.oidcEnabled !== true ||
+      configuration.oidcProvider === null ||
+      organization === undefined ||
+      !["aws", "gcp", "azure", "vault"].includes(configuration.oidcProvider)
+    )
+      return {};
+    const values =
+      configuration.oidcConfiguration !== null && typeof configuration.oidcConfiguration === "object"
+        ? configuration.oidcConfiguration
+        : {};
+    const identity = await moduleTestIdentityEnvironment(
+      {
+        organizationId: organization.id,
+        organizationName: organization.name,
+        moduleName,
+        runId,
+        ttlSeconds: organization.moduleTestTokenTtl,
+      },
+      { provider: configuration.oidcProvider as CredentialProvider, values },
+      stagingDirectory,
+    );
     return identity.environment;
   };
 }
@@ -99,10 +121,18 @@ async function findRegistryModule(
   run: { runId: string; workspaceId: string; organizationId: string } | null | undefined,
 ): Promise<ModItem | undefined> {
   const mod = await db.query.registryModules.findFirst({
-    where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+    where: and(
+      eq(registryModules.namespace, namespace),
+      eq(registryModules.name, name),
+      eq(registryModules.provider, provider),
+    ),
   });
   if (mod === undefined) return undefined;
-  if (!checkRunRegistryRead(run, mod.orgId) && !(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId))) return undefined;
+  if (
+    !checkRunRegistryRead(run, mod.orgId) &&
+    !(await checkRegistryReadPermission(userId, mod.orgId, "modules", tokenOrgId))
+  )
+    return undefined;
   return mod;
 }
 
@@ -148,11 +178,32 @@ type ProvVerItem = DeepReadonly<typeof registryProviderVersions.$inferSelect>;
 type PlatItem = DeepReadonly<typeof registryProviderPlatforms.$inferSelect>;
 
 function registryProviderVersionResource(version: ProvVerItem): Record<string, unknown> {
-  return { id: version.id, type: "registry-provider-versions", attributes: { version: version.version, "key-id": version.keyId, protocols: version.protocols, "shasums-url": version.shasumsUrl, "shasums-signature-url": version.shasumsSignatureUrl, "created-at": new Date(version.createdAt).toISOString() } };
+  return {
+    id: version.id,
+    type: "registry-provider-versions",
+    attributes: {
+      version: version.version,
+      "key-id": version.keyId,
+      protocols: version.protocols,
+      "shasums-url": version.shasumsUrl,
+      "shasums-signature-url": version.shasumsSignatureUrl,
+      "created-at": new Date(version.createdAt).toISOString(),
+    },
+  };
 }
 
 function registryProviderPlatformResource(platform: PlatItem): Record<string, unknown> {
-  return { id: platform.id, type: "registry-provider-platforms", attributes: { os: platform.os, arch: platform.arch, filename: platform.filename, "download-url": platform.downloadUrl, shasum: platform.shasum } };
+  return {
+    id: platform.id,
+    type: "registry-provider-platforms",
+    attributes: {
+      os: platform.os,
+      arch: platform.arch,
+      filename: platform.filename,
+      "download-url": platform.downloadUrl,
+      shasum: platform.shasum,
+    },
+  };
 }
 
 function validModuleVersion(value: string): boolean {
@@ -197,10 +248,12 @@ function metadataProviderDependencies(metadata: unknown): readonly ProviderDepen
     if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
     const provider = value as Record<string, unknown>;
     if (typeof provider["name"] !== "string" || provider["name"] === "") return [];
-    return [{
-      name: provider["name"],
-      source: typeof provider["source"] === "string" && provider["source"] !== "" ? provider["source"] : null,
-    }];
+    return [
+      {
+        name: provider["name"],
+        source: typeof provider["source"] === "string" && provider["source"] !== "" ? provider["source"] : null,
+      },
+    ];
   });
 }
 
@@ -209,10 +262,10 @@ function primaryProviderSource(moduleProvider: string, metadata: unknown): strin
   const exact = providers.find((provider): boolean => provider.name === moduleProvider && provider.source !== null);
   if (exact?.source !== null && exact !== undefined) return exact.source;
 
-  const candidates = providers.filter((provider): boolean =>
-    provider.source !== null && provider.source.split("/").at(-1) === moduleProvider,
+  const candidates = providers.filter(
+    (provider): boolean => provider.source !== null && provider.source.split("/").at(-1) === moduleProvider,
   );
-  return candidates.length === 1 ? candidates[0]?.source ?? null : null;
+  return candidates.length === 1 ? (candidates[0]?.source ?? null) : null;
 }
 
 function latestUsableProviderSource(moduleProvider: string, versions: readonly ModVerItem[]): string | null {
@@ -229,10 +282,13 @@ async function registryModuleResource(
   canManage: boolean,
   suppliedVersions?: readonly ModVerItem[],
 ): Promise<Record<string, unknown>> {
-  const versions = sortModuleVersionsDescending(suppliedVersions ?? await db.query.registryModuleVersions.findMany({
-    where: eq(registryModuleVersions.moduleId, m.id),
-    orderBy: [desc(registryModuleVersions.createdAt)],
-  }));
+  const versions = sortModuleVersionsDescending(
+    suppliedVersions ??
+      (await db.query.registryModuleVersions.findMany({
+        where: eq(registryModuleVersions.moduleId, m.id),
+        orderBy: [desc(registryModuleVersions.createdAt)],
+      })),
+  );
   return {
     id: m.id,
     type: "registry-modules",
@@ -253,17 +309,21 @@ async function registryModuleResource(
         deprecated: version.isDeprecated === true,
         revoked: version.isRevoked === true,
       })),
-      "vcs-repo": m.publishingMechanism === "vcs" ? {
-        identifier: m.repositoryIdentifier,
-        "display-identifier": m.repositoryDisplayIdentifier,
-        "repository-url": m.repositoryUrl,
-        branch: m.branch ?? "",
-        "source-directory": m.sourceDirectory,
-        "tag-prefix": m.tagPrefix,
-        ...(m.vcsConnectionType === "github-app" ? { "github-app-installation-id": m.vcsConnectionId } : {}),
-        ...(m.vcsConnectionType === "oauth-token" ? { "oauth-token-id": m.vcsConnectionId } : {}),
-      } : null,
-      "last-successful-sync-at": m.lastSuccessfulSyncAt === null ? null : new Date(m.lastSuccessfulSyncAt).toISOString(),
+      "vcs-repo":
+        m.publishingMechanism === "vcs"
+          ? {
+              identifier: m.repositoryIdentifier,
+              "display-identifier": m.repositoryDisplayIdentifier,
+              "repository-url": m.repositoryUrl,
+              branch: m.branch ?? "",
+              "source-directory": m.sourceDirectory,
+              "tag-prefix": m.tagPrefix,
+              ...(m.vcsConnectionType === "github-app" ? { "github-app-installation-id": m.vcsConnectionId } : {}),
+              ...(m.vcsConnectionType === "oauth-token" ? { "oauth-token-id": m.vcsConnectionId } : {}),
+            }
+          : null,
+      "last-successful-sync-at":
+        m.lastSuccessfulSyncAt === null ? null : new Date(m.lastSuccessfulSyncAt).toISOString(),
       "last-sync-attempt-at": m.lastSyncAttemptAt === null ? null : new Date(m.lastSyncAttemptAt).toISOString(),
       "last-sync-error": m.lastSyncError,
       "created-at": new Date(m.createdAt).toISOString(),
@@ -294,10 +354,7 @@ async function moduleTestTarget(
   const version = await db.query.registryModuleVersions.findFirst({
     where: and(
       eq(registryModuleVersions.moduleId, moduleId),
-      or(
-        eq(registryModuleVersions.version, versionReference),
-        eq(registryModuleVersions.id, versionReference),
-      ),
+      or(eq(registryModuleVersions.version, versionReference), eq(registryModuleVersions.id, versionReference)),
     ),
   });
   return version === undefined ? undefined : { mod, version };
@@ -308,11 +365,15 @@ async function availableModuleVersions(moduleId: string): Promise<ModVerItem[]> 
     where: eq(registryModuleVersions.moduleId, moduleId),
     orderBy: [desc(registryModuleVersions.createdAt)],
   });
-  const available = await Promise.all(versions.map(async (version): Promise<boolean> =>
-    version.status === "ok"
-    && version.isRevoked !== true
-    && version.archivePath !== null
-    && await Bun.file(version.archivePath).exists()));
+  const available = await Promise.all(
+    versions.map(
+      async (version): Promise<boolean> =>
+        version.status === "ok" &&
+        version.isRevoked !== true &&
+        version.archivePath !== null &&
+        (await Bun.file(version.archivePath).exists()),
+    ),
+  );
   return sortModuleVersionsDescending(versions.filter((_, index): boolean => available[index] === true));
 }
 
@@ -321,8 +382,11 @@ async function deleteRegistryModuleAndArchives(moduleId: string): Promise<void> 
     where: eq(registryModuleVersions.moduleId, moduleId),
   });
   await db.delete(registryModules).where(eq(registryModules.id, moduleId));
-  await Promise.allSettled(versions.flatMap((version): Promise<void>[] =>
-    version.archivePath === null ? [] : [rm(version.archivePath, { force: true })]));
+  await Promise.allSettled(
+    versions.flatMap((version): Promise<void>[] =>
+      version.archivePath === null ? [] : [rm(version.archivePath, { force: true })],
+    ),
+  );
 }
 
 async function checkRegistryManagementRead(
@@ -332,14 +396,16 @@ async function checkRegistryManagementRead(
   tokenOrgId: string | null | undefined,
   teamId: string | null | undefined,
 ): Promise<boolean> {
-  return await checkRegistryReadPermission(userId, orgId, kind, tokenOrgId)
-    || await checkOrganizationPermission(
+  return (
+    (await checkRegistryReadPermission(userId, orgId, kind, tokenOrgId)) ||
+    (await checkOrganizationPermission(
       orgId,
       userId,
       tokenOrgId,
       teamId,
       kind === "modules" ? "manage-modules" : "manage-providers",
-    );
+    ))
+  );
 }
 
 type TestConfigVersionRow = DeepReadonly<typeof moduleTestConfigurationVersions.$inferSelect>;
@@ -352,11 +418,19 @@ async function resolveTestConfigVersionForUpload(
   request: ParamCtx["request"],
   set: SetObj,
 ): Promise<Readonly<{ configuration: TestConfigVersionRow; mod: ModItem } | { failure: unknown }>> {
-  const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, configurationVersionId) });
-  const mod = configuration === undefined ? undefined : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
+  const configuration = await db.query.moduleTestConfigurationVersions.findFirst({
+    where: eq(moduleTestConfigurationVersions.id, configurationVersionId),
+  });
+  const mod =
+    configuration === undefined
+      ? undefined
+      : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
   const path = `/api/v2/module-test-configuration-versions/${configurationVersionId}/upload`;
-  const authorized = mod !== undefined && (await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"));
-  if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT"))) return { failure: registryNotFound(set) };
+  const authorized =
+    mod !== undefined &&
+    (await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"));
+  if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT")))
+    return { failure: registryNotFound(set) };
   return { configuration, mod };
 }
 
@@ -368,7 +442,13 @@ async function readAndValidateUploadArchive(
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
     (set as { status: number }).status = 413;
-    return { failure: { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" },
+        ],
+      },
+    };
   }
   const bytes = await uploadedBytes(body, request);
   if (bytes.byteLength === 0) {
@@ -377,7 +457,13 @@ async function readAndValidateUploadArchive(
   }
   if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
     (set as { status: number }).status = 413;
-    return { failure: { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds the upload limit" },
+        ],
+      },
+    };
   }
   return { bytes };
 }
@@ -386,13 +472,16 @@ async function claimAndStoreConfigArchive(
   configurationId: string,
   bytes: Uint8Array,
 ): Promise<Readonly<{ alreadyUploaded: true } | { stored: true }>> {
-  const claimed = await db.update(moduleTestConfigurationVersions)
+  const claimed = await db
+    .update(moduleTestConfigurationVersions)
     .set({ status: "uploading" })
-    .where(and(
-      eq(moduleTestConfigurationVersions.id, configurationId),
-      eq(moduleTestConfigurationVersions.status, "pending"),
-      isNull(moduleTestConfigurationVersions.archivePath),
-    ))
+    .where(
+      and(
+        eq(moduleTestConfigurationVersions.id, configurationId),
+        eq(moduleTestConfigurationVersions.status, "pending"),
+        isNull(moduleTestConfigurationVersions.archivePath),
+      ),
+    )
     .returning({ id: moduleTestConfigurationVersions.id });
   if (claimed.length !== 1) return { alreadyUploaded: true as const };
   const archivePath = join(CV_STORAGE_DIR, `module-test-config-${configurationId}.tar.gz`);
@@ -400,9 +489,20 @@ async function claimAndStoreConfigArchive(
     await mkdir(CV_STORAGE_DIR, { recursive: true, mode: 0o700 });
     await writeFile(archivePath, bytes, { mode: 0o600 });
     const uploadedAt = Date.now();
-    await db.update(moduleTestConfigurationVersions).set({ archivePath, status: "uploaded", uploadedAt }).where(eq(moduleTestConfigurationVersions.id, configurationId));
+    await db
+      .update(moduleTestConfigurationVersions)
+      .set({ archivePath, status: "uploaded", uploadedAt })
+      .where(eq(moduleTestConfigurationVersions.id, configurationId));
   } catch (error: unknown) {
-    await db.update(moduleTestConfigurationVersions).set({ status: "pending" }).where(and(eq(moduleTestConfigurationVersions.id, configurationId), eq(moduleTestConfigurationVersions.status, "uploading")));
+    await db
+      .update(moduleTestConfigurationVersions)
+      .set({ status: "pending" })
+      .where(
+        and(
+          eq(moduleTestConfigurationVersions.id, configurationId),
+          eq(moduleTestConfigurationVersions.status, "uploading"),
+        ),
+      );
     throw error;
   }
   return { stored: true as const };
@@ -417,14 +517,18 @@ async function uploadedBytes(body: unknown, request: ParamCtx["request"]): Promi
   return new Uint8Array(await request.arrayBuffer());
 }
 
-async function createVcsBranchVersion(
-  mod: ModItem,
-  version: string,
-  set: SetObj,
-): Promise<unknown> {
+async function createVcsBranchVersion(mod: ModItem, version: string, set: SetObj): Promise<unknown> {
   if (mod.publishingWorkflow !== "branch") {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag-based module versions are created by matching VCS tags" }] };
+    return {
+      errors: [
+        {
+          status: "422",
+          title: "Unprocessable Entity",
+          detail: "Tag-based module versions are created by matching VCS tags",
+        },
+      ],
+    };
   }
   try {
     await synchronizeRegistryModule(mod, version);
@@ -436,7 +540,15 @@ async function createVcsBranchVersion(
     return { data: registryModuleVersionResource(created) };
   } catch (error: unknown) {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Branch publication failed" }] };
+    return {
+      errors: [
+        {
+          status: "422",
+          title: "Unprocessable Entity",
+          detail: error instanceof Error ? error.message : "Branch publication failed",
+        },
+      ],
+    };
   }
 }
 
@@ -449,7 +561,7 @@ async function resolveModuleVersionKeyId(
     return { error: "key-id must identify a GPG key" };
   }
   const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-  if (keyId !== null && await registrySigningKey(mod.orgId, mod.namespace, keyId) === undefined) {
+  if (keyId !== null && (await registrySigningKey(mod.orgId, mod.namespace, keyId)) === undefined) {
     return { error: "key-id must identify a GPG key in the module namespace" };
   }
   return { keyId };
@@ -458,12 +570,16 @@ async function resolveModuleVersionKeyId(
 function parseModuleVersionEnvelope(
   body: unknown,
 ): Readonly<{ attributes: Readonly<Record<string, unknown>> } | { error: string }> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data =
+    payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
   if (data["type"] !== undefined && data["type"] !== "registry-module-versions") {
     return { error: "data.type must be registry-module-versions" };
   }
-  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const attributes =
+    data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   return { attributes };
 }
 
@@ -475,7 +591,9 @@ async function createRegistryModuleVersion(
   const version = typeof attributes["version"] === "string" ? attributes["version"].replace(/^v/, "") : "";
   if (!validModuleVersion(version)) {
     (set as { status: number }).status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version must be a semantic module version" }] };
+    return {
+      errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version must be a semantic module version" }],
+    };
   }
   const duplicate = await db.query.registryModuleVersions.findFirst({
     where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
@@ -494,9 +612,8 @@ async function createRegistryModuleVersion(
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: key.error }] };
   }
   const keyId = key.keyId;
-  const commitSha = typeof attributes["commit-sha"] === "string" && attributes["commit-sha"] !== ""
-    ? attributes["commit-sha"]
-    : null;
+  const commitSha =
+    typeof attributes["commit-sha"] === "string" && attributes["commit-sha"] !== "" ? attributes["commit-sha"] : null;
   const now = Date.now();
   const id = newResourceId("modver");
   const created: typeof registryModuleVersions.$inferInsert = {
@@ -539,9 +656,10 @@ async function registrySigningKey(
 }
 
 function matchesMirrorHostname(provider: ProvItem, hostname: string, requestUrl: string): boolean {
-  const origin = provider.registryName === "public"
-    ? "registry.terraform.io"
-    : new URL(process.env["PUBLIC_URL"] ?? requestUrl).host;
+  const origin =
+    provider.registryName === "public"
+      ? "registry.terraform.io"
+      : new URL(process.env["PUBLIC_URL"] ?? requestUrl).host;
   return hostname === origin;
 }
 
@@ -599,7 +717,8 @@ class TerraformTypeParser {
     const scalar = parseScalarType(name);
     if (scalar !== undefined) return scalar;
     if (!this.take("(")) return parseBareCollectionType(name);
-    if (name === "list" || name === "set" || name === "map" || name === "optional") return this.parseCollectionType(name);
+    if (name === "list" || name === "set" || name === "map" || name === "optional")
+      return this.parseCollectionType(name);
     if (name === "tuple") return this.parseTupleType();
     if (name === "object") return this.parseObjectType();
     return undefined;
@@ -666,7 +785,8 @@ class TerraformTypeParser {
     this.skipSpace();
     while ((this.source[this.position] ?? "") !== "}") {
       const fieldName = this.identifier();
-      if (fieldName === undefined || fields[fieldName] !== undefined || (!this.take("=") && !this.take(":"))) return undefined;
+      if (fieldName === undefined || fields[fieldName] !== undefined || (!this.take("=") && !this.take(":")))
+        return undefined;
       const fieldType = this.parse();
       if (fieldType === undefined) return undefined;
       fields[fieldName] = fieldType;
@@ -687,19 +807,23 @@ function matchesListType(value: unknown, item: TerraformType): boolean {
 }
 
 function matchesMapType(value: unknown, item: TerraformType): boolean {
-  return value !== null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && Object.values(value).every((entry: unknown): boolean => matchesTerraformType(entry, item));
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry: unknown): boolean => matchesTerraformType(entry, item))
+  );
 }
 
 function matchesTupleType(value: unknown, items: readonly TerraformType[]): boolean {
-  return Array.isArray(value)
-    && value.length === items.length
-    && value.every((entry: unknown, index: number): boolean => {
+  return (
+    Array.isArray(value) &&
+    value.length === items.length &&
+    value.every((entry: unknown, index: number): boolean => {
       const item = items[index];
       return item !== undefined && matchesTerraformType(entry, item);
-    });
+    })
+  );
 }
 
 function matchesObjectType(value: unknown, fields: Readonly<Record<string, TerraformType>>): boolean {
@@ -724,7 +848,10 @@ function matchesTerraformType(value: unknown, type: TerraformType): boolean {
   return matchesObjectType(value, objectType.fields);
 }
 
-function variableOptionValues(id: string | undefined, values: Readonly<Record<string, unknown>>): VariableOptionInput | Readonly<{ error: string }> {
+function variableOptionValues(
+  id: string | undefined,
+  values: Readonly<Record<string, unknown>>,
+): VariableOptionInput | Readonly<{ error: string }> {
   const variableName = values["variable-name"];
   const variableType = values["variable-type"];
   const options = values["options"];
@@ -746,9 +873,11 @@ function variableOptionEntry(entry: unknown): VariableOptionInput | Readonly<{ e
   const item = entry as Record<string, unknown>;
   if (item["type"] !== "variable-options") return { error: "variable-options type must be variable-options" };
   const id = item["id"];
-  if (id !== undefined && (typeof id !== "string" || id === "")) return { error: "variable-options id must be a non-empty string" };
+  if (id !== undefined && (typeof id !== "string" || id === ""))
+    return { error: "variable-options id must be a non-empty string" };
   const attributes = item["attributes"];
-  if (attributes === null || typeof attributes !== "object") return { error: "variable-options attributes are required" };
+  if (attributes === null || typeof attributes !== "object")
+    return { error: "variable-options attributes are required" };
   return variableOptionValues(typeof id === "string" ? id : undefined, attributes as Record<string, unknown>);
 }
 
@@ -759,7 +888,8 @@ function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Re
   for (const entry of raw) {
     const result = variableOptionEntry(entry);
     if ("error" in result) return result;
-    if (names.has(result.variableName)) return { error: `variable-options contains duplicate variable-name ${result.variableName}` };
+    if (names.has(result.variableName))
+      return { error: `variable-options contains duplicate variable-name ${result.variableName}` };
     names.add(result.variableName);
     parsed.push(result);
   }
@@ -767,7 +897,7 @@ function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Re
 }
 
 function noCodeDataSection(body: unknown): Readonly<{ data: Record<string, unknown> } | { error: string }> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const rawData = payload["data"];
   if (rawData === null || typeof rawData !== "object") return { error: "data is required" };
   const data = rawData as Record<string, unknown>;
@@ -775,7 +905,9 @@ function noCodeDataSection(body: unknown): Readonly<{ data: Record<string, unkno
   return { data };
 }
 
-function noCodeAttributesSection(data: Readonly<Record<string, unknown>>): Readonly<{ enabled: unknown; versionPin: unknown } | { error: string }> {
+function noCodeAttributesSection(
+  data: Readonly<Record<string, unknown>>,
+): Readonly<{ enabled: unknown; versionPin: unknown } | { error: string }> {
   const rawAttributes = data["attributes"];
   if (rawAttributes !== undefined && (rawAttributes === null || typeof rawAttributes !== "object")) {
     return { error: "data.attributes must be an object" };
@@ -790,14 +922,14 @@ function noCodeAttributesSection(data: Readonly<Record<string, unknown>>): Reado
   return { enabled, versionPin };
 }
 
-function noCodeRelationshipsSection(data: Readonly<Record<string, unknown>>): Readonly<{ relationships: Record<string, unknown> } | { error: string }> {
+function noCodeRelationshipsSection(
+  data: Readonly<Record<string, unknown>>,
+): Readonly<{ relationships: Record<string, unknown> } | { error: string }> {
   const rawRelationships = data["relationships"];
   if (rawRelationships !== undefined && (rawRelationships === null || typeof rawRelationships !== "object")) {
     return { error: "data.relationships must be an object" };
   }
-  const relationships = typeof rawRelationships === "object"
-    ? rawRelationships as Record<string, unknown>
-    : {};
+  const relationships = typeof rawRelationships === "object" ? (rawRelationships as Record<string, unknown>) : {};
   return { relationships };
 }
 
@@ -808,17 +940,19 @@ function noCodeModuleIdSection(
   const rawRegistryModule = relationships["registry-module"];
   let moduleId: string | undefined;
   if (rawRegistryModule !== undefined) {
-    const registryModule = rawRegistryModule !== null && typeof rawRegistryModule === "object"
-      ? rawRegistryModule as Record<string, unknown>
-      : {};
+    const registryModule =
+      rawRegistryModule !== null && typeof rawRegistryModule === "object"
+        ? (rawRegistryModule as Record<string, unknown>)
+        : {};
     const rawRegistryData = registryModule["data"];
-    const registryData = rawRegistryData !== null && typeof rawRegistryData === "object"
-      ? rawRegistryData as Record<string, unknown>
-      : {};
+    const registryData =
+      rawRegistryData !== null && typeof rawRegistryData === "object"
+        ? (rawRegistryData as Record<string, unknown>)
+        : {};
     if (
-      (registryData["type"] !== "registry-module" && registryData["type"] !== "registry-modules")
-      || typeof registryData["id"] !== "string"
-      || registryData["id"] === ""
+      (registryData["type"] !== "registry-module" && registryData["type"] !== "registry-modules") ||
+      typeof registryData["id"] !== "string" ||
+      registryData["id"] === ""
     ) {
       return { error: "registry-module relationship is invalid" };
     }
@@ -888,32 +1022,42 @@ type VcsModuleOptions = Readonly<{
 }>;
 
 function parseVcsEnvelope(body: unknown): VcsModuleEnvelope {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
-  const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
-    ? attributes["vcs-repo"] as Record<string, unknown>
-    : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data =
+    payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  const attributes =
+    data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
+  const vcsRepo =
+    attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
+      ? (attributes["vcs-repo"] as Record<string, unknown>)
+      : {};
   return { data, attributes, vcsRepo };
 }
 
-function parseVcsNaming(attributes: Readonly<Record<string, unknown>>, vcsRepo: Readonly<Record<string, unknown>>): VcsModuleNaming {
+function parseVcsNaming(
+  attributes: Readonly<Record<string, unknown>>,
+  vcsRepo: Readonly<Record<string, unknown>>,
+): VcsModuleNaming {
   const identifier = typeof vcsRepo["identifier"] === "string" ? vcsRepo["identifier"].trim() : "";
   const repositoryName = identifier.split("/").at(-1) ?? "";
   const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
   const rawModuleName = attributes["module-name"] ?? attributes["name"];
   const rawProvider = attributes["module-provider"] ?? attributes["provider"];
-  const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
-  const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
+  const name = typeof rawModuleName === "string" ? rawModuleName.trim() : (conventional?.[2] ?? "");
+  const provider = typeof rawProvider === "string" ? rawProvider.trim() : (conventional?.[1] ?? "");
   return { identifier, name, provider };
 }
 
 function parseVcsConnection(vcsRepo: Readonly<Record<string, unknown>>): VcsModuleConnection {
   const githubAppInstallationId = vcsRepo["github-app-installation-id"];
   const oauthTokenId = vcsRepo["oauth-token-id"];
-  const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
-    + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
-  const branch = typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
+  const connectionCount =
+    Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "") +
+    Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
+  const branch =
+    typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
   return { githubAppInstallationId, oauthTokenId, connectionCount, branch };
 }
 
@@ -929,14 +1073,17 @@ function parseVcsOptions(
   const rawInitialVersion = attributes["initial-version"] ?? attributes["version"];
   const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
   const identifierParts = identifier.split("/");
-  const identifierValid = identifierParts.length === 2
-    && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
+  const identifierValid =
+    identifierParts.length === 2 &&
+    identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
   return { sourceDirectory, tagPrefix, initialVersion, identifierValid };
 }
 
 function isValidSourceDirectory(sourceDirectory: string): boolean {
-  return sourceDirectory === ""
-    || (!sourceDirectory.startsWith("/") && !sourceDirectory.includes("\\") && !sourceDirectory.split("/").includes(".."));
+  return (
+    sourceDirectory === "" ||
+    (!sourceDirectory.startsWith("/") && !sourceDirectory.includes("\\") && !sourceDirectory.split("/").includes(".."))
+  );
 }
 
 function vcsModuleFieldError(
@@ -948,7 +1095,10 @@ function vcsModuleFieldError(
   if (data["type"] !== "registry-modules" || !options.identifierValid || connection.connectionCount !== 1) {
     return "A repository identifier and exactly one VCS connection are required";
   }
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(naming.name) || !/^[a-z0-9]{1,64}$/.test(naming.provider)) {
+  if (
+    !/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(naming.name) ||
+    !/^[a-z0-9]{1,64}$/.test(naming.provider)
+  ) {
     return "Repository name must follow terraform-<provider>-<module>, or module-name and provider must be supplied";
   }
   if (!isValidSourceDirectory(options.sourceDirectory) || options.tagPrefix.length > 128) {
@@ -966,19 +1116,26 @@ type VcsConnectionStatus = Readonly<{
 }>;
 
 async function resolveGithubAppConnection(orgId: string, installationId: string): Promise<VcsConnectionStatus> {
-  const available = await db.query.githubAppInstallations.findFirst({
-    where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
-  }) !== undefined;
+  const available =
+    (await db.query.githubAppInstallations.findFirst({
+      where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
+    })) !== undefined;
   return { available, repositoryBaseUrl: integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com" };
 }
 
 async function resolveOauthConnection(orgId: string, oauthTokenId: unknown): Promise<VcsConnectionStatus> {
   const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
-  const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
-    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
-  });
+  const client =
+    token === undefined
+      ? undefined
+      : await db.query.oauthClients.findFirst({
+          where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+        });
   const available = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
-  return { available, repositoryBaseUrl: client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null) };
+  return {
+    available,
+    repositoryBaseUrl: client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null),
+  };
 }
 
 async function resolveVcsConnection(orgId: string, connection: VcsModuleConnection): Promise<VcsConnectionStatus> {
@@ -988,7 +1145,9 @@ async function resolveVcsConnection(orgId: string, connection: VcsModuleConnecti
   return resolveOauthConnection(orgId, connection.oauthTokenId);
 }
 
-function vcsConnectionRef(connection: VcsModuleConnection): Readonly<{ type: "github-app" | "oauth-token"; id: string }> {
+function vcsConnectionRef(
+  connection: VcsModuleConnection,
+): Readonly<{ type: "github-app" | "oauth-token"; id: string }> {
   if (typeof connection.githubAppInstallationId === "string") {
     return { type: "github-app", id: connection.githubAppInstallationId };
   }
@@ -1042,7 +1201,10 @@ async function checkVcsRepositoryAccess(
     await validateRegistryModuleRepository({
       orgId,
       vcsConnectionType: typeof connection.githubAppInstallationId === "string" ? "github-app" : "oauth-token",
-      vcsConnectionId: typeof connection.githubAppInstallationId === "string" ? connection.githubAppInstallationId : connection.oauthTokenId as string,
+      vcsConnectionId:
+        typeof connection.githubAppInstallationId === "string"
+          ? connection.githubAppInstallationId
+          : (connection.oauthTokenId as string),
       repositoryIdentifier: identifier,
     });
   } catch (error: unknown) {
@@ -1124,15 +1286,17 @@ async function replaceVariableOptions(noCodeModuleId: string, options: readonly 
   await db.delete(noCodeVariableOptions).where(eq(noCodeVariableOptions.noCodeModuleId, noCodeModuleId));
   if (options.length === 0) return;
   const now = Date.now();
-  await db.insert(noCodeVariableOptions).values(options.map((option): typeof noCodeVariableOptions.$inferInsert => ({
-    id: newResourceId("ncvaropt"),
-    noCodeModuleId,
-    variableName: option.variableName,
-    variableType: option.variableType,
-    options: [...option.options],
-    createdAt: now,
-    updatedAt: now,
-  })));
+  await db.insert(noCodeVariableOptions).values(
+    options.map((option): typeof noCodeVariableOptions.$inferInsert => ({
+      id: newResourceId("ncvaropt"),
+      noCodeModuleId,
+      variableName: option.variableName,
+      variableType: option.variableType,
+      options: [...option.options],
+      createdAt: now,
+      updatedAt: now,
+    })),
+  );
 }
 
 async function validateVariableOptionPatch(
@@ -1155,7 +1319,10 @@ async function validateVariableOptionPatch(
     : { error: "variable-options variable-name values must be unique for this no-code module" };
 }
 
-async function patchVariableOptions(noCodeModuleId: string, options: readonly VariableOptionInput[]): Promise<Readonly<{ error: string }> | undefined> {
+async function patchVariableOptions(
+  noCodeModuleId: string,
+  options: readonly VariableOptionInput[],
+): Promise<Readonly<{ error: string }> | undefined> {
   for (const option of options) {
     if (option.id === undefined) {
       await db.insert(noCodeVariableOptions).values({
@@ -1170,13 +1337,17 @@ async function patchVariableOptions(noCodeModuleId: string, options: readonly Va
       continue;
     }
     const existing = await db.query.noCodeVariableOptions.findFirst({ where: eq(noCodeVariableOptions.id, option.id) });
-    if (existing?.noCodeModuleId !== noCodeModuleId) return { error: `variable-options ${option.id} does not belong to this no-code module` };
-    await db.update(noCodeVariableOptions).set({
-      variableName: option.variableName,
-      variableType: option.variableType,
-      options: [...option.options],
-      updatedAt: Date.now(),
-    }).where(eq(noCodeVariableOptions.id, option.id));
+    if (existing?.noCodeModuleId !== noCodeModuleId)
+      return { error: `variable-options ${option.id} does not belong to this no-code module` };
+    await db
+      .update(noCodeVariableOptions)
+      .set({
+        variableName: option.variableName,
+        variableType: option.variableType,
+        options: [...option.options],
+        updatedAt: Date.now(),
+      })
+      .where(eq(noCodeVariableOptions.id, option.id));
   }
   return undefined;
 }
@@ -1199,9 +1370,18 @@ function testVariableResource(variable: DeepReadonly<typeof testVariables.$infer
 }
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- Elysia route params preserve API path names.
-type TestVarsParams = { org_name?: string | undefined; registry_name?: string | undefined; namespace?: string | undefined; module_name?: string | undefined; provider?: string | undefined; variable_id?: string | undefined };
+type TestVarsParams = {
+  org_name?: string | undefined;
+  registry_name?: string | undefined;
+  namespace?: string | undefined;
+  module_name?: string | undefined;
+  provider?: string | undefined;
+  variable_id?: string | undefined;
+};
 
-async function findTestVarsModule(params: TestVarsParams): Promise<DeepReadonly<typeof registryModules.$inferSelect> | undefined> {
+async function findTestVarsModule(
+  params: TestVarsParams,
+): Promise<DeepReadonly<typeof registryModules.$inferSelect> | undefined> {
   const orgName = params.org_name ?? "";
   const namespace = params.namespace ?? "";
   const moduleName = params.module_name ?? "";
@@ -1230,7 +1410,16 @@ async function resolveTestVariableForWrite(
   set: SetObj,
 ): Promise<Readonly<{ variable: TestVariableRow } | { failure: unknown }>> {
   const variable = await findTestVariable(params);
-  if (variable === undefined || !(await checkOrganizationPermission((await findTestVarsModule(params))?.orgId ?? "", userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+  if (
+    variable === undefined ||
+    !(await checkOrganizationPermission(
+      (await findTestVarsModule(params))?.orgId ?? "",
+      userId,
+      tokenOrgId,
+      teamId ?? null,
+      "manage-modules",
+    ))
+  ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -1247,10 +1436,18 @@ async function validateTestVariableKey(
     (set as { status: number }).status = 422;
     return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key must not be empty" }] } };
   }
-  const dup = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, moduleId), eq(testVariables.key, key), ne(testVariables.id, excludeId)) });
+  const dup = await db.query.testVariables.findFirst({
+    where: and(eq(testVariables.moduleId, moduleId), eq(testVariables.key, key), ne(testVariables.id, excludeId)),
+  });
   if (dup !== undefined) {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] } };
+    return {
+      failure: {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" },
+        ],
+      },
+    };
   }
   return null;
 }
@@ -1265,10 +1462,14 @@ function testVariableScalarUpdates(input: TestVariableFieldInput): Partial<typeo
   return updates;
 }
 
-async function findTestVariable(params: TestVarsParams): Promise<DeepReadonly<typeof testVariables.$inferSelect> | undefined> {
+async function findTestVariable(
+  params: TestVarsParams,
+): Promise<DeepReadonly<typeof testVariables.$inferSelect> | undefined> {
   const mod = await findTestVarsModule(params);
   if (mod === undefined || params.variable_id === undefined) return undefined;
-  return db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.id, params.variable_id)) });
+  return db.query.testVariables.findFirst({
+    where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.id, params.variable_id)),
+  });
 }
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- TFP test-run API wire names
@@ -1352,7 +1553,8 @@ function testRunResource(
       source: run.source,
       message: run.message,
       "log-read-url": null,
-      "oidc-token-generated-at": run.oidcTokenGeneratedAt === null ? null : new Date(run.oidcTokenGeneratedAt).toISOString(),
+      "oidc-token-generated-at":
+        run.oidcTokenGeneratedAt === null ? null : new Date(run.oidcTokenGeneratedAt).toISOString(),
       "oidc-token-expires-at": run.oidcTokenExpiresAt === null ? null : new Date(run.oidcTokenExpiresAt).toISOString(),
       "execution-stage": run.executionStage,
       "execution-started-at": run.executionStartedAt === null ? null : new Date(run.executionStartedAt).toISOString(),
@@ -1362,9 +1564,10 @@ function testRunResource(
     },
     relationships: {
       "configuration-version": {
-        data: run.configurationVersionId === null
-          ? null
-          : { id: run.configurationVersionId, type: "configuration-versions" },
+        data:
+          run.configurationVersionId === null
+            ? null
+            : { id: run.configurationVersionId, type: "configuration-versions" },
       },
       "created-by": {
         data: run.createdBy === null ? null : { id: run.createdBy, type: "users" },
@@ -1374,7 +1577,9 @@ function testRunResource(
   };
 }
 
-async function findTestRunModule(params: TestRunParams): Promise<DeepReadonly<typeof registryModules.$inferSelect> | undefined> {
+async function findTestRunModule(
+  params: TestRunParams,
+): Promise<DeepReadonly<typeof registryModules.$inferSelect> | undefined> {
   if (params.registry_name !== "private") return undefined;
   return findTestVarsModule(params);
 }
@@ -1384,30 +1589,45 @@ async function testRunConfigurationArchive(
   configurationVersionId: string | undefined,
   organizationId: string,
 ): Promise<Readonly<{ archivePath: string | null; moduleConfigurationVersionId: string | null }>> {
-  if (configurationVersionId === undefined || configurationVersionId === "") return { archivePath: null, moduleConfigurationVersionId: null };
+  if (configurationVersionId === undefined || configurationVersionId === "")
+    return { archivePath: null, moduleConfigurationVersionId: null };
   const moduleConfiguration = await db.query.moduleTestConfigurationVersions.findFirst({
-    where: and(eq(moduleTestConfigurationVersions.id, configurationVersionId), eq(moduleTestConfigurationVersions.moduleId, moduleId)),
+    where: and(
+      eq(moduleTestConfigurationVersions.id, configurationVersionId),
+      eq(moduleTestConfigurationVersions.moduleId, moduleId),
+    ),
   });
   if (moduleConfiguration !== undefined) {
     return {
-      archivePath: moduleConfiguration.status === "uploaded" && moduleConfiguration.archivePath !== null && await Bun.file(moduleConfiguration.archivePath).exists()
-        ? moduleConfiguration.archivePath
-        : null,
+      archivePath:
+        moduleConfiguration.status === "uploaded" &&
+        moduleConfiguration.archivePath !== null &&
+        (await Bun.file(moduleConfiguration.archivePath).exists())
+          ? moduleConfiguration.archivePath
+          : null,
       moduleConfigurationVersionId: moduleConfiguration.id,
     };
   }
-  const workspaceConfiguration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, configurationVersionId) });
-  if (workspaceConfiguration === undefined || workspaceConfiguration.archivePath === null || !(await Bun.file(workspaceConfiguration.archivePath).exists())) {
+  const workspaceConfiguration = await db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configurationVersionId),
+  });
+  if (
+    workspaceConfiguration === undefined ||
+    workspaceConfiguration.archivePath === null ||
+    !(await Bun.file(workspaceConfiguration.archivePath).exists())
+  ) {
     return { archivePath: null, moduleConfigurationVersionId: null };
   }
-  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceConfiguration.workspaceId) });
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceConfiguration.workspaceId),
+  });
   return workspace?.orgId === organizationId
     ? { archivePath: workspaceConfiguration.archivePath, moduleConfigurationVersionId: null }
     : { archivePath: null, moduleConfigurationVersionId: null };
 }
 
 function testVariableAttributes(body: unknown): Readonly<{ attrs: Record<string, unknown> } | { error: string }> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"];
   if (data === null || typeof data !== "object") return { error: "data is required" };
   const attributes = (data as Record<string, unknown>)["attributes"];
@@ -1421,7 +1641,8 @@ function validateTestVariableKeyCategory(
 ): Readonly<{ key: unknown; category: unknown; cat: string } | { error: string }> {
   const key = attrs["key"];
   const category = attrs["category"];
-  if (typeof category !== "undefined" && category !== null && typeof category !== "string") return { error: "category must be a string" };
+  if (typeof category !== "undefined" && category !== null && typeof category !== "string")
+    return { error: "category must be a string" };
   if (requireKey && (typeof key !== "string" || key.trim() === "")) return { error: "key is required" };
   if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
   const cat = typeof category === "string" ? category : "terraform";
@@ -1434,8 +1655,22 @@ function assembleTestVariableResult(
   key: unknown,
   category: unknown,
   cat: string,
-): { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } {
-  const result: { key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null } = {};
+): {
+  key?: string;
+  value?: string;
+  sensitive?: boolean;
+  hcl?: boolean;
+  category?: string;
+  description?: string | null;
+} {
+  const result: {
+    key?: string;
+    value?: string;
+    sensitive?: boolean;
+    hcl?: boolean;
+    category?: string;
+    description?: string | null;
+  } = {};
   // Only set category when the caller provided it, so a PATCH that omits
   // category preserves the stored one (create defaults to "terraform").
   if (typeof category === "string") result.category = cat;
@@ -1490,14 +1725,24 @@ async function buildModuleListResponse(
   providerRows: readonly { provider: string }[],
 ): Promise<Record<string, unknown>> {
   const pageData = pagination(request, page.number, page.size, total);
-  const pageVersions = pageModules.length === 0 ? [] : await db.query.registryModuleVersions.findMany({
-    where: inArray(registryModuleVersions.moduleId, pageModules.map((mod): string => mod.id)),
-    orderBy: [desc(registryModuleVersions.createdAt)],
-  });
+  const pageVersions =
+    pageModules.length === 0
+      ? []
+      : await db.query.registryModuleVersions.findMany({
+          where: inArray(
+            registryModuleVersions.moduleId,
+            pageModules.map((mod): string => mod.id),
+          ),
+          orderBy: [desc(registryModuleVersions.createdAt)],
+        });
   const versionsByModule = Map.groupBy(pageVersions, (version): string => version.moduleId);
   return {
-    data: await Promise.all(pageModules.map(async (mod): Promise<Record<string, unknown>> =>
-      await registryModuleResource(mod, orgName, canManage, versionsByModule.get(mod.id) ?? []))),
+    data: await Promise.all(
+      pageModules.map(
+        async (mod): Promise<Record<string, unknown>> =>
+          await registryModuleResource(mod, orgName, canManage, versionsByModule.get(mod.id) ?? []),
+      ),
+    ),
     ...pageData,
     meta: {
       ...pageData.meta,
@@ -1512,7 +1757,10 @@ function parseRegistryModuleFields(
 ): Readonly<{ name: string; provider: string } | { error: string }> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const attributes =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
   const provider = typeof attributes["provider"] === "string" ? attributes["provider"].trim() : "";
   const namespace = attributes["namespace"];
@@ -1520,7 +1768,10 @@ function parseRegistryModuleFields(
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
     return { error: "Name and provider must follow private module naming rules" };
   }
-  if ((namespace !== undefined && namespace !== orgName) || (registryName !== undefined && registryName !== "private")) {
+  if (
+    (namespace !== undefined && namespace !== orgName) ||
+    (registryName !== undefined && registryName !== "private")
+  ) {
     return { error: "Private modules use the organization namespace and private registry" };
   }
   return { name, provider };
@@ -1534,11 +1785,11 @@ async function resolveOrgForNoCodeWrite(
   set: SetObj,
 ): Promise<Readonly<{ org: OrgRowForWrite } | { failure: unknown }>> {
   const org = await cachedOrgByName(orgName);
-  const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
+  const hasSupportedPrincipal = (user !== null && user !== undefined) || (teamId !== null && teamId !== undefined);
   if (
-    org === undefined
-    || !hasSupportedPrincipal
-    || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+    org === undefined ||
+    !hasSupportedPrincipal ||
+    !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
   ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
@@ -1553,24 +1804,36 @@ async function resolveNoCodeCreationTarget(
 ): Promise<Readonly<{ mod: ModItem; version: ModVerItem } | { failure: unknown }>> {
   if (input.moduleId === undefined) {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "registry-module relationship is required" }] } };
+    return {
+      failure: {
+        errors: [{ status: "422", title: "Unprocessable Entity", detail: "registry-module relationship is required" }],
+      },
+    };
   }
   const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
   if (mod?.orgId !== org.id) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
-  const version = input.versionPin === undefined
-    ? (await availableModuleVersions(mod.id))[0]
-    : await db.query.registryModuleVersions.findFirst({
-        where: and(
-          eq(registryModuleVersions.moduleId, mod.id),
-          eq(registryModuleVersions.version, input.versionPin),
-        ),
-      });
+  const version =
+    input.versionPin === undefined
+      ? (await availableModuleVersions(mod.id))[0]
+      : await db.query.registryModuleVersions.findFirst({
+          where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, input.versionPin)),
+        });
   if (version?.status !== "ok") {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "version-pin must identify a published version of the registry module",
+          },
+        ],
+      },
+    };
   }
   return { mod, version };
 }
@@ -1583,11 +1846,19 @@ async function upsertNoCodeRow(
 ): Promise<NoCodeRow> {
   const now = Date.now();
   if (existing === undefined) {
-    const row: NoCodeRow = { id: newResourceId("nocode"), moduleId: mod.id, versionId: version.id, enabled: enabled ?? false, createdAt: now, updatedAt: now };
+    const row: NoCodeRow = {
+      id: newResourceId("nocode"),
+      moduleId: mod.id,
+      versionId: version.id,
+      enabled: enabled ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
     await db.insert(noCodeModules).values(row);
     return row;
   }
-  await db.update(noCodeModules)
+  await db
+    .update(noCodeModules)
     .set({ versionId: version.id, enabled: enabled ?? false, updatedAt: now })
     .where(eq(noCodeModules.id, existing.id));
   return { ...existing, versionId: version.id, enabled: enabled ?? false, updatedAt: now };
@@ -1606,9 +1877,36 @@ async function resolveProviderPlatformChain(
 ): Promise<Readonly<{ chain: ProviderPlatformChain } | { failure: unknown }>> {
   if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
   const org = await cachedOrgByName(params["org_name"] ?? "");
-  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-  const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-  const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
+  const provider =
+    org === undefined
+      ? undefined
+      : await db.query.registryProviders.findFirst({
+          where: and(
+            eq(registryProviders.orgId, org.id),
+            eq(registryProviders.namespace, params["namespace"] ?? ""),
+            eq(registryProviders.type, params["name"] ?? ""),
+            eq(registryProviders.registryName, "private"),
+          ),
+        });
+  const version =
+    provider === undefined
+      ? undefined
+      : await db.query.registryProviderVersions.findFirst({
+          where: and(
+            eq(registryProviderVersions.providerId, provider.id),
+            eq(registryProviderVersions.version, params["version"] ?? ""),
+          ),
+        });
+  const platform =
+    version === undefined
+      ? undefined
+      : await db.query.registryProviderPlatforms.findFirst({
+          where: and(
+            eq(registryProviderPlatforms.versionId, version.id),
+            eq(registryProviderPlatforms.os, params["os"] ?? ""),
+            eq(registryProviderPlatforms.arch, params["arch"] ?? ""),
+          ),
+        });
   if (org === undefined || provider === undefined || version === undefined || platform === undefined) {
     return { failure: registryNotFound(set) };
   }
@@ -1623,9 +1921,15 @@ async function resolveModuleVersionForManage(
   set: SetObj,
 ): Promise<Readonly<{ ver: ModVerItem; mod: ModItem } | { failure: unknown }>> {
   const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-  if (ver === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (ver === undefined) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
   const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+  if (
+    mod === undefined ||
+    !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))
+  ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -1638,13 +1942,16 @@ async function ingestModuleVersionUpload(
   bytes: Uint8Array,
   set: SetObj,
 ): Promise<unknown> {
-  const claimed = await db.update(registryModuleVersions)
+  const claimed = await db
+    .update(registryModuleVersions)
     .set({ status: "ingesting", updatedAt: Date.now() })
-    .where(and(
-      eq(registryModuleVersions.id, versionId),
-      isNull(registryModuleVersions.archivePath),
-      ne(registryModuleVersions.status, "ingesting"),
-    ))
+    .where(
+      and(
+        eq(registryModuleVersions.id, versionId),
+        isNull(registryModuleVersions.archivePath),
+        ne(registryModuleVersions.status, "ingesting"),
+      ),
+    )
     .returning({ id: registryModuleVersions.id });
   if (claimed.length !== 1) {
     (set as { status: number }).status = 409;
@@ -1658,27 +1965,38 @@ async function ingestModuleVersionUpload(
     const metadata = await ingestModuleArchive(rawPath, archivePath, "", inspectRegistryModule);
     const publishedAt = Date.now();
     await db.transaction(async (tx): Promise<void> => {
-      await tx.update(registryModuleVersions).set({
-        archivePath,
-        status: "ok",
-        metadata,
-        ingestError: null,
-        publishedAt,
-        updatedAt: publishedAt,
-      }).where(eq(registryModuleVersions.id, versionId));
-      await tx.update(registryModules).set({
-        status: "setup_complete",
-        description: metadata.description,
-        updatedAt: publishedAt,
-      }).where(eq(registryModules.id, moduleId));
+      await tx
+        .update(registryModuleVersions)
+        .set({
+          archivePath,
+          status: "ok",
+          metadata,
+          ingestError: null,
+          publishedAt,
+          updatedAt: publishedAt,
+        })
+        .where(eq(registryModuleVersions.id, versionId));
+      await tx
+        .update(registryModules)
+        .set({
+          status: "setup_complete",
+          description: metadata.description,
+          updatedAt: publishedAt,
+        })
+        .where(eq(registryModules.id, moduleId));
     });
-    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+    const updated = await db.query.registryModuleVersions.findFirst({
+      where: eq(registryModuleVersions.id, versionId),
+    });
     (set as { status: number }).status = 200;
     if (updated === undefined) throw new Error("Uploaded registry module version could not be loaded");
     return { data: registryModuleVersionResource(updated) };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Module archive ingestion failed";
-    await db.update(registryModuleVersions).set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
+    await db
+      .update(registryModuleVersions)
+      .set({ status: "errored", ingestError: message.slice(0, 2_000), updatedAt: Date.now() })
+      .where(eq(registryModuleVersions.id, versionId));
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: message }] };
   } finally {
@@ -1694,9 +2012,15 @@ async function resolveProviderVersionByIdForWrite(
   set: SetObj,
 ): Promise<Readonly<{ version: ProvVerItem } | { failure: unknown }>> {
   const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
-  if (ver === undefined) { (set as { status: number }).status = 404; return { failure: { errors: [{ status: "404", title: "Not Found" }] } }; }
+  if (ver === undefined) {
+    (set as { status: number }).status = 404;
+    return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
+  }
   const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-  if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))) {
+  if (
+    prov === undefined ||
+    !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))
+  ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -1711,7 +2035,10 @@ async function resolveProviderByIdForWrite(
   set: SetObj,
 ): Promise<Readonly<{ provider: ProvItem } | { failure: unknown }>> {
   const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
-  if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))) {
+  if (
+    prov === undefined ||
+    !(await checkOrganizationPermission(prov.orgId, userId, tokenOrgId, teamId ?? null, "manage-providers"))
+  ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -1726,11 +2053,11 @@ async function resolveNoCodeDetailsForWrite(
   set: SetObj,
 ): Promise<Readonly<{ details: NoCodeDetails } | { failure: unknown }>> {
   const details = await noCodeDetails(id);
-  const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
+  const hasSupportedPrincipal = (user !== null && user !== undefined) || (teamId !== null && teamId !== undefined);
   if (
-    details === undefined
-    || !hasSupportedPrincipal
-    || !(await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+    details === undefined ||
+    !hasSupportedPrincipal ||
+    !(await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
   ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
@@ -1743,24 +2070,36 @@ async function resolveNoCodeTarget(
   input: NoCodeInput,
   set: SetObj,
 ): Promise<Readonly<{ targetModule: ModItem; targetVersion: ModVerItem } | { failure: unknown }>> {
-  const targetModule = input.moduleId === undefined
-    ? details.mod
-    : await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
+  const targetModule =
+    input.moduleId === undefined
+      ? details.mod
+      : await db.query.registryModules.findFirst({ where: eq(registryModules.id, input.moduleId) });
   if (targetModule?.orgId !== details.org.id) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
-  const targetVersion = input.versionPin === undefined
-    ? (await availableModuleVersions(targetModule.id))[0]
-    : await db.query.registryModuleVersions.findFirst({
-        where: and(
-          eq(registryModuleVersions.moduleId, targetModule.id),
-          eq(registryModuleVersions.version, input.versionPin),
-        ),
-      });
+  const targetVersion =
+    input.versionPin === undefined
+      ? (await availableModuleVersions(targetModule.id))[0]
+      : await db.query.registryModuleVersions.findFirst({
+          where: and(
+            eq(registryModuleVersions.moduleId, targetModule.id),
+            eq(registryModuleVersions.version, input.versionPin),
+          ),
+        });
   if (targetVersion?.status !== "ok") {
     (set as { status: number }).status = 422;
-    return { failure: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] } };
+    return {
+      failure: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "version-pin must identify a published version of the registry module",
+          },
+        ],
+      },
+    };
   }
   return { targetModule, targetVersion };
 }
@@ -1779,19 +2118,35 @@ async function resolveTestRunModuleForWrite(
   set: SetObj,
 ): Promise<Readonly<{ mod: ModItem } | { failure: unknown }>> {
   const mod = await findTestRunModule(params);
-  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  if (
+    mod === undefined ||
+    !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))
+  )
+    return { failure: registryNotFound(set) };
   return { mod };
 }
 
 function parseTestRunConfigurationVersion(body: unknown): { configurationVersionId: string | undefined } {
-  const rawPayload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = rawPayload["data"] !== null && typeof rawPayload["data"] === "object" ? rawPayload["data"] as Record<string, unknown> : {};
-  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+  const rawPayload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data =
+    rawPayload["data"] !== null && typeof rawPayload["data"] === "object"
+      ? (rawPayload["data"] as Record<string, unknown>)
+      : {};
+  const relationships =
+    data["relationships"] !== null && typeof data["relationships"] === "object"
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
   const configurationRelationship = relationships["configuration-version"];
-  const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>)["data"] : undefined;
-  const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>)["id"] === "string"
-    ? (configurationData as Record<string, unknown>)["id"] as string
-    : undefined;
+  const configurationData =
+    configurationRelationship !== null && typeof configurationRelationship === "object"
+      ? (configurationRelationship as Record<string, unknown>)["data"]
+      : undefined;
+  const configurationVersionId =
+    configurationData !== null &&
+    typeof configurationData === "object" &&
+    typeof (configurationData as Record<string, unknown>)["id"] === "string"
+      ? ((configurationData as Record<string, unknown>)["id"] as string)
+      : undefined;
   return { configurationVersionId };
 }
 
@@ -1825,31 +2180,48 @@ async function resolveModuleVersionForWrite(
 ): Promise<Readonly<{ version: ModVerItem } | { failure: unknown }>> {
   if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
   const org = await cachedOrgByName(params["org_name"] ?? "");
-  const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
+  const mod =
+    org === undefined
+      ? undefined
+      : await db.query.registryModules.findFirst({
+          where: and(
+            eq(registryModules.orgId, org.id),
+            eq(registryModules.namespace, params["namespace"] ?? ""),
+            eq(registryModules.name, params["module_name"] ?? ""),
+            eq(registryModules.provider, params["provider"] ?? ""),
+          ),
+        });
+  if (
+    org === undefined ||
+    mod === undefined ||
+    !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))
+  )
+    return { failure: registryNotFound(set) };
+  const version = await db.query.registryModuleVersions.findFirst({
     where: and(
-      eq(registryModules.orgId, org.id),
-      eq(registryModules.namespace, params["namespace"] ?? ""),
-      eq(registryModules.name, params["module_name"] ?? ""),
-      eq(registryModules.provider, params["provider"] ?? ""),
+      eq(registryModuleVersions.moduleId, mod.id),
+      eq(registryModuleVersions.version, params["version"] ?? ""),
     ),
   });
-  if (org === undefined || mod === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
-  const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
   if (version === undefined) return { failure: registryNotFound(set) };
   return { version };
 }
 
 function parseDeprecationFlag(body: unknown): Readonly<{ deprecated: boolean } | { error: string }> {
   const attrs = jsonApiAttributes(body);
-  const deprecation = attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object" ? attrs["deprecation"] as Record<string, unknown> : {};
+  const deprecation =
+    attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object"
+      ? (attrs["deprecation"] as Record<string, unknown>)
+      : {};
   const status = deprecation["deprecated-status"];
-  const deprecated = typeof attrs["deprecated"] === "boolean"
-    ? attrs["deprecated"]
-    : status === "Deprecated"
-      ? true
-      : status === "Undeprecated"
-        ? false
-        : undefined;
+  const deprecated =
+    typeof attrs["deprecated"] === "boolean"
+      ? attrs["deprecated"]
+      : status === "Deprecated"
+        ? true
+        : status === "Undeprecated"
+          ? false
+          : undefined;
   if (deprecated === undefined) {
     return { error: "deprecation.deprecated-status must be Deprecated or Undeprecated" };
   }
@@ -1864,7 +2236,11 @@ async function resolveRegistryModuleForWrite(
   set: SetObj,
 ): Promise<Readonly<{ org: OrgRowForWrite; mod: ModItem } | { failure: unknown }>> {
   const org = await cachedOrgByName(params["org_name"] ?? "");
-  if (org === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))) return { failure: registryNotFound(set) };
+  if (
+    org === undefined ||
+    !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-modules"))
+  )
+    return { failure: registryNotFound(set) };
   const mod = await db.query.registryModules.findFirst({
     where: and(
       eq(registryModules.orgId, org.id),
@@ -1883,9 +2259,18 @@ function validateModulePatchFields(
 ): Readonly<{ sourceDirectory: unknown; tagPrefix: unknown } | { error: string }> {
   const sourceDirectory = attributes["source-directory"];
   const tagPrefix = attributes["tag-prefix"];
-  const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
+  const vcsRepo =
+    attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
+      ? (attributes["vcs-repo"] as Record<string, unknown>)
+      : {};
   const requestedBranch = vcsRepo["branch"];
-  if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
+  if (
+    sourceDirectory !== undefined &&
+    (typeof sourceDirectory !== "string" ||
+      sourceDirectory.startsWith("/") ||
+      sourceDirectory.includes("\\") ||
+      sourceDirectory.split("/").includes(".."))
+  ) {
     return { error: "source-directory must be a safe relative path" };
   }
   if (tagPrefix !== undefined && (typeof tagPrefix !== "string" || tagPrefix.length > 128)) {
@@ -1922,8 +2307,23 @@ async function resolveProviderForWrite(
 ): Promise<Readonly<{ provider: ProvItem } | { failure: unknown }>> {
   if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
   const org = await cachedOrgByName(params["org_name"] ?? "");
-  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-  if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))) return { failure: registryNotFound(set) };
+  const provider =
+    org === undefined
+      ? undefined
+      : await db.query.registryProviders.findFirst({
+          where: and(
+            eq(registryProviders.orgId, org.id),
+            eq(registryProviders.namespace, params["namespace"] ?? ""),
+            eq(registryProviders.type, params["name"] ?? ""),
+            eq(registryProviders.registryName, "private"),
+          ),
+        });
+  if (
+    org === undefined ||
+    provider === undefined ||
+    !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))
+  )
+    return { failure: registryNotFound(set) };
   return { provider };
 }
 
@@ -1936,9 +2336,11 @@ async function parseProviderVersionFields(
   const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
   if (version === "") return { error: "Version is required" };
   const rawKeyId = attrs["key-id"];
-  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) return { error: "key-id must identify a GPG key" };
+  if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === ""))
+    return { error: "key-id must identify a GPG key" };
   const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
-  if (keyId !== null && await registrySigningKey(orgId, namespace, keyId) === undefined) return { error: "key-id must identify a GPG key in the provider namespace" };
+  if (keyId !== null && (await registrySigningKey(orgId, namespace, keyId)) === undefined)
+    return { error: "key-id must identify a GPG key in the provider namespace" };
   const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
   return {
     version,
@@ -1950,9 +2352,12 @@ async function parseProviderVersionFields(
 }
 
 function jsonApiAttributes(body: unknown): Record<string, unknown> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
-  return data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data =
+    payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+  return data["attributes"] !== null && typeof data["attributes"] === "object"
+    ? (data["attributes"] as Record<string, unknown>)
+    : {};
 }
 
 function parsePlatformFields(body: unknown): ProviderPlatformFields | Readonly<{ error: string }> {
@@ -1977,9 +2382,33 @@ async function resolveProviderVersionForWrite(
 ): Promise<Readonly<{ version: ProvVerItem } | { failure: unknown }>> {
   if (params["registry_name"] !== "private") return { failure: registryNotFound(set) };
   const org = await cachedOrgByName(params["org_name"] ?? "");
-  const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-  const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-  if (org === undefined || provider === undefined || version === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))) return { failure: registryNotFound(set) };
+  const provider =
+    org === undefined
+      ? undefined
+      : await db.query.registryProviders.findFirst({
+          where: and(
+            eq(registryProviders.orgId, org.id),
+            eq(registryProviders.namespace, params["namespace"] ?? ""),
+            eq(registryProviders.type, params["name"] ?? ""),
+            eq(registryProviders.registryName, "private"),
+          ),
+        });
+  const version =
+    provider === undefined
+      ? undefined
+      : await db.query.registryProviderVersions.findFirst({
+          where: and(
+            eq(registryProviderVersions.providerId, provider.id),
+            eq(registryProviderVersions.version, params["version"] ?? ""),
+          ),
+        });
+  if (
+    org === undefined ||
+    provider === undefined ||
+    version === undefined ||
+    !(await checkOrganizationPermission(org.id, userId, tokenOrgId, teamId ?? null, "manage-providers"))
+  )
+    return { failure: registryNotFound(set) };
   return { version };
 }
 
@@ -1994,9 +2423,17 @@ async function resolveTestConfigModule(
   const { namespace, name, provider } = params;
   const org = await cachedOrgByName(namespace ?? "");
   const mod = await db.query.registryModules.findFirst({
-    where: and(eq(registryModules.orgId, org?.id ?? ""), eq(registryModules.namespace, namespace ?? ""), eq(registryModules.name, name ?? ""), eq(registryModules.provider, provider ?? "")),
+    where: and(
+      eq(registryModules.orgId, org?.id ?? ""),
+      eq(registryModules.namespace, namespace ?? ""),
+      eq(registryModules.name, name ?? ""),
+      eq(registryModules.provider, provider ?? ""),
+    ),
   });
-  if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))) {
+  if (
+    mod === undefined ||
+    !(await checkOrganizationPermission(mod.orgId, userId, tokenOrgId, teamId ?? null, "manage-modules"))
+  ) {
     (set as { status: number }).status = 404;
     return { failure: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -2007,15 +2444,18 @@ function resolveTestConfigBasics(
   attrs: Readonly<Record<string, unknown>>,
   existing: TestConfigRow | undefined,
   legacyProviderUrl: string | null,
-): Readonly<{ id: string; oidcEnabled: boolean; oidcProvider: string | null; rawConfiguration: unknown } | { error: string }> {
+): Readonly<
+  { id: string; oidcEnabled: boolean; oidcProvider: string | null; rawConfiguration: unknown } | { error: string }
+> {
   const rawEnabled = attrs["oidc-enabled"];
   const rawProvider = attrs["oidc-provider"];
   if (rawEnabled !== undefined && typeof rawEnabled !== "boolean") {
     return { error: "oidc-enabled must be a boolean" };
   }
   const id = existing?.id ?? crypto.randomUUID();
-  const oidcEnabled = typeof rawEnabled === "boolean" ? rawEnabled : existing?.oidcEnabled ?? legacyProviderUrl !== null;
-  const oidcProvider = typeof rawProvider === "string" ? rawProvider : existing?.oidcProvider ?? null;
+  const oidcEnabled =
+    typeof rawEnabled === "boolean" ? rawEnabled : (existing?.oidcEnabled ?? legacyProviderUrl !== null);
+  const oidcProvider = typeof rawProvider === "string" ? rawProvider : (existing?.oidcProvider ?? null);
   return { id, oidcEnabled, oidcProvider, rawConfiguration: attrs["oidc-configuration"] };
 }
 
@@ -2034,7 +2474,9 @@ function testConfigOidcError(
       azure: ["tenant-id", "client-id", "subscription-id"],
       vault: ["url", "role-name"],
     };
-    const missing = (requiredFields[oidcProvider ?? ""] ?? []).filter((field): boolean => typeof oidcConfiguration[field] !== "string" || oidcConfiguration[field] === "");
+    const missing = (requiredFields[oidcProvider ?? ""] ?? []).filter(
+      (field): boolean => typeof oidcConfiguration[field] !== "string" || oidcConfiguration[field] === "",
+    );
     if (missing.length > 0) {
       return `oidc-configuration requires ${missing.join(", ")}`;
     }
@@ -2051,18 +2493,32 @@ function resolveTestConfigConfiguration(
   if (oidcEnabled && (oidcProvider === null || !["aws", "gcp", "azure", "vault"].includes(oidcProvider))) {
     return { error: "oidc-provider must be aws, gcp, azure, or vault when OIDC is enabled" };
   }
-  if (rawConfiguration !== undefined && (rawConfiguration === null || typeof rawConfiguration !== "object" || Array.isArray(rawConfiguration))) {
+  if (
+    rawConfiguration !== undefined &&
+    (rawConfiguration === null || typeof rawConfiguration !== "object" || Array.isArray(rawConfiguration))
+  ) {
     return { error: "oidc-configuration must be an object" };
   }
-  const oidcConfiguration = rawConfiguration === undefined
-    ? existingConfiguration ?? null
-    : rawConfiguration as Record<string, unknown>;
+  const oidcConfiguration =
+    rawConfiguration === undefined ? (existingConfiguration ?? null) : (rawConfiguration as Record<string, unknown>);
   const oidcError = testConfigOidcError(oidcEnabled, oidcProvider, oidcConfiguration);
   if (oidcError !== null) return { error: oidcError };
   return { configuration: oidcConfiguration };
 }
 
-function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
+function testVariableInput(
+  body: unknown,
+  requireKey: boolean,
+):
+  | Readonly<{
+      key?: string;
+      value?: string;
+      sensitive?: boolean;
+      hcl?: boolean;
+      category?: string;
+      description?: string | null;
+    }>
+  | Readonly<{ error: string }> {
   const envelope = testVariableAttributes(body);
   if ("error" in envelope) return envelope;
   const checked = validateTestVariableKeyCategory(envelope.attrs, requireKey);
@@ -2092,1368 +2548,2632 @@ async function noCodeDetails(id: string): Promise<NoCodeDetails | undefined> {
 export const registryRoutes = new Elysia({ name: "registry" })
   .use(authPlugin)
   // --- Module Registry Protocol ---
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/versions", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
-    if (mod === undefined) return registryNotFound(set);
-    const verList = await availableModuleVersions(mod.id);
-    return { modules: [{ versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) }] };
-  })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const version = params["version"] ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
-    if (mod === undefined) return registryNotFound(set);
-    const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined || ver.status !== "ok" || ver.isRevoked === true || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) return registryNotFound(set);
-    return { id: `${namespace}/${name}/${provider}/${version}`, owner: namespace, namespace, name, provider, version: ver.version, status: ver.status, download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download` };
-  })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const version = params["version"] ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
-    if (mod === undefined) return registryNotFound(set);
-    const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined || ver.status !== "ok" || ver.isRevoked === true || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) return registryNotFound(set);
-    // Terraform fetches the archive WITHOUT an Authorization header, so the
-    // archive URL is signed (the reference format model).
-    // The URL ends in .tar.gz so go-getter detects the archive format from
-    // the extension (a bare /archive path falls back to XML sniffing).
-    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
-    (set.headers as Record<string, string | number>)["X-Terraform-Get"] = signedApiURL(request, archivePath, "GET");
-    (set as { status: number }).status = 204;
-    return undefined;
-  })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive.tar.gz", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const version = params["version"] ?? "";
-    const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
-    // Terraform fetches the archive without an Authorization header; a valid
-    // signed URL (issued by the download endpoint) authorizes the fetch.
-    const signedOk = validSignedApiURL(request, archivePath, "GET");
-    let mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
-    if (mod === undefined && signedOk) {
-      mod = await db.query.registryModules.findFirst({
-        where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name), eq(registryModules.provider, provider)),
+  .get(
+    "/api/registry/v1/modules/:namespace/:name/:provider/versions",
+    async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
+      if (mod === undefined) return registryNotFound(set);
+      const verList = await availableModuleVersions(mod.id);
+      return {
+        modules: [{ versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) }],
+      };
+    },
+  )
+  .get(
+    "/api/registry/v1/modules/:namespace/:name/:provider/:version",
+    async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const version = params["version"] ?? "";
+      const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
+      if (mod === undefined) return registryNotFound(set);
+      const ver = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
       });
-    }
-    if (mod === undefined) return registryNotFound(set);
-    const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined || ver.status !== "ok" || ver.isRevoked === true || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) return registryNotFound(set);
-    (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-gzip";
-    return Bun.file(ver.archivePath);
-  })
-  .get("/api/registry/v1/modules/:namespace/:name", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const found = await db.query.registryModules.findMany({ where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name)) });
-    const readable = await Promise.all(found.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
-    const mods = found.filter((_, index): boolean => readable[index] === true);
-    if (mods.length === 0) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { modules: mods.map((m: ModItem): Record<string, unknown> => ({ id: `${namespace}/${name}/${m.provider}`, owner: namespace, namespace, name, provider: m.provider, versions: [] })) };
-  })
-  .get("/api/registry/v1/modules/:namespace/:name/:provider", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
-    if (mod === undefined) return registryNotFound(set);
-    const verList = await availableModuleVersions(mod.id);
-    const latestVersion = verList[0]?.version ?? "0.0.0";
-    const status = verList[0]?.status ?? "pending";
-    return { id: `${namespace}/${name}/${provider}/${latestVersion}`, owner: namespace, namespace, name, provider, version: latestVersion, status, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
-  })
-  .get("/api/registry/v1/modules/:namespace", async ({ params, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const found = await db.query.registryModules.findMany({ where: eq(registryModules.namespace, namespace) });
-    const readable = await Promise.all(found.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
-    const mods = found.filter((_, index): boolean => readable[index] === true);
-    const modules = await Promise.all(mods.map(async (m: ModItem): Promise<Record<string, unknown>> => {
-      const verList = await availableModuleVersions(m.id);
-      return { id: `${m.namespace}/${m.name}/${m.provider}`, owner: m.namespace, namespace: m.namespace, name: m.name, provider: m.provider, version: verList[0]?.version ?? null, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
-    }));
-    return { modules };
-  })
+      if (
+        ver === undefined ||
+        ver.status !== "ok" ||
+        ver.isRevoked === true ||
+        ver.archivePath === null ||
+        !(await Bun.file(ver.archivePath).exists())
+      )
+        return registryNotFound(set);
+      return {
+        id: `${namespace}/${name}/${provider}/${version}`,
+        owner: namespace,
+        namespace,
+        name,
+        provider,
+        version: ver.version,
+        status: ver.status,
+        download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download`,
+      };
+    },
+  )
+  .get(
+    "/api/registry/v1/modules/:namespace/:name/:provider/:version/download",
+    async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const version = params["version"] ?? "";
+      const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
+      if (mod === undefined) return registryNotFound(set);
+      const ver = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+      });
+      if (
+        ver === undefined ||
+        ver.status !== "ok" ||
+        ver.isRevoked === true ||
+        ver.archivePath === null ||
+        !(await Bun.file(ver.archivePath).exists())
+      )
+        return registryNotFound(set);
+      // Terraform fetches the archive WITHOUT an Authorization header, so the
+      // archive URL is signed (the reference format model).
+      // The URL ends in .tar.gz so go-getter detects the archive format from
+      // the extension (a bare /archive path falls back to XML sniffing).
+      const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
+      (set.headers as Record<string, string | number>)["X-Terraform-Get"] = signedApiURL(request, archivePath, "GET");
+      (set as { status: number }).status = 204;
+      return undefined;
+    },
+  )
+  .get(
+    "/api/registry/v1/modules/:namespace/:name/:provider/:version/archive.tar.gz",
+    async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const version = params["version"] ?? "";
+      const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
+      // Terraform fetches the archive without an Authorization header; a valid
+      // signed URL (issued by the download endpoint) authorizes the fetch.
+      const signedOk = validSignedApiURL(request, archivePath, "GET");
+      let mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
+      if (mod === undefined && signedOk) {
+        mod = await db.query.registryModules.findFirst({
+          where: and(
+            eq(registryModules.namespace, namespace),
+            eq(registryModules.name, name),
+            eq(registryModules.provider, provider),
+          ),
+        });
+      }
+      if (mod === undefined) return registryNotFound(set);
+      const ver = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+      });
+      if (
+        ver === undefined ||
+        ver.status !== "ok" ||
+        ver.isRevoked === true ||
+        ver.archivePath === null ||
+        !(await Bun.file(ver.archivePath).exists())
+      )
+        return registryNotFound(set);
+      (set.headers as Record<string, string | number>)["Content-Type"] = "application/x-gzip";
+      return Bun.file(ver.archivePath);
+    },
+  )
+  .get(
+    "/api/registry/v1/modules/:namespace/:name",
+    async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const found = await db.query.registryModules.findMany({
+        where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name)),
+      });
+      const readable = await Promise.all(
+        found.map(
+          async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId),
+        ),
+      );
+      const mods = found.filter((_, index): boolean => readable[index] === true);
+      if (mods.length === 0) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        modules: mods.map(
+          (m: ModItem): Record<string, unknown> => ({
+            id: `${namespace}/${name}/${m.provider}`,
+            owner: namespace,
+            namespace,
+            name,
+            provider: m.provider,
+            versions: [],
+          }),
+        ),
+      };
+    },
+  )
+  .get(
+    "/api/registry/v1/modules/:namespace/:name/:provider",
+    async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
+      if (mod === undefined) return registryNotFound(set);
+      const verList = await availableModuleVersions(mod.id);
+      const latestVersion = verList[0]?.version ?? "0.0.0";
+      const status = verList[0]?.status ?? "pending";
+      return {
+        id: `${namespace}/${name}/${provider}/${latestVersion}`,
+        owner: namespace,
+        namespace,
+        name,
+        provider,
+        version: latestVersion,
+        status,
+        versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })),
+      };
+    },
+  )
+  .get(
+    "/api/registry/v1/modules/:namespace",
+    async ({ params, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const found = await db.query.registryModules.findMany({ where: eq(registryModules.namespace, namespace) });
+      const readable = await Promise.all(
+        found.map(
+          async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId),
+        ),
+      );
+      const mods = found.filter((_, index): boolean => readable[index] === true);
+      const modules = await Promise.all(
+        mods.map(async (m: ModItem): Promise<Record<string, unknown>> => {
+          const verList = await availableModuleVersions(m.id);
+          return {
+            id: `${m.namespace}/${m.name}/${m.provider}`,
+            owner: m.namespace,
+            namespace: m.namespace,
+            name: m.name,
+            provider: m.provider,
+            version: verList[0]?.version ?? null,
+            versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })),
+          };
+        }),
+      );
+      return { modules };
+    },
+  )
   .get("/api/registry/v1/modules", async ({ query, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
     const searchQuery = (query?.["q"] ?? "").trim();
     let mods: (typeof registryModules.$inferSelect)[];
     if (searchQuery !== "") {
-      mods = await db.query.registryModules.findMany({ where: or(caseInsensitiveLike(registryModules.name, `%${searchQuery}%`), caseInsensitiveLike(registryModules.namespace, `%${searchQuery}%`), caseInsensitiveLike(registryModules.provider, `%${searchQuery}%`)), limit: 50 });
+      mods = await db.query.registryModules.findMany({
+        where: or(
+          caseInsensitiveLike(registryModules.name, `%${searchQuery}%`),
+          caseInsensitiveLike(registryModules.namespace, `%${searchQuery}%`),
+          caseInsensitiveLike(registryModules.provider, `%${searchQuery}%`),
+        ),
+        limit: 50,
+      });
     } else {
       mods = await db.query.registryModules.findMany({ limit: 50 });
     }
-    const readable = await Promise.all(mods.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
-    const modules = await Promise.all(mods.filter((_, index): boolean => readable[index] === true).map(async (m: ModItem): Promise<Record<string, unknown>> => {
-      const verList = await availableModuleVersions(m.id);
-      return { id: `${m.namespace}/${m.name}/${m.provider}`, owner: m.namespace, namespace: m.namespace, name: m.name, provider: m.provider, version: verList[0]?.version ?? null, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
-    }));
+    const readable = await Promise.all(
+      mods.map(
+        async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId),
+      ),
+    );
+    const modules = await Promise.all(
+      mods
+        .filter((_, index): boolean => readable[index] === true)
+        .map(async (m: ModItem): Promise<Record<string, unknown>> => {
+          const verList = await availableModuleVersions(m.id);
+          return {
+            id: `${m.namespace}/${m.name}/${m.provider}`,
+            owner: m.namespace,
+            namespace: m.namespace,
+            name: m.name,
+            provider: m.provider,
+            version: verList[0]?.version ?? null,
+            versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })),
+          };
+        }),
+    );
     return { modules };
   })
   // --- Provider Registry Protocol ---
-  .get("/api/registry/v1/providers/-/versions", async ({ query, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const searchQuery = (query?.["q"] ?? "").trim();
-    let provs: (typeof registryProviders.$inferSelect)[];
-    if (searchQuery !== "") {
-      provs = await db.query.registryProviders.findMany({ where: or(caseInsensitiveLike(registryProviders.namespace, `%${searchQuery}%`), caseInsensitiveLike(registryProviders.type, `%${searchQuery}%`)), limit: 50 });
-    } else {
-      provs = await db.query.registryProviders.findMany({ limit: 50 });
-    }
-    const readable = await Promise.all(provs.map(async (provider): Promise<boolean> => checkRegistryReadPermission(user?.id, provider.orgId, "providers", tokenOrgId)));
-    const versions = await Promise.all(provs.filter((_, index): boolean => readable[index] === true).map(async (p: ProvItem): Promise<Record<string, unknown>> => {
-      const verList = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, p.id), orderBy: [desc(registryProviderVersions.createdAt)] }));
-      return { id: `${p.namespace}/${p.type}`, namespace: p.namespace, versions: verList.map((v: ProvVerItem): Record<string, unknown> => ({ version: v.version, protocols: v.protocols ?? ["5.0"], platforms: [] })) };
-    }));
-    return { versions };
-  })
-  .get("/api/registry/v1/providers/:namespace/:type/versions", async ({ params, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const type = params["type"] ?? "";
-    const prov = await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)) });
-    if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) { return { versions: [] }; }
-    const verList = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }));
-    const versions = await Promise.all(verList.map(async (v: ProvVerItem): Promise<Record<string, unknown>> => {
-      const platList = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, v.id) });
-      return { version: v.version, protocols: v.protocols ?? ["5.0"], platforms: platList.map((p: PlatItem): Record<string, string> => ({ os: p.os, arch: p.arch })) };
-    }));
-    return { versions };
-  })
-  .get("/api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params["namespace"] ?? "";
-    const type = params["type"] ?? "";
-    const version = params["version"] ?? "";
-    const os = params["os"] ?? "";
-    const arch = params["arch"] ?? "";
-    const prov = await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)) });
-    if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ver = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, prov.id), eq(registryProviderVersions.version, version)) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const plat = await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, ver.id), eq(registryProviderPlatforms.os, os), eq(registryProviderPlatforms.arch, arch)) });
-    if (plat === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const signingKey = await registrySigningKey(prov.orgId, prov.namespace, ver.keyId);
-    return {
-      protocols: ver.protocols ?? ["5.0"],
-      os: plat.os,
-      arch: plat.arch,
-      filename: plat.filename,
-      download_url: plat.downloadUrl,
-      shasum: plat.shasum,
-      signing_keys: {
-        gpg_public_keys: signingKey === undefined
-          ? []
-          : [{ key_id: signingKey.keyId, ascii_armor: signingKey.asciiArmor }],
-      },
-    };
-  })
+  .get(
+    "/api/registry/v1/providers/-/versions",
+    async ({ query, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
+      const searchQuery = (query?.["q"] ?? "").trim();
+      let provs: (typeof registryProviders.$inferSelect)[];
+      if (searchQuery !== "") {
+        provs = await db.query.registryProviders.findMany({
+          where: or(
+            caseInsensitiveLike(registryProviders.namespace, `%${searchQuery}%`),
+            caseInsensitiveLike(registryProviders.type, `%${searchQuery}%`),
+          ),
+          limit: 50,
+        });
+      } else {
+        provs = await db.query.registryProviders.findMany({ limit: 50 });
+      }
+      const readable = await Promise.all(
+        provs.map(
+          async (provider): Promise<boolean> =>
+            checkRegistryReadPermission(user?.id, provider.orgId, "providers", tokenOrgId),
+        ),
+      );
+      const versions = await Promise.all(
+        provs
+          .filter((_, index): boolean => readable[index] === true)
+          .map(async (p: ProvItem): Promise<Record<string, unknown>> => {
+            const verList = sortModuleVersionsDescending(
+              await db.query.registryProviderVersions.findMany({
+                where: eq(registryProviderVersions.providerId, p.id),
+                orderBy: [desc(registryProviderVersions.createdAt)],
+              }),
+            );
+            return {
+              id: `${p.namespace}/${p.type}`,
+              namespace: p.namespace,
+              versions: verList.map(
+                (v: ProvVerItem): Record<string, unknown> => ({
+                  version: v.version,
+                  protocols: v.protocols ?? ["5.0"],
+                  platforms: [],
+                }),
+              ),
+            };
+          }),
+      );
+      return { versions };
+    },
+  )
+  .get(
+    "/api/registry/v1/providers/:namespace/:type/versions",
+    async ({ params, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const type = params["type"] ?? "";
+      const prov = await db.query.registryProviders.findFirst({
+        where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)),
+      });
+      if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) {
+        return { versions: [] };
+      }
+      const verList = sortModuleVersionsDescending(
+        await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }),
+      );
+      const versions = await Promise.all(
+        verList.map(async (v: ProvVerItem): Promise<Record<string, unknown>> => {
+          const platList = await db.query.registryProviderPlatforms.findMany({
+            where: eq(registryProviderPlatforms.versionId, v.id),
+          });
+          return {
+            version: v.version,
+            protocols: v.protocols ?? ["5.0"],
+            platforms: platList.map((p: PlatItem): Record<string, string> => ({ os: p.os, arch: p.arch })),
+          };
+        }),
+      );
+      return { versions };
+    },
+  )
+  .get(
+    "/api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch",
+    async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+      const namespace = params["namespace"] ?? "";
+      const type = params["type"] ?? "";
+      const version = params["version"] ?? "";
+      const os = params["os"] ?? "";
+      const arch = params["arch"] ?? "";
+      const prov = await db.query.registryProviders.findFirst({
+        where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)),
+      });
+      if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ver = await db.query.registryProviderVersions.findFirst({
+        where: and(eq(registryProviderVersions.providerId, prov.id), eq(registryProviderVersions.version, version)),
+      });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const plat = await db.query.registryProviderPlatforms.findFirst({
+        where: and(
+          eq(registryProviderPlatforms.versionId, ver.id),
+          eq(registryProviderPlatforms.os, os),
+          eq(registryProviderPlatforms.arch, arch),
+        ),
+      });
+      if (plat === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const signingKey = await registrySigningKey(prov.orgId, prov.namespace, ver.keyId);
+      return {
+        protocols: ver.protocols ?? ["5.0"],
+        os: plat.os,
+        arch: plat.arch,
+        filename: plat.filename,
+        download_url: plat.downloadUrl,
+        shasum: plat.shasum,
+        signing_keys: {
+          gpg_public_keys:
+            signingKey === undefined ? [] : [{ key_id: signingKey.keyId, ascii_armor: signingKey.asciiArmor }],
+        },
+      };
+    },
+  )
   // --- Provider Network Mirror Protocol ---
-  .get("/api/registry/v1/provider-mirror/:hostname/:namespace/:type/index.json", async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
-    const prov = await db.query.registryProviders.findFirst({
-      where: and(eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["type"] ?? "")),
-    });
-    if (
-      prov === undefined
-      || !matchesMirrorHostname(prov, params["hostname"] ?? "", request.url)
-      || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))
-    ) {
-      return new Response(null, { status: 404 });
-    }
-    const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }));
-    return Response.json({ versions: Object.fromEntries(versions.map((version: ProvVerItem): [string, Record<string, never>] => [version.version, {}])) });
-  })
-  .get("/api/registry/v1/provider-mirror/:hostname/:namespace/:type/:version", async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
-    const prov = await db.query.registryProviders.findFirst({
-      where: and(eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["type"] ?? "")),
-    });
-    if (
-      prov === undefined
-      || !matchesMirrorHostname(prov, params["hostname"] ?? "", request.url)
-      || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))
-    ) {
-      return new Response(null, { status: 404 });
-    }
-    const versionParam = params["version"] ?? "";
-    if (!versionParam.endsWith(".json")) return new Response(null, { status: 404 });
-    const requestedVersion = versionParam.slice(0, -".json".length);
-    const ver = await db.query.registryProviderVersions.findFirst({
-      where: and(eq(registryProviderVersions.providerId, prov.id), eq(registryProviderVersions.version, requestedVersion)),
-    });
-    if (ver === undefined) return new Response(null, { status: 404 });
-    const platforms = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, ver.id) });
-    return Response.json({
-      archives: Object.fromEntries(platforms.map((platform: PlatItem): [string, { url: string; hashes: string[] }] => [
-        `${platform.os}_${platform.arch}`,
-        { url: platform.downloadUrl, hashes: [`zh:${platform.shasum}`] },
-      ])),
-    });
-  })
+  .get(
+    "/api/registry/v1/provider-mirror/:hostname/:namespace/:type/index.json",
+    async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
+      const prov = await db.query.registryProviders.findFirst({
+        where: and(
+          eq(registryProviders.namespace, params["namespace"] ?? ""),
+          eq(registryProviders.type, params["type"] ?? ""),
+        ),
+      });
+      if (
+        prov === undefined ||
+        !matchesMirrorHostname(prov, params["hostname"] ?? "", request.url) ||
+        !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))
+      ) {
+        return new Response(null, { status: 404 });
+      }
+      const versions = sortModuleVersionsDescending(
+        await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }),
+      );
+      return Response.json({
+        versions: Object.fromEntries(
+          versions.map((version: ProvVerItem): [string, Record<string, never>] => [version.version, {}]),
+        ),
+      });
+    },
+  )
+  .get(
+    "/api/registry/v1/provider-mirror/:hostname/:namespace/:type/:version",
+    async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
+      const prov = await db.query.registryProviders.findFirst({
+        where: and(
+          eq(registryProviders.namespace, params["namespace"] ?? ""),
+          eq(registryProviders.type, params["type"] ?? ""),
+        ),
+      });
+      if (
+        prov === undefined ||
+        !matchesMirrorHostname(prov, params["hostname"] ?? "", request.url) ||
+        !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))
+      ) {
+        return new Response(null, { status: 404 });
+      }
+      const versionParam = params["version"] ?? "";
+      if (!versionParam.endsWith(".json")) return new Response(null, { status: 404 });
+      const requestedVersion = versionParam.slice(0, -".json".length);
+      const ver = await db.query.registryProviderVersions.findFirst({
+        where: and(
+          eq(registryProviderVersions.providerId, prov.id),
+          eq(registryProviderVersions.version, requestedVersion),
+        ),
+      });
+      if (ver === undefined) return new Response(null, { status: 404 });
+      const platforms = await db.query.registryProviderPlatforms.findMany({
+        where: eq(registryProviderPlatforms.versionId, ver.id),
+      });
+      return Response.json({
+        archives: Object.fromEntries(
+          platforms.map((platform: PlatItem): [string, { url: string; hashes: string[] }] => [
+            `${platform.os}_${platform.arch}`,
+            { url: platform.downloadUrl, hashes: [`zh:${platform.shasum}`] },
+          ]),
+        ),
+      });
+    },
+  )
   // --- Module Management API (the reference format v2) ---
-  .get("/api/v2/organizations/:org_name/registry-modules", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const query = new URL(request.url).searchParams;
-    const where = moduleListWhere(org.id, query);
-    const page = pageRequest(request);
-    const start = (page.number - 1) * page.size;
-    const canManage = await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
-    const [pageModules, countRows, providerRows] = await Promise.all([
-      db.query.registryModules.findMany({
-        where,
-        orderBy: moduleListOrderBy(query.get("sort")),
-        limit: page.size,
-        offset: start,
-      }),
-      db.select({ total: count() }).from(registryModules).where(where),
-      db.selectDistinct({ provider: registryModules.provider })
-        .from(registryModules)
-        .where(eq(registryModules.orgId, org.id)),
-    ]);
-    return await buildModuleListResponse(request, page, org.name, canManage, pageModules, countRows[0]?.total ?? 0, providerRows);
-  })
-  .post("/api/v2/organizations/:org_name/registry-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const fields = parseRegistryModuleFields(body, org.name);
-    if ("error" in fields) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
-    }
-    const id = newResourceId("mod");
-    const now = Date.now();
-    const created: typeof registryModules.$inferInsert = {
-      id,
-      orgId: org.id,
-      namespace: org.name,
-      name: fields.name,
-      provider: fields.provider,
-      publishingMechanism: "manual",
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-    };
-    try {
-      await db.insert(registryModules).values(created);
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
-    }
-    (set as { status: number }).status = 201;
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
-    if (mod === undefined) throw new Error("Created registry module could not be loaded");
-    return { data: await registryModuleResource(mod, org.name, true) };
-  })
-  .post("/api/v2/organizations/:org_name/registry-modules/vcs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const envelope = parseVcsEnvelope(body);
-    const naming = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
-    const connection = parseVcsConnection(envelope.vcsRepo);
-    const options = parseVcsOptions(envelope.attributes, envelope.vcsRepo, naming.identifier);
-    const fieldError = vcsModuleFieldError(
-      envelope.data,
-      naming,
-      connection,
-      options,
-    );
-    if (fieldError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldError }] };
-    }
-    const connectionStatus = await resolveVcsConnection(org.id, connection);
-    const connectionAvailable = connectionStatus.available;
-    if (!connectionAvailable) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The selected VCS connection is unavailable or unsupported" }] };
-    }
-    const now = Date.now();
-    const id = newResourceId("mod");
-    const connectionRef = vcsConnectionRef(connection);
-    const urlResult = buildVcsRepositoryUrl(connectionStatus.repositoryBaseUrl, envelope.vcsRepo["repository-url"], naming.identifier);
-    if ("error" in urlResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: urlResult.error }] };
-    }
-    const accessError = await checkVcsRepositoryAccess(org.id, connection, naming.identifier);
-    if (accessError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: accessError }] };
-    }
-    try {
-      await db.insert(registryModules).values({
+  .get(
+    "/api/v2/organizations/:org_name/registry-modules",
+    async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const query = new URL(request.url).searchParams;
+      const where = moduleListWhere(org.id, query);
+      const page = pageRequest(request);
+      const start = (page.number - 1) * page.size;
+      const canManage = await checkOrganizationPermission(
+        org.id,
+        user?.id,
+        tokenOrgId,
+        teamId ?? null,
+        "manage-modules",
+      );
+      const [pageModules, countRows, providerRows] = await Promise.all([
+        db.query.registryModules.findMany({
+          where,
+          orderBy: moduleListOrderBy(query.get("sort")),
+          limit: page.size,
+          offset: start,
+        }),
+        db.select({ total: count() }).from(registryModules).where(where),
+        db
+          .selectDistinct({ provider: registryModules.provider })
+          .from(registryModules)
+          .where(eq(registryModules.orgId, org.id)),
+      ]);
+      return await buildModuleListResponse(
+        request,
+        page,
+        org.name,
+        canManage,
+        pageModules,
+        countRows[0]?.total ?? 0,
+        providerRows,
+      );
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/registry-modules",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const fields = parseRegistryModuleFields(body, org.name);
+      if ("error" in fields) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+      }
+      const id = newResourceId("mod");
+      const now = Date.now();
+      const created: typeof registryModules.$inferInsert = {
         id,
         orgId: org.id,
         namespace: org.name,
-        name: naming.name,
-        provider: naming.provider,
-        publishingMechanism: "vcs",
-        publishingWorkflow: connection.branch === null ? "tag" : "branch",
-        vcsConnectionType: connectionRef.type,
-        vcsConnectionId: connectionRef.id,
-        repositoryIdentifier: naming.identifier,
-        repositoryDisplayIdentifier: vcsDisplayIdentifier(envelope.vcsRepo, naming.identifier),
-        repositoryUrl: urlResult.url,
-        sourceDirectory: options.sourceDirectory,
-        tagPrefix: options.tagPrefix,
-        branch: connection.branch,
+        name: fields.name,
+        provider: fields.provider,
+        publishingMechanism: "manual",
         status: "pending",
         createdAt: now,
         updatedAt: now,
-      });
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }] };
-    }
-    return finishVcsModuleCreation(id, connection.branch, options.initialVersion, org.name, set);
-  })
-  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const namespace = params["namespace"] ?? "";
-    const moduleName = params["module_name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, namespace),
-        eq(registryModules.name, moduleName),
-        eq(registryModules.provider, provider),
-      ),
-    });
-    if (mod === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const canManage = await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
-    return { data: await registryModuleResource(mod, org.name, canManage) };
-  })
-  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (org === undefined || mod === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
-    return version === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(version) };
-  })
-  .patch("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { version } = resolved;
-    const parsed = parseDeprecationFlag(body);
-    if ("error" in parsed) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsed.error }] };
-    }
-    await db.update(registryModuleVersions).set({ isDeprecated: parsed.deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, version.id));
-    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, version.id) });
-    return updated === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(updated) };
-  })
-  .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
-    const { version } = resolved;
-    await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, version.id));
-    if (version.archivePath !== null) await rm(version.archivePath, { force: true });
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .get("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const moduleId = params["module_id"] ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
-    if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
-    const canManage = await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules");
-    return { data: await registryModuleResource(mod, org?.name ?? mod.orgId, canManage) };
-  })
-  .post("/api/v2/registry-modules/:module_id/actions/resync", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, params["module_id"] ?? "") });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    if (mod.publishingMechanism !== "vcs" || mod.publishingWorkflow !== "tag") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Resync imports new versions only for tag-based VCS modules; create a version for branch-based modules" }] };
-    }
-    try {
-      const result = await synchronizeRegistryModule(mod);
-      const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
-      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
-      if (updated === undefined) return registryNotFound(set);
-      return { data: await registryModuleResource(updated, org?.name ?? mod.orgId, true), meta: result };
-    } catch (error: unknown) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Registry module synchronization failed" }] };
-    }
-  })
-  .patch("/api/v2/organizations/:org_name/registry-modules/private/:namespace/:module_name/:provider", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveRegistryModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { org, mod } = resolved;
-    const validated = validateModulePatchFields(jsonApiAttributes(body), mod.branch);
-    if ("error" in validated) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: validated.error }] };
-    }
-    await db.update(registryModules).set({
-      ...(typeof validated.sourceDirectory === "string" ? { sourceDirectory: validated.sourceDirectory } : {}),
-      ...(typeof validated.tagPrefix === "string" ? { tagPrefix: validated.tagPrefix } : {}),
-      updatedAt: Date.now(),
-    }).where(eq(registryModules.id, mod.id));
-    const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
-    if (updated === undefined) return registryNotFound(set);
-    return { data: await registryModuleResource(updated, org.name, true) };
-  })
-  .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/version", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    // go-tfe RegistryModules.ReadVersion — resolves a single published module
-    // version by ?module_version=. The tfe_no_code_module create polls this
-    // until the pinned version is published.
-    const orgName = params["org_name"] ?? "";
-    const namespace = params["namespace"] ?? "";
-    const moduleName = params["module_name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const version = new URL(request.url).searchParams.get("module_version") ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null)) || version === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({
-      where: and(eq(registryModules.orgId, org.id), eq(registryModules.namespace, namespace), eq(registryModules.name, moduleName), eq(registryModules.provider, provider)),
-    });
-    if (mod === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: ver.id, type: "registry-module-versions", attributes: { version: ver.version, status: ver.status, "created-at": new Date(ver.createdAt).toISOString() } } };
-  })
-  .delete("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const moduleId = params["module_id"] ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await deleteRegistryModuleAndArchives(moduleId);
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params["org_name"] ?? "";
-    const namespace = params["namespace"] ?? "";
-    const moduleName = params["module_name"] ?? "";
-    const provider = params["provider"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, namespace),
-        eq(registryModules.name, moduleName),
-        eq(registryModules.provider, provider),
-      ),
-    });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await deleteRegistryModuleAndArchives(mod.id);
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  // --- No-Code Module Allowlist ---
-  .post("/api/v2/organizations/:org_name/no-code-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const access = await resolveOrgForNoCodeWrite(params["org_name"] ?? "", user, tokenOrgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { org } = access;
-
-    const input = noCodeInput(body, true);
-    if ("error" in input) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
-    }
-    const target = await resolveNoCodeCreationTarget(org, input, set);
-    if ("failure" in target) return target.failure;
-    const { mod, version } = target;
-
-    const existing = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, mod.id) });
-    const noCode = await upsertNoCodeRow(existing, mod, version, input.enabled);
-    if (input.variableOptions !== undefined) await replaceVariableOptions(noCode.id, input.variableOptions);
-    const options = await db.query.noCodeVariableOptions.findMany({
-      where: eq(noCodeVariableOptions.noCodeModuleId, noCode.id),
-    });
-    return { data: noCodeResource(noCode, org, mod, version, options) };
-  })
-  .get("/api/v2/organizations/:org_name/no-code-modules", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (
-      org === undefined
-      || !(
-        await checkOrgPermission(user?.id, org.id, "member", tokenOrgId)
-        || await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules")
-      )
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const rows = await db.select({
-      noCode: noCodeModules,
-      mod: registryModules,
-      version: registryModuleVersions,
-    })
-      .from(noCodeModules)
-      .innerJoin(registryModules, eq(noCodeModules.moduleId, registryModules.id))
-      .innerJoin(registryModuleVersions, eq(noCodeModules.versionId, registryModuleVersions.id))
-      .where(eq(registryModules.orgId, org.id))
-      .orderBy(desc(noCodeModules.createdAt));
-    const resources = await Promise.all(rows.map(async (row): Promise<Record<string, unknown>> => {
-      const options = await db.query.noCodeVariableOptions.findMany({
-        where: eq(noCodeVariableOptions.noCodeModuleId, row.noCode.id),
-      });
-      return noCodeResource(row.noCode, org, row.mod, row.version, options);
-    }));
-    return { data: resources };
-  })
-  .get("/api/v2/no-code-modules/:id", async ({ params, query, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const includeRaw = query?.["include"];
-    const include = typeof includeRaw === "string" ? includeRaw : undefined;
-    if (include !== undefined && include !== "variable_options" && include !== "variable-options") {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "include must be variable_options" }] };
-    }
-    const details = await noCodeDetails(params["id"] ?? "");
-    if (
-      details === undefined
-      || !(
-        await checkOrgPermission(user?.id, details.org.id, "member", tokenOrgId)
-        || await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules")
-      )
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const options = await db.query.noCodeVariableOptions.findMany({
-      where: eq(noCodeVariableOptions.noCodeModuleId, details.noCode.id),
-    });
-    return {
-      data: noCodeResource(details.noCode, details.org, details.mod, details.version, options),
-      ...(include === "variable_options" || include === "variable-options" ? { included: options.map(variableOptionResource) } : {}),
-    };
-  })
-  .patch("/api/v2/no-code-modules/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const access = await resolveNoCodeDetailsForWrite(params["id"] ?? "", user, tokenOrgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { details } = access;
-    const input = noCodeInput(body, false);
-    if ("error" in input) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
-    }
-    const target = await resolveNoCodeTarget(details, input, set);
-    if ("failure" in target) return target.failure;
-    const { targetModule, targetVersion } = target;
-    const duplicate = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, targetModule.id) });
-    if (duplicate !== undefined && duplicate.id !== details.noCode.id) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The registry module is already enabled as a no-code module" }] };
-    }
-    if (input.variableOptions !== undefined) {
-      const optionError = await validateVariableOptionPatch(details.noCode.id, input.variableOptions);
-      if (optionError !== undefined) {
+      };
+      try {
+        await db.insert(registryModules).values(created);
+      } catch (error: unknown) {
+        if (!isUniqueConstraintError(error)) throw error;
         (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: optionError.error }] };
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }],
+        };
       }
-    }
-    await db.update(noCodeModules).set({
-      moduleId: targetModule.id,
-      versionId: targetVersion.id,
-      enabled: input.enabled ?? details.noCode.enabled,
-      updatedAt: Date.now(),
-    }).where(eq(noCodeModules.id, details.noCode.id));
-    if (input.variableOptions !== undefined) {
-      const optionError = await patchVariableOptions(details.noCode.id, input.variableOptions);
-      if (optionError !== undefined) {
+      (set as { status: number }).status = 201;
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, id) });
+      if (mod === undefined) throw new Error("Created registry module could not be loaded");
+      return { data: await registryModuleResource(mod, org.name, true) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/registry-modules/vcs",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      const envelope = parseVcsEnvelope(body);
+      const naming = parseVcsNaming(envelope.attributes, envelope.vcsRepo);
+      const connection = parseVcsConnection(envelope.vcsRepo);
+      const options = parseVcsOptions(envelope.attributes, envelope.vcsRepo, naming.identifier);
+      const fieldError = vcsModuleFieldError(envelope.data, naming, connection, options);
+      if (fieldError !== null) {
         (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: optionError.error }] };
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldError }] };
       }
-    }
-    const [updated, options] = await Promise.all([
-      db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, details.noCode.id) }),
-      db.query.noCodeVariableOptions.findMany({ where: eq(noCodeVariableOptions.noCodeModuleId, details.noCode.id) }),
-    ]);
-    if (updated === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return { data: noCodeResource(updated, details.org, targetModule, targetVersion, options) };
-  })
-  .delete("/api/v2/no-code-modules/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params["id"] ?? "";
-    const noCode = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, id) });
-    const mod = noCode === undefined
-      ? undefined
-      : await db.query.registryModules.findFirst({ where: eq(registryModules.id, noCode.moduleId) });
-    const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
-    if (
-      noCode === undefined
-      || mod === undefined
-      || !hasSupportedPrincipal
-      || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await db.delete(noCodeModules).where(eq(noCodeModules.id, id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  // --- Provider Management API (the reference format v2) ---
-  .get("/api/v2/organizations/:org_name/registry-providers", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
-    return { data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)), meta: { "total-count": provList.length } };
-      })
-      .get("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-        const providerId = params["provider_id"] ?? "";
-        const p = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
-        if (p === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        const org = await db.query.organizations.findFirst({ where: eq(organizations.id, p.orgId) });
-        if (org === undefined || !(await checkRegistryManagementRead(user?.id, p.orgId, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
-        }
-        return { data: registryProviderResource(p, org.name) };
-      })
-      .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-        const orgName = params["org_name"] ?? "";
-        const namespace = params["namespace"] ?? "";
-        const name = params["name"] ?? "";
-        const org = await cachedOrgByName(orgName);
-        if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        const p = await db.query.registryProviders.findFirst({
-          where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),
+      const connectionStatus = await resolveVcsConnection(org.id, connection);
+      const connectionAvailable = connectionStatus.available;
+      if (!connectionAvailable) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "The selected VCS connection is unavailable or unsupported",
+            },
+          ],
+        };
+      }
+      const now = Date.now();
+      const id = newResourceId("mod");
+      const connectionRef = vcsConnectionRef(connection);
+      const urlResult = buildVcsRepositoryUrl(
+        connectionStatus.repositoryBaseUrl,
+        envelope.vcsRepo["repository-url"],
+        naming.identifier,
+      );
+      if ("error" in urlResult) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: urlResult.error }] };
+      }
+      const accessError = await checkVcsRepositoryAccess(org.id, connection, naming.identifier);
+      if (accessError !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: accessError }] };
+      }
+      try {
+        await db.insert(registryModules).values({
+          id,
+          orgId: org.id,
+          namespace: org.name,
+          name: naming.name,
+          provider: naming.provider,
+          publishingMechanism: "vcs",
+          publishingWorkflow: connection.branch === null ? "tag" : "branch",
+          vcsConnectionType: connectionRef.type,
+          vcsConnectionId: connectionRef.id,
+          repositoryIdentifier: naming.identifier,
+          repositoryDisplayIdentifier: vcsDisplayIdentifier(envelope.vcsRepo, naming.identifier),
+          repositoryUrl: urlResult.url,
+          sourceDirectory: options.sourceDirectory,
+          tagPrefix: options.tagPrefix,
+          branch: connection.branch,
+          status: "pending",
+          createdAt: now,
+          updatedAt: now,
         });
-        if (p === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        return { data: registryProviderResource(p, org.name) };
-      })
-      .post("/api/v2/organizations/:org_name/registry-providers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-        const orgName = params["org_name"] ?? "";
-        const org = await cachedOrgByName(orgName);
-        if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-        const data = payload["data"] as Record<string, unknown> | undefined;
-        const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-        const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
-        if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] }; }
-        const id = newResourceId("prov");
-        const namespace = typeof attributes["namespace"] === "string" ? attributes["namespace"] : org.name;
-        const registryName = typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private";
-        await db.insert(registryProviders).values({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() });
-        (set as { status: number }).status = 201;
-        return { data: registryProviderResource({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() }, org.name) };
-      })
-  .delete("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const providerId = params["provider_id"] ?? "";
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryProviders).where(eq(registryProviders.id, providerId));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params["org_name"] ?? "";
-    const namespace = params["namespace"] ?? "";
-    const name = params["name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({
-      where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, namespace), eq(registryProviders.type, name)),
-    });
-    if (prov === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryProviders).where(eq(registryProviders.id, prov.id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
+      } catch (error: unknown) {
+        if (!isUniqueConstraintError(error)) throw error;
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "This private module already exists" }],
+        };
+      }
+      return finishVcsModuleCreation(id, connection.branch, options.initialVersion, org.name, set);
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const namespace = params["namespace"] ?? "";
+      const moduleName = params["module_name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({
+        where: and(
+          eq(registryModules.orgId, org.id),
+          eq(registryModules.namespace, namespace),
+          eq(registryModules.name, moduleName),
+          eq(registryModules.provider, provider),
+        ),
+      });
+      if (mod === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const canManage = await checkOrganizationPermission(
+        org.id,
+        user?.id,
+        tokenOrgId,
+        teamId ?? null,
+        "manage-modules",
+      );
+      return { data: await registryModuleResource(mod, org.name, canManage) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      if (params["registry_name"] !== "private") return registryNotFound(set);
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      const mod =
+        org === undefined
+          ? undefined
+          : await db.query.registryModules.findFirst({
+              where: and(
+                eq(registryModules.orgId, org.id),
+                eq(registryModules.namespace, params["namespace"] ?? ""),
+                eq(registryModules.name, params["module_name"] ?? ""),
+                eq(registryModules.provider, params["provider"] ?? ""),
+              ),
+            });
+      if (
+        org === undefined ||
+        mod === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))
+      )
+        return registryNotFound(set);
+      const version = await db.query.registryModuleVersions.findFirst({
+        where: and(
+          eq(registryModuleVersions.moduleId, mod.id),
+          eq(registryModuleVersions.version, params["version"] ?? ""),
+        ),
+      });
+      return version === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(version) };
+    },
+  )
+  .patch(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { version } = resolved;
+      const parsed = parseDeprecationFlag(body);
+      if ("error" in parsed) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: parsed.error }] };
+      }
+      await db
+        .update(registryModuleVersions)
+        .set({ isDeprecated: parsed.deprecated, updatedAt: Date.now() })
+        .where(eq(registryModuleVersions.id, version.id));
+      const updated = await db.query.registryModuleVersions.findFirst({
+        where: eq(registryModuleVersions.id, version.id),
+      });
+      return updated === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(updated) };
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const resolved = await resolveModuleVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+      const { version } = resolved;
+      await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, version.id));
+      if (version.archivePath !== null) await rm(version.archivePath, { force: true });
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .get(
+    "/api/v2/registry-modules/:module_id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const moduleId = params["module_id"] ?? "";
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
+      const canManage = await checkOrganizationPermission(
+        mod.orgId,
+        user?.id,
+        tokenOrgId,
+        teamId ?? null,
+        "manage-modules",
+      );
+      return { data: await registryModuleResource(mod, org?.name ?? mod.orgId, canManage) };
+    },
+  )
+  .post(
+    "/api/v2/registry-modules/:module_id/actions/resync",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await db.query.registryModules.findFirst({
+        where: eq(registryModules.id, params["module_id"] ?? ""),
+      });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      if (mod.publishingMechanism !== "vcs" || mod.publishingWorkflow !== "tag") {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail:
+                "Resync imports new versions only for tag-based VCS modules; create a version for branch-based modules",
+            },
+          ],
+        };
+      }
+      try {
+        const result = await synchronizeRegistryModule(mod);
+        const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
+        const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
+        if (updated === undefined) return registryNotFound(set);
+        return { data: await registryModuleResource(updated, org?.name ?? mod.orgId, true), meta: result };
+      } catch (error: unknown) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: error instanceof Error ? error.message : "Registry module synchronization failed",
+            },
+          ],
+        };
+      }
+    },
+  )
+  .patch(
+    "/api/v2/organizations/:org_name/registry-modules/private/:namespace/:module_name/:provider",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveRegistryModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { org, mod } = resolved;
+      const validated = validateModulePatchFields(jsonApiAttributes(body), mod.branch);
+      if ("error" in validated) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: validated.error }] };
+      }
+      await db
+        .update(registryModules)
+        .set({
+          ...(typeof validated.sourceDirectory === "string" ? { sourceDirectory: validated.sourceDirectory } : {}),
+          ...(typeof validated.tagPrefix === "string" ? { tagPrefix: validated.tagPrefix } : {}),
+          updatedAt: Date.now(),
+        })
+        .where(eq(registryModules.id, mod.id));
+      const updated = await db.query.registryModules.findFirst({ where: eq(registryModules.id, mod.id) });
+      if (updated === undefined) return registryNotFound(set);
+      return { data: await registryModuleResource(updated, org.name, true) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/version",
+    async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      // go-tfe RegistryModules.ReadVersion — resolves a single published module
+      // version by ?module_version=. The tfe_no_code_module create polls this
+      // until the pinned version is published.
+      const orgName = params["org_name"] ?? "";
+      const namespace = params["namespace"] ?? "";
+      const moduleName = params["module_name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const version = new URL(request.url).searchParams.get("module_version") ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null)) ||
+        version === ""
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({
+        where: and(
+          eq(registryModules.orgId, org.id),
+          eq(registryModules.namespace, namespace),
+          eq(registryModules.name, moduleName),
+          eq(registryModules.provider, provider),
+        ),
+      });
+      if (mod === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ver = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)),
+      });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        data: {
+          id: ver.id,
+          type: "registry-module-versions",
+          attributes: { version: ver.version, status: ver.status, "created-at": new Date(ver.createdAt).toISOString() },
+        },
+      };
+    },
+  )
+  .delete(
+    "/api/v2/registry-modules/:module_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const moduleId = params["module_id"] ?? "";
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await deleteRegistryModuleAndArchives(moduleId);
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const orgName = params["org_name"] ?? "";
+      const namespace = params["namespace"] ?? "";
+      const moduleName = params["module_name"] ?? "";
+      const provider = params["provider"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({
+        where: and(
+          eq(registryModules.orgId, org.id),
+          eq(registryModules.namespace, namespace),
+          eq(registryModules.name, moduleName),
+          eq(registryModules.provider, provider),
+        ),
+      });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await deleteRegistryModuleAndArchives(mod.id);
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  // --- No-Code Module Allowlist ---
+  .post(
+    "/api/v2/organizations/:org_name/no-code-modules",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const access = await resolveOrgForNoCodeWrite(params["org_name"] ?? "", user, tokenOrgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { org } = access;
+
+      const input = noCodeInput(body, true);
+      if ("error" in input) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+      }
+      const target = await resolveNoCodeCreationTarget(org, input, set);
+      if ("failure" in target) return target.failure;
+      const { mod, version } = target;
+
+      const existing = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, mod.id) });
+      const noCode = await upsertNoCodeRow(existing, mod, version, input.enabled);
+      if (input.variableOptions !== undefined) await replaceVariableOptions(noCode.id, input.variableOptions);
+      const options = await db.query.noCodeVariableOptions.findMany({
+        where: eq(noCodeVariableOptions.noCodeModuleId, noCode.id),
+      });
+      return { data: noCodeResource(noCode, org, mod, version, options) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/no-code-modules",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(
+          (await checkOrgPermission(user?.id, org.id, "member", tokenOrgId)) ||
+          (await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+        )
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const rows = await db
+        .select({
+          noCode: noCodeModules,
+          mod: registryModules,
+          version: registryModuleVersions,
+        })
+        .from(noCodeModules)
+        .innerJoin(registryModules, eq(noCodeModules.moduleId, registryModules.id))
+        .innerJoin(registryModuleVersions, eq(noCodeModules.versionId, registryModuleVersions.id))
+        .where(eq(registryModules.orgId, org.id))
+        .orderBy(desc(noCodeModules.createdAt));
+      const resources = await Promise.all(
+        rows.map(async (row): Promise<Record<string, unknown>> => {
+          const options = await db.query.noCodeVariableOptions.findMany({
+            where: eq(noCodeVariableOptions.noCodeModuleId, row.noCode.id),
+          });
+          return noCodeResource(row.noCode, org, row.mod, row.version, options);
+        }),
+      );
+      return { data: resources };
+    },
+  )
+  .get(
+    "/api/v2/no-code-modules/:id",
+    async ({ params, query, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const includeRaw = query?.["include"];
+      const include = typeof includeRaw === "string" ? includeRaw : undefined;
+      if (include !== undefined && include !== "variable_options" && include !== "variable-options") {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request", detail: "include must be variable_options" }] };
+      }
+      const details = await noCodeDetails(params["id"] ?? "");
+      if (
+        details === undefined ||
+        !(
+          (await checkOrgPermission(user?.id, details.org.id, "member", tokenOrgId)) ||
+          (await checkOrganizationPermission(details.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+        )
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const options = await db.query.noCodeVariableOptions.findMany({
+        where: eq(noCodeVariableOptions.noCodeModuleId, details.noCode.id),
+      });
+      return {
+        data: noCodeResource(details.noCode, details.org, details.mod, details.version, options),
+        ...(include === "variable_options" || include === "variable-options"
+          ? { included: options.map(variableOptionResource) }
+          : {}),
+      };
+    },
+  )
+  .patch(
+    "/api/v2/no-code-modules/:id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const access = await resolveNoCodeDetailsForWrite(params["id"] ?? "", user, tokenOrgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { details } = access;
+      const input = noCodeInput(body, false);
+      if ("error" in input) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+      }
+      const target = await resolveNoCodeTarget(details, input, set);
+      if ("failure" in target) return target.failure;
+      const { targetModule, targetVersion } = target;
+      const duplicate = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, targetModule.id) });
+      if (duplicate !== undefined && duplicate.id !== details.noCode.id) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "The registry module is already enabled as a no-code module",
+            },
+          ],
+        };
+      }
+      if (input.variableOptions !== undefined) {
+        const optionError = await validateVariableOptionPatch(details.noCode.id, input.variableOptions);
+        if (optionError !== undefined) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: optionError.error }] };
+        }
+      }
+      await db
+        .update(noCodeModules)
+        .set({
+          moduleId: targetModule.id,
+          versionId: targetVersion.id,
+          enabled: input.enabled ?? details.noCode.enabled,
+          updatedAt: Date.now(),
+        })
+        .where(eq(noCodeModules.id, details.noCode.id));
+      if (input.variableOptions !== undefined) {
+        const optionError = await patchVariableOptions(details.noCode.id, input.variableOptions);
+        if (optionError !== undefined) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: optionError.error }] };
+        }
+      }
+      const [updated, options] = await Promise.all([
+        db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, details.noCode.id) }),
+        db.query.noCodeVariableOptions.findMany({ where: eq(noCodeVariableOptions.noCodeModuleId, details.noCode.id) }),
+      ]);
+      if (updated === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: noCodeResource(updated, details.org, targetModule, targetVersion, options) };
+    },
+  )
+  .delete(
+    "/api/v2/no-code-modules/:id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const id = params["id"] ?? "";
+      const noCode = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, id) });
+      const mod =
+        noCode === undefined
+          ? undefined
+          : await db.query.registryModules.findFirst({ where: eq(registryModules.id, noCode.moduleId) });
+      const hasSupportedPrincipal = (user !== null && user !== undefined) || (teamId !== null && teamId !== undefined);
+      if (
+        noCode === undefined ||
+        mod === undefined ||
+        !hasSupportedPrincipal ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(noCodeModules).where(eq(noCodeModules.id, id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  // --- Provider Management API (the reference format v2) ---
+  .get(
+    "/api/v2/organizations/:org_name/registry-providers",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
+      return {
+        data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)),
+        meta: { "total-count": provList.length },
+      };
+    },
+  )
+  .get(
+    "/api/v2/registry-providers/:provider_id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const providerId = params["provider_id"] ?? "";
+      const p = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
+      if (p === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, p.orgId) });
+      if (
+        org === undefined ||
+        !(await checkRegistryManagementRead(user?.id, p.orgId, "providers", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: registryProviderResource(p, org.name) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const p = await db.query.registryProviders.findFirst({
+        where: and(
+          eq(registryProviders.orgId, org.id),
+          eq(registryProviders.namespace, namespace),
+          eq(registryProviders.type, name),
+        ),
+      });
+      if (p === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: registryProviderResource(p, org.name) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/registry-providers",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const attributes =
+        typeof data?.["attributes"] === "object" && data["attributes"] !== null
+          ? (data["attributes"] as Record<string, unknown>)
+          : {};
+      const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
+      if (name === "") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] };
+      }
+      const id = newResourceId("prov");
+      const namespace = typeof attributes["namespace"] === "string" ? attributes["namespace"] : org.name;
+      const registryName = typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private";
+      await db
+        .insert(registryProviders)
+        .values({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() });
+      (set as { status: number }).status = 201;
+      return {
+        data: registryProviderResource(
+          { id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() },
+          org.name,
+        ),
+      };
+    },
+  )
+  .delete(
+    "/api/v2/registry-providers/:provider_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const providerId = params["provider_id"] ?? "";
+      const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
+      if (
+        prov === undefined ||
+        !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(registryProviders).where(eq(registryProviders.id, providerId));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const orgName = params["org_name"] ?? "";
+      const namespace = params["namespace"] ?? "";
+      const name = params["name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const prov = await db.query.registryProviders.findFirst({
+        where: and(
+          eq(registryProviders.orgId, org.id),
+          eq(registryProviders.namespace, namespace),
+          eq(registryProviders.type, name),
+        ),
+      });
+      if (prov === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(registryProviders).where(eq(registryProviders.id, prov.id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
   // --- Provider Versions ---
-  .get("/api/v2/registry-providers/:provider_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const providerId = params["provider_id"] ?? "";
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
-    if (prov === undefined || !(await checkRegistryManagementRead(user?.id, prov.orgId, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, providerId), orderBy: [desc(registryProviderVersions.createdAt)] }));
-    return { data: versions.map((v: ProvVerItem): Record<string, unknown> => ({ id: v.id, type: "registry-provider-versions", attributes: { version: v.version, "key-id": v.keyId, protocols: v.protocols, "shasums-url": v.shasumsUrl, "shasums-signature-url": v.shasumsSignatureUrl, "created-at": new Date(v.createdAt).toISOString() } })) };
-  })
-  .post("/api/v2/registry-providers/:provider_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const providerId = params["provider_id"] ?? "";
-    const resolved = await resolveProviderByIdForWrite(providerId, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { provider } = resolved;
-    const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
-    if ("error" in fields) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
-    }
-    const id = newResourceId("provver");
-    try {
-      await db.insert(registryProviderVersions).values({ id, providerId, version: fields.version, keyId: fields.keyId, protocols: fields.protocols, shasumsUrl: fields.shasumsUrl, shasumsSignatureUrl: fields.shasumsSignatureUrl, createdAt: Date.now() });
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider version already exists" }] };
-    }
-    (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-provider-versions", attributes: { version: fields.version, "key-id": fields.keyId, protocols: fields.protocols, "shasums-url": fields.shasumsUrl, "shasums-signature-url": fields.shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
-  })
-  .delete("/api/v2/registry-provider-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const resolved = await resolveProviderVersionByIdForWrite(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
-    const { version } = resolved;
-    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
+  .get(
+    "/api/v2/registry-providers/:provider_id/versions",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const providerId = params["provider_id"] ?? "";
+      const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
+      if (
+        prov === undefined ||
+        !(await checkRegistryManagementRead(user?.id, prov.orgId, "providers", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const versions = sortModuleVersionsDescending(
+        await db.query.registryProviderVersions.findMany({
+          where: eq(registryProviderVersions.providerId, providerId),
+          orderBy: [desc(registryProviderVersions.createdAt)],
+        }),
+      );
+      return {
+        data: versions.map(
+          (v: ProvVerItem): Record<string, unknown> => ({
+            id: v.id,
+            type: "registry-provider-versions",
+            attributes: {
+              version: v.version,
+              "key-id": v.keyId,
+              protocols: v.protocols,
+              "shasums-url": v.shasumsUrl,
+              "shasums-signature-url": v.shasumsSignatureUrl,
+              "created-at": new Date(v.createdAt).toISOString(),
+            },
+          }),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/registry-providers/:provider_id/versions",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const providerId = params["provider_id"] ?? "";
+      const resolved = await resolveProviderByIdForWrite(providerId, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { provider } = resolved;
+      const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
+      if ("error" in fields) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+      }
+      const id = newResourceId("provver");
+      try {
+        await db.insert(registryProviderVersions).values({
+          id,
+          providerId,
+          version: fields.version,
+          keyId: fields.keyId,
+          protocols: fields.protocols,
+          shasumsUrl: fields.shasumsUrl,
+          shasumsSignatureUrl: fields.shasumsSignatureUrl,
+          createdAt: Date.now(),
+        });
+      } catch (error: unknown) {
+        if (!isUniqueConstraintError(error)) throw error;
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider version already exists" }],
+        };
+      }
+      (set as { status: number }).status = 201;
+      return {
+        data: {
+          id,
+          type: "registry-provider-versions",
+          attributes: {
+            version: fields.version,
+            "key-id": fields.keyId,
+            protocols: fields.protocols,
+            "shasums-url": fields.shasumsUrl,
+            "shasums-signature-url": fields.shasumsSignatureUrl,
+            "created-at": new Date().toISOString(),
+          },
+        },
+      };
+    },
+  )
+  .delete(
+    "/api/v2/registry-provider-versions/:version_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const resolved = await resolveProviderVersionByIdForWrite(
+        params["version_id"] ?? "",
+        user?.id,
+        tokenOrgId,
+        teamId,
+        set,
+      );
+      if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+      const { version } = resolved;
+      await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
   // --- Provider Version Platforms ---
-  .get("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-    if (prov === undefined || !(await checkRegistryManagementRead(user?.id, prov.orgId, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const platforms = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, versionId) });
-    return { data: platforms.map((p: PlatItem): Record<string, unknown> => ({ id: p.id, type: "registry-provider-platforms", attributes: { os: p.os, arch: p.arch, filename: p.filename, "download-url": p.downloadUrl, shasum: p.shasum } })) };
-  })
-  .post("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveProviderVersionByIdForWrite(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { version } = resolved;
-    const fields = parsePlatformFields(body);
-    if ("error" in fields) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
-    }
-    const id = newResourceId("provplat");
-    await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os: fields.os, arch: fields.arch, filename: fields.filename, downloadUrl: fields.downloadUrl, shasum: fields.shasum, createdAt: Date.now() });
-    (set as { status: number }).status = 201;
-    return { data: { id, type: "registry-provider-platforms", attributes: { os: fields.os, arch: fields.arch, filename: fields.filename, "download-url": fields.downloadUrl, shasum: fields.shasum } } };
-  })
-  .delete("/api/v2/registry-provider-platforms/:platform_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const platformId = params["platform_id"] ?? "";
-    const platform = await db.query.registryProviderPlatforms.findFirst({ where: eq(registryProviderPlatforms.id, platformId) });
-    if (platform === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, platform.versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
-    if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platformId));
-    (set as { status: number }).status = 204;
-    return {};
-  })
+  .get(
+    "/api/v2/registry-provider-versions/:version_id/platforms",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const ver = await db.query.registryProviderVersions.findFirst({
+        where: eq(registryProviderVersions.id, versionId),
+      });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+      if (
+        prov === undefined ||
+        !(await checkRegistryManagementRead(user?.id, prov.orgId, "providers", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const platforms = await db.query.registryProviderPlatforms.findMany({
+        where: eq(registryProviderPlatforms.versionId, versionId),
+      });
+      return {
+        data: platforms.map(
+          (p: PlatItem): Record<string, unknown> => ({
+            id: p.id,
+            type: "registry-provider-platforms",
+            attributes: {
+              os: p.os,
+              arch: p.arch,
+              filename: p.filename,
+              "download-url": p.downloadUrl,
+              shasum: p.shasum,
+            },
+          }),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/registry-provider-versions/:version_id/platforms",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveProviderVersionByIdForWrite(
+        params["version_id"] ?? "",
+        user?.id,
+        tokenOrgId,
+        teamId,
+        set,
+      );
+      if ("failure" in resolved) return resolved.failure;
+      const { version } = resolved;
+      const fields = parsePlatformFields(body);
+      if ("error" in fields) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+      }
+      const id = newResourceId("provplat");
+      await db.insert(registryProviderPlatforms).values({
+        id,
+        versionId: version.id,
+        os: fields.os,
+        arch: fields.arch,
+        filename: fields.filename,
+        downloadUrl: fields.downloadUrl,
+        shasum: fields.shasum,
+        createdAt: Date.now(),
+      });
+      (set as { status: number }).status = 201;
+      return {
+        data: {
+          id,
+          type: "registry-provider-platforms",
+          attributes: {
+            os: fields.os,
+            arch: fields.arch,
+            filename: fields.filename,
+            "download-url": fields.downloadUrl,
+            shasum: fields.shasum,
+          },
+        },
+      };
+    },
+  )
+  .delete(
+    "/api/v2/registry-provider-platforms/:platform_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const platformId = params["platform_id"] ?? "";
+      const platform = await db.query.registryProviderPlatforms.findFirst({
+        where: eq(registryProviderPlatforms.id, platformId),
+      });
+      if (platform === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ver = await db.query.registryProviderVersions.findFirst({
+        where: eq(registryProviderVersions.id, platform.versionId),
+      });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
+      if (
+        prov === undefined ||
+        !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platformId));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
   // Canonical organization-scoped provider version/platform paths. The
   // generic resource-ID endpoints above remain available to Terrence clients.
-  .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    if (org === undefined || provider === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, provider.id), orderBy: [desc(registryProviderVersions.createdAt)] }));
-    return { data: versions.map(registryProviderVersionResource) };
-  })
-  .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    if (org === undefined || provider === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const version = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    return version === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(version) };
-  })
-  .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveProviderForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { provider } = resolved;
-    const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
-    if ("error" in fields) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
-    }
-    const id = newResourceId("provver");
-    const createdAt = Date.now();
-    try {
-      await db.insert(registryProviderVersions).values({ id, providerId: provider.id, version: fields.version, keyId: fields.keyId, protocols: fields.protocols, shasumsUrl: fields.shasumsUrl, shasumsSignatureUrl: fields.shasumsSignatureUrl, createdAt });
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider version already exists" }] };
-    }
-    (set as { status: number }).status = 201;
-    const created = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, id) });
-    return created === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(created) };
-  })
-  .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    const version = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    if (version === undefined) return registryNotFound(set);
-    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveProviderVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { version } = resolved;
-    const fields = parsePlatformFields(body);
-    if ("error" in fields) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
-    }
-    const id = newResourceId("provplat");
-    try {
-      await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os: fields.os, arch: fields.arch, filename: fields.filename, downloadUrl: fields.downloadUrl, shasum: fields.shasum, createdAt: Date.now() });
-    } catch (error: unknown) {
-      if (!isUniqueConstraintError(error)) throw error;
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider platform already exists" }] };
-    }
-    (set as { status: number }).status = 201;
-    const created = await db.query.registryProviderPlatforms.findFirst({ where: eq(registryProviderPlatforms.id, id) });
-    return created === undefined ? registryNotFound(set) : { data: registryProviderPlatformResource(created) };
-  })
-  .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["registry_name"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
-    if (org === undefined || provider === undefined || version === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const platforms = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, version.id) });
-    return { data: platforms.map(registryProviderPlatformResource) };
-  })
-  .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveProviderPlatformChain(params, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { chain } = resolved;
-    if (!(await checkRegistryManagementRead(user?.id, chain.org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    return { data: registryProviderPlatformResource(chain.platform) };
-  })
-  .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const resolved = await resolveProviderPlatformChain(params, set);
-    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
-    const { chain } = resolved;
-    if (!(await checkOrganizationPermission(chain.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, chain.platform.id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
+  .get(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      if (params["registry_name"] !== "private") return registryNotFound(set);
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      const provider =
+        org === undefined
+          ? undefined
+          : await db.query.registryProviders.findFirst({
+              where: and(
+                eq(registryProviders.orgId, org.id),
+                eq(registryProviders.namespace, params["namespace"] ?? ""),
+                eq(registryProviders.type, params["name"] ?? ""),
+                eq(registryProviders.registryName, "private"),
+              ),
+            });
+      if (
+        org === undefined ||
+        provider === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))
+      )
+        return registryNotFound(set);
+      const versions = sortModuleVersionsDescending(
+        await db.query.registryProviderVersions.findMany({
+          where: eq(registryProviderVersions.providerId, provider.id),
+          orderBy: [desc(registryProviderVersions.createdAt)],
+        }),
+      );
+      return { data: versions.map(registryProviderVersionResource) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      if (params["registry_name"] !== "private") return registryNotFound(set);
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      const provider =
+        org === undefined
+          ? undefined
+          : await db.query.registryProviders.findFirst({
+              where: and(
+                eq(registryProviders.orgId, org.id),
+                eq(registryProviders.namespace, params["namespace"] ?? ""),
+                eq(registryProviders.type, params["name"] ?? ""),
+                eq(registryProviders.registryName, "private"),
+              ),
+            });
+      if (
+        org === undefined ||
+        provider === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))
+      )
+        return registryNotFound(set);
+      const version = await db.query.registryProviderVersions.findFirst({
+        where: and(
+          eq(registryProviderVersions.providerId, provider.id),
+          eq(registryProviderVersions.version, params["version"] ?? ""),
+        ),
+      });
+      return version === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(version) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveProviderForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { provider } = resolved;
+      const fields = await parseProviderVersionFields(body, provider.orgId, provider.namespace);
+      if ("error" in fields) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+      }
+      const id = newResourceId("provver");
+      const createdAt = Date.now();
+      try {
+        await db.insert(registryProviderVersions).values({
+          id,
+          providerId: provider.id,
+          version: fields.version,
+          keyId: fields.keyId,
+          protocols: fields.protocols,
+          shasumsUrl: fields.shasumsUrl,
+          shasumsSignatureUrl: fields.shasumsSignatureUrl,
+          createdAt,
+        });
+      } catch (error: unknown) {
+        if (!isUniqueConstraintError(error)) throw error;
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider version already exists" }],
+        };
+      }
+      (set as { status: number }).status = 201;
+      const created = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, id) });
+      return created === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(created) };
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      if (params["registry_name"] !== "private") return registryNotFound(set);
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      const provider =
+        org === undefined
+          ? undefined
+          : await db.query.registryProviders.findFirst({
+              where: and(
+                eq(registryProviders.orgId, org.id),
+                eq(registryProviders.namespace, params["namespace"] ?? ""),
+                eq(registryProviders.type, params["name"] ?? ""),
+                eq(registryProviders.registryName, "private"),
+              ),
+            });
+      if (
+        org === undefined ||
+        provider === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))
+      )
+        return registryNotFound(set);
+      const version = await db.query.registryProviderVersions.findFirst({
+        where: and(
+          eq(registryProviderVersions.providerId, provider.id),
+          eq(registryProviderVersions.version, params["version"] ?? ""),
+        ),
+      });
+      if (version === undefined) return registryNotFound(set);
+      await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveProviderVersionForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { version } = resolved;
+      const fields = parsePlatformFields(body);
+      if ("error" in fields) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fields.error }] };
+      }
+      const id = newResourceId("provplat");
+      try {
+        await db.insert(registryProviderPlatforms).values({
+          id,
+          versionId: version.id,
+          os: fields.os,
+          arch: fields.arch,
+          filename: fields.filename,
+          downloadUrl: fields.downloadUrl,
+          shasum: fields.shasum,
+          createdAt: Date.now(),
+        });
+      } catch (error: unknown) {
+        if (!isUniqueConstraintError(error)) throw error;
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "Provider platform already exists" }],
+        };
+      }
+      (set as { status: number }).status = 201;
+      const created = await db.query.registryProviderPlatforms.findFirst({
+        where: eq(registryProviderPlatforms.id, id),
+      });
+      return created === undefined ? registryNotFound(set) : { data: registryProviderPlatformResource(created) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      if (params["registry_name"] !== "private") return registryNotFound(set);
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      const provider =
+        org === undefined
+          ? undefined
+          : await db.query.registryProviders.findFirst({
+              where: and(
+                eq(registryProviders.orgId, org.id),
+                eq(registryProviders.namespace, params["namespace"] ?? ""),
+                eq(registryProviders.type, params["name"] ?? ""),
+                eq(registryProviders.registryName, "private"),
+              ),
+            });
+      const version =
+        provider === undefined
+          ? undefined
+          : await db.query.registryProviderVersions.findFirst({
+              where: and(
+                eq(registryProviderVersions.providerId, provider.id),
+                eq(registryProviderVersions.version, params["version"] ?? ""),
+              ),
+            });
+      if (
+        org === undefined ||
+        provider === undefined ||
+        version === undefined ||
+        !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))
+      )
+        return registryNotFound(set);
+      const platforms = await db.query.registryProviderPlatforms.findMany({
+        where: eq(registryProviderPlatforms.versionId, version.id),
+      });
+      return { data: platforms.map(registryProviderPlatformResource) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveProviderPlatformChain(params, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { chain } = resolved;
+      if (!(await checkRegistryManagementRead(user?.id, chain.org.id, "providers", tokenOrgId, teamId ?? null)))
+        return registryNotFound(set);
+      return { data: registryProviderPlatformResource(chain.platform) };
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const resolved = await resolveProviderPlatformChain(params, set);
+      if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+      const { chain } = resolved;
+      if (!(await checkOrganizationPermission(chain.org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers")))
+        return registryNotFound(set);
+      await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, chain.platform.id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
   // --- Module Versions ---
-  .post("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params["org_name"] ?? "");
-    if (org === undefined || params["registry_name"] !== "private" || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const mod = await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["module_name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (mod === undefined) return registryNotFound(set);
-    const envelope = parseModuleVersionEnvelope(body);
-    if ("error" in envelope) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: envelope.error }] };
-    }
-    return createRegistryModuleVersion(mod, envelope.attributes, set);
-  })
-  .get("/api/v2/registry-modules/:module_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const moduleId = params["module_id"] ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
-    if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const versions = sortModuleVersionsDescending(await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId), orderBy: [desc(registryModuleVersions.createdAt)] }));
-    return { data: versions.map(registryModuleVersionResource) };
-  })
-  .post("/api/v2/registry-modules/:module_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const moduleId = params["module_id"] ?? "";
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
-    return createRegistryModuleVersion(mod, attributes, set);
-  })
-  .post("/api/v2/registry-modules/:module_id/versions/:version/test", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const target = await moduleTestTarget(params["module_id"] ?? "", params["version"] ?? "");
-    if (
-      target === undefined
-      || !(await checkOrganizationPermission(target.mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (
-      target.version.status !== "ok"
-      || target.version.archivePath === null
-      || !(await Bun.file(target.version.archivePath).exists())
-    ) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module version has no published archive" }] };
-    }
-    const configuration = moduleTestConfiguration(body);
-    if ("error" in configuration) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
-    }
-    const legacyRunId = newResourceId("legacy-module-test");
-    let result: Awaited<ReturnType<typeof runModuleTest>>;
-    try {
-      result = await runModuleTest(target.version.id, target.version.archivePath, configuration, undefined, await moduleTestEnvironmentFactory(target.mod.id, target.mod.name, target.mod.orgId, legacyRunId));
-    } finally {
-      await revokeWorkloadIdentityTokens(legacyRunId);
-    }
-    (set as { status: number }).status = 201;
-    return { data: moduleTestResource(result, target.mod.id, target.version.version) };
-  })
-  .get("/api/v2/registry-modules/:module_id/versions/:version/test", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const target = await moduleTestTarget(params["module_id"] ?? "", params["version"] ?? "");
-    if (
-      target === undefined
-      || !(await checkOrganizationPermission(target.mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
-    ) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const result = await readModuleTestResult(target.version.id);
-    if (result === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return { data: moduleTestResource(result, target.mod.id, target.version.version) };
-  })
-  .delete("/api/v2/registry-module-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, versionId));
-    if (ver.archivePath !== null) await rm(ver.archivePath, { force: true });
-    (set as { status: number }).status = 204;
-    return {};
-  })
+  .post(
+    "/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/versions",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await cachedOrgByName(params["org_name"] ?? "");
+      if (
+        org === undefined ||
+        params["registry_name"] !== "private" ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      const mod = await db.query.registryModules.findFirst({
+        where: and(
+          eq(registryModules.orgId, org.id),
+          eq(registryModules.namespace, params["namespace"] ?? ""),
+          eq(registryModules.name, params["module_name"] ?? ""),
+          eq(registryModules.provider, params["provider"] ?? ""),
+        ),
+      });
+      if (mod === undefined) return registryNotFound(set);
+      const envelope = parseModuleVersionEnvelope(body);
+      if ("error" in envelope) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: envelope.error }] };
+      }
+      return createRegistryModuleVersion(mod, envelope.attributes, set);
+    },
+  )
+  .get(
+    "/api/v2/registry-modules/:module_id/versions",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const moduleId = params["module_id"] ?? "";
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const versions = sortModuleVersionsDescending(
+        await db.query.registryModuleVersions.findMany({
+          where: eq(registryModuleVersions.moduleId, moduleId),
+          orderBy: [desc(registryModuleVersions.createdAt)],
+        }),
+      );
+      return { data: versions.map(registryModuleVersionResource) };
+    },
+  )
+  .post(
+    "/api/v2/registry-modules/:module_id/versions",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const moduleId = params["module_id"] ?? "";
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const attributes =
+        typeof data?.["attributes"] === "object" && data["attributes"] !== null
+          ? (data["attributes"] as Record<string, unknown>)
+          : {};
+      return createRegistryModuleVersion(mod, attributes, set);
+    },
+  )
+  .post(
+    "/api/v2/registry-modules/:module_id/versions/:version/test",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const target = await moduleTestTarget(params["module_id"] ?? "", params["version"] ?? "");
+      if (
+        target === undefined ||
+        !(await checkOrganizationPermission(target.mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (
+        target.version.status !== "ok" ||
+        target.version.archivePath === null ||
+        !(await Bun.file(target.version.archivePath).exists())
+      ) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unprocessable Entity", detail: "The module version has no published archive" },
+          ],
+        };
+      }
+      const configuration = moduleTestConfiguration(body);
+      if ("error" in configuration) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
+      }
+      const legacyRunId = newResourceId("legacy-module-test");
+      let result: Awaited<ReturnType<typeof runModuleTest>>;
+      try {
+        result = await runModuleTest(
+          target.version.id,
+          target.version.archivePath,
+          configuration,
+          undefined,
+          await moduleTestEnvironmentFactory(target.mod.id, target.mod.name, target.mod.orgId, legacyRunId),
+        );
+      } finally {
+        await revokeWorkloadIdentityTokens(legacyRunId);
+      }
+      (set as { status: number }).status = 201;
+      return { data: moduleTestResource(result, target.mod.id, target.version.version) };
+    },
+  )
+  .get(
+    "/api/v2/registry-modules/:module_id/versions/:version/test",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const target = await moduleTestTarget(params["module_id"] ?? "", params["version"] ?? "");
+      if (
+        target === undefined ||
+        !(await checkOrganizationPermission(target.mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const result = await readModuleTestResult(target.version.id);
+      if (result === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: moduleTestResource(result, target.mod.id, target.version.version) };
+    },
+  )
+  .delete(
+    "/api/v2/registry-module-versions/:version_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const versionId = params["version_id"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, versionId));
+      if (ver.archivePath !== null) await rm(ver.archivePath, { force: true });
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
   // --- Module Version Upload ---
-  .put("/api/v2/registry-module-versions/:version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const access = await resolveModuleVersionForManage(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
-    if ("failure" in access) return access.failure;
-    const { ver, mod } = access;
-    if (mod.publishingMechanism !== "manual") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "VCS-backed module versions are ingested from their configured VCS connection" }] };
-    }
-    if (ver.archivePath !== null) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }] };
-    }
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }] };
-    }
-    const bytes = await uploadedBytes(body, request);
-    if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
-      (set as { status: number }).status = 413;
-      return { errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }] };
-    }
-    return await ingestModuleVersionUpload(ver.id, mod.id, bytes, set);
-  })
-  .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  .put(
+    "/api/v2/registry-module-versions/:version_id/upload",
+    async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const access = await resolveModuleVersionForManage(params["version_id"] ?? "", user?.id, tokenOrgId, teamId, set);
+      if ("failure" in access) return access.failure;
+      const { ver, mod } = access;
+      if (mod.publishingMechanism !== "manual") {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "VCS-backed module versions are ingested from their configured VCS connection",
+            },
+          ],
+        };
+      }
+      if (ver.archivePath !== null) {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [{ status: "409", title: "Conflict", detail: "Module version content was already uploaded" }],
+        };
+      }
+      const contentLength = Number(request.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) {
+        (set as { status: number }).status = 413;
+        return {
+          errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }],
+        };
+      }
+      const bytes = await uploadedBytes(body, request);
+      if (bytes.byteLength > MAX_MODULE_ARCHIVE_BYTES) {
+        (set as { status: number }).status = 413;
+        return {
+          errors: [{ status: "413", title: "Payload Too Large", detail: "Module archive exceeds the upload limit" }],
+        };
+      }
+      return await ingestModuleVersionUpload(ver.id, mod.id, bytes, set);
+    },
+  )
+  .patch(
+    "/api/v2/registry-module-versions/:version_id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
 
-    if (typeof attributes["deprecated"] !== "boolean") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "deprecated must be a boolean" }] };
-    }
-    await db.update(registryModuleVersions).set({ isDeprecated: attributes["deprecated"], updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
-    const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (updated === undefined) throw new Error("Updated registry module version could not be loaded");
-    return { data: registryModuleVersionResource(updated) };
-  })
-  .delete("/api/v2/registry-module-versions/:version_id/actions/revert-deprecation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      if (typeof attributes["deprecated"] !== "boolean") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "deprecated must be a boolean" }] };
+      }
+      await db
+        .update(registryModuleVersions)
+        .set({ isDeprecated: attributes["deprecated"], updatedAt: Date.now() })
+        .where(eq(registryModuleVersions.id, versionId));
+      const updated = await db.query.registryModuleVersions.findFirst({
+        where: eq(registryModuleVersions.id, versionId),
+      });
+      if (updated === undefined) throw new Error("Updated registry module version could not be loaded");
+      return { data: registryModuleVersionResource(updated) };
+    },
+  )
+  .delete(
+    "/api/v2/registry-module-versions/:version_id/actions/revert-deprecation",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    await db.update(registryModuleVersions).set({ isDeprecated: false, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/configuration-versions", async ({ params, user, orgId: tokenOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const now = Date.now();
-    const id = newResourceId("cv");
-    await db.insert(moduleTestConfigurationVersions).values({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null });
-    (set as { status: number }).status = 201;
-    return { data: testConfigurationVersionResource({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null }, mod.id, request) };
-  })
-  .put("/api/v2/module-test-configuration-versions/:configuration_version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const access = await resolveTestConfigVersionForUpload(params["configuration_version_id"] ?? "", user?.id, tokenOrgId, teamId, request, set);
-    if ("failure" in access) return access.failure;
-    const { configuration, mod } = access;
-    const archive = await readAndValidateUploadArchive(body, request, set);
-    if ("failure" in archive) return archive.failure;
-    const stored = await claimAndStoreConfigArchive(configuration.id, archive.bytes);
-    if ("alreadyUploaded" in stored) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
-    }
-    const updated = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, configuration.id) });
-    if (updated === undefined) return registryNotFound(set);
-    (set as { status: number }).status = 200;
-    return { data: testConfigurationVersionResource(updated, mod.id, request) };
-  })
-  .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveTestRunModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { mod } = resolved;
-    const configuration = moduleTestConfiguration(body);
-    if ("error" in configuration) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
-    }
-    const { configurationVersionId } = parseTestRunConfigurationVersion(body);
-    const selection = await selectTestRunArchive(mod.id, configurationVersionId, mod.orgId);
-    if ("error" in selection) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: selection.error }] };
-    }
-    const now = Date.now();
-    const id = newResourceId("trun");
-    const runValues: typeof moduleTestRuns.$inferInsert = {
-      id,
-      moduleId: mod.id,
-      versionId: selection.version.id,
-      configurationVersionId: selection.moduleConfigurationVersionId,
-      status: "queued",
-      testStatus: null,
-      testsPassed: null,
-      testsFailed: null,
-      testsErrored: null,
-      testsSkipped: null,
-      verbose: configuration.verbose,
-      filters: [...configuration.filters],
-      testDirectory: configuration.testDirectory,
-      variables: configuration.variables.map((variable) => ({ ...variable })),
-      source: "tfe-api",
-      message: "Queued manually via the remote-workflow API",
-      output: null,
-      error: null,
-      createdBy: user?.id ?? null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await db.insert(moduleTestRuns).values(runValues);
-    await enqueueDurableJob(
-      "module-test",
-      { runId: id, organizationId: mod.orgId, jobClass: "plan", estimatedBytes: 16 * 1024 * 1024 },
-      { dedupeKey: id },
-    );
-    const created = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, id) });
-    if (created === undefined) throw new Error("Created module test run could not be loaded");
-    (set as { status: number }).status = 201;
-    return { data: testRunResource(created, mod.id, selection.version.version) };
-  })
-  .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const search = new URL(request.url).searchParams;
-    const rawSources = search.get("filter[source]");
-    const sources = rawSources === null || rawSources.trim() === "" ? [] : rawSources.split(",").map((source) => source.trim()).filter((source) => source !== "");
-    const where = sources.length === 0
-      ? eq(moduleTestRuns.moduleId, mod.id)
-      : and(eq(moduleTestRuns.moduleId, mod.id), inArray(moduleTestRuns.source, sources));
-    const { number, size } = pageRequest(request);
-    const [rows, total] = await Promise.all([
-      db.query.moduleTestRuns.findMany({ where, orderBy: [desc(moduleTestRuns.createdAt)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(moduleTestRuns).where(where),
-    ]);
-    const versions = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
-    const versionById = new Map(versions.map((version) => [version.id, version.version]));
-    return {
-      data: rows.map((row) => testRunResource(row, mod.id, versionById.get(row.versionId) ?? row.versionId)),
-      ...pagination(request, number, size, total[0]?.total ?? 0),
-    };
-  })
-  .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
-    if (mod === undefined || run === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const version = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, run.versionId) });
-    return { data: testRunResource(run, mod.id, version?.version ?? run.versionId) };
-  })
-  .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id/cancel", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
-    if (mod === undefined || run === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    if (!(["queued", "pending", "running"] as string[]).includes(run.status)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
-    }
-    const canceled = await db.update(moduleTestRuns)
-      .set({ status: "canceled", updatedAt: Date.now(), message: "Canceled via the remote-workflow API" })
-      .where(and(eq(moduleTestRuns.id, run.id), inArray(moduleTestRuns.status, ["queued", "pending", "running"])))
-      .returning({ id: moduleTestRuns.id });
-    if (canceled.length === 0) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
-    }
-    await cancelDurableJobs("module-test", run.id);
-    (set as { status: number }).status = 202;
-    return {};
-  })
-  .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id/force-cancel", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestRunModule(params);
-    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
-    if (mod === undefined || run === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    if (!(["queued", "pending", "running"] as string[]).includes(run.status)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
-    }
-    const canceled = await db.update(moduleTestRuns)
-      .set({ status: "canceled", updatedAt: Date.now(), message: "Force-canceled via the remote-workflow API" })
-      .where(and(eq(moduleTestRuns.id, run.id), inArray(moduleTestRuns.status, ["queued", "pending", "running"])))
-      .returning({ id: moduleTestRuns.id });
-    if (canceled.length === 0) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
-    }
-    await cancelDurableJobs("module-test", run.id);
-    (set as { status: number }).status = 202;
-    return {};
-  })
-  .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestVarsModule(params);
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const rows = await db.query.testVariables.findMany({ where: eq(testVariables.moduleId, mod.id) });
-    return { data: rows.map(testVariableResource) };
-  })
-  .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await findTestVarsModule(params);
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const input = testVariableInput(body, true);
-    if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
-    const existing = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.key, input.key ?? "")) });
-    if (existing !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] }; }
-    const id = newResourceId("var");
-    const now = Date.now();
-    const created = { id, moduleId: mod.id, key: input.key ?? "", value: input.value ?? "", sensitive: input.sensitive ?? false, hcl: input.hcl ?? false, category: input.category ?? "terraform", description: input.description ?? null, createdAt: now, updatedAt: now };
-    await db.insert(testVariables).values(created);
-    (set as { status: number }).status = 201;
-    return { data: testVariableResource(created) };
-  })
-  .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { variable } = resolved;
-    return { data: testVariableResource(variable) };
-  })
-  .patch("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { variable } = resolved;
-    const input = testVariableInput(body, false);
-    if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
-    const updates: Partial<typeof testVariables.$inferInsert> = { updatedAt: Date.now(), ...testVariableScalarUpdates(input) };
-    if (input.key !== undefined) {
-      const keyFailure = await validateTestVariableKey(variable.moduleId, variable.id, input.key, set);
-      if (keyFailure !== null) return keyFailure.failure;
-      updates.key = input.key;
-    }
-    let conflict = "";
-    await db.transaction(async (tx): Promise<void> => {
-      // Duplicate-key enforcement and the write share one transaction so a
-      // concurrent create cannot slip a same-key row between check and update.
+      await db
+        .update(registryModuleVersions)
+        .set({ isDeprecated: false, updatedAt: Date.now() })
+        .where(eq(registryModuleVersions.id, versionId));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/configuration-versions",
+    async ({ params, user, orgId: tokenOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestRunModule(params);
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      const now = Date.now();
+      const id = newResourceId("cv");
+      await db
+        .insert(moduleTestConfigurationVersions)
+        .values({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null });
+      (set as { status: number }).status = 201;
+      return {
+        data: testConfigurationVersionResource(
+          { id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null },
+          mod.id,
+          request,
+        ),
+      };
+    },
+  )
+  .put(
+    "/api/v2/module-test-configuration-versions/:configuration_version_id/upload",
+    async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const access = await resolveTestConfigVersionForUpload(
+        params["configuration_version_id"] ?? "",
+        user?.id,
+        tokenOrgId,
+        teamId,
+        request,
+        set,
+      );
+      if ("failure" in access) return access.failure;
+      const { configuration, mod } = access;
+      const archive = await readAndValidateUploadArchive(body, request, set);
+      if ("failure" in archive) return archive.failure;
+      const stored = await claimAndStoreConfigArchive(configuration.id, archive.bytes);
+      if ("alreadyUploaded" in stored) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
+      }
+      const updated = await db.query.moduleTestConfigurationVersions.findFirst({
+        where: eq(moduleTestConfigurationVersions.id, configuration.id),
+      });
+      if (updated === undefined) return registryNotFound(set);
+      (set as { status: number }).status = 200;
+      return { data: testConfigurationVersionResource(updated, mod.id, request) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveTestRunModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { mod } = resolved;
+      const configuration = moduleTestConfiguration(body);
+      if ("error" in configuration) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
+      }
+      const { configurationVersionId } = parseTestRunConfigurationVersion(body);
+      const selection = await selectTestRunArchive(mod.id, configurationVersionId, mod.orgId);
+      if ("error" in selection) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: selection.error }] };
+      }
+      const now = Date.now();
+      const id = newResourceId("trun");
+      const runValues: typeof moduleTestRuns.$inferInsert = {
+        id,
+        moduleId: mod.id,
+        versionId: selection.version.id,
+        configurationVersionId: selection.moduleConfigurationVersionId,
+        status: "queued",
+        testStatus: null,
+        testsPassed: null,
+        testsFailed: null,
+        testsErrored: null,
+        testsSkipped: null,
+        verbose: configuration.verbose,
+        filters: [...configuration.filters],
+        testDirectory: configuration.testDirectory,
+        variables: configuration.variables.map((variable) => ({ ...variable })),
+        source: "tfe-api",
+        message: "Queued manually via the remote-workflow API",
+        output: null,
+        error: null,
+        createdBy: user?.id ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.insert(moduleTestRuns).values(runValues);
+      await enqueueDurableJob(
+        "module-test",
+        { runId: id, organizationId: mod.orgId, jobClass: "plan", estimatedBytes: 16 * 1024 * 1024 },
+        { dedupeKey: id },
+      );
+      const created = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, id) });
+      if (created === undefined) throw new Error("Created module test run could not be loaded");
+      (set as { status: number }).status = 201;
+      return { data: testRunResource(created, mod.id, selection.version.version) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs",
+    async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestRunModule(params);
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      const search = new URL(request.url).searchParams;
+      const rawSources = search.get("filter[source]");
+      const sources =
+        rawSources === null || rawSources.trim() === ""
+          ? []
+          : rawSources
+              .split(",")
+              .map((source) => source.trim())
+              .filter((source) => source !== "");
+      const where =
+        sources.length === 0
+          ? eq(moduleTestRuns.moduleId, mod.id)
+          : and(eq(moduleTestRuns.moduleId, mod.id), inArray(moduleTestRuns.source, sources));
+      const { number, size } = pageRequest(request);
+      const [rows, total] = await Promise.all([
+        db.query.moduleTestRuns.findMany({
+          where,
+          orderBy: [desc(moduleTestRuns.createdAt)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(moduleTestRuns).where(where),
+      ]);
+      const versions = await db.query.registryModuleVersions.findMany({
+        where: eq(registryModuleVersions.moduleId, mod.id),
+      });
+      const versionById = new Map(versions.map((version) => [version.id, version.version]));
+      return {
+        data: rows.map((row) => testRunResource(row, mod.id, versionById.get(row.versionId) ?? row.versionId)),
+        ...pagination(request, number, size, total[0]?.total ?? 0),
+      };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestRunModule(params);
+      const run =
+        mod === undefined
+          ? undefined
+          : await db.query.moduleTestRuns.findFirst({
+              where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)),
+            });
+      if (
+        mod === undefined ||
+        run === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      const version = await db.query.registryModuleVersions.findFirst({
+        where: eq(registryModuleVersions.id, run.versionId),
+      });
+      return { data: testRunResource(run, mod.id, version?.version ?? run.versionId) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id/cancel",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestRunModule(params);
+      const run =
+        mod === undefined
+          ? undefined
+          : await db.query.moduleTestRuns.findFirst({
+              where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)),
+            });
+      if (
+        mod === undefined ||
+        run === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      if (!(["queued", "pending", "running"] as string[]).includes(run.status)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
+      }
+      const canceled = await db
+        .update(moduleTestRuns)
+        .set({ status: "canceled", updatedAt: Date.now(), message: "Canceled via the remote-workflow API" })
+        .where(and(eq(moduleTestRuns.id, run.id), inArray(moduleTestRuns.status, ["queued", "pending", "running"])))
+        .returning({ id: moduleTestRuns.id });
+      if (canceled.length === 0) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
+      }
+      await cancelDurableJobs("module-test", run.id);
+      (set as { status: number }).status = 202;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id/force-cancel",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestRunModule(params);
+      const run =
+        mod === undefined
+          ? undefined
+          : await db.query.moduleTestRuns.findFirst({
+              where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)),
+            });
+      if (
+        mod === undefined ||
+        run === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      if (!(["queued", "pending", "running"] as string[]).includes(run.status)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
+      }
+      const canceled = await db
+        .update(moduleTestRuns)
+        .set({ status: "canceled", updatedAt: Date.now(), message: "Force-canceled via the remote-workflow API" })
+        .where(and(eq(moduleTestRuns.id, run.id), inArray(moduleTestRuns.status, ["queued", "pending", "running"])))
+        .returning({ id: moduleTestRuns.id });
+      if (canceled.length === 0) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Test was not running" }] };
+      }
+      await cancelDurableJobs("module-test", run.id);
+      (set as { status: number }).status = 202;
+      return {};
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestVarsModule(params);
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const rows = await db.query.testVariables.findMany({ where: eq(testVariables.moduleId, mod.id) });
+      return { data: rows.map(testVariableResource) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const mod = await findTestVarsModule(params);
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const input = testVariableInput(body, true);
+      if ("error" in input) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+      }
+      const existing = await db.query.testVariables.findFirst({
+        where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.key, input.key ?? "")),
+      });
+      if (existing !== undefined) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" },
+          ],
+        };
+      }
+      const id = newResourceId("var");
+      const now = Date.now();
+      const created = {
+        id,
+        moduleId: mod.id,
+        key: input.key ?? "",
+        value: input.value ?? "",
+        sensitive: input.sensitive ?? false,
+        hcl: input.hcl ?? false,
+        category: input.category ?? "terraform",
+        description: input.description ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.insert(testVariables).values(created);
+      (set as { status: number }).status = 201;
+      return { data: testVariableResource(created) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { variable } = resolved;
+      return { data: testVariableResource(variable) };
+    },
+  )
+  .patch(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { variable } = resolved;
+      const input = testVariableInput(body, false);
+      if ("error" in input) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
+      }
+      const updates: Partial<typeof testVariables.$inferInsert> = {
+        updatedAt: Date.now(),
+        ...testVariableScalarUpdates(input),
+      };
       if (input.key !== undefined) {
-        if (input.key.trim() === "") { conflict = "key must not be empty"; return; }
-        const dup = await tx.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, variable.moduleId), eq(testVariables.key, input.key), ne(testVariables.id, variable.id)) });
-        if (dup !== undefined) { conflict = "A test variable with this key already exists"; return; }
+        const keyFailure = await validateTestVariableKey(variable.moduleId, variable.id, input.key, set);
+        if (keyFailure !== null) return keyFailure.failure;
         updates.key = input.key;
       }
-      await tx.update(testVariables).set(updates).where(eq(testVariables.id, variable.id));
-    });
-    if (conflict !== "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: conflict }] };
-    }
-    const updated = await db.query.testVariables.findFirst({ where: eq(testVariables.id, variable.id) });
-    return { data: updated === undefined ? undefined : testVariableResource(updated) };
-  })
-  .delete("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
-    const { variable } = resolved;
-    await db.delete(testVariables).where(eq(testVariables.id, variable.id));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/registry-module-versions/:version_id/actions/revoke", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      let conflict = "";
+      await db.transaction(async (tx): Promise<void> => {
+        // Duplicate-key enforcement and the write share one transaction so a
+        // concurrent create cannot slip a same-key row between check and update.
+        if (input.key !== undefined) {
+          if (input.key.trim() === "") {
+            conflict = "key must not be empty";
+            return;
+          }
+          const dup = await tx.query.testVariables.findFirst({
+            where: and(
+              eq(testVariables.moduleId, variable.moduleId),
+              eq(testVariables.key, input.key),
+              ne(testVariables.id, variable.id),
+            ),
+          });
+          if (dup !== undefined) {
+            conflict = "A test variable with this key already exists";
+            return;
+          }
+          updates.key = input.key;
+        }
+        await tx.update(testVariables).set(updates).where(eq(testVariables.id, variable.id));
+      });
+      if (conflict !== "") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: conflict }] };
+      }
+      const updated = await db.query.testVariables.findFirst({ where: eq(testVariables.id, variable.id) });
+      return { data: updated === undefined ? undefined : testVariableResource(updated) };
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/vars/:variable_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const resolved = await resolveTestVariableForWrite(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure as { errors: { status: string; title: string }[] };
+      const { variable } = resolved;
+      await db.delete(testVariables).where(eq(testVariables.id, variable.id));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/registry-module-versions/:version_id/actions/revoke",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    await db.update(registryModuleVersions).set({ isRevoked: true, isDeprecated: true, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
-    return {
-      data: {
-        id: versionId,
-        type: "registry-module-versions",
-        attributes: {
-          version: ver.version,
-          status: ver.status,
-          deprecated: true,
-          revoked: true,
+      await db
+        .update(registryModuleVersions)
+        .set({ isRevoked: true, isDeprecated: true, updatedAt: Date.now() })
+        .where(eq(registryModuleVersions.id, versionId));
+      return {
+        data: {
+          id: versionId,
+          type: "registry-module-versions",
+          attributes: {
+            version: ver.version,
+            status: ver.status,
+            deprecated: true,
+            revoked: true,
+          },
         },
-      },
-    };
-  })
-  .post("/api/v2/registry-module-versions/:version_id/actions/revert-revocation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      };
+    },
+  )
+  .post(
+    "/api/v2/registry-module-versions/:version_id/actions/revert-revocation",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    await db.update(registryModuleVersions).set({ isRevoked: false, isDeprecated: true, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
-    return {
-      data: {
-        id: versionId,
-        type: "registry-module-versions",
-        attributes: {
-          version: ver.version,
-          status: ver.status,
-          deprecated: true,
-          revoked: false,
+      await db
+        .update(registryModuleVersions)
+        .set({ isRevoked: false, isDeprecated: true, updatedAt: Date.now() })
+        .where(eq(registryModuleVersions.id, versionId));
+      return {
+        data: {
+          id: versionId,
+          type: "registry-module-versions",
+          attributes: {
+            version: ver.version,
+            status: ver.status,
+            deprecated: true,
+            revoked: false,
+          },
         },
-      },
-    };
-  })
-  .get("/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params["module_id"] !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params["namespace"] ?? "");
-    const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
-      where: and(
-        eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params["namespace"] ?? ""),
-        eq(registryModules.name, params["name"] ?? ""),
-        eq(registryModules.provider, params["provider"] ?? ""),
-      ),
-    });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const configuration = await db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.moduleId, mod.id) });
-    if (configuration === undefined) return registryNotFound(set);
-    return {
-      data: testConfigurationResource(
-        configuration,
-        mod.id,
-        `/api/v2/registry-modules/private/${encodeURIComponent(mod.namespace)}/${encodeURIComponent(mod.name)}/${encodeURIComponent(mod.provider)}/test-configuration`,
-      ),
-    };
-  })
-  .patch("/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveTestConfigModule(params, user?.id, tokenOrgId, teamId, set);
-    if ("failure" in resolved) return resolved.failure;
-    const { mod } = resolved;
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"] as Record<string, unknown> | undefined;
-    const attrs = (data?.["attributes"] as Record<string, unknown>) ?? {};
-    const legacyProviderUrl = typeof attrs["oidc-provider-url"] === "string" ? attrs["oidc-provider-url"] : null;
-    const existing = await db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.moduleId, mod.id) });
-    const basics = resolveTestConfigBasics(attrs, existing, legacyProviderUrl);
-    if ("error" in basics) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: basics.error }] };
-    }
-    const configResult = resolveTestConfigConfiguration(basics.oidcEnabled, basics.oidcProvider, basics.rawConfiguration, existing?.oidcConfiguration);
-    if ("error" in configResult) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configResult.error }] };
-    }
-    const { id, oidcEnabled, oidcProvider } = basics;
-    const { configuration: oidcConfiguration } = configResult;
-    const updatedAt = Date.now();
-    if (existing !== undefined) {
-      await db.update(moduleTestConfigurations).set({ oidcEnabled, oidcProvider, oidcConfiguration, oidcProviderUrl: legacyProviderUrl ?? existing.oidcProviderUrl, updatedAt }).where(eq(moduleTestConfigurations.id, id));
-    } else {
-      await db.insert(moduleTestConfigurations).values({ id, moduleId: mod.id, oidcEnabled, oidcProvider, oidcConfiguration, oidcProviderUrl: legacyProviderUrl, updatedAt });
-    }
-    const configuration = await db.query.moduleTestConfigurations.findFirst({ where: eq(moduleTestConfigurations.id, id) });
-    if (configuration === undefined) throw new Error("Updated test configuration could not be loaded");
-    return {
-      data: testConfigurationResource(configuration, mod.id, `/api/v2/registry-modules/private/${encodeURIComponent(mod.namespace)}/${encodeURIComponent(mod.name)}/${encodeURIComponent(mod.provider)}/test-configuration`),
-    };
-  })
-  .post("/api/v2/registry-modules/:module_id/versions/:version/actions/test", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const modId = params["module_id"] ?? "";
-    const versionStr = params["version"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({
-      where: and(eq(registryModuleVersions.moduleId, modId), eq(registryModuleVersions.version, versionStr)),
-    });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, modId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      };
+    },
+  )
+  .get(
+    "/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      if (params["module_id"] !== "private") return registryNotFound(set);
+      const org = await cachedOrgByName(params["namespace"] ?? "");
+      const mod =
+        org === undefined
+          ? undefined
+          : await db.query.registryModules.findFirst({
+              where: and(
+                eq(registryModules.orgId, org.id),
+                eq(registryModules.namespace, params["namespace"] ?? ""),
+                eq(registryModules.name, params["name"] ?? ""),
+                eq(registryModules.provider, params["provider"] ?? ""),
+              ),
+            });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      )
+        return registryNotFound(set);
+      const configuration = await db.query.moduleTestConfigurations.findFirst({
+        where: eq(moduleTestConfigurations.moduleId, mod.id),
+      });
+      if (configuration === undefined) return registryNotFound(set);
+      return {
+        data: testConfigurationResource(
+          configuration,
+          mod.id,
+          `/api/v2/registry-modules/private/${encodeURIComponent(mod.namespace)}/${encodeURIComponent(mod.name)}/${encodeURIComponent(mod.provider)}/test-configuration`,
+        ),
+      };
+    },
+  )
+  .patch(
+    "/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveTestConfigModule(params, user?.id, tokenOrgId, teamId, set);
+      if ("failure" in resolved) return resolved.failure;
+      const { mod } = resolved;
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const data = payload["data"] as Record<string, unknown> | undefined;
+      const attrs = (data?.["attributes"] as Record<string, unknown>) ?? {};
+      const legacyProviderUrl = typeof attrs["oidc-provider-url"] === "string" ? attrs["oidc-provider-url"] : null;
+      const existing = await db.query.moduleTestConfigurations.findFirst({
+        where: eq(moduleTestConfigurations.moduleId, mod.id),
+      });
+      const basics = resolveTestConfigBasics(attrs, existing, legacyProviderUrl);
+      if ("error" in basics) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: basics.error }] };
+      }
+      const configResult = resolveTestConfigConfiguration(
+        basics.oidcEnabled,
+        basics.oidcProvider,
+        basics.rawConfiguration,
+        existing?.oidcConfiguration,
+      );
+      if ("error" in configResult) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configResult.error }] };
+      }
+      const { id, oidcEnabled, oidcProvider } = basics;
+      const { configuration: oidcConfiguration } = configResult;
+      const updatedAt = Date.now();
+      if (existing !== undefined) {
+        await db
+          .update(moduleTestConfigurations)
+          .set({
+            oidcEnabled,
+            oidcProvider,
+            oidcConfiguration,
+            oidcProviderUrl: legacyProviderUrl ?? existing.oidcProviderUrl,
+            updatedAt,
+          })
+          .where(eq(moduleTestConfigurations.id, id));
+      } else {
+        await db.insert(moduleTestConfigurations).values({
+          id,
+          moduleId: mod.id,
+          oidcEnabled,
+          oidcProvider,
+          oidcConfiguration,
+          oidcProviderUrl: legacyProviderUrl,
+          updatedAt,
+        });
+      }
+      const configuration = await db.query.moduleTestConfigurations.findFirst({
+        where: eq(moduleTestConfigurations.id, id),
+      });
+      if (configuration === undefined) throw new Error("Updated test configuration could not be loaded");
+      return {
+        data: testConfigurationResource(
+          configuration,
+          mod.id,
+          `/api/v2/registry-modules/private/${encodeURIComponent(mod.namespace)}/${encodeURIComponent(mod.name)}/${encodeURIComponent(mod.provider)}/test-configuration`,
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/registry-modules/:module_id/versions/:version/actions/test",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const modId = params["module_id"] ?? "";
+      const versionStr = params["version"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, modId), eq(registryModuleVersions.version, versionStr)),
+      });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, modId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    if (ver.status !== "ok" || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module version has no published archive" }] };
-    }
-    const legacyRunId = newResourceId("legacy-module-test");
-    let result: Awaited<ReturnType<typeof runModuleTest>>;
-    try {
-      result = await runModuleTest(ver.id, ver.archivePath, {
-        verbose: false,
-        filters: [],
-        testDirectory: "tests",
-        variables: [],
-      }, undefined, await moduleTestEnvironmentFactory(mod.id, mod.name, mod.orgId, legacyRunId));
-    } finally {
-      await revokeWorkloadIdentityTokens(legacyRunId);
-    }
-    (set as { status: number }).status = 201;
-    return { data: moduleTestResource(result, mod.id, ver.version) };
-  })
-  .get("/api/v2/registry-modules/:module_id/versions/:version/tests", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const modId = params["module_id"] ?? "";
-    const versionStr = params["version"] ?? "";
-    const ver = await db.query.registryModuleVersions.findFirst({
-      where: and(eq(registryModuleVersions.moduleId, modId), eq(registryModuleVersions.version, versionStr)),
-    });
-    if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, modId) });
-    if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      if (ver.status !== "ok" || ver.archivePath === null || !(await Bun.file(ver.archivePath).exists())) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            { status: "422", title: "Unprocessable Entity", detail: "The module version has no published archive" },
+          ],
+        };
+      }
+      const legacyRunId = newResourceId("legacy-module-test");
+      let result: Awaited<ReturnType<typeof runModuleTest>>;
+      try {
+        result = await runModuleTest(
+          ver.id,
+          ver.archivePath,
+          {
+            verbose: false,
+            filters: [],
+            testDirectory: "tests",
+            variables: [],
+          },
+          undefined,
+          await moduleTestEnvironmentFactory(mod.id, mod.name, mod.orgId, legacyRunId),
+        );
+      } finally {
+        await revokeWorkloadIdentityTokens(legacyRunId);
+      }
+      (set as { status: number }).status = 201;
+      return { data: moduleTestResource(result, mod.id, ver.version) };
+    },
+  )
+  .get(
+    "/api/v2/registry-modules/:module_id/versions/:version/tests",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const modId = params["module_id"] ?? "";
+      const versionStr = params["version"] ?? "";
+      const ver = await db.query.registryModuleVersions.findFirst({
+        where: and(eq(registryModuleVersions.moduleId, modId), eq(registryModuleVersions.version, versionStr)),
+      });
+      if (ver === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, modId) });
+      if (
+        mod === undefined ||
+        !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    const [latest, tests] = await Promise.all([
-      readModuleTestResult(ver.id),
-      db.query.moduleTestResults.findMany({ where: eq(moduleTestResults.versionId, ver.id) }),
-    ]);
-    return {
-      data: [
-        ...(latest === undefined ? [] : [moduleTestResource(latest, mod.id, ver.version)]),
-        ...tests.map((t) => ({
-        id: t.id,
-        type: "module-tests",
-        attributes: { status: t.status, output: t.output },
-        })),
-      ],
-    };
-  });
+      const [latest, tests] = await Promise.all([
+        readModuleTestResult(ver.id),
+        db.query.moduleTestResults.findMany({ where: eq(moduleTestResults.versionId, ver.id) }),
+      ]);
+      return {
+        data: [
+          ...(latest === undefined ? [] : [moduleTestResource(latest, mod.id, ver.version)]),
+          ...tests.map((t) => ({
+            id: t.id,
+            type: "module-tests",
+            attributes: { status: t.status, output: t.output },
+          })),
+        ],
+      };
+    },
+  );

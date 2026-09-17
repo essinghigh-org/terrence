@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react";
 
-import {
-  formatDateTime,
-  formatDateTimeExact,
-  formatRelativeTime,
-} from "../../lib/utils";
+import { formatDateTime, formatDateTimeExact, formatRelativeTime } from "../../lib/utils";
 
 type TimeValue = Readonly<Date> | string | number | null | undefined;
 
@@ -36,8 +32,12 @@ export function RelativeTime({
 
   useEffect((): (() => void) | undefined => {
     if (updateIntervalMs <= 0) return undefined;
-    const timer = window.setInterval((): void => { setNow(new Date()); }, updateIntervalMs);
-    return (): void => { window.clearInterval(timer); };
+    const timer = window.setInterval((): void => {
+      setNow(new Date());
+    }, updateIntervalMs);
+    return (): void => {
+      window.clearInterval(timer);
+    };
   }, [updateIntervalMs]);
 
   const relative = formatRelativeTime(value, now);

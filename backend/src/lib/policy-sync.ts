@@ -9,7 +9,6 @@ import type { policySets } from "../db/schema";
 import type { DeepReadonly } from "./utils";
 import { extractSafeTarArchive } from "./archive";
 
-
 export type PolicyVcsProvider = "github" | "gitlab" | "bitbucket";
 export type PolicyWebhookDetails = {
   readonly branch?: string;
@@ -30,7 +29,10 @@ type ParsedPolicy = Readonly<{
 }>;
 
 const MAX_POLICY_BYTES = 20 * 1024 * 1024;
-const POLICY_ARCHIVE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
+const POLICY_ARCHIVE_DIR = resolve(
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
+  "policy-set-versions",
+);
 
 function within(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
@@ -66,10 +68,13 @@ export function matchesPolicySetWebhook(
   }
 
   const policiesPath = normalizedRepositoryPath(policySet.policiesPath);
-  return policiesPath === "" || [...details.filesChanged].some((file: string): boolean => {
-    const normalized = file.replaceAll("\\", "/").replace(/^\/+/, "");
-    return normalized === policiesPath || normalized.startsWith(`${policiesPath}/`);
-  });
+  return (
+    policiesPath === "" ||
+    [...details.filesChanged].some((file: string): boolean => {
+      const normalized = file.replaceAll("\\", "/").replace(/^\/+/, "");
+      return normalized === policiesPath || normalized.startsWith(`${policiesPath}/`);
+    })
+  );
 }
 
 async function extractArchive(archivePath: string, destination: string): Promise<void> {
@@ -78,9 +83,7 @@ async function extractArchive(archivePath: string, destination: string): Promise
 
 async function repositoryRoot(extracted: string): Promise<string> {
   const entries = await readdir(extracted, { withFileTypes: true });
-  return entries.length === 1 && entries[0]?.isDirectory() === true
-    ? join(extracted, entries[0].name)
-    : extracted;
+  return entries.length === 1 && entries[0]?.isDirectory() === true ? join(extracted, entries[0].name) : extracted;
 }
 
 async function readPolicyFile(path: string): Promise<string> {
@@ -98,10 +101,14 @@ async function readPolicyFile(path: string): Promise<string> {
   }
 }
 
-function consumeQuotedChar(input: string, index: number, output: string): { nextIndex: number; output: string; quoted: boolean } {
+function consumeQuotedChar(
+  input: string,
+  index: number,
+  output: string,
+): { nextIndex: number; output: string; quoted: boolean } {
   const char = input[index] ?? "";
   if (char === "\\") return { nextIndex: index + 1, output: output + char + (input[index + 1] ?? ""), quoted: true };
-  if (char === "\"") return { nextIndex: index, output: output + char, quoted: false };
+  if (char === '"') return { nextIndex: index, output: output + char, quoted: false };
   return { nextIndex: index, output: output + char, quoted: true };
 }
 
@@ -109,7 +116,12 @@ function consumeUnquotedQuote(output: string, char: string): string {
   return output + char;
 }
 
-function consumeLineComment(input: string, index: number, output: string, char: string): { nextIndex: number; output: string } {
+function consumeLineComment(
+  input: string,
+  index: number,
+  output: string,
+  char: string,
+): { nextIndex: number; output: string } {
   let nextOutput = output;
   let nextIndex = index;
   if (char === "/") {
@@ -152,7 +164,7 @@ function withoutHclComments(input: string): string {
       index = res.nextIndex;
       continue;
     }
-    if (char === "\"") {
+    if (char === '"') {
       quoted = true;
       output = consumeUnquotedQuote(output, char);
       continue;
@@ -181,10 +193,10 @@ function closingBrace(input: string, opening: number): number {
     const char = input[index];
     if (quoted) {
       if (char === "\\") index += 1;
-      else if (char === "\"") quoted = false;
+      else if (char === '"') quoted = false;
       continue;
     }
-    if (char === "\"") quoted = true;
+    if (char === '"') quoted = true;
     else if (char === "{") depth += 1;
     else if (char === "}") {
       depth -= 1;
@@ -194,7 +206,9 @@ function closingBrace(input: string, opening: number): number {
   return -1;
 }
 
-function hclPolicyBlocks(input: string): readonly Readonly<{ attributes: Readonly<Record<string, string>>; name: string }>[] {
+function hclPolicyBlocks(
+  input: string,
+): readonly Readonly<{ attributes: Readonly<Record<string, string>>; name: string }>[] {
   const clean = withoutHclComments(input);
   const header = /\bpolicy\s+("(?:\\.|[^"\\])*")\s*\{/g;
   const blocks: { attributes: Record<string, string>; name: string }[] = [];
@@ -238,7 +252,10 @@ async function regoFiles(directory: string): Promise<readonly string[]> {
   return files.sort();
 }
 
-async function parseManifest(policySet: VcsPolicySet, root: string): Promise<Readonly<{ manifest: string; policies: readonly ParsedPolicy[] }>> {
+async function parseManifest(
+  policySet: VcsPolicySet,
+  root: string,
+): Promise<Readonly<{ manifest: string; policies: readonly ParsedPolicy[] }>> {
   const configuredPath = normalizedRepositoryPath(policySet.policiesPath);
   const policyDirectory = resolve(root, configuredPath);
   if (!within(root, policyDirectory)) throw new Error("policies-path escapes the repository");
@@ -248,28 +265,31 @@ async function parseManifest(policySet: VcsPolicySet, root: string): Promise<Rea
   if (policySet.kind === "sentinel") {
     const manifestPath = join(policyDirectory, "sentinel.hcl");
     const blocks = hclPolicyBlocks(await readPolicyFile(manifestPath));
-    const parsed = await Promise.all(blocks.map(async ({ attributes, name }): Promise<ParsedPolicy> => {
-      const sourcePath = attributes["source"];
-      const enforcementLevel = attributes["enforcement_level"];
-      if (sourcePath === undefined || sourcePath === "") throw new Error(`Sentinel policy "${name}" is missing source`);
-      if (!["hard-mandatory", "soft-mandatory", "advisory"].includes(enforcementLevel ?? "")) {
-        throw new Error(`Sentinel policy "${name}" has an invalid enforcement level`);
-      }
-      if (/^https?:\/\//i.test(sourcePath)) throw new Error("Remote Sentinel policy sources are not supported");
-      const sourceFile = resolve(policyDirectory, sourcePath);
-      if (!within(root, sourceFile) || !sourceFile.endsWith(".sentinel")) {
-        throw new Error(`Sentinel policy "${name}" has an unsafe source path`);
-      }
-      const source = await readPolicyFile(sourceFile);
-      return {
-        description: attributes["description"] ?? null,
-        enforcementLevel: enforcementLevel ?? "advisory",
-        name,
-        query: source,
-        source,
-        sourcePath: relative(root, sourceFile).split(sep).join("/"),
-      };
-    }));
+    const parsed = await Promise.all(
+      blocks.map(async ({ attributes, name }): Promise<ParsedPolicy> => {
+        const sourcePath = attributes["source"];
+        const enforcementLevel = attributes["enforcement_level"];
+        if (sourcePath === undefined || sourcePath === "")
+          throw new Error(`Sentinel policy "${name}" is missing source`);
+        if (!["hard-mandatory", "soft-mandatory", "advisory"].includes(enforcementLevel ?? "")) {
+          throw new Error(`Sentinel policy "${name}" has an invalid enforcement level`);
+        }
+        if (/^https?:\/\//i.test(sourcePath)) throw new Error("Remote Sentinel policy sources are not supported");
+        const sourceFile = resolve(policyDirectory, sourcePath);
+        if (!within(root, sourceFile) || !sourceFile.endsWith(".sentinel")) {
+          throw new Error(`Sentinel policy "${name}" has an unsafe source path`);
+        }
+        const source = await readPolicyFile(sourceFile);
+        return {
+          description: attributes["description"] ?? null,
+          enforcementLevel: enforcementLevel ?? "advisory",
+          name,
+          query: source,
+          source,
+          sourcePath: relative(root, sourceFile).split(sep).join("/"),
+        };
+      }),
+    );
     return { manifest: relative(root, manifestPath).split(sep).join("/"), policies: parsed };
   }
 
@@ -356,12 +376,15 @@ export async function synchronizeVcsPolicySet(
       await rm(temporaryPath, { force: true });
     }
     uploadedAt = new Date().toISOString();
-    await db.update(policySetVersions).set({
-      archivePath,
-      statusTimestamps: { uploadedAt },
-      statusMetadataSchemaVersion: 1,
-      updatedAt: Date.now(),
-    }).where(eq(policySetVersions.id, versionId));
+    await db
+      .update(policySetVersions)
+      .set({
+        archivePath,
+        statusTimestamps: { uploadedAt },
+        statusMetadataSchemaVersion: 1,
+        updatedAt: Date.now(),
+      })
+      .where(eq(policySetVersions.id, versionId));
 
     await extractArchive(archivePath, extractionDirectory);
     const root = await repositoryRoot(extractionDirectory);
@@ -369,40 +392,48 @@ export async function synchronizeVcsPolicySet(
     const readyAt = new Date().toISOString();
     await db.transaction(async (tx): Promise<void> => {
       await tx.delete(policies).where(eq(policies.policySetId, policySet.id));
-      await tx.insert(policies).values(parsed.policies.map((policy): typeof policies.$inferInsert => ({
-        id: newResourceId("pol"),
-        policySetId: policySet.id,
-        policySetVersionId: versionId,
-        name: policy.name,
-        description: policy.description,
-        kind: policySet.kind,
-        enforcementLevel: policy.enforcementLevel,
-        query: policy.query,
-        source: policy.source,
-        sourcePath: policy.sourcePath,
-        createdAt: Date.now(),
-      })));
-      await tx.update(policySetVersions).set({
-        status: "ready",
-        statusTimestamps: { ...(uploadedAt === undefined ? {} : { uploadedAt }), readyAt },
-        statusMetadataSchemaVersion: 1,
-        ingressAttributes: { ...baseIngress, manifest: parsed.manifest, policyCount: parsed.policies.length },
-        error: null,
-        updatedAt: Date.now(),
-      }).where(eq(policySetVersions.id, versionId));
+      await tx.insert(policies).values(
+        parsed.policies.map((policy): typeof policies.$inferInsert => ({
+          id: newResourceId("pol"),
+          policySetId: policySet.id,
+          policySetVersionId: versionId,
+          name: policy.name,
+          description: policy.description,
+          kind: policySet.kind,
+          enforcementLevel: policy.enforcementLevel,
+          query: policy.query,
+          source: policy.source,
+          sourcePath: policy.sourcePath,
+          createdAt: Date.now(),
+        })),
+      );
+      await tx
+        .update(policySetVersions)
+        .set({
+          status: "ready",
+          statusTimestamps: { ...(uploadedAt === undefined ? {} : { uploadedAt }), readyAt },
+          statusMetadataSchemaVersion: 1,
+          ingressAttributes: { ...baseIngress, manifest: parsed.manifest, policyCount: parsed.policies.length },
+          error: null,
+          updatedAt: Date.now(),
+        })
+        .where(eq(policySetVersions.id, versionId));
     });
   } catch (error) {
     const erroredAt = new Date().toISOString();
     const message = (error instanceof Error ? error.message : "Policy synchronization failed").slice(0, 2_000);
     await rm(archivePath, { force: true });
-    await db.update(policySetVersions).set({
-      status: "errored",
-      statusTimestamps: { ...(uploadedAt === undefined ? {} : { uploadedAt }), erroredAt },
-      statusMetadataSchemaVersion: 1,
-      error: message,
-      archivePath: null,
-      updatedAt: Date.now(),
-    }).where(eq(policySetVersions.id, versionId));
+    await db
+      .update(policySetVersions)
+      .set({
+        status: "errored",
+        statusTimestamps: { ...(uploadedAt === undefined ? {} : { uploadedAt }), erroredAt },
+        statusMetadataSchemaVersion: 1,
+        error: message,
+        archivePath: null,
+        updatedAt: Date.now(),
+      })
+      .where(eq(policySetVersions.id, versionId));
   } finally {
     await rm(stagingDirectory, { recursive: true, force: true });
   }

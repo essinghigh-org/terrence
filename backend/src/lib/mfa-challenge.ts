@@ -43,6 +43,7 @@ export async function consumeMfaChallenge(token: string): Promise<{ userId: stri
   if (typeof userId !== "string" || userId === "" || typeof payload?.["credential"] !== "string") return null;
   const user = await db.query.users.findFirst({ where: eq(users.id, userId), columns: { passwordHash: true } });
   // A password reset also invalidates partially completed logins, on every replica.
-  if (user === undefined || createHash("sha256").update(user.passwordHash).digest("hex") !== payload["credential"]) return null;
+  if (user === undefined || createHash("sha256").update(user.passwordHash).digest("hex") !== payload["credential"])
+    return null;
   return { userId };
 }

@@ -34,7 +34,8 @@ function canonicalHost(provider: VcsProvider, hostname: string, port: string): s
 
 export function providerForServiceProvider(serviceProvider: string): VcsProvider | undefined {
   if (serviceProvider === "github" || serviceProvider === "github_enterprise") return "github";
-  if (serviceProvider === "gitlab" || serviceProvider === "gitlab_ce" || serviceProvider === "gitlab_ee") return "gitlab";
+  if (serviceProvider === "gitlab" || serviceProvider === "gitlab_ce" || serviceProvider === "gitlab_ee")
+    return "gitlab";
   if (serviceProvider === "bitbucket") return "bitbucket";
   return undefined;
 }
@@ -50,14 +51,15 @@ export function vcsSourceIdentity(
   try {
     const url = new URL(configured);
     if (
-      (url.protocol !== "https:" && url.protocol !== "http:")
-      || (requireHttps && url.protocol !== "https:")
-      || url.username !== ""
-      || url.password !== ""
-      || url.search !== ""
-      || url.hash !== ""
-      || url.hostname === ""
-    ) return undefined;
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      (requireHttps && url.protocol !== "https:") ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== "" ||
+      url.hostname === ""
+    )
+      return undefined;
     return {
       provider,
       host: canonicalHost(provider, url.hostname, url.port),
@@ -76,13 +78,17 @@ export function configuredVcsSourceIdentity(
   installationId?: number,
   requireHttps = false,
 ): VcsSourceIdentity | undefined {
-  const configured = firstConfiguredValue(httpUrl, apiUrl) ?? (
-    provider === "github"
-      ? serviceProvider === "github" ? "https://api.github.com" : undefined
+  const configured =
+    firstConfiguredValue(httpUrl, apiUrl) ??
+    (provider === "github"
+      ? serviceProvider === "github"
+        ? "https://api.github.com"
+        : undefined
       : provider === "gitlab"
-        ? serviceProvider === "gitlab" ? "https://gitlab.com/api/v4" : undefined
-        : "https://bitbucket.org"
-  );
+        ? serviceProvider === "gitlab"
+          ? "https://gitlab.com/api/v4"
+          : undefined
+        : "https://bitbucket.org");
   return vcsSourceIdentity(provider, configured, installationId, requireHttps);
 }
 
@@ -91,10 +97,7 @@ export function configuredVcsSourceIdentity(
  * OAuth connections have no installation ID and therefore remain host-scoped;
  * GitHub App connections must have the matching delivery installation ID.
  */
-export function vcsSourceMatchesConnection(
-  configured: VcsSourceIdentity,
-  incoming: VcsSourceIdentity,
-): boolean {
+export function vcsSourceMatchesConnection(configured: VcsSourceIdentity, incoming: VcsSourceIdentity): boolean {
   if (configured.provider !== incoming.provider || configured.host !== incoming.host) return false;
   return configured.installationId === undefined || configured.installationId === incoming.installationId;
 }
@@ -115,14 +118,7 @@ export async function sourceIdentityForConnection(
     if (installation === undefined) return undefined;
     const githubApiUrl = await getGitHubAppApiUrl();
     if (githubApiUrl === null) return undefined;
-    return configuredVcsSourceIdentity(
-      "github",
-      "github",
-      githubApiUrl,
-      null,
-      installation.installationId,
-      true,
-    );
+    return configuredVcsSourceIdentity("github", "github", githubApiUrl, null, installation.installationId, true);
   }
 
   if (connectionType !== "oauth-token") return undefined;

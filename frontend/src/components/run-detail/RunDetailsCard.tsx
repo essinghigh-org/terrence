@@ -27,7 +27,10 @@ export type RunDetailsCardProps = Readonly<{
   inputStateSerial: string | undefined;
 }>;
 
-function RunTimeline({ timestamps, inputStateSerial }: Readonly<{
+function RunTimeline({
+  timestamps,
+  inputStateSerial,
+}: Readonly<{
   timestamps: Readonly<Record<string, string>>;
   inputStateSerial: string | undefined;
 }>): React.JSX.Element | null {
@@ -44,12 +47,14 @@ function RunTimeline({ timestamps, inputStateSerial }: Readonly<{
   return (
     <Disclosure label="Run timeline" className="rounded-none border-0 border-t" bodyClassName="px-5 py-4">
       <dl className="grid gap-3 text-xs">
-        {timestampEntries.map(([key, value]): React.JSX.Element => (
-          <div key={key}>
-            <dt className="capitalize text-muted-foreground">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
-            <dd className="mt-0.5 text-foreground">{formatDate(value)}</dd>
-          </div>
-        ))}
+        {timestampEntries.map(
+          ([key, value]): React.JSX.Element => (
+            <div key={key}>
+              <dt className="capitalize text-muted-foreground">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
+              <dd className="mt-0.5 text-foreground">{formatDate(value)}</dd>
+            </div>
+          ),
+        )}
         {inputStateSerial !== undefined && /^\d+$/.test(inputStateSerial) && (
           <div>
             <dt className="text-muted-foreground">Input state serial</dt>
@@ -67,17 +72,18 @@ export function RunDetailsCard(props: RunDetailsCardProps): React.JSX.Element {
   const { attributes, status } = props;
   const baseline = attributes["duration-baseline"];
   const medianSeconds = baseline?.["median-duration-seconds"];
-  const slowRunNote = baseline?.["is-slow"] === true && isNumber(medianSeconds)
-    ? (
+  const slowRunNote =
+    baseline?.["is-slow"] === true && isNumber(medianSeconds) ? (
       <span className="font-medium text-warning-text">
         Slower than typical (median {formatDurationSeconds(medianSeconds)})
       </span>
-    )
-    : null;
+    ) : null;
 
   return (
     <section aria-labelledby="run-details-heading" className="overflow-hidden rounded-lg border border-border bg-card">
-      <h2 id="run-details-heading" className="border-b border-border px-5 py-4 text-sm font-semibold">Run details</h2>
+      <h2 id="run-details-heading" className="border-b border-border px-5 py-4 text-sm font-semibold">
+        Run details
+      </h2>
       <MetaList
         columns={2}
         className="grid-cols-1 px-5 py-4 sm:grid-cols-1"
@@ -101,28 +107,37 @@ export function RunDetailsCard(props: RunDetailsCardProps): React.JSX.Element {
           },
           {
             label: "Actions",
-            value: props.planActionCount === null
-              ? "Unavailable"
-              : `${props.planActionCount} ${props.applyStatus === "finished" ? "invoked" : "to invoke"}`,
+            value:
+              props.planActionCount === null
+                ? "Unavailable"
+                : `${props.planActionCount} ${props.applyStatus === "finished" ? "invoked" : "to invoke"}`,
           },
           { label: "Status", value: formatRunStatus(status) },
-          ...(props.creatorUsername === "" ? [] : [{
-            label: "Created by",
-            value: (
-              <span className="flex items-center gap-2">
-                <Avatar className="size-6 rounded-full">
-                  {props.creatorAvatarUrl !== "" ? (
-                    <AvatarImage src={props.creatorAvatarUrl} alt={props.creatorUsername} className="rounded-full object-cover" />
-                  ) : (
-                    <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
-                      {props.creatorUsername.slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  )}
-                </Avatar>
-                {props.creatorUsername}
-              </span>
-            ),
-          }]),
+          ...(props.creatorUsername === ""
+            ? []
+            : [
+                {
+                  label: "Created by",
+                  value: (
+                    <span className="flex items-center gap-2">
+                      <Avatar className="size-6 rounded-full">
+                        {props.creatorAvatarUrl !== "" ? (
+                          <AvatarImage
+                            src={props.creatorAvatarUrl}
+                            alt={props.creatorUsername}
+                            className="rounded-full object-cover"
+                          />
+                        ) : (
+                          <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
+                            {props.creatorUsername.slice(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        )}
+                      </Avatar>
+                      {props.creatorUsername}
+                    </span>
+                  ),
+                },
+              ]),
           {
             label: "Workspace",
             value: (

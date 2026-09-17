@@ -11,7 +11,12 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
-import { breakerStateForTests, resetDedupForTests, resetSharedDeliveryStateForTests, deliverRunNotifications } from "../../src/lib/notifications";
+import {
+  breakerStateForTests,
+  resetDedupForTests,
+  resetSharedDeliveryStateForTests,
+  deliverRunNotifications,
+} from "../../src/lib/notifications";
 
 describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
   const suffix = crypto.randomUUID();
@@ -28,9 +33,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
     process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: organizationName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(authToken), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
     resetDedupForTests(true);

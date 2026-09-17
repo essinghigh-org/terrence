@@ -2,7 +2,16 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { eq } from "drizzle-orm";
-import { agentJobs, agentPools, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks, runs } from "../../src/db/schema";
+import {
+  agentJobs,
+  agentPools,
+  organizations,
+  stackAgentJobs,
+  stackRecords,
+  stackStateLocks,
+  stacks,
+  runs,
+} from "../../src/db/schema";
 
 describe("the reference format API v2 - Agent Pools & Agents", () => {
   let userToken: string;
@@ -21,7 +30,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
         body: JSON.stringify({
           data: { attributes: { username, password: "Password123!" } },
         }),
-      })
+      }),
     );
 
     const loginRes = await app.handle(
@@ -31,7 +40,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
         body: JSON.stringify({
           data: { attributes: { username, password: "Password123!" } },
         }),
-      })
+      }),
     );
     const loginData = await loginRes.json();
     userToken = loginData.data.attributes.token;
@@ -47,7 +56,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
         body: JSON.stringify({
           data: { type: "organizations", attributes: { name: orgName } },
         }),
-      })
+      }),
     );
   });
 
@@ -67,7 +76,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(res.status).toBe(201);
@@ -234,7 +243,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(res.status).toBe(201);
@@ -263,7 +272,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       new Request(`http://localhost/api/v2/agent-pools/${poolId}/agents`, {
         method: "GET",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
 
     expect(listRes.status).toBe(200);
@@ -275,7 +284,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       new Request(`http://localhost/api/v2/agent-pools/${poolId}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(poolRes.status).toBe(200);
     const poolBody = await poolRes.json();
@@ -287,7 +296,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       new Request(`http://localhost/api/v2/agents/${agentId}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -357,10 +366,12 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       claimedAt: now,
       createdAt: now,
     });
-    const response = await app.handle(new Request(`http://localhost/api/v2/agents/${agentId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const response = await app.handle(
+      new Request(`http://localhost/api/v2/agents/${agentId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     expect(response.status).toBe(409);
     expect((await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, jobId) }))?.status).toBe("claimed");
     await db.delete(agentJobs).where(eq(agentJobs.id, jobId));
@@ -372,7 +383,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       new Request(`http://localhost/api/v2/agents/${agentId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(delRes.status).toBe(204);
 
@@ -380,7 +391,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       new Request(`http://localhost/api/v2/agents/${agentId}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(fetchRes.status).toBe(404);
   });
@@ -396,7 +407,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
         body: JSON.stringify({
           data: { attributes: { name: `capability-pool-${crypto.randomUUID().slice(0, 8)}` } },
         }),
-      })
+      }),
     );
     expect(poolRes.status).toBe(201);
     const capabilityPoolId = (await poolRes.json()).data.id as string;
@@ -409,7 +420,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
           "Content-Type": "application/vnd.api+json",
         },
         body: JSON.stringify({ data: { attributes: { description: "capability registration" } } }),
-      })
+      }),
     );
     expect(tokenRes.status).toBe(201);
     const poolToken = (await tokenRes.json()).data.attributes.token as string;
@@ -423,7 +434,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
             "Content-Type": "application/vnd.api+json",
           },
           body: JSON.stringify({ data: { attributes } }),
-        })
+        }),
       );
 
     const tofuAgent = await register({
@@ -444,25 +455,26 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
     const listRes = await app.handle(
       new Request(`http://localhost/api/v2/agent-pools/${capabilityPoolId}/agents`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(listRes.status).toBe(200);
     const listed = (await listRes.json()).data as { id: string; attributes: Record<string, unknown> }[];
-    expect(listed.map((a) => a.attributes["iac-binaries"])).toEqual(expect.arrayContaining([
-      ["tofu", "terraform"],
-      ["tofu"],
-    ]));
+    expect(listed.map((a) => a.attributes["iac-binaries"])).toEqual(
+      expect.arrayContaining([["tofu", "terraform"], ["tofu"]]),
+    );
     expect(listed.length).toBeGreaterThanOrEqual(2);
-    const bothBinaryAgent = listed.find((a): boolean =>
-      Array.isArray(a.attributes["iac-binaries"])
-      && (a.attributes["iac-binaries"] as readonly string[]).includes("tofu")
-      && (a.attributes["iac-binaries"] as readonly string[]).includes("terraform"));
+    const bothBinaryAgent = listed.find(
+      (a): boolean =>
+        Array.isArray(a.attributes["iac-binaries"]) &&
+        (a.attributes["iac-binaries"] as readonly string[]).includes("tofu") &&
+        (a.attributes["iac-binaries"] as readonly string[]).includes("terraform"),
+    );
     if (bothBinaryAgent === undefined) throw new Error("Expected a tofu+terraform agent to be listed");
 
     const showRes = await app.handle(
       new Request(`http://localhost/api/v2/agents/${bothBinaryAgent.id}`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(showRes.status).toBe(200);
     expect((await showRes.json()).data.attributes["iac-binaries"]).toEqual(["tofu", "terraform"]);
@@ -478,11 +490,41 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
     const now = Date.now();
     const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
     if (organization === undefined) throw new Error("Agent test organization was not created");
-    await db.insert(agentPools).values({ id: stackPoolId, orgId: organization.id, name: stackPoolId, organizationScoped: true, createdAt: now });
-    await db.insert(stacks).values({ id: stackRecordId, orgId: organization.id, agentPoolId: stackPoolId, executionMode: "agent", name: stackRecordId, createdAt: now, updatedAt: now });
+    await db
+      .insert(agentPools)
+      .values({ id: stackPoolId, orgId: organization.id, name: stackPoolId, organizationScoped: true, createdAt: now });
+    await db.insert(stacks).values({
+      id: stackRecordId,
+      orgId: organization.id,
+      agentPoolId: stackPoolId,
+      executionMode: "agent",
+      name: stackRecordId,
+      createdAt: now,
+      updatedAt: now,
+    });
     await db.insert(stackRecords).values([
-      { id: deploymentRunId, stackId: stackRecordId, parentId: null, recordType: "stack-deployment-runs", name: "active", status: "applying", payload: {}, createdAt: now, updatedAt: now },
-      { id: stepId, stackId: stackRecordId, parentId: deploymentRunId, recordType: "stack-deployment-steps", name: "component", status: "running", payload: {}, createdAt: now, updatedAt: now },
+      {
+        id: deploymentRunId,
+        stackId: stackRecordId,
+        parentId: null,
+        recordType: "stack-deployment-runs",
+        name: "active",
+        status: "applying",
+        payload: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: stepId,
+        stackId: stackRecordId,
+        parentId: deploymentRunId,
+        recordType: "stack-deployment-steps",
+        name: "component",
+        status: "running",
+        payload: {},
+        createdAt: now,
+        updatedAt: now,
+      },
     ]);
     await db.insert(stackAgentJobs).values({
       id: stackJobId,
@@ -507,12 +549,16 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       updatedAt: now,
     });
 
-    const response = await app.handle(new Request(`http://localhost/api/v2/agent-pools/${stackPoolId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const response = await app.handle(
+      new Request(`http://localhost/api/v2/agent-pools/${stackPoolId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     expect(response.status).toBe(204);
-    expect((await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, deploymentRunId) }))?.status).toBe("failed");
+    expect((await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, deploymentRunId) }))?.status).toBe(
+      "failed",
+    );
     expect((await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, stepId) }))?.status).toBe("failed");
     expect((await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.id, lockId) }))?.runId).toBeNull();
     const detachedStack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackRecordId) });
@@ -533,7 +579,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
         body: JSON.stringify({
           data: { attributes: { name: `invalid-pool-${crypto.randomUUID().slice(0, 8)}` } },
         }),
-      })
+      }),
     );
     expect(poolRes.status).toBe(201);
     const invalidPoolId = (await poolRes.json()).data.id as string;
@@ -546,7 +592,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
           "Content-Type": "application/vnd.api+json",
         },
         body: JSON.stringify({ data: { attributes: { description: "invalid registration" } } }),
-      })
+      }),
     );
     const poolToken = (await tokenRes.json()).data.attributes.token as string;
 
@@ -565,7 +611,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
             "Content-Type": "application/vnd.api+json",
           },
           body: JSON.stringify({ data: { attributes } }),
-        })
+        }),
       );
       expect(res.status).toBe(422);
     }

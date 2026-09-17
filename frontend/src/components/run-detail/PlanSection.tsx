@@ -54,11 +54,13 @@ export function PlanSection(props: PlanSectionProps): React.JSX.Element {
       <summary className="cursor-pointer list-none px-5 py-4 group-open:border-b group-open:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
-            <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
+            <ChevronRight
+              className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90"
+              aria-hidden="true"
+            />
             <PhaseIcon status={planStatus} />
             <h3 id="plan-heading" className="font-semibold text-foreground">
-              Plan{" "}
-              <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(planStatus)}</span>
+              Plan <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(planStatus)}</span>
             </h3>
             {["finished", "planned_and_saved"].includes(planStatus) && props.planExplainerEnabled && (
               <Button
@@ -103,16 +105,19 @@ export function PlanSection(props: PlanSectionProps): React.JSX.Element {
       {["errored", "failed", "unreachable"].includes(planStatus) && (
         <div className="flex items-center gap-4 border-b border-destructive/20 bg-destructive/5 px-5 py-3">
           <Terrence pose="failed" detail="small" className="w-24 shrink-0" />
-          <div><p className="font-medium text-destructive">Plan failed</p><p className="mt-1 text-sm text-muted-foreground">Review the diagnostics and logs below before starting another run.</p></div>
+          <div>
+            <p className="font-medium text-destructive">Plan failed</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Review the diagnostics and logs below before starting another run.
+            </p>
+          </div>
         </div>
       )}
       {props.planWarnings.length > 0 && (
         <DiagnosticsBanner severity="warning" diagnostics={props.planWarnings} collapsible />
       )}
 
-      {props.planErrors.length > 0 && (
-        <DiagnosticsBanner severity="error" diagnostics={props.planErrors} collapsible />
-      )}
+      {props.planErrors.length > 0 && <DiagnosticsBanner severity="error" diagnostics={props.planErrors} collapsible />}
 
       <PlanOutput
         runId={props.runId}

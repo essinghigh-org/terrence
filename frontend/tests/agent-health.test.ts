@@ -53,7 +53,10 @@ describe("agent health presentation", (): void => {
     expect(formatLastObserved("2026-09-06T11:58:00.000Z", now)).toBe("Observed 2m ago");
     expect(formatLastObserved(null, now)).toBe("Never observed");
     expect(formatLastObserved("not-a-date", now)).toBe("Invalid timestamp");
-    expect(agentCapabilities(agent("tofu", "idle", "2026-09-06T12:00:00.000Z", ["tofu", "terraform"]))).toEqual(["tofu", "terraform"]);
+    expect(agentCapabilities(agent("tofu", "idle", "2026-09-06T12:00:00.000Z", ["tofu", "terraform"]))).toEqual([
+      "tofu",
+      "terraform",
+    ]);
     expect(agentCapabilities(agent("legacy", "idle", "2026-09-06T12:00:00.000Z", []))).toEqual(["terraform"]);
   });
 });

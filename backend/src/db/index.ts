@@ -1,22 +1,35 @@
 import { integerSetting } from "../lib/runtime-config";
-import { Database } from 'bun:sqlite';
-import { drizzle as sqliteDrizzle, SQLiteBunSession, SQLiteBunTransaction, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
-import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { reconcileSparseMigrationJournal, sparseJournalReconcilePlan, readBundledMigrationJournal } from './reconcile';
-import { SQL as BunSQL } from 'bun';
-import { drizzle as pgDrizzle } from 'drizzle-orm/bun-sql';
-import { sql, type SQL } from 'drizzle-orm';
-import { mkdirSync, readFileSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { AsyncLocalStorage } from 'node:async_hooks';
-import type { DeepReadonly } from '../lib/types';
-import { join } from 'path';
-import * as schema from './schema';
-import { envFlag } from '../lib/env';
-import { databaseUrl, isPostgres, storageDir } from './driver';
-import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery, recordSqliteWriteContention } from '../lib/db-pool-metrics';
-import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS } from '../lib/agent-token';
+import { Database } from "bun:sqlite";
+import {
+  drizzle as sqliteDrizzle,
+  SQLiteBunSession,
+  SQLiteBunTransaction,
+  type BunSQLiteDatabase,
+} from "drizzle-orm/bun-sqlite";
+import type { SQLiteSession, SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
+import { migrate as sqliteMigrate } from "drizzle-orm/bun-sqlite/migrator";
+import { reconcileSparseMigrationJournal, sparseJournalReconcilePlan, readBundledMigrationJournal } from "./reconcile";
+import { SQL as BunSQL } from "bun";
+import { drizzle as pgDrizzle } from "drizzle-orm/bun-sql";
+import { sql, type SQL } from "drizzle-orm";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { DeepReadonly } from "../lib/types";
+import { join } from "path";
+import * as schema from "./schema";
+import { envFlag } from "../lib/env";
+import { databaseUrl, isPostgres, storageDir } from "./driver";
+import {
+  poolMetrics,
+  poolQueryEnd,
+  poolQueryStart,
+  poolTransactionEnd,
+  poolTransactionStart,
+  recordSlowQuery,
+  recordSqliteWriteContention,
+} from "../lib/db-pool-metrics";
+import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS } from "../lib/agent-token";
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -65,7 +78,7 @@ type SQLiteTransactionInternals = TerrenceSQLiteTransaction & {
 };
 type NestedSQLiteTransactionCallback<T> = (
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- drizzle transaction class carries mutable/private state; DeepReadonly drops its private members
-  tx: TerrenceSQLiteTransaction
+  tx: TerrenceSQLiteTransaction,
 ) => T;
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -83,13 +96,15 @@ function patchNestedSqliteTransaction(
   };
   transactionWithPatchedMethod.transaction = <T>(callback: NestedSQLiteTransactionCallback<T>): T => {
     const savepointName = `sp${transaction.nestedIndex}`;
-    const nestedTx = patchNestedSqliteTransaction(new SQLiteBunTransaction(
-      "sync",
-      transaction.dialect,
-      transaction.session,
-      transaction.schema,
-      transaction.nestedIndex + 1,
-    ));
+    const nestedTx = patchNestedSqliteTransaction(
+      new SQLiteBunTransaction(
+        "sync",
+        transaction.dialect,
+        transaction.session,
+        transaction.schema,
+        transaction.nestedIndex + 1,
+      ),
+    );
     transaction.session.run(sql.raw(`savepoint ${savepointName}`));
     try {
       const result = callback(nestedTx);
@@ -142,13 +157,13 @@ function gateSqlitePreparedQuery<T extends object>(query: T): T {
 
 if (!isPostgres) {
   const dbUrl = databaseUrl;
-  sqliteClient = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
+  sqliteClient = new Database(dbUrl === ":memory:" ? ":memory:" : dbUrl.replace(/^file:/, ""), { create: true });
   const client = sqliteClient;
-  client.run('PRAGMA journal_mode = WAL;');
-  client.run('PRAGMA busy_timeout = 5000;');
+  client.run("PRAGMA journal_mode = WAL;");
+  client.run("PRAGMA busy_timeout = 5000;");
   // bun:sqlite defaults foreign_keys to OFF per-connection; enable enforcement
   // explicitly so referential integrity holds (drizzle's migrate() does not set it).
-  client.run('PRAGMA foreign_keys = ON;');
+  client.run("PRAGMA foreign_keys = ON;");
 
   const originalPrepare = client.prepare.bind(client);
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
@@ -171,8 +186,7 @@ if (!isPostgres) {
 // async and this module must stay synchronous for bun's worker threads.
 // ---------------------------------------------------------------------------
 
-
-const PG_QUERY_DERIVERS = ['execute', 'raw', 'simple', 'values'] as const;
+const PG_QUERY_DERIVERS = ["execute", "raw", "simple", "values"] as const;
 
 /** Keep Bun.SQL's lazy Query object intact while recording one lifecycle. */
 export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
@@ -186,9 +200,9 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
     recordSlowQuery(queryText, durationMs);
   };
   const attach = (target: unknown): void => {
-    if (target === null || typeof target !== 'object' || attached.has(target)) return;
+    if (target === null || typeof target !== "object" || attached.has(target)) return;
     const query = target as Record<string, unknown>;
-    if (typeof query["then"] !== 'function') {
+    if (typeof query["then"] !== "function") {
       finish();
       return;
     }
@@ -198,31 +212,30 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
       onFulfilled?: (value: unknown) => unknown,
       onRejected?: (error: unknown) => unknown,
     ) => unknown;
-    query["then"] = (
-      onFulfilled?: (value: unknown) => unknown,
-      onRejected?: (error: unknown) => unknown,
-    ): unknown => originalThen(
-      (value: unknown): unknown => {
-        finish();
-        return onFulfilled === undefined ? value : onFulfilled(value);
-      },
-      (error: unknown): unknown => {
-        finish();
-        if (onRejected !== undefined) return onRejected(error);
-        throw error;
-      },
-    );
+    query["then"] = (onFulfilled?: (value: unknown) => unknown, onRejected?: (error: unknown) => unknown): unknown =>
+      originalThen(
+        (value: unknown): unknown => {
+          finish();
+          return onFulfilled === undefined ? value : onFulfilled(value);
+        },
+        (error: unknown): unknown => {
+          finish();
+          if (onRejected !== undefined) return onRejected(error);
+          throw error;
+        },
+      );
 
-    if (typeof query["catch"] === 'function') {
+    if (typeof query["catch"] === "function") {
       const originalCatch = query["catch"].bind(target) as (onRejected: (error: unknown) => unknown) => unknown;
-      query["catch"] = (onRejected: (error: unknown) => unknown): unknown => originalCatch((error: unknown): unknown => {
-        finish();
-        return onRejected(error);
-      });
+      query["catch"] = (onRejected: (error: unknown) => unknown): unknown =>
+        originalCatch((error: unknown): unknown => {
+          finish();
+          return onRejected(error);
+        });
     }
 
     for (const method of PG_QUERY_DERIVERS) {
-      if (typeof query[method] !== 'function') continue;
+      if (typeof query[method] !== "function") continue;
       const original = query[method].bind(target) as (...args: readonly unknown[]) => unknown;
       query[method] = (...args: readonly unknown[]): unknown => {
         const derived = original(...args);
@@ -265,7 +278,10 @@ if (isPostgres) {
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
-    pgClient.unsafe = ((queryText: string, values?: readonly unknown[] | Readonly<Record<string, unknown>>): ReturnType<BunSQL['unsafe']> => {
+    pgClient.unsafe = ((
+      queryText: string,
+      values?: readonly unknown[] | Readonly<Record<string, unknown>>,
+    ): ReturnType<BunSQL["unsafe"]> => {
       const queryObj = originalUnsafe(queryText, values as never);
       return wrapPgQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
@@ -273,7 +289,10 @@ if (isPostgres) {
   if (envFlag("TERRENCE_QUERY_COUNT")) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
-    pgClient.unsafe = ((queryText: string, values?: readonly unknown[] | Readonly<Record<string, unknown>>): ReturnType<BunSQL['unsafe']> => {
+    pgClient.unsafe = ((
+      queryText: string,
+      values?: readonly unknown[] | Readonly<Record<string, unknown>>,
+    ): ReturnType<BunSQL["unsafe"]> => {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(queryText);
       return originalUnsafe(queryText, values as never);
@@ -324,14 +343,14 @@ if (pgDb !== null) {
     transaction: (...args: readonly never[]) => Promise<unknown>;
   };
   const originalTransaction = instrumented.transaction.bind(instrumented);
-  instrumented.transaction = (async (callback: unknown, config?: unknown): Promise<unknown> => {
+  instrumented.transaction = async (callback: unknown, config?: unknown): Promise<unknown> => {
     const start = poolTransactionStart();
     try {
       return await originalTransaction(callback as never, config as never);
     } finally {
       poolTransactionEnd(start);
     }
-  });
+  };
 }
 export const db = (isPostgres ? pgDb : sqliteDb) as unknown as AppDb;
 
@@ -355,13 +374,15 @@ if (!isPostgres) {
   const mainSession = sharedDatabase.session;
   const mainInternals = mainSession as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
   const originalPrepareQuery = mainSession.prepareQuery.bind(mainSession);
-  (mainSession as unknown as { prepareQuery: (...args: readonly never[]) => unknown }).prepareQuery = (...args: readonly never[]): unknown =>
-    gateSqlitePreparedQuery(Reflect.apply(originalPrepareQuery, mainSession, args) as object);
+  (mainSession as unknown as { prepareQuery: (...args: readonly never[]) => unknown }).prepareQuery = (
+    ...args: readonly never[]
+  ): unknown => gateSqlitePreparedQuery(Reflect.apply(originalPrepareQuery, mainSession, args) as object);
   const rawClient = new Proxy(client, {
     get(target: Readonly<Database>, property: string | symbol, receiver: unknown): unknown {
       const value: unknown = Reflect.get(target, property, receiver);
       if (property === "prepare" && typeof value === "function") {
-        return (...args: readonly unknown[]): unknown => requirePrepareSqliteStatement()(...(args as [string, ...unknown[]]));
+        return (...args: readonly unknown[]): unknown =>
+          requirePrepareSqliteStatement()(...(args as [string, ...unknown[]]));
       }
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -371,7 +392,7 @@ if (!isPostgres) {
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
     fn: (tx: SQLiteBunTransaction<Record<string, unknown>, never>) => Promise<unknown>,
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-    config?: { behavior?: 'deferred' | 'immediate' | 'exclusive' },
+    config?: { behavior?: "deferred" | "immediate" | "exclusive" },
   ): Promise<unknown> {
     if (sqliteTransactionContext.getStore() !== undefined) {
       throw new Error("Nested db.transaction calls are not supported; use the current tx handle");
@@ -382,29 +403,30 @@ if (!isPostgres) {
         finishTransaction = resolve;
       });
       sqliteTransactionCompletion = completion;
-      const transactionSession = new SQLiteBunSession(
-        rawClient,
-        mainInternals.dialect,
-        mainInternals.schema as never,
+      const transactionSession = new SQLiteBunSession(rawClient, mainInternals.dialect, mainInternals.schema as never);
+      const tx = patchNestedSqliteTransaction(
+        new SQLiteBunTransaction<Record<string, unknown>, never>(
+          "sync",
+          mainInternals.dialect,
+          transactionSession as unknown as SQLiteSession<"sync", void, Record<string, unknown>, never>,
+          mainInternals.schema as never,
+        ),
       );
-      const tx = patchNestedSqliteTransaction(new SQLiteBunTransaction<Record<string, unknown>, never>(
-        'sync',
-        mainInternals.dialect,
-        transactionSession as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
-        mainInternals.schema as never,
-      ));
-      const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
+      const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : "";
       const transactionStart = poolTransactionStart();
       let began = false;
       try {
         client.run(`BEGIN${behavior}`);
         began = true;
-        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), async (): Promise<unknown> => fn(tx));
-        client.run('COMMIT');
+        const result = await sqliteTransactionContext.run(
+          Symbol("sqlite-transaction"),
+          async (): Promise<unknown> => fn(tx),
+        );
+        client.run("COMMIT");
         return result;
       } catch (err) {
         recordSqliteWriteContention(err);
-        if (began) client.run('ROLLBACK');
+        if (began) client.run("ROLLBACK");
         throw err;
       } finally {
         poolTransactionEnd(transactionStart);
@@ -413,7 +435,10 @@ if (!isPostgres) {
       }
     };
     const transaction = transactionTail.then(run, run);
-    transactionTail = transaction.then((): undefined => undefined, (): undefined => undefined);
+    transactionTail = transaction.then(
+      (): undefined => undefined,
+      (): undefined => undefined,
+    );
     return transaction;
   };
 
@@ -427,23 +452,37 @@ if (!isPostgres) {
   // inert and Drizzle remains the canonical bootstrap path.
   const reconcileSqliteMigrationJournal = (): void => {
     try {
-      const bundledFolder = join(import.meta.dir, '../../drizzle');
+      const bundledFolder = join(import.meta.dir, "../../drizzle");
       const entries = readBundledMigrationJournal(bundledFolder);
       // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-      const appliedRows = (client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as { hash: string; created_at: number }[]).map(
-        (row): { readonly hash: string; readonly createdAt: number } => ({ hash: row.hash, createdAt: row.created_at }),
-      );
+      const appliedRows = (
+        client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as {
+          hash: string;
+          created_at: number;
+        }[]
+      ).map((row): { readonly hash: string; readonly createdAt: number } => ({
+        hash: row.hash,
+        createdAt: row.created_at,
+      }));
       const tables = new Set(
-        (client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row): string => row.name),
+        (client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
+          (row): string => row.name,
+        ),
       );
       const indexes = new Set(
-        (client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((row): string => row.name),
+        (client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map(
+          (row): string => row.name,
+        ),
       );
       const columns = new Set(
         // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-        (client.query("SELECT m.name AS tbl_name, p.name AS name FROM sqlite_master AS m, pragma_table_info(m.name) AS p WHERE m.type = 'table'").all() as { tbl_name: string; name: string }[]).map(
-          (row): string => `${row.tbl_name}.${row.name}`,
-        ),
+        (
+          client
+            .query(
+              "SELECT m.name AS tbl_name, p.name AS name FROM sqlite_master AS m, pragma_table_info(m.name) AS p WHERE m.type = 'table'",
+            )
+            .all() as { tbl_name: string; name: string }[]
+        ).map((row): string => `${row.tbl_name}.${row.name}`),
       );
       const plan = sparseJournalReconcilePlan(bundledFolder, entries, { appliedRows, tables, indexes, columns });
       for (const entry of plan) {
@@ -452,7 +491,10 @@ if (!isPostgres) {
         }
         client.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [entry.hash, entry.when]);
       }
-      if (plan.length > 0) console.warn(`[terrence] sparse migration journal reconciled (sqlite): reconciled ${plan.length} migration(s) before drizzle`);
+      if (plan.length > 0)
+        console.warn(
+          `[terrence] sparse migration journal reconciled (sqlite): reconciled ${plan.length} migration(s) before drizzle`,
+        );
     } catch (err) {
       // Reconciliation is a best-effort repair. Surface failures, then let
       // the canonical migrator report any genuinely unapplied migration.
@@ -468,7 +510,9 @@ if (!isPostgres) {
       hash text NOT NULL,
       created_at numeric
     )`);
-    const workspaceVariablesTable = client.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_variables'").get();
+    const workspaceVariablesTable = client
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_variables'")
+      .get();
     if (workspaceVariablesTable !== null && workspaceVariablesTable !== undefined) {
       client.run(`
         DELETE FROM workspace_variables WHERE rowid NOT IN (
@@ -477,7 +521,7 @@ if (!isPostgres) {
       `);
     }
     reconcileSqliteMigrationJournal();
-    sqliteMigrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
+    sqliteMigrate(db, { migrationsFolder: join(import.meta.dir, "../../drizzle") });
   } finally {
     client.run("PRAGMA legacy_alter_table = OFF;");
     client.run("PRAGMA foreign_keys = ON;");
@@ -555,7 +599,9 @@ if (!isPostgres) {
   if (!agentPoolTokenColumns.has("revoked_at")) {
     client.run("ALTER TABLE agent_pool_tokens ADD COLUMN revoked_at INTEGER");
   }
-  client.run(`UPDATE agent_pool_tokens SET expires_at = created_at + ${AGENT_POOL_TOKEN_DEFAULT_TTL_MS} WHERE expires_at IS NULL`);
+  client.run(
+    `UPDATE agent_pool_tokens SET expires_at = created_at + ${AGENT_POOL_TOKEN_DEFAULT_TTL_MS} WHERE expires_at IS NULL`,
+  );
 
   // Hot-path indexes are declared in the canonical schema and migrations, but
   // keep this backfill idempotent for installations whose journal skipped a
@@ -563,7 +609,9 @@ if (!isPostgres) {
   client.run("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
   client.run("CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs (created_at)");
   client.run("CREATE INDEX IF NOT EXISTS audit_logs_org_created_at_idx ON audit_logs (org_id, created_at)");
-  client.run("CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)");
+  client.run(
+    "CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)",
+  );
   client.run("CREATE INDEX IF NOT EXISTS run_comments_run_created_idx ON run_comments (run_id, created_at, id)");
   client.run("CREATE INDEX IF NOT EXISTS organization_memberships_user_idx ON organization_memberships (user_id)");
   client.run("CREATE INDEX IF NOT EXISTS team_memberships_user_idx ON team_memberships (user_id)");
@@ -573,7 +621,9 @@ if (!isPostgres) {
   client.run("CREATE INDEX IF NOT EXISTS task_stages_run_idx ON task_stages (run_id)");
   client.run("CREATE INDEX IF NOT EXISTS run_task_results_run_idx ON run_task_results (run_id)");
   client.run("CREATE INDEX IF NOT EXISTS policy_evaluations_run_idx ON policy_evaluations (run_id)");
-  client.run("CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)");
+  client.run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)",
+  );
 
   // SQLite cannot add a portable CHECK constraint to the existing users table;
   // these idempotent triggers enforce the same invariant for all future writes.
@@ -615,28 +665,30 @@ export function checkpointWal(): void {
   // busy count means frames could not be flushed (a concurrent writer or a
   // read transaction still holding the WAL), so the main DB file is not yet
   // complete. Fail loudly instead of discarding the result (kanban 4.17).
-  type WalCheckpointRow = { busy: number; log: number; checkpointed: number; }
+  type WalCheckpointRow = { busy: number; log: number; checkpointed: number };
   const row = client.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as WalCheckpointRow | null | undefined;
   if (row !== null && row !== undefined && row.busy > 0) {
     throw new Error(`WAL checkpoint left ${row.busy} frame(s) busy; main DB file may be incomplete`);
   }
 }
 
-async function postgresDatabaseMetrics(): Promise<Readonly<{
-  sizeBytes: number;
-  walSizeBytes: number | null;
-  journalMode: string;
-  pageSize: number;
-  pageCount: number;
-  path: string;
-  cacheSizeBytes: number | null;
-  freelistBytes: number | null;
-}>> {
+async function postgresDatabaseMetrics(): Promise<
+  Readonly<{
+    sizeBytes: number;
+    walSizeBytes: number | null;
+    journalMode: string;
+    pageSize: number;
+    pageCount: number;
+    path: string;
+    cacheSizeBytes: number | null;
+    freelistBytes: number | null;
+  }>
+> {
   const client = pgClient;
   if (client === null) throw new Error("PostgreSQL client is not initialized");
-  const rows = await client.unsafe(
+  const rows = (await client.unsafe(
     "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
-  ) as unknown as readonly { size: number | bigint; blockSize: number }[];
+  )) as unknown as readonly { size: number | bigint; blockSize: number }[];
   const sizeBytes = Number(rows[0]?.size ?? 0);
   const pageSize = rows[0]?.blockSize ?? 8192;
   // The URL may embed credentials; surface only host + database name.
@@ -680,36 +732,48 @@ function sqliteFileSizes(dbPath: string): { sizeBytes: number; walSizeBytes: num
  * sidecar size, journal mode, and page geometry (kanban 4.18). Postgres
  * reports the same shape from pg_database_size + block_size settings.
  */
-export async function databaseMetrics(): Promise<Readonly<{
-  sizeBytes: number;
-  walSizeBytes: number | null;
-  journalMode: string;
-  pageSize: number;
-  pageCount: number;
-  path: string;
-  /**
-   * SQLite page-cache budget in bytes (PRAGMA cache_size: positive = pages,
-   * negative = KiB). Null on postgres, which manages its own shared buffers.
-   */
-  cacheSizeBytes: number | null;
-  /**
-   * Freelist pages in bytes: free pages not yet returned to the OS. A
-   * steadily growing freelist indicates db bloat (churn + no VACUUM).
-   * Null on postgres.
-   */
-  freelistBytes: number | null;
-}>> {
+export async function databaseMetrics(): Promise<
+  Readonly<{
+    sizeBytes: number;
+    walSizeBytes: number | null;
+    journalMode: string;
+    pageSize: number;
+    pageCount: number;
+    path: string;
+    /**
+     * SQLite page-cache budget in bytes (PRAGMA cache_size: positive = pages,
+     * negative = KiB). Null on postgres, which manages its own shared buffers.
+     */
+    cacheSizeBytes: number | null;
+    /**
+     * Freelist pages in bytes: free pages not yet returned to the OS. A
+     * steadily growing freelist indicates db bloat (churn + no VACUUM).
+     * Null on postgres.
+     */
+    freelistBytes: number | null;
+  }>
+> {
   if (isPostgres) return postgresDatabaseMetrics();
   const client = requireSqliteClient();
-  const dbPath = databaseUrl === ':memory:' ? ':memory:' : databaseUrl.replace(/^file:/, '');
+  const dbPath = databaseUrl === ":memory:" ? ":memory:" : databaseUrl.replace(/^file:/, "");
   // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
   // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
   const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
   // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-  const journalMode = (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
+  const journalMode =
+    (client.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode ?? "unknown";
   const { sizeBytes, walSizeBytes } = sqliteFileSizes(dbPath);
-  return { sizeBytes, walSizeBytes, journalMode, pageSize, pageCount, path: dbPath, cacheSizeBytes: sqliteCacheSizeBytes(client, pageSize), freelistBytes: sqliteFreelistBytes(client, pageSize) };
+  return {
+    sizeBytes,
+    walSizeBytes,
+    journalMode,
+    pageSize,
+    pageCount,
+    path: dbPath,
+    cacheSizeBytes: sqliteCacheSizeBytes(client, pageSize),
+    freelistBytes: sqliteFreelistBytes(client, pageSize),
+  };
 }
 
 /** SQLite page-cache budget in bytes: PRAGMA cache_size is pages when positive, KiB when negative. */
@@ -722,7 +786,8 @@ function sqliteCacheSizeBytes(client: Readonly<Database>, pageSize: number): num
 /** SQLite freelist footprint in bytes (free pages not yet returned to the OS). */
 function sqliteFreelistBytes(client: Readonly<Database>, pageSize: number): number {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-  const freelist = (client.query("PRAGMA freelist_count").get() as { freelist_count: number } | null)?.freelist_count ?? 0;
+  const freelist =
+    (client.query("PRAGMA freelist_count").get() as { freelist_count: number } | null)?.freelist_count ?? 0;
   return freelist * pageSize;
 }
 
@@ -748,7 +813,7 @@ export { isPostgres };
 
 export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
   const max = isPostgres ? 10 : 1;
-  const driver = isPostgres ? 'postgres' as const : 'sqlite' as const;
+  const driver = isPostgres ? ("postgres" as const) : ("sqlite" as const);
   return poolMetrics(driver, max);
 }
 
@@ -780,7 +845,10 @@ export function databaseSchemaVersion(): string | null {
     const tag = (JSON.parse(raw) as { entries?: { tag?: string }[] }).entries?.slice(-1)[0]?.tag;
     cachedSchemaVersion = typeof tag === "string" && tag !== "" ? tag : null;
     return cachedSchemaVersion;
-  } catch { cachedSchemaVersion = null; return null; }
+  } catch {
+    cachedSchemaVersion = null;
+    return null;
+  }
 }
 
 // Wrappers for transaction latency (todo 291): callers in db-layer wrap
@@ -801,7 +869,9 @@ export async function applyPgMigrations(): Promise<void> {
     const instance = pgDb;
     if (instance === null) throw new Error("postgres backend not initialized");
     const pg = requirePgClient();
-    const durableJobsTable = await pg.unsafe<{ exists: boolean }[]>("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'durable_jobs') AS exists");
+    const durableJobsTable = await pg.unsafe<{ exists: boolean }[]>(
+      "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'durable_jobs') AS exists",
+    );
     if (durableJobsTable[0]?.exists === true) {
       await pg.unsafe(`
         WITH ranked AS (
@@ -850,37 +920,56 @@ export async function applyPgMigrations(): Promise<void> {
       bundledFolder: join(import.meta.dir, "../../drizzle/pg"),
       appliedRows: async (): Promise<readonly { readonly hash: string; readonly createdAt: number }[]> =>
         // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-        (await pg.unsafe<{ hash: string; "created_at": string | number }[]>("SELECT hash, created_at FROM drizzle.__drizzle_migrations")).map(
-          ({ hash, "created_at": createdAt }): { readonly hash: string; readonly createdAt: number } => ({ hash, createdAt: Number(createdAt) }),
-        ),
+        (
+          await pg.unsafe<{ hash: string; created_at: string | number }[]>(
+            "SELECT hash, created_at FROM drizzle.__drizzle_migrations",
+          )
+        ).map(({ hash, created_at: createdAt }): { readonly hash: string; readonly createdAt: number } => ({
+          hash,
+          createdAt: Number(createdAt),
+        })),
       existingTables: async (): Promise<readonly string[]> =>
         (
-          await pg.unsafe<{ "table_name": string }[]>( // eslint-disable-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+          await pg.unsafe<{ table_name: string }[]>(
+            // eslint-disable-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
             "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()",
           )
-        ).map(({ "table_name": tableName }): string => tableName),
+        ).map(({ table_name: tableName }): string => tableName),
       existingIndexes: async (): Promise<readonly string[]> =>
-        (await pg.unsafe<{ indexname: string }[]>("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")).map(
-          ({ indexname }): string => indexname,
-        ),
-      existingColumns: async (): Promise<readonly { readonly table: string; readonly column: string }[]> =>
         (
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
-          await pg.unsafe<{ "table_name": string; "column_name": string }[]>(
+          await pg.unsafe<{ indexname: string }[]>(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()",
+          )
+        ).map(({ indexname }): string => indexname),
+      existingColumns: async (): Promise<readonly { readonly table: string; readonly column: string }[]> =>
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+        (
+          await pg.unsafe<{ table_name: string; column_name: string }[]>(
             "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()",
           )
-        ).map(({ "table_name": tableName, "column_name": columnName }): { readonly table: string; readonly column: string } => ({
-          table: tableName,
-          column: columnName,
-        })),
+        ).map(
+          ({
+            table_name: tableName,
+            column_name: columnName,
+          }): { readonly table: string; readonly column: string } => ({
+            table: tableName,
+            column: columnName,
+          }),
+        ),
       runStatement: async (sql: string): Promise<void> => {
         await pg.unsafe(sql);
       },
       markApplied: async (hash: string, createdAt: number): Promise<void> => {
-        await pg.unsafe('INSERT INTO "drizzle"."__drizzle_migrations" ("hash", "created_at") VALUES($1, $2)', [hash, createdAt]);
+        await pg.unsafe('INSERT INTO "drizzle"."__drizzle_migrations" ("hash", "created_at") VALUES($1, $2)', [
+          hash,
+          createdAt,
+        ]);
       },
     });
-    if (stampedPg > 0) console.warn(`[terrence] sparse migration journal reconciled (pg): reconciled ${stampedPg} migration(s) outside the migrator`);
+    if (stampedPg > 0)
+      console.warn(
+        `[terrence] sparse migration journal reconciled (pg): reconciled ${stampedPg} migration(s) outside the migrator`,
+      );
     await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
     // Keep the external-identity pairing invariant on PostgreSQL too. The
     // function is replaceable and the trigger is recreated so older installs
@@ -905,7 +994,9 @@ export async function applyPgMigrations(): Promise<void> {
     // State-version authorship is additive. The generated migration covers
     // fresh databases; this repair also converges installs with sparse
     // migration journals.
-    await pg.unsafe("ALTER TABLE state_versions ADD COLUMN IF NOT EXISTS created_by text REFERENCES users(id) ON DELETE SET NULL");
+    await pg.unsafe(
+      "ALTER TABLE state_versions ADD COLUMN IF NOT EXISTS created_by text REFERENCES users(id) ON DELETE SET NULL",
+    );
     // Deferred-upload artifact identity (issues #690/#703): additive, idempotent.
     await pg.unsafe("ALTER TABLE state_versions ADD COLUMN IF NOT EXISTS upload_sha256 text");
     // Agent claim fencing is additive and intentionally kept idempotent here;
@@ -915,11 +1006,15 @@ export async function applyPgMigrations(): Promise<void> {
     // cleared on unlock. Idempotent for sparse-journal installs.
     await pg.unsafe("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS locked_at bigint");
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
-    await pg.unsafe("UPDATE team_projects SET organization_id = projects.org_id FROM projects WHERE team_projects.organization_id IS NULL AND projects.id = team_projects.project_id");
+    await pg.unsafe(
+      "UPDATE team_projects SET organization_id = projects.org_id FROM projects WHERE team_projects.organization_id IS NULL AND projects.id = team_projects.project_id",
+    );
     // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
     // lists 36x, calendar range 17x faster). Fresh installs get them from the
     // schema; running deployments get an idempotent backfill here.
-    await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_workspace_status_created_idx ON runs (workspace_id, status, created_at)");
+    await pg.unsafe(
+      "CREATE INDEX IF NOT EXISTS runs_workspace_status_created_idx ON runs (workspace_id, status, created_at)",
+    );
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_created_idx ON runs (status, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
     // Configuration-version upload-claim lease (todo 278, see sqlite boot path).
@@ -935,7 +1030,9 @@ export async function applyPgMigrations(): Promise<void> {
     // Agent-pool token lifecycle is additive and idempotent for older installs.
     await pg.unsafe("ALTER TABLE agent_pool_tokens ADD COLUMN IF NOT EXISTS expires_at bigint");
     await pg.unsafe("ALTER TABLE agent_pool_tokens ADD COLUMN IF NOT EXISTS revoked_at bigint");
-    await pg.unsafe(`UPDATE agent_pool_tokens SET expires_at = created_at + ${AGENT_POOL_TOKEN_DEFAULT_TTL_MS} WHERE expires_at IS NULL`);
+    await pg.unsafe(
+      `UPDATE agent_pool_tokens SET expires_at = created_at + ${AGENT_POOL_TOKEN_DEFAULT_TTL_MS} WHERE expires_at IS NULL`,
+    );
     // Refresh-session two-tab concurrency grace (todo 125-127, see sqlite boot path).
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS successor_hash text");
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS rotated_at_ms bigint");
@@ -945,16 +1042,22 @@ export async function applyPgMigrations(): Promise<void> {
     // Policy-set parameter encryption (issue #577, CodeRabbit P1-sweep
     // review): same idempotent repair so sparse-journal installs converge.
     await pg.unsafe("ALTER TABLE policy_set_parameters ADD COLUMN IF NOT EXISTS value_encrypted text");
-    await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
+    await pg.unsafe(
+      "CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)",
+    );
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
     // every poll; keep it off a full table scan as agent volume grows.
     await pg.unsafe("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs (created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_org_created_at_idx ON audit_logs (org_id, created_at)");
-    await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)");
+    await pg.unsafe(
+      "CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)",
+    );
     await pg.unsafe("CREATE INDEX IF NOT EXISTS run_comments_run_created_idx ON run_comments (run_id, created_at, id)");
-    await pg.unsafe("CREATE INDEX IF NOT EXISTS organization_memberships_user_idx ON organization_memberships (user_id)");
+    await pg.unsafe(
+      "CREATE INDEX IF NOT EXISTS organization_memberships_user_idx ON organization_memberships (user_id)",
+    );
     await pg.unsafe("CREATE INDEX IF NOT EXISTS team_memberships_user_idx ON team_memberships (user_id)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_configuration_version_idx ON runs (configuration_version_id)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS state_versions_run_idx ON state_versions (run_id)");
@@ -962,7 +1065,9 @@ export async function applyPgMigrations(): Promise<void> {
     await pg.unsafe("CREATE INDEX IF NOT EXISTS task_stages_run_idx ON task_stages (run_id)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS run_task_results_run_idx ON run_task_results (run_id)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS policy_evaluations_run_idx ON policy_evaluations (run_id)");
-    await pg.unsafe("CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)");
+    await pg.unsafe(
+      "CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)",
+    );
     // Team-token legacy discriminator (see sqlite boot path): the singular
     // legacy team-token endpoints must only see the team's legacy credential.
     await pg.unsafe("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS legacy boolean NOT NULL DEFAULT false");
@@ -975,7 +1080,9 @@ export async function applyPgMigrations(): Promise<void> {
         payload JSONB NOT NULL
       )
     `);
-    await pg.unsafe("CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)");
+    await pg.unsafe(
+      "CREATE INDEX IF NOT EXISTS oauth_handshake_states_expires_idx ON oauth_handshake_states (expires_at)",
+    );
     // Registry module sync lease (see sqlite boot path).
     await pg.unsafe(`
       CREATE TABLE IF NOT EXISTS registry_sync_leases (
@@ -1040,9 +1147,13 @@ export async function applyPgMigrations(): Promise<void> {
       $$;
     `);
     await pg.unsafe(`DROP TRIGGER IF EXISTS workspaces_vcs_repo_guard ON workspaces`);
-    await pg.unsafe(`CREATE TRIGGER workspaces_vcs_repo_guard BEFORE INSERT OR UPDATE ON workspaces FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`);
+    await pg.unsafe(
+      `CREATE TRIGGER workspaces_vcs_repo_guard BEFORE INSERT OR UPDATE ON workspaces FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`,
+    );
     await pg.unsafe(`DROP TRIGGER IF EXISTS policy_sets_vcs_repo_guard ON policy_sets`);
-    await pg.unsafe(`CREATE TRIGGER policy_sets_vcs_repo_guard BEFORE INSERT OR UPDATE ON policy_sets FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`);
+    await pg.unsafe(
+      `CREATE TRIGGER policy_sets_vcs_repo_guard BEFORE INSERT OR UPDATE ON policy_sets FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`,
+    );
     // Delete guard removed — the BEFORE INSERT/UPDATE guard on
     // workspaces/policy_sets already closes the TOCTOU window for the
     // concurrent workspace/policy_set insert. A BEFORE DELETE guard on

@@ -7,12 +7,20 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { and, asc, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "../db";
-import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runTokens, runs, workspaces, stackAgentJobs } from "../db/schema";
-import { authPlugin } from "../auth";
 import {
-  isAgentResultValid,
-  MAX_AGENT_RESULT_BYTES,
-} from "../lib/agent-jobs";
+  agentForwardedRequests,
+  agentPoolTokens,
+  agents,
+  agentJobs,
+  logs,
+  organizations,
+  runTokens,
+  runs,
+  workspaces,
+  stackAgentJobs,
+} from "../db/schema";
+import { authPlugin } from "../auth";
+import { isAgentResultValid, MAX_AGENT_RESULT_BYTES } from "../lib/agent-jobs";
 import {
   appendAgentJobLog,
   authenticateAgent,
@@ -24,7 +32,13 @@ import {
   type AgentJobCompletion,
   type ClaimedAgentJob,
 } from "../lib/agent-jobs";
-import { claimStackAgentJob, completeStackAgentJob, findClaimedStackAgentJob, heartbeatStackAgentJob, type ClaimedStackAgentJob } from "../lib/stack-agent-jobs";
+import {
+  claimStackAgentJob,
+  completeStackAgentJob,
+  findClaimedStackAgentJob,
+  heartbeatStackAgentJob,
+  type ClaimedStackAgentJob,
+} from "../lib/stack-agent-jobs";
 import { isStackStoragePath } from "../lib/stack-worker";
 import { writePlanJsonArtifact } from "../lib/plan-json";
 import {
@@ -56,8 +70,9 @@ const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // advertised and enforced limit aligned so a body cannot claim a larger
 // contract and then be rejected before the route sees it.
 const MAX_AGENT_FILESYSTEM_BYTES = 100 * 1024 * 1024;
-const MAX_FORWARDED_RESPONSE_BASE64_BYTES = Math.ceil(10 * 1024 * 1024 * 4 / 3) + 8;
-const DEFAULT_AGENT_ACCEPT = "plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test";
+const MAX_FORWARDED_RESPONSE_BASE64_BYTES = Math.ceil((10 * 1024 * 1024 * 4) / 3) + 8;
+const DEFAULT_AGENT_ACCEPT =
+  "plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test";
 const AGENT_WORKLOAD_TYPES = `${DEFAULT_AGENT_ACCEPT},ingress`.split(",");
 const AGENT_ARCHITECTURES = new Set(["amd64", "aarch64", "arm64", "386", "arm"]);
 
@@ -67,19 +82,25 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
   await db.transaction(async (transaction: unknown): Promise<void> => {
     const t = transaction as typeof db;
-    const released = await t.update(agentJobs).set({
-      status: "queued",
-      agentId: null,
-      claimedAt: null,
-      completedAt: null,
-      errorMessage: null,
-      fencingToken: sql`${agentJobs.fencingToken} + 1`,
-    }).where(and(
-      eq(agentJobs.id, job.id),
-      owner,
-      eq(agentJobs.fencingToken, job.fencingToken),
-      eq(agentJobs.status, "claimed"),
-    )).returning({ id: agentJobs.id });
+    const released = await t
+      .update(agentJobs)
+      .set({
+        status: "queued",
+        agentId: null,
+        claimedAt: null,
+        completedAt: null,
+        errorMessage: null,
+        fencingToken: sql`${agentJobs.fencingToken} + 1`,
+      })
+      .where(
+        and(
+          eq(agentJobs.id, job.id),
+          owner,
+          eq(agentJobs.fencingToken, job.fencingToken),
+          eq(agentJobs.status, "claimed"),
+        ),
+      )
+      .returning({ id: agentJobs.id });
     if (released.length === 0) return;
 
     await t.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, run.id));
@@ -88,24 +109,31 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
       columns: { status: true, statusTimestamps: true },
     });
     if (current?.status !== (job.phase === "plan" ? "planning" : "applying")) return;
-    const timestamps: Record<string, string> = current.statusTimestamps !== null && typeof current.statusTimestamps === "object"
-      ? { ...(current.statusTimestamps), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
-      : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
-    const updatedRuns = await t.update(runs).set({
-      agentId: null,
-      status: queuedStatus,
-      statusTimestamps: timestamps,
-    }).where(and(
-      eq(runs.id, run.id),
-      eq(runs.status, current.status),
-    )).returning({ id: runs.id });
+    const timestamps: Record<string, string> =
+      current.statusTimestamps !== null && typeof current.statusTimestamps === "object"
+        ? { ...current.statusTimestamps, [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
+        : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
+    const updatedRuns = await t
+      .update(runs)
+      .set({
+        agentId: null,
+        status: queuedStatus,
+        statusTimestamps: timestamps,
+      })
+      .where(and(eq(runs.id, run.id), eq(runs.status, current.status)))
+      .returning({ id: runs.id });
     if (updatedRuns.length === 0) return;
     if (job.phase === "apply") {
-      await t.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-        eq(workspaces.locked, true),
-        eq(workspaces.lockOwnerType, "agent-run"),
-        eq(workspaces.lockOwnerId, run.id),
-      ));
+      await t
+        .update(workspaces)
+        .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+        .where(
+          and(
+            eq(workspaces.locked, true),
+            eq(workspaces.lockOwnerType, "agent-run"),
+            eq(workspaces.lockOwnerId, run.id),
+          ),
+        );
     }
   });
 }
@@ -117,10 +145,7 @@ type AgentCtx = Readonly<{
   set: { status?: number | string; headers?: Record<string, string | number> };
 }>;
 
-function protocolHeaders(
-  set: { headers?: Record<string, string | number> },
-  capabilities: readonly string[],
-): void {
+function protocolHeaders(set: { headers?: Record<string, string | number> }, capabilities: readonly string[]): void {
   set.headers ??= {};
   set.headers["tfc-agent-protocol-version"] = AGENT_PROTOCOL_VERSION;
   set.headers["tfc-agent-capabilities"] = serializeAgentCapabilities(capabilities);
@@ -132,14 +157,16 @@ function protocolNegotiationError(
 ): Record<string, unknown> {
   set.status = error.status;
   return {
-    errors: [{
-      status: String(error.status),
-      title: "Agent protocol negotiation failed",
-      code: error.code,
-      detail: error.message,
-      supported_versions: error.versions.length === 0 ? undefined : error.versions,
-      unsupported_capabilities: error.capabilities.length === 0 ? undefined : error.capabilities,
-    }],
+    errors: [
+      {
+        status: String(error.status),
+        title: "Agent protocol negotiation failed",
+        code: error.code,
+        detail: error.message,
+        supported_versions: error.versions.length === 0 ? undefined : error.versions,
+        unsupported_capabilities: error.capabilities.length === 0 ? undefined : error.capabilities,
+      },
+    ],
   };
 }
 
@@ -183,7 +210,10 @@ function bearerToken(authorization: string | null): string | undefined {
 /** Resolve the agent pool that owns an agent token (or undefined). */
 async function poolForToken(token: string): Promise<{ poolId: string; tokenId: string } | undefined> {
   const [tokenHash, legacyTokenHash] = tokenHashCandidates(token);
-  const rows = await db.query.agentPoolTokens.findMany({ where: inArray(agentPoolTokens.token, [tokenHash, legacyTokenHash]), limit: 2 });
+  const rows = await db.query.agentPoolTokens.findMany({
+    where: inArray(agentPoolTokens.token, [tokenHash, legacyTokenHash]),
+    limit: 2,
+  });
   const row = rows.find((candidate) => candidate.token === tokenHash) ?? rows[0];
   if (row === undefined) return undefined;
   const now = Date.now();
@@ -201,23 +231,23 @@ async function agentFromRequest(ctx: AgentCtx): Promise<Agent | undefined> {
 }
 
 async function rejectUnsafeForwardedRequest(requestId: string, reason: string): Promise<void> {
-  await db.update(agentForwardedRequests).set({
-    status: "errored",
-    agentId: null,
-    claimedAt: null,
-    responseStatus: null,
-    responseHeaders: null,
-    responseBody: null,
-    errorMessage: `Forwarded request rejected: ${reason}`,
-    completedAt: Date.now(),
-    // Never retain credentials or a request body for a request rejected at the
-    // agent handoff boundary.
-    headers: {},
-    body: null,
-  }).where(and(
-    eq(agentForwardedRequests.id, requestId),
-    eq(agentForwardedRequests.status, "queued"),
-  ));
+  await db
+    .update(agentForwardedRequests)
+    .set({
+      status: "errored",
+      agentId: null,
+      claimedAt: null,
+      responseStatus: null,
+      responseHeaders: null,
+      responseBody: null,
+      errorMessage: `Forwarded request rejected: ${reason}`,
+      completedAt: Date.now(),
+      // Never retain credentials or a request body for a request rejected at the
+      // agent handoff boundary.
+      headers: {},
+      body: null,
+    })
+    .where(and(eq(agentForwardedRequests.id, requestId), eq(agentForwardedRequests.status, "queued")));
 }
 
 function requestedFencingToken(ctx: AgentCtx): number | undefined {
@@ -229,16 +259,22 @@ function requestedFencingToken(ctx: AgentCtx): number | undefined {
 function fencingConflict(set: { status?: number }): Record<string, unknown> {
   set.status = 409;
   return {
-    errors: [{
-      status: "409",
-      title: "Conflict",
-      code: "stale-agent-lease",
-      detail: "Completion rejected because the agent lease is stale, already finalized, or belongs to another run generation; newer artifacts are retained.",
-    }],
+    errors: [
+      {
+        status: "409",
+        title: "Conflict",
+        code: "stale-agent-lease",
+        detail:
+          "Completion rejected because the agent lease is stale, already finalized, or belongs to another run generation; newer artifacts are retained.",
+      },
+    ],
   };
 }
 
-async function activeStackJobForStatus(agentId: string, phase?: string): Promise<typeof stackAgentJobs.$inferSelect | undefined> {
+async function activeStackJobForStatus(
+  agentId: string,
+  phase?: string,
+): Promise<typeof stackAgentJobs.$inferSelect | undefined> {
   return db.query.stackAgentJobs.findFirst({
     where: and(
       eq(stackAgentJobs.agentId, agentId),
@@ -305,8 +341,7 @@ async function claimedSignedJob(
   fencingToken: number,
 ): Promise<ClaimedAgentJob | undefined> {
   const path = new URL(ctx.request.url).pathname;
-  const signed = validSignedApiURL(ctx.request, path, ctx.request.method)
-    || validSignedApiURL(ctx.request, path, "*");
+  const signed = validSignedApiURL(ctx.request, path, ctx.request.method) || validSignedApiURL(ctx.request, path, "*");
   if (!signed) return undefined;
   const job = await db.query.agentJobs.findFirst({
     where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
@@ -315,10 +350,7 @@ async function claimedSignedJob(
   return findClaimedAgentJob(job.agentId, jobId, fencingToken);
 }
 
-async function claimedJobForArtifact(
-  ctx: AgentCtx,
-  jobId: string,
-): Promise<ClaimedAgentJob | undefined> {
+async function claimedJobForArtifact(ctx: AgentCtx, jobId: string): Promise<ClaimedAgentJob | undefined> {
   if (jobId === "") return undefined;
   const fencingToken = requestedFencingToken(ctx);
   if (fencingToken === undefined) return undefined;
@@ -336,7 +368,7 @@ async function claimedJobForArtifact(
 
 async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
   const set = ctx.set as { status?: number };
-  if (await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "") === undefined) {
+  if ((await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "")) === undefined) {
     set.status = 401;
     return { errors: [{ status: "401", title: "Unauthorized" }] };
   }
@@ -373,7 +405,9 @@ async function configurationArchivePath(cvId: string): Promise<string> {
   return candidates[0] ?? join(root, "cv", `config-${cvId}.tar.gz`);
 }
 
-async function tarOutput(args: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> {
+async function tarOutput(
+  args: readonly string[],
+): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> {
   const process = Bun.spawn(["tar", ...args], { stdout: "pipe", stderr: "pipe" });
   const [exitCode, stdout, stderr] = await Promise.all([
     process.exited,
@@ -398,7 +432,7 @@ async function flattenedConfigurationArchive(cvId: string, sourcePath?: string):
   } catch {
     await rm(cached, { force: true });
   }
-  const source = sourcePath ?? await configurationArchivePath(cvId);
+  const source = sourcePath ?? (await configurationArchivePath(cvId));
   await assertSafeTarArchive(source);
   const tmp = await mkdtemp(join(storageRoot(), ".agent-cv-"));
   try {
@@ -478,13 +512,24 @@ function parseRegistrationIacBinaries(
 ): { iacBinaries: string[] } | { error: unknown } {
   if (body["iac_binaries"] === undefined) return { iacBinaries: ["terraform"] };
   if (
-    !Array.isArray(body["iac_binaries"])
-    || body["iac_binaries"].length === 0
-    || body["iac_binaries"].some((binary: unknown): boolean =>
-      typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
+    !Array.isArray(body["iac_binaries"]) ||
+    body["iac_binaries"].length === 0 ||
+    body["iac_binaries"].some(
+      (binary: unknown): boolean => typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"),
+    )
   ) {
     set.status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] } };
+    return {
+      error: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'",
+          },
+        ],
+      },
+    };
   }
   return { iacBinaries: [...new Set(body["iac_binaries"] as string[])] };
 }
@@ -498,12 +543,28 @@ function parseRegistrationFields(
   const arch = typeof body["arch"] === "string" ? body["arch"] : null;
   if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
     set.status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] } };
+    return {
+      error: {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" },
+        ],
+      },
+    };
   }
   const accept = typeof body["accept"] === "string" && body["accept"] !== "" ? body["accept"] : DEFAULT_AGENT_ACCEPT;
-  if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
+  if (
+    accept !== "none" &&
+    (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) ||
+      accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))
+  ) {
     set.status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" }] } };
+    return {
+      error: {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" },
+        ],
+      },
+    };
   }
   const binaries = parseRegistrationIacBinaries(body, set);
   if ("error" in binaries) return binaries;
@@ -528,19 +589,22 @@ async function upsertRegistrationAgent(
     where: and(eq(agents.agentPoolId, pool.poolId), eq(agents.name, fields.name)),
   });
   if (existing !== undefined) {
-    await db.update(agents).set({
-      architecture: fields.arch,
-      version: fields.version ?? existing.version,
-      protocolVersion: negotiation.version,
-      capabilities: [...negotiation.capabilities],
-      artifactFormats: [...negotiation.artifactFormats],
-      iacBinaries: fields.iacBinaries,
-      accept: fields.accept,
-      requestForwarding: fields.requestForwarding,
-      hyok: fields.hyok,
-      status: "idle",
-      lastPingAt: now,
-    }).where(eq(agents.id, existing.id));
+    await db
+      .update(agents)
+      .set({
+        architecture: fields.arch,
+        version: fields.version ?? existing.version,
+        protocolVersion: negotiation.version,
+        capabilities: [...negotiation.capabilities],
+        artifactFormats: [...negotiation.artifactFormats],
+        iacBinaries: fields.iacBinaries,
+        accept: fields.accept,
+        requestForwarding: fields.requestForwarding,
+        hyok: fields.hyok,
+        status: "idle",
+        lastPingAt: now,
+      })
+      .where(eq(agents.id, existing.id));
     return existing.id;
   }
   const agentId = newResourceId("agent");
@@ -572,10 +636,12 @@ type StatusJobPayload = {
 };
 
 function parseStatusJobPayload(body: Record<string, unknown>): StatusJobPayload {
-  const jobPayload = typeof body["job"] === "object" && body["job"] !== null ? body["job"] as Record<string, unknown> : null;
-  const jobData = jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
-    ? jobPayload["data"] as Record<string, unknown>
-    : null;
+  const jobPayload =
+    typeof body["job"] === "object" && body["job"] !== null ? (body["job"] as Record<string, unknown>) : null;
+  const jobData =
+    jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
+      ? (jobPayload["data"] as Record<string, unknown>)
+      : null;
   return {
     jobStatus: jobPayload === null ? null : jobPayload["status"],
     jobPayload,
@@ -623,23 +689,44 @@ async function completeStatusAgentJob(
   set: { status?: number },
 ): Promise<unknown> {
   const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
-  const result = statusResultFields(jobData, ["has_changes", "generated_configuration", "resource_additions",
-    "resource_changes", "resource_destructions", "resource_imports", "action_failures",
-    "action_invocations"]);
+  const result = statusResultFields(jobData, [
+    "has_changes",
+    "generated_configuration",
+    "resource_additions",
+    "resource_changes",
+    "resource_destructions",
+    "resource_imports",
+    "action_failures",
+    "action_invocations",
+  ]);
   const statePayload = jsonStringOrNull(jobData?.["state"]);
   const jsonState = jsonStringOrNull(jobData?.["json_state"]);
   const jsonStateOutputs = jsonStringOrNull(jobData?.["json_state_outputs"]);
   if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
     set.status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
+    return {
+      errors: [
+        { status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" },
+      ],
+    };
   }
   if (isClientEncryptedState(statePayload)) {
     set.status = 422;
-    return { errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }] };
+    return {
+      errors: [{ status: "422", title: "Unsupported state representation", detail: CLIENT_ENCRYPTED_STATE_ERROR }],
+    };
   }
   if (!isAgentResultValid(result)) {
     set.status = 422;
-    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
+    return {
+      errors: [
+        {
+          status: "422",
+          title: "Unprocessable Entity",
+          detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits`,
+        },
+      ],
+    };
   }
   const completion: AgentJobCompletion = {
     status: jobStatus === "finished" ? "completed" : "errored",
@@ -699,20 +786,43 @@ async function completeStatusStackJob(
   fencingToken: number | undefined,
   set: { status?: number },
 ): Promise<unknown> {
-  const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
+  const explicitStackJobId =
+    jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
   const stackJob = await findStatusStackJob(agent.id, phase, runId, explicitStackJobId, fencingToken);
   if (stackJob === undefined) return fencingConflict(set);
-  const result = statusResultFields(jobData, ["has_changes", "has-changes", "deferred_changes", "deferred-changes", "resource_additions", "resource_changes", "resource_destructions", "resource_imports"]);
+  const result = statusResultFields(jobData, [
+    "has_changes",
+    "has-changes",
+    "deferred_changes",
+    "deferred-changes",
+    "resource_additions",
+    "resource_changes",
+    "resource_destructions",
+    "resource_imports",
+  ]);
   for (const key of ["state", "json_state"]) {
     if (jobData?.[key] === undefined) continue;
     const value = jsonStringOrNull(jobData?.[key]);
     if (value === undefined) {
       set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Agent ${key} payload must be a valid JSON string` }] };
+      return {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: `Agent ${key} payload must be a valid JSON string` },
+        ],
+      };
     }
     result[key] = value;
   }
-  const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result }, fencingToken);
+  const completed = await completeStackAgentJob(
+    agent.id,
+    stackJob.id,
+    {
+      status: jobStatus === "finished" ? "completed" : "errored",
+      errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null,
+      result,
+    },
+    fencingToken,
+  );
   if (completed === undefined) return fencingConflict(set);
   return undefined;
 }
@@ -723,18 +833,20 @@ async function heartbeatStatusStackJob(
   operation: string | null,
   fencingToken: number | undefined,
 ): Promise<void> {
-  const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
+  const explicitStackJobId =
+    jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
   const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
-  const stackJob = explicitStackJobId === null
-    ? await activeStackJobForStatus(agent.id, stackPhase)
-    : await db.query.stackAgentJobs.findFirst({
-        where: and(
-          eq(stackAgentJobs.id, explicitStackJobId),
-          eq(stackAgentJobs.agentId, agent.id),
-          eq(stackAgentJobs.status, "claimed"),
-          ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
-        ),
-      });
+  const stackJob =
+    explicitStackJobId === null
+      ? await activeStackJobForStatus(agent.id, stackPhase)
+      : await db.query.stackAgentJobs.findFirst({
+          where: and(
+            eq(stackAgentJobs.id, explicitStackJobId),
+            eq(stackAgentJobs.agentId, agent.id),
+            eq(stackAgentJobs.status, "claimed"),
+            ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
+          ),
+        });
   if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id, fencingToken);
 }
 
@@ -755,7 +867,10 @@ async function handleStatusCompletion(
   return completeStatusStackJob(agent, jobPayload, jobData, jobStatus, phase, runId, fencingToken, set);
 }
 
-function statusResponseHeaders(ctx: AgentCtx, set: { headers?: Record<string, string | number> }): Record<string, never> {
+function statusResponseHeaders(
+  ctx: AgentCtx,
+  set: { headers?: Record<string, string | number> },
+): Record<string, never> {
   const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
   set.headers ??= {};
   if (messageIndex !== null) set.headers["tfc-agent-message-index"] = messageIndex;
@@ -779,9 +894,17 @@ function parseForwardedBody(
   const rawResponseBody = body?.["body"];
   if (typeof rawResponseBody === "string" && rawResponseBody.length > MAX_FORWARDED_RESPONSE_BASE64_BYTES) {
     set.status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" }] } };
+    return {
+      error: {
+        errors: [
+          { status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" },
+        ],
+      },
+    };
   }
-  return { responseBody: typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null };
+  return {
+    responseBody: typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null,
+  };
 }
 
 function parseForwardedHeaders(
@@ -792,9 +915,17 @@ function parseForwardedHeaders(
   const responseHeaders: Record<string, string[]> = {};
   if (rawHeaders !== null && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
     for (const [name, values] of Object.entries(rawHeaders as Record<string, unknown>)) {
-      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || !Array.isArray(values) || !values.every((value): value is string => typeof value === "string" && !/[\r\n]/.test(value))) {
+      if (
+        !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) ||
+        !Array.isArray(values) ||
+        !values.every((value): value is string => typeof value === "string" && !/[\r\n]/.test(value))
+      ) {
         set.status = 422;
-        return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid forwarded response headers" }] } };
+        return {
+          error: {
+            errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid forwarded response headers" }],
+          },
+        };
       }
       responseHeaders[name] = values;
     }
@@ -805,27 +936,38 @@ function parseForwardedHeaders(
 async function completeForwardedRequest(
   agentId: string,
   requestId: string,
-  fields: { responseStatus: number | null; responseHeaders: Record<string, string[]>; responseBody: string | null; errorMessage: string | null },
+  fields: {
+    responseStatus: number | null;
+    responseHeaders: Record<string, string[]>;
+    responseBody: string | null;
+    errorMessage: string | null;
+  },
   set: { status?: number },
 ): Promise<unknown> {
-  const updated = await db.update(agentForwardedRequests).set({
-    status: fields.errorMessage === null ? "completed" : "errored",
-    responseStatus: fields.responseStatus,
-    responseHeaders: fields.responseHeaders,
-    responseBody: fields.responseBody,
-    errorMessage: fields.errorMessage,
-    completedAt: Date.now(),
-    // The request is done; the agent no longer needs the original request
-    // headers/body to replay it. Drop them so credentials that may have
-    // been forwarded (Authorization, cookies) are not persisted with the
-    // completed row in the database or a support bundle.
-    headers: {},
-    body: null,
-  }).where(and(
-    eq(agentForwardedRequests.id, requestId),
-    eq(agentForwardedRequests.agentId, agentId),
-    eq(agentForwardedRequests.status, "claimed"),
-  )).returning({ id: agentForwardedRequests.id });
+  const updated = await db
+    .update(agentForwardedRequests)
+    .set({
+      status: fields.errorMessage === null ? "completed" : "errored",
+      responseStatus: fields.responseStatus,
+      responseHeaders: fields.responseHeaders,
+      responseBody: fields.responseBody,
+      errorMessage: fields.errorMessage,
+      completedAt: Date.now(),
+      // The request is done; the agent no longer needs the original request
+      // headers/body to replay it. Drop them so credentials that may have
+      // been forwarded (Authorization, cookies) are not persisted with the
+      // completed row in the database or a support bundle.
+      headers: {},
+      body: null,
+    })
+    .where(
+      and(
+        eq(agentForwardedRequests.id, requestId),
+        eq(agentForwardedRequests.agentId, agentId),
+        eq(agentForwardedRequests.status, "claimed"),
+      ),
+    )
+    .returning({ id: agentForwardedRequests.id });
   if (updated.length === 0) {
     set.status = 404;
     return { errors: [{ status: "404", title: "Not Found" }] };
@@ -833,7 +975,10 @@ async function completeForwardedRequest(
   return {};
 }
 
-function acceptedWorkloadPhases(agent: Readonly<{ accept: string | null | undefined }>, headerValue: string | null): ReadonlySet<string> {
+function acceptedWorkloadPhases(
+  agent: Readonly<{ accept: string | null | undefined }>,
+  headerValue: string | null,
+): ReadonlySet<string> {
   // The registered accept list is authoritative: the agent declared its
   // workload set when it registered (validated against AGENT_WORKLOAD_TYPES
   // then persisted). The tfc-agent-accept header may only narrow that set
@@ -851,10 +996,18 @@ async function claimAvailableJob(
   accepted: ReadonlySet<string>,
   request: AgentCtx["request"],
   set: { status?: number },
-): Promise<{ claimed: NonNullable<Awaited<ReturnType<typeof claimAgentJob>>> } | { response: unknown } | { empty: true }> {
-  const claimed = await claimAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(phase)));
+): Promise<
+  { claimed: NonNullable<Awaited<ReturnType<typeof claimAgentJob>>> } | { response: unknown } | { empty: true }
+> {
+  const claimed = await claimAgentJob(
+    agent,
+    ["plan", "apply"].filter((phase): boolean => accepted.has(phase)),
+  );
   if (claimed !== undefined) return { claimed };
-  const stackClaimed = await claimStackAgentJob(agent, ["plan", "apply"].filter((phase): boolean => accepted.has(`stack_${phase}`)));
+  const stackClaimed = await claimStackAgentJob(
+    agent,
+    ["plan", "apply"].filter((phase): boolean => accepted.has(`stack_${phase}`)),
+  );
   if (stackClaimed === undefined) {
     set.status = 204;
     return { empty: true as const };
@@ -876,7 +1029,12 @@ async function buildClaimedJobPayload(
     const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
     const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
     if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
-    const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null, run.variables);
+    const environment = await agentEnvironment(
+      workspace.id,
+      workspace.orgId,
+      workspace.projectId ?? null,
+      run.variables,
+    );
     const runVars: Record<string, string> = {};
     // Mint the run token only after all fallible lookups/resolution work has
     // succeeded, so a failed payload build cannot accumulate valid tokens.
@@ -896,7 +1054,15 @@ async function buildClaimedJobPayload(
     }
     log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
     set.status = 503;
-    return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
+    return {
+      errors: [
+        {
+          status: "503",
+          title: "Service Unavailable",
+          detail: error instanceof Error ? error.message : "Unable to construct agent job",
+        },
+      ],
+    };
   }
 }
 
@@ -904,8 +1070,14 @@ type ClaimedStackJob = NonNullable<Awaited<ReturnType<typeof findClaimedStackAge
 
 function stackJobConfigArchivePath(claimed: ClaimedStackJob | undefined): string | null {
   if (claimed === undefined) return null;
-  const runArchivePath = typeof (claimed.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed.deploymentRun.payload ?? {})["archivePath"] as string : null;
-  const configurationArchivePath = typeof (claimed.configuration.payload ?? {})["archivePath"] === "string" ? (claimed.configuration.payload ?? {})["archivePath"] as string : null;
+  const runArchivePath =
+    typeof (claimed.deploymentRun.payload ?? {})["archivePath"] === "string"
+      ? ((claimed.deploymentRun.payload ?? {})["archivePath"] as string)
+      : null;
+  const configurationArchivePath =
+    typeof (claimed.configuration.payload ?? {})["archivePath"] === "string"
+      ? ((claimed.configuration.payload ?? {})["archivePath"] as string)
+      : null;
   return runArchivePath ?? configurationArchivePath;
 }
 
@@ -915,7 +1087,12 @@ async function serveStackConfigArchive(
   agentMissing: boolean,
   set: { status?: number; headers?: Record<string, string | number> },
 ): Promise<unknown> {
-  if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
+  if (
+    claimed === undefined ||
+    archivePath === null ||
+    !isStackStoragePath(archivePath) ||
+    !(await Bun.file(archivePath).exists())
+  ) {
     const status = agentMissing ? 401 : 404;
     set.status = status;
     return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Not Found" }] };
@@ -932,7 +1109,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .get("/api/agent/protocol", (ctx: AgentCtx): unknown => {
     const set = ctx.set as { headers?: Record<string, string | number> };
     const description = agentProtocolDescription();
-    const capabilities = Array.isArray(description["capabilities"]) ? description["capabilities"] as string[] : [];
+    const capabilities = Array.isArray(description["capabilities"]) ? (description["capabilities"] as string[]) : [];
     protocolHeaders(set, capabilities);
     return description;
   })
@@ -997,10 +1174,23 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       payload.jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
     );
 
-    if ((payload.jobStatus === "finished" || payload.jobStatus === "errored") && payload.jobPayload !== null && payload.runId !== null) {
+    if (
+      (payload.jobStatus === "finished" || payload.jobStatus === "errored") &&
+      payload.jobPayload !== null &&
+      payload.runId !== null
+    ) {
       // Completion signal: the agent finished (or failed) its claimed job.
       const phase = payload.operation === "apply" ? "apply" : "plan";
-      const done = await handleStatusCompletion(agent, payload.jobPayload, payload.jobData, payload.jobStatus, phase, payload.runId, fencingToken, set);
+      const done = await handleStatusCompletion(
+        agent,
+        payload.jobPayload,
+        payload.jobData,
+        payload.jobStatus,
+        phase,
+        payload.runId,
+        fencingToken,
+        set,
+      );
       if (done !== undefined) return done;
       await db.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agent.id));
     } else {
@@ -1043,19 +1233,27 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     // Scope the stale-claim sweep to this agent's own pool. Without the pool
     // predicate, an agent polling here would requeue stale claims that belong
     // to another pool's agents.
-    await db.update(agentForwardedRequests).set({
-      status: "queued",
-      agentId: null,
-      claimedAt: null,
-      errorMessage: null,
-    }).where(and(
-      eq(agentForwardedRequests.agentPoolId, agent.agentPoolId),
-      eq(agentForwardedRequests.status, "claimed"),
-      lt(agentForwardedRequests.claimedAt, Date.now() - 90_000),
-    ));
+    await db
+      .update(agentForwardedRequests)
+      .set({
+        status: "queued",
+        agentId: null,
+        claimedAt: null,
+        errorMessage: null,
+      })
+      .where(
+        and(
+          eq(agentForwardedRequests.agentPoolId, agent.agentPoolId),
+          eq(agentForwardedRequests.status, "claimed"),
+          lt(agentForwardedRequests.claimedAt, Date.now() - 90_000),
+        ),
+      );
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const candidate = await db.query.agentForwardedRequests.findFirst({
-        where: and(eq(agentForwardedRequests.agentPoolId, agent.agentPoolId), eq(agentForwardedRequests.status, "queued")),
+        where: and(
+          eq(agentForwardedRequests.agentPoolId, agent.agentPoolId),
+          eq(agentForwardedRequests.status, "queued"),
+        ),
         orderBy: [asc(agentForwardedRequests.createdAt)],
       });
       if (candidate === undefined) {
@@ -1077,15 +1275,21 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         await rejectUnsafeForwardedRequest(candidate.id, destination.error);
         continue;
       }
-      const claimed = await db.update(agentForwardedRequests).set({
-        status: "claimed",
-        agentId: agent.id,
-        claimedAt: Date.now(),
-      }).where(and(
-        eq(agentForwardedRequests.id, candidate.id),
-        eq(agentForwardedRequests.url, candidate.url),
-        eq(agentForwardedRequests.status, "queued"),
-      )).returning();
+      const claimed = await db
+        .update(agentForwardedRequests)
+        .set({
+          status: "claimed",
+          agentId: agent.id,
+          claimedAt: Date.now(),
+        })
+        .where(
+          and(
+            eq(agentForwardedRequests.id, candidate.id),
+            eq(agentForwardedRequests.url, candidate.url),
+            eq(agentForwardedRequests.status, "queued"),
+          ),
+        )
+        .returning();
       const request = claimed[0];
       if (request === undefined) continue;
       await db.update(agents).set({ lastPingAt: Date.now() }).where(eq(agents.id, agent.id));
@@ -1117,14 +1321,21 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     if ("error" in parsedHeaders) return parsedHeaders.error;
     if ((responseStatus === null || parsedBody.responseBody === null) && errorMessage === null) {
       set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A forwarded response or error is required" }] };
+      return {
+        errors: [{ status: "422", title: "Unprocessable Entity", detail: "A forwarded response or error is required" }],
+      };
     }
-    return completeForwardedRequest(agent.id, ctx.params["request_id"] ?? "", {
-      responseStatus,
-      responseHeaders: parsedHeaders.responseHeaders,
-      responseBody: parsedBody.responseBody,
-      errorMessage,
-    }, set);
+    return completeForwardedRequest(
+      agent.id,
+      ctx.params["request_id"] ?? "",
+      {
+        responseStatus,
+        responseHeaders: parsedHeaders.responseHeaders,
+        responseBody: parsedBody.responseBody,
+        errorMessage,
+      },
+      set,
+    );
   })
 
   // --- Job claim ------------------------------------------------------------
@@ -1166,7 +1377,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
     const agent = await agentFromRequest(ctx);
     const fencingToken = requestedFencingToken(ctx);
-    const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
+    const claimed =
+      agent === undefined
+        ? undefined
+        : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
     return serveStackConfigArchive(claimed, stackJobConfigArchivePath(claimed), agent === undefined, set);
   })
 
@@ -1185,7 +1399,13 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const configuration = details.configuration;
-    if (configuration === null || configuration.id !== cvId || configuration.status !== "uploaded" || configuration.archivePath === null || !(await Bun.file(configuration.archivePath).exists())) {
+    if (
+      configuration === null ||
+      configuration.id !== cvId ||
+      configuration.status !== "uploaded" ||
+      configuration.archivePath === null ||
+      !(await Bun.file(configuration.archivePath).exists())
+    ) {
       await rm(join(storageRoot(), "agent-cv", `${cvId}.tar.gz`), { force: true });
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -1232,7 +1452,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         ctx.request,
         path,
         MAX_AGENT_FILESYSTEM_BYTES,
-        async (): Promise<boolean> => await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken) !== undefined,
+        async (): Promise<boolean> =>
+          (await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken)) !==
+          undefined,
       );
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "stale-agent-lease") return fencingConflict(set);
@@ -1266,7 +1488,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       await writePlanJsonArtifact(
         details.job.runId,
         planJson,
-        async (): Promise<boolean> => await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken) !== undefined,
+        async (): Promise<boolean> =>
+          (await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken)) !==
+          undefined,
       );
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "stale-agent-lease") return fencingConflict(set);
@@ -1326,7 +1550,12 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
     });
     const isImmediateDuplicate = last !== undefined && last.outputText === text && Date.now() - last.createdAt < 2000;
     if (!isImmediateDuplicate) {
-      await appendAgentJobLog(details.job.agentId ?? "", details.job.id, details.job.fencingToken, text.slice(0, 1024 * 1024));
+      await appendAgentJobLog(
+        details.job.agentId ?? "",
+        details.job.id,
+        details.job.fencingToken,
+        text.slice(0, 1024 * 1024),
+      );
     }
   }
   return {};
@@ -1347,7 +1576,8 @@ async function storeSideArtifact(ctx: AgentCtx, kind: string, ext: string): Prom
   if (ext === "json") {
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error("Expected a JSON object");
     } catch {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Artifact must be a JSON object" }] };

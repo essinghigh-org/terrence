@@ -8,11 +8,31 @@ import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { TableSkeleton } from "@/components/ui/table-skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../components/ui/dialog";
 
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { Activity, CheckCircle2, Clock3, Cpu, Eye, Key, Plus, RefreshCw, Server, ShieldCheck, Trash2, WifiOff } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  Clock3,
+  Cpu,
+  Eye,
+  Key,
+  Plus,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  Trash2,
+  WifiOff,
+} from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader, PageShell } from "@/components/PageHeader";
 import {
@@ -41,7 +61,7 @@ type AgentPool = {
     "allowed-projects"?: { data?: { id: string }[] };
     "excluded-workspaces"?: { data?: { id: string }[] };
   };
-}
+};
 
 type AgentToken = {
   id: string;
@@ -52,19 +72,31 @@ type AgentToken = {
 
     "last-used-at"?: string | null;
   };
-}
+};
 
 function AgentHealthBadge({ state }: Readonly<{ state: AgentHealthState }>): React.JSX.Element {
-  const tone = state === "idle" ? "border-success/30 bg-success/10 text-success"
-    : state === "busy" ? "border-primary/30 bg-primary/10 text-primary"
-      : state === "draining" ? "border-warning/30 bg-warning/10 text-warning"
-        : state === "stale" || state === "offline" ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-border bg-muted text-muted-foreground";
-  const statusIcon = state === "idle" ? <CheckCircle2 className="size-3" aria-hidden="true" />
-    : state === "busy" ? <Activity className="size-3" aria-hidden="true" />
-      : state === "stale" ? <Clock3 className="size-3" aria-hidden="true" />
-        : state === "offline" ? <WifiOff className="size-3" aria-hidden="true" />
-          : <Activity className="size-3" aria-hidden="true" />;
+  const tone =
+    state === "idle"
+      ? "border-success/30 bg-success/10 text-success"
+      : state === "busy"
+        ? "border-primary/30 bg-primary/10 text-primary"
+        : state === "draining"
+          ? "border-warning/30 bg-warning/10 text-warning"
+          : state === "stale" || state === "offline"
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : "border-border bg-muted text-muted-foreground";
+  const statusIcon =
+    state === "idle" ? (
+      <CheckCircle2 className="size-3" aria-hidden="true" />
+    ) : state === "busy" ? (
+      <Activity className="size-3" aria-hidden="true" />
+    ) : state === "stale" ? (
+      <Clock3 className="size-3" aria-hidden="true" />
+    ) : state === "offline" ? (
+      <WifiOff className="size-3" aria-hidden="true" />
+    ) : (
+      <Activity className="size-3" aria-hidden="true" />
+    );
   return (
     <Badge variant="outline" className={`inline-flex items-center gap-1 ${tone}`}>
       {statusIcon}
@@ -134,9 +166,15 @@ function AgentPoolTableBody({
       ) : pools.length === 0 ? (
         <TableRow>
           <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-            <EmptyState compact illustration={error === "" ? "empty" : undefined}
+            <EmptyState
+              compact
+              illustration={error === "" ? "empty" : undefined}
               title={error === "" ? "No agent pools yet" : "Agent pools unavailable"}
-              description={error === "" ? "Create an agent pool to run infrastructure jobs on your own workers." : "Reload the page to try again."}
+              description={
+                error === ""
+                  ? "Create an agent pool to run infrastructure jobs on your own workers."
+                  : "Reload the page to try again."
+              }
               docsHref="/app/docs/execution"
             />
           </TableCell>
@@ -147,59 +185,73 @@ function AgentPoolTableBody({
           const summary = summarizeAgentHealth(agents);
           const agentError = agentLoadErrors[pool.id];
           return (
-          <TableRow key={pool.id}>
-            <TableCell className="font-semibold">
-              <div className="flex items-center gap-2">
-                <Server className="size-4 text-primary" />
-                {pool.attributes.name}
-              </div>
-            </TableCell>
-            <TableCell className="text-xs text-muted-foreground">
-              {pool.attributes.organization}
-            </TableCell>
-            <TableCell>
-              {agentError !== undefined ? (
-                <div className="text-xs text-muted-foreground">Worker health unavailable</div>
-              ) : (
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Cpu className="size-3.5 text-primary" aria-hidden="true" />
-                    <span className="text-xs font-medium">{summary.usable} usable</span>
-                    <span className="text-xs text-muted-foreground">of {summary.total} registered</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {summary.usable === 0 ? "No eligible workers; runs will wait." : `${summary.idle} idle · ${summary.busy} busy`}
-                    {summary.stale > 0 ? ` · ${summary.stale} heartbeat stale` : ""}
-                  </p>
-                  {(pool.attributes["queued-job-count"] ?? 0) > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      {pool.attributes["queued-job-count"]} queued job{pool.attributes["queued-job-count"] === 1 ? "" : "s"} · {pool.attributes["claimed-job-count"] ?? 0} claimed
-                    </p>
-                  )}
+            <TableRow key={pool.id}>
+              <TableCell className="font-semibold">
+                <div className="flex items-center gap-2">
+                  <Server className="size-4 text-primary" />
+                  {pool.attributes.name}
                 </div>
-              )}
-            </TableCell>
-            <TableCell className="text-xs text-muted-foreground">
-              {assignmentScopeLabel(pool)}
-            </TableCell>
-            <TableCell className="text-right">
-              <div className="flex justify-end gap-2">
-                <Button size="sm" variant="outline" onClick={(): void => { onViewHealth(pool); }}>
-                  <Eye className="size-3.5 mr-1" aria-hidden="true" /> Worker health
-                </Button>
-                <Button size="sm" variant="outline" onClick={(): void => { onManageTokens(pool); }}>
-                  <Key className="size-3.5 mr-1" /> Agent Tokens
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={(): void => { onDeleteRequest(pool); }}
-                >
-                  <Trash2 className="size-3.5 mr-1" /> Delete
-                </Button>
-              </div>
-            </TableCell>
-          </TableRow>
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">{pool.attributes.organization}</TableCell>
+              <TableCell>
+                {agentError !== undefined ? (
+                  <div className="text-xs text-muted-foreground">Worker health unavailable</div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Cpu className="size-3.5 text-primary" aria-hidden="true" />
+                      <span className="text-xs font-medium">{summary.usable} usable</span>
+                      <span className="text-xs text-muted-foreground">of {summary.total} registered</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {summary.usable === 0
+                        ? "No eligible workers; runs will wait."
+                        : `${summary.idle} idle · ${summary.busy} busy`}
+                      {summary.stale > 0 ? ` · ${summary.stale} heartbeat stale` : ""}
+                    </p>
+                    {(pool.attributes["queued-job-count"] ?? 0) > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {pool.attributes["queued-job-count"]} queued job
+                        {pool.attributes["queued-job-count"] === 1 ? "" : "s"} ·{" "}
+                        {pool.attributes["claimed-job-count"] ?? 0} claimed
+                      </p>
+                    )}
+                  </div>
+                )}
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">{assignmentScopeLabel(pool)}</TableCell>
+              <TableCell className="text-right">
+                <div className="flex justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={(): void => {
+                      onViewHealth(pool);
+                    }}
+                  >
+                    <Eye className="size-3.5 mr-1" aria-hidden="true" /> Worker health
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={(): void => {
+                      onManageTokens(pool);
+                    }}
+                  >
+                    <Key className="size-3.5 mr-1" /> Agent Tokens
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={(): void => {
+                      onDeleteRequest(pool);
+                    }}
+                  >
+                    <Trash2 className="size-3.5 mr-1" /> Delete
+                  </Button>
+                </div>
+              </TableCell>
+            </TableRow>
           );
         })
       )}
@@ -221,108 +273,132 @@ function WorkerHealthDialog({
   onClose: () => void;
 }>): React.JSX.Element {
   return (
-    <Dialog open={healthPool !== null} onOpenChange={(open): void => { if (!open) onClose(); }}>
+    <Dialog
+      open={healthPool !== null}
+      onOpenChange={(open): void => {
+        if (!open) onClose();
+      }}
+    >
       <DialogContent className="sm:max-w-[900px]" align="top">
-        {healthPool !== null && (() => {
-          const healthAgents = agentsByPool[healthPool.id] ?? [];
-          const healthSummary = summarizeAgentHealth(healthAgents);
-          const healthError = agentLoadErrors[healthPool.id];
-          return (
-            <>
-              <DialogHeader>
-                <DialogTitle>Worker health — {healthPool.attributes.name}</DialogTitle>
-                <DialogDescription>
-                  Usable capacity reflects the server&apos;s recorded worker status. Heartbeat times are last observed values, not a live connection claim.
-                </DialogDescription>
-              </DialogHeader>
+        {healthPool !== null &&
+          (() => {
+            const healthAgents = agentsByPool[healthPool.id] ?? [];
+            const healthSummary = summarizeAgentHealth(healthAgents);
+            const healthError = agentLoadErrors[healthPool.id];
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Worker health — {healthPool.attributes.name}</DialogTitle>
+                  <DialogDescription>
+                    Usable capacity reflects the server&apos;s recorded worker status. Heartbeat times are last observed
+                    values, not a live connection claim.
+                  </DialogDescription>
+                </DialogHeader>
 
-              <div className="grid gap-3 sm:grid-cols-4" aria-label="Worker health summary">
-                <div className="rounded-md border bg-muted/30 p-3">
-                  <div className="text-xs text-muted-foreground">Usable capacity</div>
-                  <div className="mt-1 text-lg font-semibold">{healthSummary.usable} / {healthSummary.total}</div>
+                <div className="grid gap-3 sm:grid-cols-4" aria-label="Worker health summary">
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Usable capacity</div>
+                    <div className="mt-1 text-lg font-semibold">
+                      {healthSummary.usable} / {healthSummary.total}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Idle</div>
+                    <div className="mt-1 text-lg font-semibold">{healthSummary.idle}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Busy</div>
+                    <div className="mt-1 text-lg font-semibold">{healthSummary.busy}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Needs attention</div>
+                    <div className="mt-1 text-lg font-semibold">
+                      {healthSummary.stale + healthSummary.draining + healthSummary.failed}
+                    </div>
+                  </div>
                 </div>
-                <div className="rounded-md border bg-muted/30 p-3">
-                  <div className="text-xs text-muted-foreground">Idle</div>
-                  <div className="mt-1 text-lg font-semibold">{healthSummary.idle}</div>
-                </div>
-                <div className="rounded-md border bg-muted/30 p-3">
-                  <div className="text-xs text-muted-foreground">Busy</div>
-                  <div className="mt-1 text-lg font-semibold">{healthSummary.busy}</div>
-                </div>
-                <div className="rounded-md border bg-muted/30 p-3">
-                  <div className="text-xs text-muted-foreground">Needs attention</div>
-                  <div className="mt-1 text-lg font-semibold">{healthSummary.stale + healthSummary.draining + healthSummary.failed}</div>
-                </div>
-              </div>
 
-              {healthError !== undefined && (
-                <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-text">
-                  <span>Worker health could not be loaded: {healthError}</span>
-                  <Button type="button" size="sm" variant="outline" onClick={onRetry}>
-                    Try again
+                {healthError !== undefined && (
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-text"
+                  >
+                    <span>Worker health could not be loaded: {healthError}</span>
+                    <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+                      Try again
+                    </Button>
+                  </div>
+                )}
+
+                {healthError === undefined && healthAgents.length === 0 ? (
+                  <div className="rounded-md border border-dashed p-6 text-center">
+                    <p className="font-medium">No workers have registered with this pool.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Runs assigned here will wait until a compatible worker checks in.
+                    </p>
+                  </div>
+                ) : healthError === undefined ? (
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Worker</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Capabilities</TableHead>
+                          <TableHead>Version / architecture</TableHead>
+                          <TableHead>Last observed</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {healthAgents.map((agent): React.JSX.Element => {
+                          const state = agentHealthState(agent);
+                          const lastObserved = agent.attributes["last-ping-at"];
+                          return (
+                            <TableRow key={agent.id}>
+                              <TableCell>
+                                <div className="font-medium">{agent.attributes.name ?? agent.id}</div>
+                                <div className="font-mono text-xs text-muted-foreground">{agent.id}</div>
+                              </TableCell>
+                              <TableCell>
+                                <AgentHealthBadge state={state} />
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  {agentCapabilities(agent).map(
+                                    (capability): React.JSX.Element => (
+                                      <Badge key={capability} variant="secondary" className="font-mono text-[11px]">
+                                        {capability}
+                                      </Badge>
+                                    ),
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                <div>{agent.attributes.version ?? "Version unknown"}</div>
+                                <div>{agent.attributes.architecture ?? "Architecture unknown"}</div>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                <time dateTime={lastObserved ?? undefined}>{formatLastObserved(lastObserved)}</time>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={onRetry}>
+                    <RefreshCw className="mr-1.5 size-4" aria-hidden="true" /> Refresh health
                   </Button>
-                </div>
-              )}
-
-              {healthError === undefined && healthAgents.length === 0 ? (
-                <div className="rounded-md border border-dashed p-6 text-center">
-                  <p className="font-medium">No workers have registered with this pool.</p>
-                  <p className="mt-1 text-sm text-muted-foreground">Runs assigned here will wait until a compatible worker checks in.</p>
-                </div>
-              ) : healthError === undefined ? (
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Worker</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Capabilities</TableHead>
-                        <TableHead>Version / architecture</TableHead>
-                        <TableHead>Last observed</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {healthAgents.map((agent): React.JSX.Element => {
-                        const state = agentHealthState(agent);
-                        const lastObserved = agent.attributes["last-ping-at"];
-                        return (
-                          <TableRow key={agent.id}>
-                            <TableCell>
-                              <div className="font-medium">{agent.attributes.name ?? agent.id}</div>
-                              <div className="font-mono text-xs text-muted-foreground">{agent.id}</div>
-                            </TableCell>
-                            <TableCell><AgentHealthBadge state={state} /></TableCell>
-                            <TableCell>
-                              <div className="flex flex-wrap gap-1">
-                                {agentCapabilities(agent).map((capability): React.JSX.Element => (
-                                  <Badge key={capability} variant="secondary" className="font-mono text-[11px]">{capability}</Badge>
-                                ))}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              <div>{agent.attributes.version ?? "Version unknown"}</div>
-                              <div>{agent.attributes.architecture ?? "Architecture unknown"}</div>
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              <time dateTime={lastObserved ?? undefined}>{formatLastObserved(lastObserved)}</time>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              ) : null}
-
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={onRetry}>
-                  <RefreshCw className="mr-1.5 size-4" aria-hidden="true" /> Refresh health
-                </Button>
-                <Button type="button" onClick={onClose}>Close</Button>
-              </DialogFooter>
-            </>
-          );
-        })()}
+                  <Button type="button" onClick={onClose}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
       </DialogContent>
     </Dialog>
   );
@@ -362,22 +438,36 @@ function CreatePoolDialog({
           )}
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <label htmlFor="agent-pool-name" className="text-sm font-medium">Pool Name</label>
+              <label htmlFor="agent-pool-name" className="text-sm font-medium">
+                Pool Name
+              </label>
               <Input
                 id="agent-pool-name"
                 name="agent-pool-name"
                 autoComplete="off"
                 spellCheck={false}
                 value={poolName}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onPoolNameChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onPoolNameChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onPoolNameChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onPoolNameChange(event.currentTarget.value);
+                }}
                 placeholder="e.g. production-k8s-pool"
                 required
               />
             </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={(): void => { onOpenChange(false); }}>Cancel</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={(): void => {
+                onOpenChange(false);
+              }}
+            >
+              Cancel
+            </Button>
             <Button type="submit" disabled={creatingPool || poolName.trim() === ""}>
               {creatingPool ? <Spinner className="size-4" /> : null}
               {creatingPool ? "Creating pool…" : "Create pool"}
@@ -427,14 +517,20 @@ function AgentTokensDialog({
         <div className="space-y-4 py-2">
           <form onSubmit={onSubmit} noValidate className="flex items-end gap-2 rounded-md border p-3 bg-muted/20">
             <div className="flex-1 space-y-1">
-              <label htmlFor="agent-token-desc" className="text-xs font-medium">New Token Description</label>
+              <label htmlFor="agent-token-desc" className="text-xs font-medium">
+                New Token Description
+              </label>
               <Input
                 id="agent-token-desc"
                 name="agent-token-description"
                 autoComplete="off"
                 value={tokenDesc}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onTokenDescChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onTokenDescChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onTokenDescChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onTokenDescChange(event.currentTarget.value);
+                }}
                 placeholder="e.g. k8s-worker-node-1"
                 required
               />
@@ -479,23 +575,27 @@ function AgentTokensDialog({
                     </TableCell>
                   </TableRow>
                 ) : (
-                tokens.map((token): React.JSX.Element => (
-                  <TableRow key={token.id}>
-                    <TableCell className="font-medium text-xs">{token.attributes.description}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatDate(token.attributes["created-at"])}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={(): void => { onRevokeRequest(token); }}
-                      >
-                          <Trash2 className="size-3 mr-1" /> Revoke
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                  tokens.map(
+                    (token): React.JSX.Element => (
+                      <TableRow key={token.id}>
+                        <TableCell className="font-medium text-xs">{token.attributes.description}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDate(token.attributes["created-at"])}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={(): void => {
+                              onRevokeRequest(token);
+                            }}
+                          >
+                            <Trash2 className="size-3 mr-1" /> Revoke
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ),
+                  )
                 )}
               </TableBody>
             </Table>
@@ -520,11 +620,15 @@ function DeletePoolConfirm({
   return (
     <ConfirmDialog
       open={pool !== null}
-      onOpenChange={(open): void => { if (!open) onClose(); }}
+      onOpenChange={(open): void => {
+        if (!open) onClose();
+      }}
       title="Delete Agent Pool"
       description={
         <>
-          Are you sure you want to delete agent pool <strong className="text-foreground">{pool?.attributes.name}</strong>? Workspaces using this pool will fail to run until reassigned. This cannot be undone.
+          Are you sure you want to delete agent pool{" "}
+          <strong className="text-foreground">{pool?.attributes.name}</strong>? Workspaces using this pool will fail to
+          run until reassigned. This cannot be undone.
         </>
       }
       confirmText="Delete Agent Pool"
@@ -548,7 +652,9 @@ function RevokeTokenConfirm({
   return (
     <ConfirmDialog
       open={token !== null}
-      onOpenChange={(open): void => { if (!open) onClose(); }}
+      onOpenChange={(open): void => {
+        if (!open) onClose();
+      }}
       title="Revoke Agent Token"
       description={`Are you sure you want to revoke agent token "${token?.attributes.description ?? token?.id}"?`}
       confirmText="Revoke Token"
@@ -606,10 +712,10 @@ export function AgentPools(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const organizationResponse = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const organizationResponse = (await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}`,
-      ) as {
+      )) as {
         data?: { attributes?: { permissions?: { "can-manage-agent-pools"?: boolean } } };
       };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
@@ -618,10 +724,10 @@ export function AgentPools(): React.JSX.Element {
         return;
       }
       setManageableOrganizationName(requestedOrganizationName);
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
-      ) as { data?: AgentPool[] };
+      )) as { data?: AgentPool[] };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
       const nextPools = Array.isArray(response.data) ? response.data : [];
       setPools(nextPools);
@@ -629,35 +735,45 @@ export function AgentPools(): React.JSX.Element {
       // Pool resources contain only the count. Read the agent collection as a
       // second, permission-scoped request so the table can explain whether a
       // worker is usable, busy, draining, or stale without inventing state.
-      const agentResults = await Promise.all(nextPools.map(async (pool): Promise<{
-        id: string;
-        agents: AgentHealthRecord[];
-        error: string;
-      }> => {
-        try {
-          const agentResponse = await fetchApi(
-            `/agent-pools/${encodeURIComponent(pool.id)}/agents`,
-          ) as { data?: AgentHealthRecord[] };
-          return {
-            id: pool.id,
-            agents: Array.isArray(agentResponse.data) ? agentResponse.data : [],
-            error: "",
-          };
-        } catch (agentError: unknown) {
-          return {
-            id: pool.id,
-            agents: [],
-            error: agentError instanceof Error ? agentError.message : "Worker health could not be loaded.",
-          };
-        }
-      }));
+      const agentResults = await Promise.all(
+        nextPools.map(
+          async (
+            pool,
+          ): Promise<{
+            id: string;
+            agents: AgentHealthRecord[];
+            error: string;
+          }> => {
+            try {
+              const agentResponse = (await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/agents`)) as {
+                data?: AgentHealthRecord[];
+              };
+              return {
+                id: pool.id,
+                agents: Array.isArray(agentResponse.data) ? agentResponse.data : [],
+                error: "",
+              };
+            } catch (agentError: unknown) {
+              return {
+                id: pool.id,
+                agents: [],
+                error: agentError instanceof Error ? agentError.message : "Worker health could not be loaded.",
+              };
+            }
+          },
+        ),
+      );
       if (activeOrganizationName.current !== requestedOrganizationName) return;
-      setAgentsByPool(Object.fromEntries(agentResults.map((result): [string, AgentHealthRecord[]] => [result.id, result.agents])));
-      setAgentLoadErrors(Object.fromEntries(
-        agentResults
-          .filter((result): boolean => result.error !== "")
-          .map((result): [string, string] => [result.id, result.error]),
-      ));
+      setAgentsByPool(
+        Object.fromEntries(agentResults.map((result): [string, AgentHealthRecord[]] => [result.id, result.agents])),
+      );
+      setAgentLoadErrors(
+        Object.fromEntries(
+          agentResults
+            .filter((result): boolean => result.error !== "")
+            .map((result): [string, string] => [result.id, result.error]),
+        ),
+      );
     } catch (err: unknown) {
       if (activeOrganizationName.current === requestedOrganizationName) {
         setError(err instanceof Error ? err.message : "Failed to load agent pools");
@@ -673,8 +789,8 @@ export function AgentPools(): React.JSX.Element {
     setCreatingPool(true);
     setPoolFormError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/agent-pools`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi(`/organizations/${encodeURIComponent(orgName)}/agent-pools`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -684,7 +800,7 @@ export function AgentPools(): React.JSX.Element {
             },
           },
         }),
-      }) as { data: AgentPool };
+      })) as { data: AgentPool };
       if (activeOrganizationName.current !== orgName) return;
       setPools((prev: AgentPool[]): AgentPool[] => [...prev, res.data]);
       setAgentsByPool((prev): Record<string, AgentHealthRecord[]> => ({ ...prev, [res.data.id]: [] }));
@@ -733,10 +849,10 @@ export function AgentPools(): React.JSX.Element {
     setTokensDialogOpen(true);
     setLoadingTokens(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi(
-        `/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`,
-      ) as { data?: AgentToken[] };
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`)) as {
+        data?: AgentToken[];
+      };
       if (activeOrganizationName.current !== orgName || selectedPoolId.current !== pool.id) return;
       setTokens(Array.isArray(res.data) ? res.data : []);
     } catch (err: unknown) {
@@ -754,8 +870,8 @@ export function AgentPools(): React.JSX.Element {
     setCreatingToken(true);
     setCreatedSecret(null);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -765,15 +881,15 @@ export function AgentPools(): React.JSX.Element {
             },
           },
         }),
-      }) as { data: { attributes: { token?: string; secret?: string } } };
+      })) as { data: { attributes: { token?: string; secret?: string } } };
       if (activeOrganizationName.current !== orgName || selectedPoolId.current !== pool.id) return;
       const attrs = res.data.attributes;
       setCreatedSecret(attrs.token ?? attrs.secret ?? "Token created successfully");
       setTokenDesc("");
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const tokensRes = await fetchApi(
-        `/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`,
-      ) as { data?: AgentToken[] };
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const tokensRes = (await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}/authentication-tokens`)) as {
+        data?: AgentToken[];
+      };
       if (activeOrganizationName.current !== orgName || selectedPoolId.current !== pool.id) return;
       setTokens(Array.isArray(tokensRes.data) ? tokensRes.data : []);
     } catch (err: unknown) {
@@ -812,17 +928,33 @@ export function AgentPools(): React.JSX.Element {
         // against the other. One explanation, in the description.
         title="Agent pools"
         description="An agent is a small worker you run yourself, somewhere that can reach the infrastructure it manages. Use a pool when runs need to touch a private network this server cannot; otherwise leave workspaces on the built-in executor."
-        action={canManage ? (
-          <Button onClick={(): void => { setPoolDialogOpen(true); }}>
-            <Plus className="mr-1.5 size-4" /> Create agent pool
-          </Button>
-        ) : undefined}
+        action={
+          canManage ? (
+            <Button
+              onClick={(): void => {
+                setPoolDialogOpen(true);
+              }}
+            >
+              <Plus className="mr-1.5 size-4" /> Create agent pool
+            </Button>
+          ) : undefined
+        }
       />
 
       {error !== "" && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive">
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-destructive/15 p-4 text-sm font-medium text-destructive"
+        >
           <span>{error}</span>
-          <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadAgentPools(); }}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={(): void => {
+              void loadAgentPools();
+            }}
+          >
             Try again
           </Button>
         </div>
@@ -847,8 +979,12 @@ export function AgentPools(): React.JSX.Element {
               error={error}
               agentsByPool={agentsByPool}
               agentLoadErrors={agentLoadErrors}
-              onViewHealth={(pool: AgentPool): void => { setHealthPool(pool); }}
-              onManageTokens={(pool: AgentPool): void => { void openTokensModal(pool); }}
+              onViewHealth={(pool: AgentPool): void => {
+                setHealthPool(pool);
+              }}
+              onManageTokens={(pool: AgentPool): void => {
+                void openTokensModal(pool);
+              }}
               onDeleteRequest={(pool: AgentPool): void => {
                 const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                 if (isTestEnv) {
@@ -866,8 +1002,12 @@ export function AgentPools(): React.JSX.Element {
         healthPool={healthPool}
         agentsByPool={agentsByPool}
         agentLoadErrors={agentLoadErrors}
-        onRetry={(): void => { void loadAgentPools(); }}
-        onClose={(): void => { setHealthPool(null); }}
+        onRetry={(): void => {
+          void loadAgentPools();
+        }}
+        onClose={(): void => {
+          setHealthPool(null);
+        }}
       />
 
       {/* Create Modal */}
@@ -875,7 +1015,9 @@ export function AgentPools(): React.JSX.Element {
         open={poolDialogOpen}
         onOpenChange={setPoolDialogOpen}
         poolName={poolName}
-        onPoolNameChange={(value: string): void => { setPoolName(value); }}
+        onPoolNameChange={(value: string): void => {
+          setPoolName(value);
+        }}
         creatingPool={creatingPool}
         poolFormError={poolFormError}
         onSubmit={handleCreatePool}
@@ -887,7 +1029,9 @@ export function AgentPools(): React.JSX.Element {
         onOpenChange={setTokensDialogOpen}
         selectedPool={selectedPool}
         tokenDesc={tokenDesc}
-        onTokenDescChange={(value: string): void => { setTokenDesc(value); }}
+        onTokenDescChange={(value: string): void => {
+          setTokenDesc(value);
+        }}
         creatingToken={creatingToken}
         createdSecret={createdSecret}
         loadingTokens={loadingTokens}
@@ -906,7 +1050,9 @@ export function AgentPools(): React.JSX.Element {
       <DeletePoolConfirm
         pool={poolToDelete}
         deleting={deletingPool}
-        onClose={(): void => { setPoolToDelete(null); }}
+        onClose={(): void => {
+          setPoolToDelete(null);
+        }}
         onConfirm={async (): Promise<void> => {
           if (poolToDelete !== null) {
             await handleDeletePool(poolToDelete);
@@ -916,7 +1062,9 @@ export function AgentPools(): React.JSX.Element {
 
       <RevokeTokenConfirm
         token={tokenToRevoke}
-        onClose={(): void => { setTokenToRevoke(null); }}
+        onClose={(): void => {
+          setTokenToRevoke(null);
+        }}
         onConfirm={async (): Promise<void> => {
           if (tokenToRevoke !== null) {
             await handleRevokeToken(tokenToRevoke);

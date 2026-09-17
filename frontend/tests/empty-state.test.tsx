@@ -24,7 +24,9 @@ describe("EmptyState (kanban 14.11)", () => {
       <EmptyState
         title="No runs yet"
         actionLabel="Start new run"
-        onAction={(): void => { clicked += 1; }}
+        onAction={(): void => {
+          clicked += 1;
+        }}
       />,
     );
     const button = getByRole("button");
@@ -35,9 +37,7 @@ describe("EmptyState (kanban 14.11)", () => {
   });
 
   it("renders a docs link when provided", () => {
-    const { getByText } = render(
-      <EmptyState title="No runs yet" docsHref="https://example.com/docs/runs" />,
-    );
+    const { getByText } = render(<EmptyState title="No runs yet" docsHref="https://example.com/docs/runs" />);
     const link = getByText("Read the docs");
     expect(link.getAttribute("href")).toBe("https://example.com/docs/runs");
     expect(link.getAttribute("target")).toBe("_blank");

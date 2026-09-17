@@ -78,11 +78,9 @@ describe("stateOutputResources (STATE-001/002)", () => {
       expect((r as Record<string, string>)["id"]!).toBe(expectedId("sv-x", name));
       expect((r as Record<string, unknown>)["type"]).toBe("state-version-outputs");
       const links = (r["links"] ?? {}) as Record<string, unknown>;
-      expect(links["self"]).toBe(`/api/v2/state-version-outputs/${(r as Record<string,string>)["id"]}`);
+      expect(links["self"]).toBe(`/api/v2/state-version-outputs/${(r as Record<string, string>)["id"]}`);
       const attr = (r["attributes"] ?? {}) as Record<string, unknown>;
-      expect(Object.keys(attr).sort()).toEqual(
-        ["detailed-type", "name", "sensitive", "type", "value"].sort(),
-      );
+      expect(Object.keys(attr).sort()).toEqual(["detailed-type", "name", "sensitive", "type", "value"].sort());
     }
     expect((byName["plain"]!["attributes"] as Record<string, unknown>)["sensitive"]).toBe(false);
     expect((byName["flagged"]!["attributes"] as Record<string, unknown>)["sensitive"]).toBe(true);

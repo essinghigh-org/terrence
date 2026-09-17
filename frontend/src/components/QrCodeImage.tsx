@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 
-export function QrCodeImage({
-  value,
-  className,
-}: Readonly<{ value: string; className?: string }>): React.JSX.Element {
+export function QrCodeImage({ value, className }: Readonly<{ value: string; className?: string }>): React.JSX.Element {
   const [dataUrl, setDataUrl] = useState("");
   const [failed, setFailed] = useState(false);
 

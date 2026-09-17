@@ -3,14 +3,7 @@ import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -32,14 +25,7 @@ import {
 } from "@/components/ui/field";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
 
 type AccessLevel = "read" | "plan" | "write" | "admin" | "custom";
@@ -81,8 +67,7 @@ const defaultPermissions: CustomPermissions = {
   "policy-overrides": false,
 };
 
-const messageFrom = (error: unknown, fallback: string): string =>
-  error instanceof Error ? error.message : fallback;
+const messageFrom = (error: unknown, fallback: string): string => (error instanceof Error ? error.message : fallback);
 
 export function WorkspaceTeamAccess({
   orgName,
@@ -115,9 +100,9 @@ export function WorkspaceTeamAccess({
     ])
       .then(([teamResponse, accessResponse]: unknown[]): void => {
         if (!active) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const teamData = (teamResponse as { data?: Team[] }).data;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const accessData = (accessResponse as { data?: TeamWorkspace[] }).data;
         setTeams(Array.isArray(teamData) ? teamData : []);
         setRelationships(Array.isArray(accessData) ? accessData : []);
@@ -134,16 +119,13 @@ export function WorkspaceTeamAccess({
   }, [orgName, workspaceId]);
 
   const assignedTeamIds = useMemo(
-    (): Set<string> => new Set(
-      relationships.map((relationship: TeamWorkspace): string => relationship.relationships.team.data.id),
-    ),
+    (): Set<string> =>
+      new Set(relationships.map((relationship: TeamWorkspace): string => relationship.relationships.team.data.id)),
     [relationships],
   );
   const availableTeams = teams.filter((team: Team): boolean => !assignedTeamIds.has(team.id));
   const namesById = useMemo(
-    (): Map<string, string> => new Map(
-      teams.map((team: Team): [string, string] => [team.id, team.attributes.name]),
-    ),
+    (): Map<string, string> => new Map(teams.map((team: Team): [string, string] => [team.id, team.attributes.name])),
     [teams],
   );
 
@@ -159,10 +141,7 @@ export function WorkspaceTeamAccess({
     setEditorOpen(true);
   };
 
-  const setPermission = <K extends keyof CustomPermissions>(
-    key: K,
-    value: CustomPermissions[K],
-  ): void => {
+  const setPermission = <K extends keyof CustomPermissions>(key: K, value: CustomPermissions[K]): void => {
     setPermissions((current: CustomPermissions): CustomPermissions => ({ ...current, [key]: value }));
   };
 
@@ -179,34 +158,31 @@ export function WorkspaceTeamAccess({
     setSaving(true);
     setEditorError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
-        editing == null ? "/team-workspaces" : `/team-workspaces/${editing.id}`,
-        {
-          method: editing == null ? "POST" : "PATCH",
-          body: JSON.stringify({
-            data: {
-              type: "team-workspaces",
-              ...(editing == null ? undefined : { id: editing.id }),
-              attributes,
-              ...(editing == null
-                ? {
-                    relationships: {
-                      team: { data: { id: teamId, type: "teams" } },
-                      workspace: { data: { id: workspaceId, type: "workspaces" } },
-                    },
-                  }
-                : undefined),
-            },
-          }),
-        },
-      ) as { data: TeamWorkspace };
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(editing == null ? "/team-workspaces" : `/team-workspaces/${editing.id}`, {
+        method: editing == null ? "POST" : "PATCH",
+        body: JSON.stringify({
+          data: {
+            type: "team-workspaces",
+            ...(editing == null ? undefined : { id: editing.id }),
+            attributes,
+            ...(editing == null
+              ? {
+                  relationships: {
+                    team: { data: { id: teamId, type: "teams" } },
+                    workspace: { data: { id: workspaceId, type: "workspaces" } },
+                  },
+                }
+              : undefined),
+          },
+        }),
+      })) as { data: TeamWorkspace };
       const saved = response.data;
       setRelationships((current: TeamWorkspace[]): TeamWorkspace[] =>
         editing == null
           ? [...current, saved]
-          : current.map((relationship: TeamWorkspace): TeamWorkspace =>
-              relationship.id === saved.id ? saved : relationship,
+          : current.map(
+              (relationship: TeamWorkspace): TeamWorkspace => (relationship.id === saved.id ? saved : relationship),
             ),
       );
       setEditorOpen(false);
@@ -241,7 +217,9 @@ export function WorkspaceTeamAccess({
           </CardDescription>
           <CardAction>
             <Button
-              onClick={(): void => { openEditor(); }}
+              onClick={(): void => {
+                openEditor();
+              }}
               disabled={availableTeams.length === 0}
             >
               <Plus data-icon="inline-start" />
@@ -250,7 +228,11 @@ export function WorkspaceTeamAccess({
           </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {pageError !== "" && <p role="alert" className="text-sm text-destructive">{pageError}</p>}
+          {pageError !== "" && (
+            <p role="alert" className="text-sm text-destructive">
+              {pageError}
+            </p>
+          )}
           <div className="rounded-md border">
             <Table>
               <TableHeader>
@@ -268,28 +250,42 @@ export function WorkspaceTeamAccess({
                     </TableCell>
                   </TableRow>
                 )}
-                {!loading && relationships.map((relationship: TeamWorkspace): React.JSX.Element => (
-                  <TableRow key={relationship.id}>
-                    <TableCell className="font-medium">
-                      {namesById.get(relationship.relationships.team.data.id) ?? relationship.relationships.team.data.id}
-                    </TableCell>
-                    <TableCell><Badge variant="outline">{relationship.attributes.access}</Badge></TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={(): void => { openEditor(relationship); }}>
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={(): void => { setPendingRemove(relationship); }}
-                        >
-                          Remove
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {!loading &&
+                  relationships.map(
+                    (relationship: TeamWorkspace): React.JSX.Element => (
+                      <TableRow key={relationship.id}>
+                        <TableCell className="font-medium">
+                          {namesById.get(relationship.relationships.team.data.id) ??
+                            relationship.relationships.team.data.id}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{relationship.attributes.access}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(): void => {
+                                openEditor(relationship);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={(): void => {
+                                setPendingRemove(relationship);
+                              }}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ),
+                  )}
                 {!loading && relationships.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={3} className="h-20 text-center text-muted-foreground">
@@ -307,9 +303,7 @@ export function WorkspaceTeamAccess({
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing == null ? "Add team access" : "Edit team access"}</DialogTitle>
-            <DialogDescription>
-              Select an access level or configure individual workspace permissions.
-            </DialogDescription>
+            <DialogDescription>Select an access level or configure individual workspace permissions.</DialogDescription>
           </DialogHeader>
           <form onSubmit={saveAccess} noValidate>
             <FieldGroup>
@@ -323,9 +317,13 @@ export function WorkspaceTeamAccess({
                   aria-invalid={editorError !== "" && teamId === ""}
                 >
                   <SelectItem value="">Select a team</SelectItem>
-                  {(editing == null ? availableTeams : teams).map((team: Team): React.JSX.Element => (
-                    <SelectItem key={team.id} value={team.id}>{team.attributes.name}</SelectItem>
-                  ))}
+                  {(editing == null ? availableTeams : teams).map(
+                    (team: Team): React.JSX.Element => (
+                      <SelectItem key={team.id} value={team.id}>
+                        {team.attributes.name}
+                      </SelectItem>
+                    ),
+                  )}
                 </Select>
               </Field>
               <Field>
@@ -333,13 +331,11 @@ export function WorkspaceTeamAccess({
                 <Select
                   id="team-access-level"
                   value={access}
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                  // SAFETY: the select options are generated from the same union; the change event carries one of them.
                   onValueChange={(value: string): void => {
-
                     // SAFETY: the change event carries one of the union values the UI renders from the same options.
 
                     setAccess(value as AccessLevel);
-
                   }}
                 >
                   <SelectItem value="read">Read</SelectItem>
@@ -359,7 +355,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-runs"
                         value={permissions.runs}
                         onValueChange={(value: string): void => {
-// SAFETY: the value matches the fixture's declared contract.
+                          // SAFETY: the value matches the fixture's declared contract.
                           setPermission("runs", value as CustomPermissions["runs"]);
                         }}
                       >
@@ -374,7 +370,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-variables"
                         value={permissions.variables}
                         onValueChange={(value: string): void => {
-// SAFETY: the value matches the fixture's declared contract.
+                          // SAFETY: the value matches the fixture's declared contract.
                           setPermission("variables", value as CustomPermissions["variables"]);
                         }}
                       >
@@ -389,7 +385,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-state"
                         value={permissions["state-versions"]}
                         onValueChange={(value: string): void => {
-// SAFETY: the value matches the fixture's declared contract.
+                          // SAFETY: the value matches the fixture's declared contract.
                           setPermission("state-versions", value as CustomPermissions["state-versions"]);
                         }}
                       >
@@ -405,7 +401,7 @@ export function WorkspaceTeamAccess({
                         id="team-access-mocks"
                         value={permissions["sentinel-mocks"]}
                         onValueChange={(value: string): void => {
-// SAFETY: the value matches the fixture's declared contract.
+                          // SAFETY: the value matches the fixture's declared contract.
                           setPermission("sentinel-mocks", value as CustomPermissions["sentinel-mocks"]);
                         }}
                       >
@@ -451,7 +447,13 @@ export function WorkspaceTeamAccess({
               )}
               <FieldError>{editorError}</FieldError>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={(): void => { setEditorOpen(false); }}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={(): void => {
+                    setEditorOpen(false);
+                  }}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" disabled={saving}>
@@ -465,21 +467,27 @@ export function WorkspaceTeamAccess({
       </Dialog>
       <ConfirmDialog
         open={pendingRemove !== null}
-        onOpenChange={(open): void => { if (!open) setPendingRemove(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setPendingRemove(null);
+        }}
         title="Remove team access?"
-        description={pendingRemove === null ? undefined : (
-          <>
-            Team{" "}
-            <strong>
-              {namesById.get(pendingRemove.relationships.team.data.id) ?? pendingRemove.relationships.team.data.id}
-            </strong>{" "}
-            will lose {pendingRemove.attributes.access} access to this workspace. Members of that team
-            will no longer see or act on it.
-          </>
-        )}
+        description={
+          pendingRemove === null ? undefined : (
+            <>
+              Team{" "}
+              <strong>
+                {namesById.get(pendingRemove.relationships.team.data.id) ?? pendingRemove.relationships.team.data.id}
+              </strong>{" "}
+              will lose {pendingRemove.attributes.access} access to this workspace. Members of that team will no longer
+              see or act on it.
+            </>
+          )
+        }
         confirmText="Remove access"
         confirmVariant="destructive"
-        onConfirm={(): void => { if (pendingRemove !== null) void removeAccess(pendingRemove); }}
+        onConfirm={(): void => {
+          if (pendingRemove !== null) void removeAccess(pendingRemove);
+        }}
       />
     </>
   );

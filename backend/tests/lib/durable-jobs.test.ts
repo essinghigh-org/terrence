@@ -54,7 +54,10 @@ describe("durable job leases", () => {
 
   test("rejects a new budgeted job with a retryable, tenant-neutral error", async () => {
     const organizationId = `budget-test-org-${crypto.randomUUID()}`;
-    process.env[RESOURCE_BUDGET_ENV] = JSON.stringify({ global: { queue: 1_000, concurrency: 1, reservedCriticalSlots: 0 }, organization: { queue: 1 } });
+    process.env[RESOURCE_BUDGET_ENV] = JSON.stringify({
+      global: { queue: 1_000, concurrency: 1, reservedCriticalSlots: 0 },
+      organization: { queue: 1 },
+    });
     const first = await enqueueDurableJob(
       kind,
       { workspaceId: "org-a-workspace" },
@@ -95,10 +98,12 @@ describe("durable job leases", () => {
       { workspaceId: "occupying-workspace" },
       { dedupeKey: "budget-occupying-job", budget: { organizationId, jobClass: "background" } },
     );
-    expect(enqueueDurableJob(
-      kind,
-      { workspaceId: "terminal-workspace", refreshed: true },
-      { dedupeKey: "budget-terminal-job", budget: { organizationId, jobClass: "background" } },
-    )).rejects.toBeInstanceOf(DurableJobBudgetError);
+    expect(
+      enqueueDurableJob(
+        kind,
+        { workspaceId: "terminal-workspace", refreshed: true },
+        { dedupeKey: "budget-terminal-job", budget: { organizationId, jobClass: "background" } },
+      ),
+    ).rejects.toBeInstanceOf(DurableJobBudgetError);
   });
 });

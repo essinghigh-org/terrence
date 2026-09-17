@@ -9,7 +9,9 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
   "base64",
 );
-const SVG = Buffer.from("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script><rect width=\"1\" height=\"1\"/></svg>");
+const SVG = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="1" height="1"/></svg>',
+);
 
 let storage: string;
 let origin: string;
@@ -29,7 +31,8 @@ beforeAll(async (): Promise<void> => {
       if (path === "/avatar.png") return new Response(PNG, { headers: { "content-type": "image/png" } });
       if (path === "/avatar.svg") return new Response(SVG, { headers: { "content-type": "image/svg+xml" } });
       if (path === "/text.txt") return new Response("not an image", { headers: { "content-type": "text/plain" } });
-      if (path === "/fake.png") return new Response("not real image bytes", { headers: { "content-type": "image/png" } });
+      if (path === "/fake.png")
+        return new Response("not real image bytes", { headers: { "content-type": "image/png" } });
       return new Response("not found", { status: 404 });
     },
   });
@@ -94,9 +97,11 @@ describe("avatar proxy route", (): void => {
     expect(primed.status).toBe(200);
     const etag = primed.headers.get("etag");
     expect(etag).not.toBeNull();
-    const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`, {
-      headers: { "If-None-Match": etag ?? "" },
-    }));
+    const res = await app.handle(
+      new Request(`https://t/api/v2/avatars/${key}`, {
+        headers: { "If-None-Match": etag ?? "" },
+      }),
+    );
     expect(res.status).toBe(304);
     expect(res.headers.get("etag")).toBe(etag);
     expect(res.headers.get("cache-control")).toBe("private, max-age=86400");
@@ -104,28 +109,28 @@ describe("avatar proxy route", (): void => {
   });
 
   it("refuses a non-trusted private destination (SSRF), including shape-mismatch", async (): Promise<void> => {
-      // An UNBOUND provider id gets no private exception even when a GitHub App
-      // origin is configured — trust is integration-scoped, never global.
-      process.env["GITHUB_APP_HTTP_URL"] = "http://example.com";
-      try {
-        const key = AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
-        const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
-        expect([422, 502]).toContain(res.status);
-      } finally {
-        delete process.env["GITHUB_APP_HTTP_URL"];
-      }
-    });
+    // An UNBOUND provider id gets no private exception even when a GitHub App
+    // origin is configured — trust is integration-scoped, never global.
+    process.env["GITHUB_APP_HTTP_URL"] = "http://example.com";
+    try {
+      const key = AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
+      const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+      expect([422, 502]).toContain(res.status);
+    } finally {
+      delete process.env["GITHUB_APP_HTTP_URL"];
+    }
+  });
 
-    it("scopes the private exception to the matching integration origin", async (): Promise<void> => {
-      process.env["GITHUB_APP_HTTP_URL"] = origin.slice(0, -1);
-      try {
-        const key = AvatarService.record("github-app", "http://127.0.0.1:1/avatar.png");
-        const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
-        expect([422, 502]).toContain(res.status);
-      } finally {
-        delete process.env["GITHUB_APP_HTTP_URL"];
-      }
-    });
+  it("scopes the private exception to the matching integration origin", async (): Promise<void> => {
+    process.env["GITHUB_APP_HTTP_URL"] = origin.slice(0, -1);
+    try {
+      const key = AvatarService.record("github-app", "http://127.0.0.1:1/avatar.png");
+      const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+      expect([422, 502]).toContain(res.status);
+    } finally {
+      delete process.env["GITHUB_APP_HTTP_URL"];
+    }
+  });
 
   it("rejects non-image and mislabeled content from the upstream", async (): Promise<void> => {
     process.env["GITHUB_APP_HTTP_URL"] = origin.slice(0, -1);

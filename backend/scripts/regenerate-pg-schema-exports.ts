@@ -7,9 +7,7 @@ import * as schema from "../src/db/schema-sqlite";
 
 const names = Object.keys(schema).filter(
   (key): boolean =>
-    schema[key] !== null &&
-    typeof schema[key] === "object" &&
-    Symbol.for("drizzle:Columns") in schema[key],
+    schema[key] !== null && typeof schema[key] === "object" && Symbol.for("drizzle:Columns") in schema[key],
 );
 
 const header = [
@@ -27,8 +25,8 @@ const header = [
   "//",
   "// AUTO-GENERATED export list; regenerate with:",
   "//   bun run scripts/regenerate-pg-schema-exports.ts",
-  "import * as sqliteSchema from \"./schema-sqlite\";",
-  "import { buildPgSchema } from \"./pg-convert\";",
+  'import * as sqliteSchema from "./schema-sqlite";',
+  'import { buildPgSchema } from "./pg-convert";',
   "",
   "const pg = buildPgSchema(sqliteSchema);",
   "",

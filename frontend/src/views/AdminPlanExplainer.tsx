@@ -5,7 +5,15 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Select, SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
-import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { FuzzyCombobox } from "../components/ui/fuzzy-combobox";
 import { Sparkles } from "lucide-react";
@@ -81,7 +89,9 @@ function ExplainerProviderModelFields({
             id="explainer-provider"
             name="explainer-provider"
             value={explainerProvider}
-            onChange={(event): void => { onProviderInput(event.target.value); }}
+            onChange={(event): void => {
+              onProviderInput(event.target.value);
+            }}
             placeholder="custom"
           />
         )}
@@ -124,7 +134,9 @@ function ExplainerProviderModelFields({
             id="explainer-model"
             name="explainer-model"
             value={explainerModel}
-            onChange={(event): void => { onModelInput(event.target.value); }}
+            onChange={(event): void => {
+              onModelInput(event.target.value);
+            }}
             placeholder="e.g. gpt-4o, claude-3-7-sonnet"
           />
         )}
@@ -164,7 +176,7 @@ export function AdminPlanExplainer(): React.JSX.Element {
       setLoading(true);
       setLoadError("");
       try {
-        const response = await fetchApi("/admin/operations-settings") as {
+        const response = (await fetchApi("/admin/operations-settings")) as {
           data?: { attributes?: OperationsSettings };
         };
         const attributes = response.data?.attributes ?? {};
@@ -189,14 +201,16 @@ export function AdminPlanExplainer(): React.JSX.Element {
   useEffect((): void => {
     const loadCatalog = async (): Promise<void> => {
       try {
-        const response = await fetchApi("/admin/operations-settings/explainer/providers") as {
+        const response = (await fetchApi("/admin/operations-settings/explainer/providers")) as {
           data?: { id: string; attributes: { name: string; "model-count": number } }[];
         };
-        const list = (response.data ?? []).map((p): ExplainerProvider => ({
-          id: p.id,
-          name: p.attributes.name,
-          "model-count": p.attributes["model-count"],
-        }));
+        const list = (response.data ?? []).map(
+          (p): ExplainerProvider => ({
+            id: p.id,
+            name: p.attributes.name,
+            "model-count": p.attributes["model-count"],
+          }),
+        );
         setProviders(list);
         setProviderCatalogError("");
       } catch (caught: unknown) {
@@ -214,16 +228,20 @@ export function AdminPlanExplainer(): React.JSX.Element {
         return;
       }
       try {
-        const response = await fetchApi(`/admin/operations-settings/explainer/models?provider=${encodeURIComponent(explainerProvider)}`) as {
+        const response = (await fetchApi(
+          `/admin/operations-settings/explainer/models?provider=${encodeURIComponent(explainerProvider)}`,
+        )) as {
           data?: { id: string; attributes: { name: string; reasoning: boolean; context: number | null } }[];
         };
         if (cancelled) return;
-        const list = (response.data ?? []).map((m): ExplainerModel => ({
-          id: m.id,
-          name: m.attributes.name,
-          reasoning: m.attributes.reasoning,
-          context: m.attributes.context,
-        }));
+        const list = (response.data ?? []).map(
+          (m): ExplainerModel => ({
+            id: m.id,
+            name: m.attributes.name,
+            reasoning: m.attributes.reasoning,
+            context: m.attributes.context,
+          }),
+        );
         setProviderModels(list);
       } catch {
         if (!cancelled) setProviderModels([]);
@@ -281,9 +299,20 @@ export function AdminPlanExplainer(): React.JSX.Element {
     return (
       <PageShell variant="form">
         <Card>
-          <CardContent role="alert" className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive">
+          <CardContent
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive"
+          >
             <span>{loadError}</span>
-            <Button type="button" size="sm" variant="outline" onClick={(): void => { setLoadAttempt((attempt): number => attempt + 1); }} disabled={loading}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={(): void => {
+                setLoadAttempt((attempt): number => attempt + 1);
+              }}
+              disabled={loading}
+            >
               Try again
             </Button>
           </CardContent>
@@ -296,12 +325,12 @@ export function AdminPlanExplainer(): React.JSX.Element {
     <PageShell variant="form">
       <PageHeader
         eyebrow="Site administration"
-        title={(
+        title={
           <span className="flex items-center gap-2">
             <Sparkles className="size-7 text-primary" aria-hidden="true" />
             AI plan explainer
           </span>
-        )}
+        }
         description="Summarize Terraform and OpenTofu execution plans using language models."
       />
 
@@ -316,7 +345,12 @@ export function AdminPlanExplainer(): React.JSX.Element {
               <label htmlFor="explainer-enabled" className="text-xs font-medium text-muted-foreground cursor-pointer">
                 {explainerEnabled ? "Enabled" : "Disabled"}
               </label>
-              <Switch id="explainer-enabled" checked={explainerEnabled} onCheckedChange={setExplainerEnabled} aria-label="Plan explainer" />
+              <Switch
+                id="explainer-enabled"
+                checked={explainerEnabled}
+                onCheckedChange={setExplainerEnabled}
+                aria-label="Plan explainer"
+              />
             </div>
           </CardAction>
         </CardHeader>
@@ -330,9 +364,15 @@ export function AdminPlanExplainer(): React.JSX.Element {
               setExplainerProvider(id);
               setExplainerModel("");
             }}
-            onProviderInput={(value: string): void => { setExplainerProvider(value); }}
-            onModelSelect={(id): void => { setExplainerModel(id); }}
-            onModelInput={(value: string): void => { setExplainerModel(value); }}
+            onProviderInput={(value: string): void => {
+              setExplainerProvider(value);
+            }}
+            onModelSelect={(id): void => {
+              setExplainerModel(id);
+            }}
+            onModelInput={(value: string): void => {
+              setExplainerModel(value);
+            }}
           />
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -343,7 +383,9 @@ export function AdminPlanExplainer(): React.JSX.Element {
               <Select
                 id="explainer-reasoning-effort"
                 value={explainerReasoningEffort}
-                onValueChange={(val: string): void => { setExplainerReasoningEffort(val as ReasoningEffort | ""); }}
+                onValueChange={(val: string): void => {
+                  setExplainerReasoningEffort(val as ReasoningEffort | "");
+                }}
               >
                 <SelectItem value="">Default</SelectItem>
                 <SelectItem value="low">Low</SelectItem>
@@ -364,8 +406,14 @@ export function AdminPlanExplainer(): React.JSX.Element {
                 name="explainer-base-url"
                 autoComplete="url"
                 value={explainerBaseUrl}
-                onInput={(event): void => { setExplainerBaseUrl(event.currentTarget.value); }}
-                placeholder={explainerProvider === CUSTOM_PROVIDER_ID ? "https://your-llm-host.example.com/v1" : "Leave blank for provider default"}
+                onInput={(event): void => {
+                  setExplainerBaseUrl(event.currentTarget.value);
+                }}
+                placeholder={
+                  explainerProvider === CUSTOM_PROVIDER_ID
+                    ? "https://your-llm-host.example.com/v1"
+                    : "Leave blank for provider default"
+                }
                 aria-describedby="explainer-base-url-help"
               />
               <p id="explainer-base-url-help" className="text-xs text-muted-foreground">
@@ -420,7 +468,13 @@ export function AdminPlanExplainer(): React.JSX.Element {
             {saveError !== "" && <span className="text-destructive">{saveError}</span>}
             {savedAt !== "" && <span className="text-success">Explainer settings saved at {savedAt}.</span>}
           </span>
-          <Button type="button" onClick={(): void => { void savePlanExplainer(); }} disabled={saving}>
+          <Button
+            type="button"
+            onClick={(): void => {
+              void savePlanExplainer();
+            }}
+            disabled={saving}
+          >
             {saving && <Spinner data-icon="inline-start" className="size-4" />}
             {saving ? "Saving…" : "Save changes"}
           </Button>

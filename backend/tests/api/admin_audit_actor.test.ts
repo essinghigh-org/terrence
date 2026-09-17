@@ -12,16 +12,36 @@ describe("admin audit actor identity", () => {
   const token = `admin-audit-token-${suffix}`;
   const auditId = `admin-audit-entry-${suffix}`;
 
-  const request = (path: string, authToken: string | null = token): Promise<Response> => app.handle(new Request(`http://terrence.test${path}`, {
-    headers: authToken === null ? {} : { Authorization: ["Bearer", authToken].join(" ") },
-  }));
+  const request = (path: string, authToken: string | null = token): Promise<Response> =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: authToken === null ? {} : { Authorization: ["Bearer", authToken].join(" ") },
+      }),
+    );
 
   beforeAll(async () => {
-    await db.insert(users).values({ id: userId, username: userId, email: `${userId}@example.com`, passwordHash: "unused", isSiteAdmin: true });
+    await db.insert(users).values({
+      id: userId,
+      username: userId,
+      email: `${userId}@example.com`,
+      passwordHash: "unused",
+      isSiteAdmin: true,
+    });
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId });
-    await db.insert(auditLogs).values({ id: auditId, orgId, userId, action: "admin-test", resourceType: "users", resourceId: userId, details: null, createdAt: Date.now() });
+    await db
+      .insert(apiTokens)
+      .values({ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId });
+    await db.insert(auditLogs).values({
+      id: auditId,
+      orgId,
+      userId,
+      action: "admin-test",
+      resourceType: "users",
+      resourceId: userId,
+      details: null,
+      createdAt: Date.now(),
+    });
   });
 
   afterAll(async () => {
@@ -33,7 +53,7 @@ describe("admin audit actor identity", () => {
   it("includes username and email for the audit actor", async () => {
     const response = await request("/api/v2/admin/audit-logs");
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { id: string; attributes: Record<string, unknown> }[] };
+    const body = (await response.json()) as { data: { id: string; attributes: Record<string, unknown> }[] };
     expect(body.data.find(({ id }) => id === auditId)).toMatchObject({
       attributes: {
         "actor-username": userId,
@@ -44,9 +64,36 @@ describe("admin audit actor identity", () => {
 
   it("uses one resource type and paginates every audit-log collection", async () => {
     await db.insert(auditLogs).values([
-      { id: `admin-audit-page-1-${auditId}`, orgId, userId, action: "page-1", resourceType: "runs", resourceId: "run-1", details: null, createdAt: Date.now() + 3 },
-      { id: `admin-audit-page-2-${auditId}`, orgId, userId, action: "page-2", resourceType: "runs", resourceId: "run-2", details: null, createdAt: Date.now() + 2 },
-      { id: `admin-audit-page-3-${auditId}`, orgId, userId, action: "page-3", resourceType: "runs", resourceId: "run-3", details: null, createdAt: Date.now() + 1 },
+      {
+        id: `admin-audit-page-1-${auditId}`,
+        orgId,
+        userId,
+        action: "page-1",
+        resourceType: "runs",
+        resourceId: "run-1",
+        details: null,
+        createdAt: Date.now() + 3,
+      },
+      {
+        id: `admin-audit-page-2-${auditId}`,
+        orgId,
+        userId,
+        action: "page-2",
+        resourceType: "runs",
+        resourceId: "run-2",
+        details: null,
+        createdAt: Date.now() + 2,
+      },
+      {
+        id: `admin-audit-page-3-${auditId}`,
+        orgId,
+        userId,
+        action: "page-3",
+        resourceType: "runs",
+        resourceId: "run-3",
+        details: null,
+        createdAt: Date.now() + 1,
+      },
     ]);
     const paths = [
       "/api/v2/admin/audit-logs",
@@ -57,7 +104,7 @@ describe("admin audit actor identity", () => {
     for (const path of paths) {
       const response = await request(`${path}?page[number]=1&page[size]=1`);
       expect(response.status).toBe(200);
-      const body = await response.json() as {
+      const body = (await response.json()) as {
         data: { type: string }[];
         links?: { next?: unknown };
         meta?: { pagination?: Record<string, unknown> };

@@ -18,11 +18,23 @@ import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { strongDocumentEtag } from "./lib/utils";
 import { setRequestTokenScopes, setRequestSiteAdmin, currentTokenScopes } from "./lib/request-scope";
 import { beginAuditRequest, resetAuditRequest, setAuditPrincipal } from "./lib/audit-trail";
-import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
+import {
+  applySecurityHeaders,
+  HSTS_VALUE,
+  shouldSendHsts,
+  staticCacheControl,
+  staticMimeFor,
+} from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
 import { recordRequestLatency, requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
-import { acceptsJsonApi, isJsonApiContentType, isJsonApiResponseContentType, isJsonContentType, JSON_API_MEDIA_TYPE } from "./lib/media-types";
+import {
+  acceptsJsonApi,
+  isJsonApiContentType,
+  isJsonApiResponseContentType,
+  isJsonContentType,
+  JSON_API_MEDIA_TYPE,
+} from "./lib/media-types";
 import { COMPATIBILITY_PROMISE } from "./lib/constants";
 // 464: per-endpoint security/rate/body/audit classifications live in endpoint-policy.ts; app.ts reuses that single registry.
 import {
@@ -133,9 +145,7 @@ function pathnameBucket(path: string): string {
   return path
     .split("/")
     .map((segment): string =>
-      segment === "" || /^v\d{1,2}$/.test(segment) || /^[a-z][a-z-]{0,30}$/.test(segment)
-        ? segment
-        : ":id",
+      segment === "" || /^v\d{1,2}$/.test(segment) || /^[a-z][a-z-]{0,30}$/.test(segment) ? segment : ":id",
     )
     .join("/");
 }
@@ -200,9 +210,9 @@ function isJsonApiEndpointPath(pathname: string): boolean {
 function isJsonApiRequestPath(pathname: string): boolean {
   if (!isJsonApiEndpointPath(pathname)) return false;
   if (pathname === "/api/v2/webhooks/run-approval") return false;
-  return !pathname.endsWith("/upload")
-    && !pathname.endsWith("/json-upload")
-    && !pathname.endsWith("/json-outputs-upload");
+  return (
+    !pathname.endsWith("/upload") && !pathname.endsWith("/json-upload") && !pathname.endsWith("/json-outputs-upload")
+  );
 }
 
 /** Raw policy uploads and the signed approval webhook return non-JSON:API success documents. */
@@ -211,31 +221,44 @@ function isJsonApiResponsePath(pathname: string): boolean {
   if (pathname === "/api/v2/webhooks/run-approval") return false;
   // Plan artifacts are ordinary JSON documents consumed by terraform show,
   // not JSON:API resources. Their callers send Accept: application/json.
-  if (/^\/api\/v2\/(?:plans\/[^/]+|runs\/[^/]+\/plan)\/(?:json-output|json-output-redacted|sanitized-plan)$/.test(pathname)) return false;
+  if (
+    /^\/api\/v2\/(?:plans\/[^/]+|runs\/[^/]+\/plan)\/(?:json-output|json-output-redacted|sanitized-plan)$/.test(
+      pathname,
+    )
+  )
+    return false;
   return !/^\/api\/v2\/policies\/[^/]+\/upload$/.test(pathname);
 }
 
 /** Account bootstrap/authentication endpoints intentionally work without a user. */
 function isPublicJsonApiRequestPath(pathname: string): boolean {
-  return pathname === "/api/v2/users"
-    || pathname === "/api/v2/users/login"
-    || pathname === "/api/v2/users/login/mfa"
-    || pathname === "/api/v2/users/refresh"
-    || pathname === "/api/v2/users/logout";
+  return (
+    pathname === "/api/v2/users" ||
+    pathname === "/api/v2/users/login" ||
+    pathname === "/api/v2/users/login/mfa" ||
+    pathname === "/api/v2/users/refresh" ||
+    pathname === "/api/v2/users/logout"
+  );
 }
 
 function hasAuthenticatedPrincipal(context: MediaTypeContext): boolean {
-  return [context.user, context.token, context.orgId, context.teamId, context.run, context.systemToken]
-    .some((value): boolean => value !== undefined && value !== null);
+  return [context.user, context.token, context.orgId, context.teamId, context.run, context.systemToken].some(
+    (value): boolean => value !== undefined && value !== null,
+  );
 }
 
-function mediaTypeError(status: 406 | 415, detail: string): { errors: { status: string; title: string; detail: string }[] } {
+function mediaTypeError(
+  status: 406 | 415,
+  detail: string,
+): { errors: { status: string; title: string; detail: string }[] } {
   return {
-    errors: [{
-      status: String(status),
-      title: status === 406 ? "Not Acceptable" : "Unsupported Media Type",
-      detail,
-    }],
+    errors: [
+      {
+        status: String(status),
+        title: status === 406 ? "Not Acceptable" : "Unsupported Media Type",
+        detail,
+      },
+    ],
   };
 }
 
@@ -292,10 +315,18 @@ function settleErrorRequestMetrics(
   // as 5xx.
   const errored = requestMeta.get(request as unknown as Request);
   if (errored === undefined) return;
-  const status = code === "NOT_FOUND" ? 404
-    : code === "VALIDATION" ? 422
-      : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
-        : typeof setStatus === "number" ? setStatus : 500;
+  const status =
+    code === "NOT_FOUND"
+      ? 404
+      : code === "VALIDATION"
+        ? 422
+        : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE"
+          ? bodyTooLarge !== null
+            ? 413
+            : 400
+          : typeof setStatus === "number"
+            ? setStatus
+            : 500;
   recordRequestLatency(errored.path, Date.now() - errored.startTime);
   requestFinished(status);
   requestMeta.delete(request as unknown as Request);
@@ -304,15 +335,25 @@ function settleErrorRequestMetrics(
 
 function formatKnownAppError(error: unknown): AppErrorDocument | null {
   if (error instanceof SettingsValidationError) {
-    return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
+    return {
+      errors: [
+        {
+          status: String(error.status),
+          title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable",
+          detail: error.message,
+        },
+      ],
+    };
   }
   if (error instanceof DurableJobBudgetError) {
     return {
-      errors: [{
-        status: String(error.status),
-        title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
-        detail: error.message,
-      }],
+      errors: [
+        {
+          status: String(error.status),
+          title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
+          detail: error.message,
+        },
+      ],
     };
   }
   return null;
@@ -332,16 +373,17 @@ function formatNotFoundAppError(pathname: string, mutableSet: MutableErrorSet): 
 }
 
 function formatClientAppError(code: unknown, mutableSet: MutableErrorSet): AppErrorDocument | null {
-  const clientStatus = code === "VALIDATION" ? 422
-    : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400
-      : null;
+  const clientStatus =
+    code === "VALIDATION" ? 422 : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? 400 : null;
   if (clientStatus === null) return null;
   mutableSet.status = clientStatus;
   return {
-    errors: [{
-      status: String(clientStatus),
-      title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
-    }],
+    errors: [
+      {
+        status: String(clientStatus),
+        title: clientStatus === 422 ? "Unprocessable Content" : "Bad Request",
+      },
+    ],
   };
 }
 
@@ -359,11 +401,13 @@ function formatFallbackAppError(
     stack: error instanceof Error ? error.stack : undefined,
   });
   return {
-    errors: [{
-      status: "500",
-      title: "Internal Server Error",
-      detail: "An unexpected error occurred",
-    }],
+    errors: [
+      {
+        status: "500",
+        title: "Internal Server Error",
+        detail: "An unexpected error occurred",
+      },
+    ],
   };
 }
 
@@ -379,7 +423,18 @@ function formatAppErrorResponse(
   if (known !== null) return known;
   if (constraint !== null) {
     mutableSet.headers["Content-Type"] = "application/vnd.api+json";
-    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
+    return {
+      errors: [
+        {
+          status: "409",
+          title: "Conflict",
+          detail:
+            constraint === "unique"
+              ? "A resource with these unique attributes already exists"
+              : "The operation conflicts with a related resource",
+        },
+      ],
+    };
   }
   if (code === "NOT_FOUND") {
     return formatNotFoundAppError(pathname, mutableSet);
@@ -388,11 +443,13 @@ function formatAppErrorResponse(
   if (bodyTooLarge !== null) {
     mutableSet.status = 413;
     return {
-      errors: [{
-        status: "413",
-        title: "Payload Too Large",
-        detail: `${bodyTooLarge.message} for this endpoint`,
-      }],
+      errors: [
+        {
+          status: "413",
+          title: "Payload Too Large",
+          detail: `${bodyTooLarge.message} for this endpoint`,
+        },
+      ],
     };
   }
   const client = formatClientAppError(code, mutableSet);
@@ -400,7 +457,9 @@ function formatAppErrorResponse(
   return formatFallbackAppError(code, pathname, error, mutableSet);
 }
 
-export function handleAppError(context: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
+export function handleAppError(
+  context: ErrorContext & { request: { url: string } },
+): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
   const { code, error, set, request } = context;
   const mutableSet = set as MutableErrorSet;
   const pathname = new URL(request.url).pathname;
@@ -489,9 +548,10 @@ export function fixedWindowContext(): RateLimitContext {
 
   return {
     init(options): void {
-      defaultDuration = typeof options.duration === "number" && Number.isFinite(options.duration) && options.duration > 0
-        ? options.duration
-        : SENSITIVE_RATE_DURATION_MS;
+      defaultDuration =
+        typeof options.duration === "number" && Number.isFinite(options.duration) && options.duration > 0
+          ? options.duration
+          : SENSITIVE_RATE_DURATION_MS;
       windows.clear();
     },
     increment(key, requestDuration, requestTime): { count: number; nextReset: Date; start: number } {
@@ -536,14 +596,10 @@ export function fixedWindowContext(): RateLimitContext {
 function ipRateLimitKey(request: Request, server: RateLimitServer | null): string {
   // When the admin has opted into trusting forwarded headers (behind Cloudflare
   // etc.), key rate limits on the real client IP instead of the proxy peer.
-  const directAddress = typeof server?.requestIP === "function"
-    ? server.requestIP(request)?.address ?? null
-    : null;
+  const directAddress = typeof server?.requestIP === "function" ? (server.requestIP(request)?.address ?? null) : null;
   const trusted = trustedClientIpForPeer(request, directAddress);
   if (trusted !== null && trusted !== "") return `ip:${trusted}`;
-  const forwardedAddress = server === null
-    ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    : undefined;
+  const forwardedAddress = server === null ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() : undefined;
   // app.handle() has no socket address; isolate those requests unless a test
   // explicitly supplies a simulated client address.
   const address = directAddress ?? forwardedAddress ?? crypto.randomUUID();
@@ -555,44 +611,41 @@ function principalRateLimitKey(request: Request, server: RateLimitServer | null)
 }
 
 const RATE_LIMIT_ERROR_RESPONSE = new Response(
-  JSON.stringify({ errors: [{ detail: "You have exceeded the API's rate limit.", status: "429", title: "Too Many Requests" }] }),
+  JSON.stringify({
+    errors: [{ detail: "You have exceeded the API's rate limit.", status: "429", title: "Too Many Requests" }],
+  }),
   { headers: { "content-type": "application/vnd.api+json" }, status: 429 },
 );
 
-
-
-
-
-
-
-function classifyResponseDocument(
-  response: AfterHandleContext["response"],
-): { isJsonDocument: boolean; isErrorDocument: boolean; responseObject: Record<string, unknown> | null; responseHeaders: Headers | null } {
-  const isJsonDocument = response !== null
-    && typeof response === "object"
-    && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
-  const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
+function classifyResponseDocument(response: AfterHandleContext["response"]): {
+  isJsonDocument: boolean;
+  isErrorDocument: boolean;
+  responseObject: Record<string, unknown> | null;
+  responseHeaders: Headers | null;
+} {
+  const isJsonDocument =
+    response !== null &&
+    typeof response === "object" &&
+    (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
+  const responseObject = isJsonDocument ? (response as Record<string, unknown>) : null;
   const isErrorDocument = responseObject !== null && Array.isArray(responseObject["errors"]);
   const responseHeaders = response instanceof Response ? response.headers : null;
   return { isJsonDocument, isErrorDocument, responseObject, responseHeaders };
 }
 
-function resolveResponseContentType(
-  set: AfterHandleContext["set"],
-  responseHeaders: Headers | null,
-): string | null {
+function resolveResponseContentType(set: AfterHandleContext["set"], responseHeaders: Headers | null): string | null {
   const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
-  return responseHeaders?.get("content-type")
-    ?? (configuredContentType === undefined ? null : String(configuredContentType));
+  return (
+    responseHeaders?.get("content-type") ?? (configuredContentType === undefined ? null : String(configuredContentType))
+  );
 }
 
-function resolveAfterHandleStatus(
-  response: AfterHandleContext["response"],
-  set: AfterHandleContext["set"],
-): number {
+function resolveAfterHandleStatus(response: AfterHandleContext["response"], set: AfterHandleContext["set"]): number {
   return response instanceof Response
     ? response.status
-    : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
+    : typeof set.status === "number"
+      ? set.status
+      : Number.parseInt(String(set.status), 10) || 200;
 }
 
 function checkJsonApiResponse(
@@ -603,14 +656,16 @@ function checkJsonApiResponse(
   responseStatus: number,
   acceptHeader: string | null,
 ): { isJsonApiDocument: boolean; isJsonApiResponse: boolean; unacceptable: boolean } {
-  const isJsonApiDocument = (isJsonApiResponsePath(pathname) || isErrorDocument)
-    && isJsonDocument
-    && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
+  const isJsonApiDocument =
+    (isJsonApiResponsePath(pathname) || isErrorDocument) &&
+    isJsonDocument &&
+    (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
   const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
-  const isJsonApiResponse = isJsonApiResponsePath(pathname)
-    && responseStatus !== 204
-    && !(responseStatus >= 300 && responseStatus < 400)
-    && (isJsonApiDocument || isExplicitJsonApiResponse);
+  const isJsonApiResponse =
+    isJsonApiResponsePath(pathname) &&
+    responseStatus !== 204 &&
+    !(responseStatus >= 300 && responseStatus < 400) &&
+    (isJsonApiDocument || isExplicitJsonApiResponse);
   const unacceptable = isJsonApiResponse && !acceptsJsonApi(acceptHeader);
   return { isJsonApiDocument, isJsonApiResponse, unacceptable };
 }
@@ -626,7 +681,7 @@ function recordAfterHandleMetrics(
   const duration = Date.now() - meta.startTime;
   const method = meta.method;
   const path = meta.path;
-  const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
+  const status = unacceptable ? 406 : (set.status ?? (response instanceof Response ? response.status : 200));
   const numericStatus = typeof status === "number" ? status : Number.parseInt(status, 10) || 200;
   recordRequestLatency(path, duration);
   requestFinished(numericStatus);
@@ -663,7 +718,9 @@ function applyTransportSecurityHeaders(
     if (shouldSendHsts(request)) {
       headers["Strict-Transport-Security"] ??= HSTS_VALUE;
     }
-  } catch { /* HSTS is best-effort */ }
+  } catch {
+    /* HSTS is best-effort */
+  }
   if (headers["Content-Type"] === undefined) {
     const mime = staticMimeFor(pathname);
     if (mime !== undefined) headers["Content-Type"] = mime;
@@ -700,7 +757,7 @@ function applyDeprecationHeaders(headers: Record<string, string | number>, pathn
   if (pathname.startsWith("/api/v1/support-bundle-requests")) {
     headers["Deprecation"] ??= "true";
     headers["Sunset"] ??= "Sat, 31 Dec 2028 23:59:59 GMT";
-    headers["Link"] ??= "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+    headers["Link"] ??= '</api/v1/support/bundle-requests>; rel="successor-version"';
   }
 }
 
@@ -753,7 +810,12 @@ function resolveRateLimitReset(
   set: AfterHandleContext["set"],
   responseHeaders: Headers | null,
 ): string | number | null | undefined {
-  return responseHeaders?.get("RateLimit-Reset") ?? set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
+  return (
+    responseHeaders?.get("RateLimit-Reset") ??
+    set.headers["RateLimit-Reset"] ??
+    set.headers["X-RateLimit-Reset"] ??
+    set.headers["X-RateLimit-Reset-At"]
+  );
 }
 
 function resolveRetryAfterSeconds(reset: string | number | null | undefined): number | null {
@@ -775,7 +837,8 @@ function applyRetryAfterFallback(
   if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
     const reset = resolveRateLimitReset(set, responseHeaders);
     headers["Retry-After"] = String(resolveRetryAfterSeconds(reset) ?? 60);
-    if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null) headers["X-RateLimit-Reset"] = String(reset);
+    if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null)
+      headers["X-RateLimit-Reset"] = String(reset);
   }
 }
 
@@ -805,7 +868,9 @@ function applyDocumentEtag(
     return handleIfNoneMatch(request, headers, etag);
   } catch (error: unknown) {
     // ETag generation must never silently mask a failure — log at debug so operators can observe.
-    try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
+    try {
+      log.debug("ETag generation failed", { error: String(error) });
+    } catch {}
   }
   return null;
 }
@@ -889,30 +954,44 @@ function rejectScopedSiteAdminAccess(
   pathname: string,
   set: AuthBeforeHandleContext["set"],
 ): Record<string, unknown> | undefined {
-  const siteAdminPath = pathname === "/api/v2/admin"
-    || pathname.startsWith("/api/v2/admin/")
-    || pathname === "/api/v1/diagnostics"
-    || pathname === "/api/v1/usage/bundle"
-    || pathname === "/api/v1/support/bundle-requests"
-    || pathname.startsWith("/api/v1/support/bundle-requests/")
-    || pathname === "/api/v1/support-bundle-requests"
-    || pathname.startsWith("/api/v1/support-bundle-requests/");
+  const siteAdminPath =
+    pathname === "/api/v2/admin" ||
+    pathname.startsWith("/api/v2/admin/") ||
+    pathname === "/api/v1/diagnostics" ||
+    pathname === "/api/v1/usage/bundle" ||
+    pathname === "/api/v1/support/bundle-requests" ||
+    pathname.startsWith("/api/v1/support/bundle-requests/") ||
+    pathname === "/api/v1/support-bundle-requests" ||
+    pathname.startsWith("/api/v1/support-bundle-requests/");
   if (currentTokenScopes() !== null && siteAdminPath) {
     (set as Record<string, unknown>)["status"] = 403;
-    return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
+    return {
+      errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }],
+    };
   }
   return undefined;
 }
 
 export const app = new Elysia()
   .use(authPlugin)
-  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: AuthBeforeHandleContext): Record<string, unknown> | undefined => {
-    const scopesError = publishTokenScopes(token, set);
-    if (scopesError !== undefined) return scopesError;
-    publishAuditPrincipal(token, user, orgId, teamId, run, systemToken);
-    const pathname = new URL(request.url).pathname;
-    return rejectScopedSiteAdminAccess(pathname, set);
-  })
+  .onBeforeHandle(
+    ({
+      request,
+      token,
+      user,
+      orgId,
+      teamId,
+      run,
+      systemToken,
+      set,
+    }: AuthBeforeHandleContext): Record<string, unknown> | undefined => {
+      const scopesError = publishTokenScopes(token, set);
+      if (scopesError !== undefined) return scopesError;
+      publishAuditPrincipal(token, user, orgId, teamId, run, systemToken);
+      const pathname = new URL(request.url).pathname;
+      return rejectScopedSiteAdminAccess(pathname, set);
+    },
+  )
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;
     // Allow-list, not prefix match (issue #570): a forced password change
@@ -926,11 +1005,13 @@ export const app = new Elysia()
     if (path === "/api/v2/users/logout" || path === "/api/v2/users/refresh") return;
     (set as { status: number }).status = 403;
     return {
-      errors: [{
-        status: "403",
-        title: "Password Change Required",
-        detail: "Change the temporary administrator password before continuing",
-      }],
+      errors: [
+        {
+          status: "403",
+          title: "Password Change Required",
+          detail: "Change the temporary administrator password before continuing",
+        },
+      ],
     };
   })
   .onBeforeHandle((context: MediaTypeContext): Record<string, unknown> | undefined => {
@@ -942,93 +1023,110 @@ export const app = new Elysia()
     // routes are explicitly listed above and still reject the wrong type.
     if (!isPublicJsonApiRequestPath(pathname) && !hasAuthenticatedPrincipal(context)) return undefined;
     const contentLength = Number(request.headers.get("content-length"));
-    const hasBody = body !== undefined && body !== null
-      || (Number.isFinite(contentLength) && contentLength > 0)
-      || request.headers.get("transfer-encoding") !== null;
+    const hasBody =
+      (body !== undefined && body !== null) ||
+      (Number.isFinite(contentLength) && contentLength > 0) ||
+      request.headers.get("transfer-encoding") !== null;
     if (!hasBody || isJsonApiContentType(request.headers.get("content-type"))) return undefined;
     (set as { status: number }).status = 415;
     return mediaTypeError(415, `Request bodies on this endpoint must use ${JSON_API_MEDIA_TYPE}`);
   })
-  .use(rateLimit({
-    max: RATE_LIMIT_MAX,
-    duration: 1000,
-    generator: (request: Request, server: RateLimitServer | null): string => {
-      return principalRateLimitKey(request, server);
-    },
-    // Static content (SPA shell, hashed /assets/* chunks, favicon) is exempt:
-    // a page load fetches 30-40 chunks in parallel and would trip the bucket
-    // on every cold cache. Only server endpoints are counted; login and other
-    // credential-bearing paths get their own tighter limiters below.
-    // Workspace run history has its own dedicated bucket (120/min) so it is
-    // excluded here to avoid double-counting the same request against the
-    // global 60/sec bucket.
-    skip: (request: CustomRequest): boolean => serverEndpointPath(request) === undefined || workspaceRunHistoryPath(request) !== undefined,
-  }))
-  .use(rateLimit({
-    context: distributedOrLocal("workspace-run-history"),
-    duration: WORKSPACE_RUN_HISTORY_DURATION_MS,
-    max: WORKSPACE_RUN_HISTORY_RATE_LIMIT,
-    generator: (request: Request, server: RateLimitServer | null): string => {
-      return `workspace-run-history:${principalRateLimitKey(request, server)}`;
-    },
-    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
-    skip: (request: CustomRequest): boolean => workspaceRunHistoryPath(request) === undefined,
-  }))
-  .use(rateLimit({
-    context: distributedOrLocal("sensitive"),
-    duration: SENSITIVE_RATE_DURATION_MS,
-    max: SENSITIVE_RATE_LIMIT,
-    generator: (request: Request, server: RateLimitServer | null): string => {
-      return `sensitive:${sensitivePath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
-    },
-    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
-    skip: (request: CustomRequest): boolean => sensitivePath(request) === undefined,
-  }))
-  .use(rateLimit({
-    context: distributedOrLocal("sso-get"),
-    duration: SENSITIVE_RATE_DURATION_MS,
-    max: SSO_GET_RATE_LIMIT,
-    generator: (request: Request, server: RateLimitServer | null): string => {
-      return `sso-get:${sensitiveSsoPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
-    },
-    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
-    skip: (request: CustomRequest): boolean => sensitiveSsoPath(request) === undefined,
-  }))
-  .use(rateLimit({
-    context: distributedOrLocal("scim-settings"),
-    duration: 1_000,
-    max: SCIM_SETTINGS_RATE_LIMIT,
-    generator: (request: Request, server: RateLimitServer | null): string => {
-      return `scim-settings:${scimSettingsPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
-    },
-    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
-    skip: (request: CustomRequest): boolean => scimSettingsPath(request) === undefined,
-  }))
+  .use(
+    rateLimit({
+      max: RATE_LIMIT_MAX,
+      duration: 1000,
+      generator: (request: Request, server: RateLimitServer | null): string => {
+        return principalRateLimitKey(request, server);
+      },
+      // Static content (SPA shell, hashed /assets/* chunks, favicon) is exempt:
+      // a page load fetches 30-40 chunks in parallel and would trip the bucket
+      // on every cold cache. Only server endpoints are counted; login and other
+      // credential-bearing paths get their own tighter limiters below.
+      // Workspace run history has its own dedicated bucket (120/min) so it is
+      // excluded here to avoid double-counting the same request against the
+      // global 60/sec bucket.
+      skip: (request: CustomRequest): boolean =>
+        serverEndpointPath(request) === undefined || workspaceRunHistoryPath(request) !== undefined,
+    }),
+  )
+  .use(
+    rateLimit({
+      context: distributedOrLocal("workspace-run-history"),
+      duration: WORKSPACE_RUN_HISTORY_DURATION_MS,
+      max: WORKSPACE_RUN_HISTORY_RATE_LIMIT,
+      generator: (request: Request, server: RateLimitServer | null): string => {
+        return `workspace-run-history:${principalRateLimitKey(request, server)}`;
+      },
+      errorResponse: RATE_LIMIT_ERROR_RESPONSE,
+      skip: (request: CustomRequest): boolean => workspaceRunHistoryPath(request) === undefined,
+    }),
+  )
+  .use(
+    rateLimit({
+      context: distributedOrLocal("sensitive"),
+      duration: SENSITIVE_RATE_DURATION_MS,
+      max: SENSITIVE_RATE_LIMIT,
+      generator: (request: Request, server: RateLimitServer | null): string => {
+        return `sensitive:${sensitivePath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+      },
+      errorResponse: RATE_LIMIT_ERROR_RESPONSE,
+      skip: (request: CustomRequest): boolean => sensitivePath(request) === undefined,
+    }),
+  )
+  .use(
+    rateLimit({
+      context: distributedOrLocal("sso-get"),
+      duration: SENSITIVE_RATE_DURATION_MS,
+      max: SSO_GET_RATE_LIMIT,
+      generator: (request: Request, server: RateLimitServer | null): string => {
+        return `sso-get:${sensitiveSsoPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+      },
+      errorResponse: RATE_LIMIT_ERROR_RESPONSE,
+      skip: (request: CustomRequest): boolean => sensitiveSsoPath(request) === undefined,
+    }),
+  )
+  .use(
+    rateLimit({
+      context: distributedOrLocal("scim-settings"),
+      duration: 1_000,
+      max: SCIM_SETTINGS_RATE_LIMIT,
+      generator: (request: Request, server: RateLimitServer | null): string => {
+        return `scim-settings:${scimSettingsPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
+      },
+      errorResponse: RATE_LIMIT_ERROR_RESPONSE,
+      skip: (request: CustomRequest): boolean => scimSettingsPath(request) === undefined,
+    }),
+  )
   // SCIM limiters are distributed on Postgres (shared bucket table) so all
   // replicas share the same window; on SQLite they remain process-local (single
   // instance, no cross-replica drift).
-  .use(rateLimit({
-    context: distributedOrLocal("scim-mapping"),
-    duration: 60_000,
-    max: SCIM_MAPPING_RATE_LIMIT,
-    generator: (request: Request, server: RateLimitServer | null): string => {
-      return `scim-mapping:${principalRateLimitKey(request, server)}`;
-    },
-    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
-    skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
-  }))
-  .use(rateLimit({
-    // 488: /metrics gets its own small bucket so scrape storms don't starve the global limiter.
-    context: distributedOrLocal("metrics"),
-    duration: 60_000,
-    max: integerSetting("RATE_LIMIT_METRICS_MAX"),
-    generator: (request: Request, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
-    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
-    skip: (request: CustomRequest): boolean => {
-      const p = new URL(request.url).pathname;
-      return p !== "/metrics";
-    },
-  }))
+  .use(
+    rateLimit({
+      context: distributedOrLocal("scim-mapping"),
+      duration: 60_000,
+      max: SCIM_MAPPING_RATE_LIMIT,
+      generator: (request: Request, server: RateLimitServer | null): string => {
+        return `scim-mapping:${principalRateLimitKey(request, server)}`;
+      },
+      errorResponse: RATE_LIMIT_ERROR_RESPONSE,
+      skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
+    }),
+  )
+  .use(
+    rateLimit({
+      // 488: /metrics gets its own small bucket so scrape storms don't starve the global limiter.
+      context: distributedOrLocal("metrics"),
+      duration: 60_000,
+      max: integerSetting("RATE_LIMIT_METRICS_MAX"),
+      generator: (request: Request, server: RateLimitServer | null): string =>
+        `metrics:${principalRateLimitKey(request, server)}`,
+      errorResponse: RATE_LIMIT_ERROR_RESPONSE,
+      skip: (request: CustomRequest): boolean => {
+        const p = new URL(request.url).pathname;
+        return p !== "/metrics";
+      },
+    }),
+  )
   .use(oauthPlugin)
   .onRequest(({ request, server, set }: RequestContext): Record<string, unknown> | undefined => {
     const url = new URL(request.url);
@@ -1036,7 +1134,8 @@ export const app = new Elysia()
     const method = request.method;
     const CORRELATION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
     const suppliedId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
-    const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
+    const correlationId =
+      suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
     beginAuditRequest(correlationId, method, pathname);
     // Issue #648: remember the socket peer so generated links only honor
@@ -1059,11 +1158,13 @@ export const app = new Elysia()
         resetAuditRequest();
         (set as { status: number }).status = 413;
         return {
-          errors: [{
-            status: "413",
-            title: "Payload Too Large",
-            detail: `Request body exceeds the ${API_BODY_LIMIT_BYTES} byte limit for this endpoint`,
-          }],
+          errors: [
+            {
+              status: "413",
+              title: "Payload Too Large",
+              detail: `Request body exceeds the ${API_BODY_LIMIT_BYTES} byte limit for this endpoint`,
+            },
+          ],
         };
       }
     }
@@ -1077,21 +1178,34 @@ export const app = new Elysia()
     const origin = request.headers.get("origin");
     const allowedOrigins = executionSetting("CORS_ORIGIN");
     const isDevBuild = process.env.NODE_ENV !== "production";
-    if (origin !== null
-      && ((allowedOrigins.length > 0 && allowedOrigins.includes(origin))
-        || (allowedOrigins.length === 0 && isDevBuild && (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173")))) {
+    if (
+      origin !== null &&
+      ((allowedOrigins.length > 0 && allowedOrigins.includes(origin)) ||
+        (allowedOrigins.length === 0 &&
+          isDevBuild &&
+          (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173")))
+    ) {
       headers["Access-Control-Allow-Origin"] = origin;
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match,MCP-Protocol-Version,Mcp-Method,Mcp-Name";
-    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
+    headers["Access-Control-Allow-Headers"] =
+      "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match,MCP-Protocol-Version,Mcp-Method,Mcp-Name";
+    headers["Access-Control-Expose-Headers"] =
+      "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | undefined => {
     const doc = classifyResponseDocument(response);
     const pathname = new URL(request.url).pathname;
     const declaredContentType = resolveResponseContentType(set, doc.responseHeaders);
     const responseStatus = resolveAfterHandleStatus(response, set);
-    const api = checkJsonApiResponse(pathname, doc.isJsonDocument, doc.isErrorDocument, declaredContentType, responseStatus, request.headers.get("accept"));
+    const api = checkJsonApiResponse(
+      pathname,
+      doc.isJsonDocument,
+      doc.isErrorDocument,
+      declaredContentType,
+      responseStatus,
+      request.headers.get("accept"),
+    );
     recordAfterHandleMetrics(request, response, set, api.unacceptable);
     const headers = set.headers as Record<string, string | number>;
 
@@ -1122,84 +1236,101 @@ export const app = new Elysia()
     const etagResponse = applyDocumentEtag(request, headers, pathname, doc.isJsonDocument, response);
     if (etagResponse !== null) return etagResponse;
   })
-  .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
-    const pathname = new URL(request.url).pathname;
-    const requestBody = (request as CustomRequest & { readonly body?: unknown }).body;
-    const hasBody = requestBody !== undefined
-      ? requestBody !== null
-      : Number(request.headers.get("content-length")) > 0 || request.headers.get("transfer-encoding") !== null;
-    // State upload checksums bind the exact bytes, including whitespace.
-    if (/^\/api\/v2\/state-versions\/[^/]+\/upload$/.test(pathname)) {
-      return readTextWithLimit(request as unknown as Request, 100 * 1024 * 1024);
-    }
-    if (hasBody && isJsonApiRequestPath(pathname)) {
-      // Read through the same bounded path used for JSON. Invalid media types
-      // remain text until the authenticated onBeforeHandle guard returns 415;
-      // this preserves auth/permission precedence without losing the 4 MiB
-      // chunked-body limit.
-      const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
-      if (!isJsonApiContentType(request.headers.get("content-type"))) return text;
-      try {
-        return JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        return null;
+  .onParse(
+    async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
+      const pathname = new URL(request.url).pathname;
+      const requestBody = (request as CustomRequest & { readonly body?: unknown }).body;
+      const hasBody =
+        requestBody !== undefined
+          ? requestBody !== null
+          : Number(request.headers.get("content-length")) > 0 || request.headers.get("transfer-encoding") !== null;
+      // State upload checksums bind the exact bytes, including whitespace.
+      if (/^\/api\/v2\/state-versions\/[^/]+\/upload$/.test(pathname)) {
+        return readTextWithLimit(request as unknown as Request, 100 * 1024 * 1024);
       }
-    }
-    // HMAC-verified webhooks must verify against the exact bytes on the wire;
-    // a JSON round-trip would re-serialize noncanonically and break signatures.
-    if (
-      pathname === "/api/webhooks/github"
-      || pathname === "/api/webhooks/bitbucket"
-      || pathname === "/api/v2/webhooks/run-approval"
-      // Agent log chunks are raw stream text (never JSON); a JSON-flavored
-      // content-type would make Elysia consume the stream and drop the body.
-      || /^\/api\/agent\/jobs\/[^/]+\/log$/.test(pathname)
-    ) {
-      return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
-    }
-    // Any valid JSON media type (vnd.api+json, application/json,
-    // application/scim+json, ...) is capped and parsed here so chunked
-    // bodies without Content-Length cannot buffer up to the 100 MiB server
-    // limit. Archive-upload paths are exempt: state and configuration
-    // uploads legitimately carry JSON content types up to the 100 MiB
-    // server cap, and their routes enforce their own limits. Arbitrary
-    // strings that merely contain "json" are not treated as JSON and fall
-    // through to Elysia's default parser.
-    if (isJsonContentType(contentType) && !isUploadPath(pathname)) {
-      const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
-      try {
-        return JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        return null;
+      if (hasBody && isJsonApiRequestPath(pathname)) {
+        // Read through the same bounded path used for JSON. Invalid media types
+        // remain text until the authenticated onBeforeHandle guard returns 415;
+        // this preserves auth/permission precedence without losing the 4 MiB
+        // chunked-body limit.
+        const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+        if (!isJsonApiContentType(request.headers.get("content-type"))) return text;
+        try {
+          return JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
       }
-    }
-  })
+      // HMAC-verified webhooks must verify against the exact bytes on the wire;
+      // a JSON round-trip would re-serialize noncanonically and break signatures.
+      if (
+        pathname === "/api/webhooks/github" ||
+        pathname === "/api/webhooks/bitbucket" ||
+        pathname === "/api/v2/webhooks/run-approval" ||
+        // Agent log chunks are raw stream text (never JSON); a JSON-flavored
+        // content-type would make Elysia consume the stream and drop the body.
+        /^\/api\/agent\/jobs\/[^/]+\/log$/.test(pathname)
+      ) {
+        return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+      }
+      // Any valid JSON media type (vnd.api+json, application/json,
+      // application/scim+json, ...) is capped and parsed here so chunked
+      // bodies without Content-Length cannot buffer up to the 100 MiB server
+      // limit. Archive-upload paths are exempt: state and configuration
+      // uploads legitimately carry JSON content types up to the 100 MiB
+      // server cap, and their routes enforce their own limits. Arbitrary
+      // strings that merely contain "json" are not treated as JSON and fall
+      // through to Elysia's default parser.
+      if (isJsonContentType(contentType) && !isUploadPath(pathname)) {
+        const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+        try {
+          return JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      }
+    },
+  )
   // Keep these routes below authentication, password-change, scope, and rate
   // limit hooks. The version endpoint performs outbound work and must not be
   // an unauthenticated, unbounded escape hatch from the application policy.
   .get("/openapi.json", (): unknown => openapiJson)
-  .get("/api/v2/available-versions", async ({ query, user, token, set }: Readonly<{
-    query: Readonly<Record<string, string>>;
-    user: unknown;
-    token: unknown;
-    set: SetObject;
-  }>): Promise<unknown> => {
-    if ((user === null || user === undefined) && (token === null || token === undefined)) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const tool = query["tool"] === "terraform" ? "terraform" : "tofu";
-    try {
-      return { data: await availableVersions(tool) };
-    } catch {
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." }] };
-    }
-  })
-  .use(staticPlugin({
-    assets: join(import.meta.dir, "../../frontend/dist"),
-    prefix: "/",
-  }))
+  .get(
+    "/api/v2/available-versions",
+    async ({
+      query,
+      user,
+      token,
+      set,
+    }: Readonly<{
+      query: Readonly<Record<string, string>>;
+      user: unknown;
+      token: unknown;
+      set: SetObject;
+    }>): Promise<unknown> => {
+      if ((user === null || user === undefined) && (token === null || token === undefined)) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const tool = query["tool"] === "terraform" ? "terraform" : "tofu";
+      try {
+        return { data: await availableVersions(tool) };
+      } catch {
+        (set as { status: number }).status = 503;
+        return {
+          errors: [
+            { status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." },
+          ],
+        };
+      }
+    },
+  )
+  .use(
+    staticPlugin({
+      assets: join(import.meta.dir, "../../frontend/dist"),
+      prefix: "/",
+    }),
+  )
   // Avatar proxy handled from the SPA catch-all (see `.get("*")` below) so it
   // is not shadowed by the wildcard route.
   .get("/", serveFrontend)
@@ -1207,43 +1338,52 @@ export const app = new Elysia()
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
   .get("/app/*", serveFrontend)
-  .get("*", async ({ request, set }: { request: Request; set: Record<string, unknown> }): Promise<Response | { errors: { status: string; title: string; detail?: string }[] } | undefined> => {
-    const url = new URL(request.url);
-    const pathname = url.pathname;
-    // Avatar proxy: handled here (the wildcard route is what Elysia matches
-    // for `/api/v2/avatars/<key>`) so it can't be shadowed by a `:param` route.
-    const avatarMatch = /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(pathname);
-    if (avatarMatch !== null && avatarMatch[1] !== undefined) {
-      return avatarHandler({
-        params: { key: avatarMatch[1] },
-        request,
-        set: set as { status: number | string; headers: Record<string, string | number> },
-      });
-    }
-    const isApiPath = pathname === "/api" || pathname.startsWith("/api/");
-    if (isApiPath) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
-    }
-    if (pathname === "/login" || pathname === "/app" || pathname.startsWith("/app/")) {
-      return new Response(Bun.file(FRONTEND_INDEX));
-    }
-    const filePath = join(FRONTEND_DIR, pathname);
-    if (filePath.startsWith(FRONTEND_DIR) && await Bun.file(filePath).exists()) {
-      return new Response(Bun.file(filePath));
-    }
-    // Nothing matched: return a real 404 instead of a silent 200 empty body.
-    // Missing assets get a bare text 404; navigations get the branded page.
-    const mutableSet = set as { status: number; headers: Record<string, string | number> };
-    mutableSet.status = 404;
-    // Each alternative is independently anchored so a path cannot slip past
-    // one branch by matching only the other (e.g. "/x/assets/" or a trailing
-    // extension without a leading path separator).
-    const isAssetPath = /^\/assets\//i.test(pathname) || /\.[a-z0-9]{1,10}$/i.test(pathname);
-    const plainText = isAssetPath || frontend404Html === null;
-    mutableSet.headers["Content-Type"] = plainText ? "text/plain; charset=utf-8" : "text/html; charset=utf-8";
-    return new Response(plainText ? "Not Found" : frontend404Html, { status: 404 });
-  })
+  .get(
+    "*",
+    async ({
+      request,
+      set,
+    }: {
+      request: Request;
+      set: Record<string, unknown>;
+    }): Promise<Response | { errors: { status: string; title: string; detail?: string }[] } | undefined> => {
+      const url = new URL(request.url);
+      const pathname = url.pathname;
+      // Avatar proxy: handled here (the wildcard route is what Elysia matches
+      // for `/api/v2/avatars/<key>`) so it can't be shadowed by a `:param` route.
+      const avatarMatch = /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(pathname);
+      if (avatarMatch !== null && avatarMatch[1] !== undefined) {
+        return avatarHandler({
+          params: { key: avatarMatch[1] },
+          request,
+          set: set as { status: number | string; headers: Record<string, string | number> },
+        });
+      }
+      const isApiPath = pathname === "/api" || pathname.startsWith("/api/");
+      if (isApiPath) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
+      }
+      if (pathname === "/login" || pathname === "/app" || pathname.startsWith("/app/")) {
+        return new Response(Bun.file(FRONTEND_INDEX));
+      }
+      const filePath = join(FRONTEND_DIR, pathname);
+      if (filePath.startsWith(FRONTEND_DIR) && (await Bun.file(filePath).exists())) {
+        return new Response(Bun.file(filePath));
+      }
+      // Nothing matched: return a real 404 instead of a silent 200 empty body.
+      // Missing assets get a bare text 404; navigations get the branded page.
+      const mutableSet = set as { status: number; headers: Record<string, string | number> };
+      mutableSet.status = 404;
+      // Each alternative is independently anchored so a path cannot slip past
+      // one branch by matching only the other (e.g. "/x/assets/" or a trailing
+      // extension without a leading path separator).
+      const isAssetPath = /^\/assets\//i.test(pathname) || /\.[a-z0-9]{1,10}$/i.test(pathname);
+      const plainText = isAssetPath || frontend404Html === null;
+      mutableSet.headers["Content-Type"] = plainText ? "text/plain; charset=utf-8" : "text/html; charset=utf-8";
+      return new Response(plainText ? "Not Found" : frontend404Html, { status: 404 });
+    },
+  )
   .options("/*", ({ set }: OptionsContext): Record<string, never> => {
     (set as { status: number }).status = 204;
     return {};
@@ -1318,12 +1458,14 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
     applySecurityHeaders(set.headers);
     set.headers["Cache-Control"] ??= "no-store";
   })
-  .onError(({ code, error, set, request }) => handleAppError({
-    code: String(code),
-    error,
-    set,
-    request: { url: request.url },
-  }));
+  .onError(({ code, error, set, request }) =>
+    handleAppError({
+      code: String(code),
+      error,
+      set,
+      request: { url: request.url },
+    }),
+  );
 
 // Start the background worker queue. Deferred out of module evaluation:
 // ./db/index.ts is a top-level-await module, and the dynamic import weave
@@ -1333,15 +1475,16 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
 setTimeout((): void => {
   let loggingRefreshFailureReported = false;
   const refreshLoggingSettings = (): void => {
-    void import("./lib/settings").then(async ({ getSettings }): Promise<void> =>
-      getSettings("logging").then(applyLoggingSettings),
-    ).then((): void => {
-      loggingRefreshFailureReported = false;
-    }).catch((error: unknown): void => {
-      if (loggingRefreshFailureReported) return;
-      loggingRefreshFailureReported = true;
-      log.warn("Failed to load Site Admin logging settings", { error: String(error) });
-    });
+    void import("./lib/settings")
+      .then(async ({ getSettings }): Promise<void> => getSettings("logging").then(applyLoggingSettings))
+      .then((): void => {
+        loggingRefreshFailureReported = false;
+      })
+      .catch((error: unknown): void => {
+        if (loggingRefreshFailureReported) return;
+        loggingRefreshFailureReported = true;
+        log.warn("Failed to load Site Admin logging settings", { error: String(error) });
+      });
   };
   // The refresh mutates the process-global logging configuration, so it
   // must not run in test processes: a refresh landing mid-test re-applies
@@ -1352,33 +1495,43 @@ setTimeout((): void => {
     const loggingRefreshTimer = setInterval(refreshLoggingSettings, 1_000);
     (loggingRefreshTimer as unknown as { unref?: () => void }).unref?.();
   }
-  import("./worker").then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
-    startWorkerQueue();
-    log.info("Worker queue started");
-  }).catch((error: unknown): void => {
-    log.error("Failed to start worker queue", { error: String(error) });
-  });
+  import("./worker")
+    .then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
+      startWorkerQueue();
+      log.info("Worker queue started");
+    })
+    .catch((error: unknown): void => {
+      log.error("Failed to start worker queue", { error: String(error) });
+    });
   // Memory/request observability sampler. Follows the worker switch: tests
   // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
   // production runs both. The ring buffer is what turns the /metrics rss
   // growth figure into a leak trend instead of a steady-state snapshot.
   if (!envFlag("TERRENCE_DISABLE_WORKER")) {
-    import("./lib/process-metrics").then(({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
-      startProcessSampler();
-    }).catch((error: unknown): void => {
-      log.error("Failed to start metrics sampler", { error: String(error) });
-    });
+    import("./lib/process-metrics")
+      .then(
+        ({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
+          startProcessSampler();
+        },
+      )
+      .catch((error: unknown): void => {
+        log.error("Failed to start metrics sampler", { error: String(error) });
+      });
   }
   // Fire-and-forget sweep of the installed-binary cache (kanban 6.5):
   // removes installs whose executable no longer matches its persisted
   // digest so tampered binaries are re-downloaded before first use.
-  import("./binaryManager").then(({ revalidateInstalledBinaries }): void => {
-    void revalidateInstalledBinaries().then((removed: string[]): void => {
-      if (removed.length > 0) {
-        log.warn(`[terrence] Removed ${removed.length} binary install(s) failing integrity check: ${removed.join(", ")}`);
-      }
+  import("./binaryManager")
+    .then(({ revalidateInstalledBinaries }): void => {
+      void revalidateInstalledBinaries().then((removed: string[]): void => {
+        if (removed.length > 0) {
+          log.warn(
+            `[terrence] Removed ${removed.length} binary install(s) failing integrity check: ${removed.join(", ")}`,
+          );
+        }
+      });
+    })
+    .catch((error: unknown): void => {
+      log.warn(`[terrence] Binary integrity sweep unavailable: ${String(error)}`);
     });
-  }).catch((error: unknown): void => {
-    log.warn(`[terrence] Binary integrity sweep unavailable: ${String(error)}`);
-  });
 }, 0);

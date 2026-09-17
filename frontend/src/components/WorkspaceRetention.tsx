@@ -28,10 +28,12 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
   useEffect((): (() => void) => {
     let active = true;
     setLoading(true);
-    void fetchApi<{ data?: { attributes?: { "max-days"?: number; "enabled"?: boolean } } }>(`/workspaces/${workspaceId}/relationships/data-retention-policy`)
+    void fetchApi<{ data?: { attributes?: { "max-days"?: number; enabled?: boolean } } }>(
+      `/workspaces/${workspaceId}/relationships/data-retention-policy`,
+    )
       .then((response): void => {
         if (!active) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = (response as { data?: Retention }).data;
         if (data === undefined) return;
         setPolicy(data);
@@ -43,8 +45,12 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
           setError(caught instanceof Error ? caught.message : "Could not load retention policy");
         }
       })
-      .finally((): void => { if (active) setLoading(false); });
-    return (): void => { active = false; };
+      .finally((): void => {
+        if (active) setLoading(false);
+      });
+    return (): void => {
+      active = false;
+    };
   }, [workspaceId]);
 
   const save = async (event: React.SyntheticEvent): Promise<void> => {
@@ -53,8 +59,8 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
     setError("");
     setNotice("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/workspaces/${workspaceId}/relationships/data-retention-policy`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/workspaces/${workspaceId}/relationships/data-retention-policy`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -65,7 +71,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
             },
           },
         }),
-      }) as { data?: Retention };
+      })) as { data?: Retention };
       if (response.data !== undefined) setPolicy(response.data);
       setNotice("Retention policy saved.");
     } catch (caught: unknown) {
@@ -75,29 +81,59 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
     }
   };
 
-  if (loading) return <div role="status" className="py-8 text-sm text-muted-foreground">Loading retention policy…</div>;
+  if (loading)
+    return (
+      <div role="status" className="py-8 text-sm text-muted-foreground">
+        Loading retention policy…
+      </div>
+    );
 
   return (
     <form onSubmit={save}>
       <SettingsSection
         title="State version retention"
         description="Automatically clean up old state versions while keeping the current version available."
-        footer={(
+        footer={
           <>
-            <span role="status" className="mr-auto text-sm text-muted-foreground">{notice || (policy === null ? "No policy configured." : "")}</span>
-            <Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}{saving ? "Saving…" : "Save policy"}</Button>
+            <span role="status" className="mr-auto text-sm text-muted-foreground">
+              {notice || (policy === null ? "No policy configured." : "")}
+            </span>
+            <Button type="submit" disabled={saving}>
+              {saving && <Spinner data-icon="inline-start" />}
+              {saving ? "Saving…" : "Save policy"}
+            </Button>
           </>
-        )}
+        }
       >
         <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
           <Field>
             <FieldLabel htmlFor="retention-count">Keep state versions</FieldLabel>
-            <Input id="retention-count" name="state-versions-count" type="number" inputMode="numeric" min="0" value={count} onChange={(event): void => { setCount(Number(event.target.value)); }} />
+            <Input
+              id="retention-count"
+              name="state-versions-count"
+              type="number"
+              inputMode="numeric"
+              min="0"
+              value={count}
+              onChange={(event): void => {
+                setCount(Number(event.target.value));
+              }}
+            />
             <FieldDescription>Set to 0 to use age-based retention only.</FieldDescription>
           </Field>
           <Field>
             <FieldLabel htmlFor="retention-days">Delete versions older than (days)</FieldLabel>
-            <Input id="retention-days" name="delete-older-than-days" type="number" inputMode="numeric" min="0" value={days} onChange={(event): void => { setDays(Number(event.target.value)); }} />
+            <Input
+              id="retention-days"
+              name="delete-older-than-days"
+              type="number"
+              inputMode="numeric"
+              min="0"
+              value={days}
+              onChange={(event): void => {
+                setDays(Number(event.target.value));
+              }}
+            />
             <FieldDescription>Set to 0 to retain state indefinitely by age.</FieldDescription>
           </Field>
           {error !== "" && <FieldError className="@md/field-group:col-span-2">{error}</FieldError>}

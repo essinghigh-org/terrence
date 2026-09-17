@@ -39,7 +39,7 @@ export type InfracostIntegrity = Readonly<{
   tool: "infracost";
   version: string;
   binarySha256: string;
-}>
+}>;
 
 const INTEGRITY_FILE = ".integrity.json";
 
@@ -54,13 +54,12 @@ function validateVersion(version: string): boolean {
 
 async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest)).map((b: number): string => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(digest))
+    .map((b: number): string => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-type IntegrityRead =
-  | { status: "ok"; integrity: InfracostIntegrity }
-  | { status: "missing" }
-  | { status: "invalid" };
+type IntegrityRead = { status: "ok"; integrity: InfracostIntegrity } | { status: "missing" } | { status: "invalid" };
 
 async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
   let raw: string;
@@ -76,12 +75,15 @@ async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
     return { status: "invalid" };
   }
   if (
-    parsed.tool === "infracost"
-    && typeof parsed.version === "string"
-    && typeof parsed.binarySha256 === "string"
-    && /^[0-9a-f]{64}$/.test(parsed.binarySha256)
+    parsed.tool === "infracost" &&
+    typeof parsed.version === "string" &&
+    typeof parsed.binarySha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(parsed.binarySha256)
   ) {
-    return { status: "ok", integrity: { tool: "infracost", version: parsed.version, binarySha256: parsed.binarySha256 } };
+    return {
+      status: "ok",
+      integrity: { tool: "infracost", version: parsed.version, binarySha256: parsed.binarySha256 },
+    };
   }
   return { status: "invalid" };
 }
@@ -106,10 +108,7 @@ async function writeIntegrity(targetDir: string, integrity: InfracostIntegrity):
 /** Download the archive and its `.sha256` sidecar, verify the digest, and only
  * then write the archive to disk. Throws on any upstream/verify failure; the
  * caller tiers that into a recoverable, non-fatal cost-estimate error. */
-async function downloadAndVerify(
-  version: string,
-  targetDir: string,
-): Promise<void> {
+async function downloadAndVerify(version: string, targetDir: string): Promise<void> {
   const arch = process.arch === "arm64" ? "arm64" : "amd64";
   const osName = process.platform === "darwin" ? "darwin" : "linux";
   const asset = `infracost-${osName}-${arch}.tar.gz`;
@@ -147,7 +146,11 @@ async function extractVerified(targetDir: string): Promise<string> {
   const archivePath = join(targetDir, "download.tar.gz");
 
   const listProc = Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "pipe" });
-  const listing = (await new Response(listProc.stdout).text()).trim().split("\n").map((s: string): string => s.trim()).filter(Boolean);
+  const listing = (await new Response(listProc.stdout).text())
+    .trim()
+    .split("\n")
+    .map((s: string): string => s.trim())
+    .filter(Boolean);
   if ((await listProc.exited) !== 0) throw new Error("Could not list Infracost archive members");
 
   const expected = `infracost-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "amd64"}`;
@@ -194,7 +197,11 @@ function lockDirFor(version: string): string {
 }
 
 function stagingDirFor(version: string): string {
-  return join(BINARY_BASE_DIR, "infracost", `.infracost-${version}.staging-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  return join(
+    BINARY_BASE_DIR,
+    "infracost",
+    `.infracost-${version}.staging-${process.pid}-${crypto.randomUUID().slice(0, 8)}`,
+  );
 }
 
 /** Acquire the per-version install lock (atomic mkdir). Returns true on
@@ -234,7 +241,11 @@ async function releaseVersionLock(lockDir: string): Promise<void> {
   await rm(lockDir, { recursive: true, force: true });
 }
 
-async function validCachedInfracostBinary(binaryPath: string, targetDir: string, invalidMessage: string): Promise<boolean> {
+async function validCachedInfracostBinary(
+  binaryPath: string,
+  targetDir: string,
+  invalidMessage: string,
+): Promise<boolean> {
   if (!(await exists(binaryPath))) return false;
   const integrity = await readIntegrity(targetDir);
   if (integrity.status === "ok" && (await verifyBinary(binaryPath, integrity.integrity))) return true;
@@ -284,10 +295,20 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
   }
 
   const targetDir = join(BINARY_BASE_DIR, "infracost", version);
-  const binaryPath = join(targetDir, `infracost-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "amd64"}`);
+  const binaryPath = join(
+    targetDir,
+    `infracost-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "amd64"}`,
+  );
 
   // Fast path: a valid, fully-published install already exists. Read-only.
-  if (await validCachedInfracostBinary(binaryPath, targetDir, `[terrence] Cached Infracost v${version} failed integrity check; reinstalling`)) return { binaryPath, version };
+  if (
+    await validCachedInfracostBinary(
+      binaryPath,
+      targetDir,
+      `[terrence] Cached Infracost v${version} failed integrity check; reinstalling`,
+    )
+  )
+    return { binaryPath, version };
 
   // Slow path: serialize installs per version so concurrent workers never
   // download into / delete each other's directories.
@@ -299,7 +320,14 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
   try {
     // Recheck after acquiring the lock: a worker that finished while we were
     // waiting has already published a valid install we can reuse.
-    if (await validCachedInfracostBinary(binaryPath, targetDir, `[terrence] Cached Infracost v${version} failed integrity check under lock; reinstalling`)) return { binaryPath, version };
+    if (
+      await validCachedInfracostBinary(
+        binaryPath,
+        targetDir,
+        `[terrence] Cached Infracost v${version} failed integrity check under lock; reinstalling`,
+      )
+    )
+      return { binaryPath, version };
     if (await exists(targetDir)) {
       // targetDir exists without a binary (legacy/partial state). We hold the
       // lock, so it cannot be another worker's in-progress install; clear it

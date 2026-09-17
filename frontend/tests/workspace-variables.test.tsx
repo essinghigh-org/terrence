@@ -6,10 +6,11 @@ import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 
-const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
-  status,
-  headers: { "Content-Type": "application/vnd.api+json" },
-});
+const json = (data: JsonValue, status = 200): Response =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
 
 const noContent = (): Response => new Response(null, { status: 204 });
 
@@ -39,7 +40,11 @@ const setVar = (id: string, key: string, category: "terraform" | "env", sensitiv
   },
 });
 
-const variableSet = (id: string, name: string, options: { global?: boolean; description?: string | null; workspaceCount?: number; varCount?: number } = {}) => ({
+const variableSet = (
+  id: string,
+  name: string,
+  options: { global?: boolean; description?: string | null; workspaceCount?: number; varCount?: number } = {},
+) => ({
   id,
   type: "varsets",
   attributes: {
@@ -74,7 +79,7 @@ test("attach dialog shows the empty state when the organization has no variable 
     if (path === "/api/v2/organizations/essighigh/varsets") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate={true} />);
   fireEvent.click(view.getByRole("button", { name: "Attach variable set" }));
@@ -100,12 +105,18 @@ test("renders workspace variables and attached variable sets as separate section
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
-  await waitFor((): void => { expect(view.getByText("LOCAL_KEY")).toBeTruthy(); });
-  await waitFor((): void => { expect(view.getAllByText("github-provider").length).toBeGreaterThan(0); });
-  await waitFor((): void => { expect(view.getByText("GITHUB_TOKEN")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("LOCAL_KEY")).toBeTruthy();
+  });
+  await waitFor((): void => {
+    expect(view.getAllByText("github-provider").length).toBeGreaterThan(0);
+  });
+  await waitFor((): void => {
+    expect(view.getByText("GITHUB_TOKEN")).toBeTruthy();
+  });
 
   // Inherited variables are read-only: exactly one Edit/Delete pair exists, for the
   // workspace-owned variable only.
@@ -135,16 +146,20 @@ test("ignores an attached variable-set response from the previous workspace", as
     if (path === "/api/v2/workspaces/ws-2/varsets") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
-  await waitFor((): void => { expect(staleRequested).toBe(true); });
+  await waitFor((): void => {
+    expect(staleRequested).toBe(true);
+  });
   view.rerender(<WorkspaceVariables workspaceId="ws-2" orgName="essighigh" canUpdate />);
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]) => {
-      const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
-      return new URL(url, "http://terrence.local").pathname === "/api/v2/workspaces/ws-2/varsets";
-    })).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([input]) => {
+        const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+        return new URL(url, "http://terrence.local").pathname === "/api/v2/workspaces/ws-2/varsets";
+      }),
+    ).toBe(true);
   });
 
   await act(async (): Promise<void> => {
@@ -175,7 +190,10 @@ test("attaches and detaches variable sets from the workspace", async () => {
       return json({ data: [variableSet("vs-2", "aws-shared", { workspaceCount: 3, varCount: 1 })] });
     }
     if (path === "/api/v2/varsets/vs-2/relationships/workspaces" && method === "POST") {
-      attached = [variableSet("vs-1", "github-provider", { workspaceCount: 2, varCount: 2 }), variableSet("vs-2", "aws-shared", { workspaceCount: 3, varCount: 1 })];
+      attached = [
+        variableSet("vs-1", "github-provider", { workspaceCount: 2, varCount: 2 }),
+        variableSet("vs-2", "aws-shared", { workspaceCount: 3, varCount: 1 }),
+      ];
       return noContent();
     }
     if (path === "/api/v2/varsets/vs-1/relationships/workspaces" && method === "DELETE") {
@@ -184,30 +202,38 @@ test("attaches and detaches variable sets from the workspace", async () => {
     }
     throw new Error(`Unexpected request: ${url} (${method})`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
-  await waitFor((): void => { expect(view.getAllByText("github-provider").length).toBeGreaterThan(0); });
+  await waitFor((): void => {
+    expect(view.getAllByText("github-provider").length).toBeGreaterThan(0);
+  });
 
   // Attach flow: the dialog lists unattached organization sets.
   fireEvent.click(view.getByRole("button", { name: "Attach variable set" }));
-  await waitFor((): void => { expect(view.getByText("aws-shared")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("aws-shared")).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("button", { name: "Attach" }));
-  await waitFor((): void => { expect(view.getByText("AWS_REGION")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("AWS_REGION")).toBeTruthy();
+  });
 
   const postCall = fetchMock.mock.calls.find(([, options]) => options?.method === "POST");
   expect(postCall).toBeTruthy();
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+  // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({
     data: [{ type: "workspaces", id: "ws-1" }],
   });
 
   // Detach flow: the card button removes the set.
   fireEvent.click(view.getAllByRole("button", { name: "Detach" })[0]!);
-  await waitFor((): void => { expect(view.queryByText("github-provider")).toBeNull(); });
+  await waitFor((): void => {
+    expect(view.queryByText("github-provider")).toBeNull();
+  });
   const deleteCall = fetchMock.mock.calls.find(([, options]) => options?.method === "DELETE");
   expect(deleteCall).toBeTruthy();
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+  // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(deleteCall?.[1]?.body as string)).toEqual({
     data: [{ type: "workspaces", id: "ws-1" }],
   });
@@ -232,15 +258,19 @@ test("names the winning source on duplicated keys", async () => {
     }
     throw new Error("Unexpected request: " + url);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
-  await waitFor((): void => { expect(view.getAllByText("DUP").length).toBe(3); });
+  await waitFor((): void => {
+    expect(view.getAllByText("DUP").length).toBe(3);
+  });
 
   const titles = [...view.container.querySelectorAll("td[title]")].map((el): string | null => el.getAttribute("title"));
   // The workspace row wins; both set rows name the workspace as winner.
   expect(titles).toContain("Effective value for DUP (wins for this workspace)");
-  expect(titles.filter((title): boolean => title === "Overridden by the workspace value for this workspace")).toHaveLength(2);
+  expect(
+    titles.filter((title): boolean => title === "Overridden by the workspace value for this workspace"),
+  ).toHaveLength(2);
 
   fireEvent.click(view.getAllByRole("button", { name: "Show precedence for DUP" })[0]!);
   expect(view.getByText("Why is this value being used?")).toBeTruthy();

@@ -4,7 +4,18 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Terrence } from "../src/components/brand/Terrence";
 
-const poses = ["welcome", "empty", "healthy", "failed", "lost", "maintenance", "guide", "blocked", "interrupted", "ecosystem"] as const;
+const poses = [
+  "welcome",
+  "empty",
+  "healthy",
+  "failed",
+  "lost",
+  "maintenance",
+  "guide",
+  "blocked",
+  "interrupted",
+  "ecosystem",
+] as const;
 
 test("Terrence exposes one explicit small detail tier for every canonical pose", (): void => {
   for (const pose of poses) {
@@ -53,8 +64,9 @@ test("engine marks float independently of the character without tiles or grips",
   expect(svg?.querySelector(".terrence-orbit--back")).not.toBeNull();
   expect(marks?.querySelector(".terrence-orbit--front")).not.toBeNull();
   const layers = [...(svg?.children ?? [])];
-  expect(layers.findIndex((layer): boolean => layer === marks))
-    .toBeGreaterThan(layers.findIndex((layer): boolean => layer.classList.contains("terrence-body")));
+  expect(layers.findIndex((layer): boolean => layer === marks)).toBeGreaterThan(
+    layers.findIndex((layer): boolean => layer.classList.contains("terrence-body")),
+  );
 });
 
 test("illustrations blend into their surrounding surface by default", (): void => {

@@ -16,18 +16,24 @@ describe("run duration baseline (kanban 15.12)", () => {
     await db.delete(apiTokens);
     await db.delete(users);
     await db.delete(organizations);
-    const org = await db.insert(organizations).values({
-      id: `org-${orgName}`,
-      name: orgName,
-      email: "ops@example.com",
-    }).returning();
+    const org = await db
+      .insert(organizations)
+      .values({
+        id: `org-${orgName}`,
+        name: orgName,
+        email: "ops@example.com",
+      })
+      .returning();
     orgId = org[0]!.id;
-    const ws = await db.insert(workspaces).values({
-      id: `ws-baseline`,
-      name: "baseline-workspace",
-      orgId,
-      autoApply: false,
-    }).returning();
+    const ws = await db
+      .insert(workspaces)
+      .values({
+        id: `ws-baseline`,
+        name: "baseline-workspace",
+        orgId,
+        autoApply: false,
+      })
+      .returning();
     workspaceId = ws[0]!.id;
   });
 
@@ -38,14 +44,17 @@ describe("run duration baseline (kanban 15.12)", () => {
   });
 
   function insertRun(overrides: Partial<typeof runs.$inferInsert>): Promise<{ id: string }[]> {
-    return db.insert(runs).values({
-      id: `run-${Math.random().toString(36).slice(2, 10)}`,
-      workspaceId,
-      status: "applied",
-      message: "baseline run",
-      createdAt: Date.now(),
-      ...overrides,
-    }).returning({ id: runs.id });
+    return db
+      .insert(runs)
+      .values({
+        id: `run-${Math.random().toString(36).slice(2, 10)}`,
+        workspaceId,
+        status: "applied",
+        message: "baseline run",
+        createdAt: Date.now(),
+        ...overrides,
+      })
+      .returning({ id: runs.id });
   }
 
   it("returns null when the run has no terminal timestamps", async () => {

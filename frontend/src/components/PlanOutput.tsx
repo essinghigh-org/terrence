@@ -1,11 +1,7 @@
 import { Terrence } from "./brand/Terrence";
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  ChevronRight,
-  Copy,
-} from "lucide-react";
+import { Check, ChevronRight, Copy } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
 import { ProviderIcon } from "./ProviderIcon";
 import { useTerrenceEvent } from "../lib/event-provider";
@@ -88,23 +84,26 @@ const PLANLESS_TERMINAL_STATUSES = new Set([
 ]);
 
 function isChange(value: unknown): value is Change {
-  if (!isRecord(value)
-    || !Array.isArray(value["actions"])
-    || !value["actions"].every((action: unknown): boolean => isString(action))) return false;
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value["actions"]) ||
+    !value["actions"].every((action: unknown): boolean => isString(action))
+  )
+    return false;
   const importing = value["importing"];
   const replacePaths = value["replace_paths"];
-  return (importing === undefined || (
-      isRecord(importing)
-      && (importing["id"] === undefined || isString(importing["id"]))
-      && (importing["unknown"] === undefined || isBoolean(importing["unknown"]))
-    ))
-    && (replacePaths === undefined || (
-      Array.isArray(replacePaths)
-      && replacePaths.every((path: unknown): boolean =>
-        Array.isArray(path)
-        && path.every((step: unknown): boolean => isString(step) || isNumber(step)),
-      )
-    ));
+  return (
+    (importing === undefined ||
+      (isRecord(importing) &&
+        (importing["id"] === undefined || isString(importing["id"])) &&
+        (importing["unknown"] === undefined || isBoolean(importing["unknown"])))) &&
+    (replacePaths === undefined ||
+      (Array.isArray(replacePaths) &&
+        replacePaths.every(
+          (path: unknown): boolean =>
+            Array.isArray(path) && path.every((step: unknown): boolean => isString(step) || isNumber(step)),
+        )))
+  );
 }
 
 function hasOptionalStringFields(value: JsonObject, fields: readonly string[]): boolean {
@@ -132,11 +131,13 @@ const RESOURCE_CHANGE_STRING_FIELDS = [
 const ACTION_INVOCATION_STRING_FIELDS = ["address", "type", "name", "provider_name"];
 
 function isResourceChange(value: unknown): value is ResourceChange {
-  return isRecord(value)
-    && isString(value["address"])
-    && isString(value["type"])
-    && hasOptionalStringFields(value, RESOURCE_CHANGE_STRING_FIELDS)
-    && isChange(value["change"]);
+  return (
+    isRecord(value) &&
+    isString(value["address"]) &&
+    isString(value["type"]) &&
+    hasOptionalStringFields(value, RESOURCE_CHANGE_STRING_FIELDS) &&
+    isChange(value["change"])
+  );
 }
 
 function isLifecycleTrigger(value: unknown): boolean {
@@ -183,11 +184,10 @@ function childValue(value: unknown, key: string | number): unknown {
 }
 
 function formatPath(path: readonly (string | number)[]): string {
-  return path.reduce<string>((value, step): string =>
-    isNumber(step)
-      ? `${value}[${step}]`
-      : value === "" ? step : `${value}.${step}`,
-  "");
+  return path.reduce<string>(
+    (value, step): string => (isNumber(step) ? `${value}[${step}]` : value === "" ? step : `${value}.${step}`),
+    "",
+  );
 }
 
 function collectDiffRows(
@@ -202,23 +202,23 @@ function collectDiffRows(
   const unknown = afterUnknown === true;
   const equal = JSON.stringify(before) === JSON.stringify(after);
   if (sensitive || unknown) {
-    return [{
-      path: path === "" ? "value" : path,
-      before,
-      after,
-      sensitive,
-      unknown,
-      unchanged: equal && !unknown,
-    }];
+    return [
+      {
+        path: path === "" ? "value" : path,
+        before,
+        after,
+        sensitive,
+        unknown,
+        unchanged: equal && !unknown,
+      },
+    ];
   }
 
   const values = [before, after, beforeSensitive, afterSensitive, afterUnknown];
   const keys = collectionKeys(values);
   if (keys.length > 0) {
     return keys.flatMap((key): readonly DiffRow[] => {
-      const childPath = isNumber(key)
-        ? `${path}[${key}]`
-        : path === "" ? key : `${path}.${key}`;
+      const childPath = isNumber(key) ? `${path}[${key}]` : path === "" ? key : `${path}.${key}`;
       return collectDiffRows(
         childPath,
         childValue(before, key),
@@ -229,14 +229,16 @@ function collectDiffRows(
       );
     });
   }
-  return [{
-    path: path === "" ? "value" : path,
-    before,
-    after,
-    sensitive: false,
-    unknown: false,
-    unchanged: equal,
-  }];
+  return [
+    {
+      path: path === "" ? "value" : path,
+      before,
+      after,
+      sensitive: false,
+      unknown: false,
+      unchanged: equal,
+    },
+  ];
 }
 
 function attributeDiff(change: Change): readonly DiffRow[] {
@@ -291,21 +293,20 @@ function buildArrayNode(
   afterUnknown: unknown,
   equal: boolean,
 ): DiffNode {
-  const length = Math.max(
-    Array.isArray(before) ? before.length : 0,
-    Array.isArray(after) ? after.length : 0,
-  );
+  const length = Math.max(Array.isArray(before) ? before.length : 0, Array.isArray(after) ? after.length : 0);
   const children: DiffNode[] = [];
   for (let index = 0; index < length; index++) {
-    children.push(buildDiffNode(
-      index,
-      path === "" ? `[${index}]` : `${path}[${index}]`,
-      Array.isArray(before) ? before[index] : undefined,
-      Array.isArray(after) ? after[index] : undefined,
-      Array.isArray(beforeSensitive) ? beforeSensitive[index] : undefined,
-      Array.isArray(afterSensitive) ? afterSensitive[index] : undefined,
-      Array.isArray(afterUnknown) ? afterUnknown[index] : undefined,
-    ));
+    children.push(
+      buildDiffNode(
+        index,
+        path === "" ? `[${index}]` : `${path}[${index}]`,
+        Array.isArray(before) ? before[index] : undefined,
+        Array.isArray(after) ? after[index] : undefined,
+        Array.isArray(beforeSensitive) ? beforeSensitive[index] : undefined,
+        Array.isArray(afterSensitive) ? afterSensitive[index] : undefined,
+        Array.isArray(afterUnknown) ? afterUnknown[index] : undefined,
+      ),
+    );
   }
   return {
     kind: "array",
@@ -331,15 +332,18 @@ function buildObjectNode(
   equal: boolean,
 ): DiffNode {
   const keys = collectionKeys([before, after, beforeSensitive, afterSensitive, afterUnknown]);
-  const children = keys.map((childKey): DiffNode => buildDiffNode(
-    childKey,
-    path === "" ? String(childKey) : `${path}.${childKey}`,
-    childValue(before, childKey),
-    childValue(after, childKey),
-    childValue(beforeSensitive, childKey),
-    childValue(afterSensitive, childKey),
-    childValue(afterUnknown, childKey),
-  ));
+  const children = keys.map(
+    (childKey): DiffNode =>
+      buildDiffNode(
+        childKey,
+        path === "" ? String(childKey) : `${path}.${childKey}`,
+        childValue(before, childKey),
+        childValue(after, childKey),
+        childValue(beforeSensitive, childKey),
+        childValue(afterSensitive, childKey),
+        childValue(afterUnknown, childKey),
+      ),
+  );
   return {
     kind: "object",
     key,
@@ -401,10 +405,7 @@ type DiffLine = {
 };
 
 function formatActionReason(reason: string): string {
-  return reason
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return reason.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function semanticKeys<T>(values: readonly T[], identity: (value: T) => string): string[] {
@@ -453,8 +454,10 @@ function diffMarkerFor(node: DiffNode, force: "add" | "del" | null): DiffMarker 
 }
 
 function maxKeyWidth(children: readonly DiffNode[]): number {
-  return children.reduce((width: number, child: DiffNode): number =>
-    Math.max(width, child.key === null ? 0 : String(child.key).length), 0);
+  return children.reduce(
+    (width: number, child: DiffNode): number => Math.max(width, child.key === null ? 0 : String(child.key).length),
+    0,
+  );
 }
 
 function padKeyText(key: string | number, width: number): string {
@@ -479,7 +482,15 @@ function emitArrayItemBlock(
     parts: [{ text: `${diffMarkerText[marker]} ${open}`, cls: diffMarkerClasses[marker] }],
     replacement: forcesReplacement(node.path),
   });
-  flattenChildNodes(node, context, force, depth + 1, forcesReplacement, lines, node.kind === "object" ? maxKeyWidth(node.children) : 0);
+  flattenChildNodes(
+    node,
+    context,
+    force,
+    depth + 1,
+    forcesReplacement,
+    lines,
+    node.kind === "object" ? maxKeyWidth(node.children) : 0,
+  );
   lines.push({
     depth,
     path: node.path,
@@ -656,7 +667,18 @@ function flattenContainerNode(
     return;
   }
 
-  flattenContainerChildren(node, context, childForce, depth, childDepth, width, marker, keyText, forcesReplacement, lines);
+  flattenContainerChildren(
+    node,
+    context,
+    childForce,
+    depth,
+    childDepth,
+    width,
+    marker,
+    keyText,
+    forcesReplacement,
+    lines,
+  );
 }
 
 function flattenDiff(
@@ -699,14 +721,13 @@ export function AttributeDiff({
   const visibleRows = rows.filter((row) => !row.unchanged || contextualUnchanged.has(row.path));
   const hiddenUnchanged = rows.filter((row) => row.unchanged).length - contextualUnchanged.size;
   const replacementPaths = (change.replace_paths ?? []).map(formatPath);
-  const forcesReplacement = (path: string): boolean => replacementPaths.some((replacementPath): boolean =>
-    path === replacementPath
-    || path.startsWith(`${replacementPath}.`)
-    || path.startsWith(`${replacementPath}[`),
-  );
-  const unchangedSummary = hiddenUnchanged > 0
-    ? `${hiddenUnchanged} unchanged attribute${hiddenUnchanged === 1 ? "" : "s"} hidden`
-    : "";
+  const forcesReplacement = (path: string): boolean =>
+    replacementPaths.some(
+      (replacementPath): boolean =>
+        path === replacementPath || path.startsWith(`${replacementPath}.`) || path.startsWith(`${replacementPath}[`),
+    );
+  const unchangedSummary =
+    hiddenUnchanged > 0 ? `${hiddenUnchanged} unchanged attribute${hiddenUnchanged === 1 ? "" : "s"} hidden` : "";
   if (visibleRows.length === 0) {
     return (
       <p className="px-4 py-3 text-xs text-muted-foreground">
@@ -715,15 +736,16 @@ export function AttributeDiff({
     );
   }
 
-  const header = type !== undefined && name !== undefined
-    ? (() => {
-        const op = operationFor(change.actions);
-        if (op === "create") return { text: "+", cls: diffMarkerClasses.add };
-        if (op === "delete" || op === "remove") return { text: "-", cls: diffMarkerClasses.del };
-        if (op === "replace") return { text: "-/", cls: "text-warning" };
-        return { text: "~", cls: diffMarkerClasses.mod };
-      })()
-    : null;
+  const header =
+    type !== undefined && name !== undefined
+      ? (() => {
+          const op = operationFor(change.actions);
+          if (op === "create") return { text: "+", cls: diffMarkerClasses.add };
+          if (op === "delete" || op === "remove") return { text: "-", cls: diffMarkerClasses.del };
+          if (op === "replace") return { text: "-/", cls: "text-warning" };
+          return { text: "~", cls: diffMarkerClasses.mod };
+        })()
+      : null;
   const hasHeader = header !== null;
 
   const root = buildDiffNode(
@@ -771,7 +793,10 @@ export function AttributeDiff({
 
   const lineKeys = semanticKeys(lines, diffLineIdentity);
   return (
-    <div aria-label={`Attribute changes for ${address}`} className="overflow-x-auto border-t border-border bg-muted px-4 pb-3">
+    <div
+      aria-label={`Attribute changes for ${address}`}
+      className="overflow-x-auto border-t border-border bg-muted px-4 pb-3"
+    >
       <div className="min-w-[560px] py-2 font-mono text-xs leading-5">
         {lines.map((line, lineIndex): React.JSX.Element => {
           const partKeys = semanticKeys(line.parts, (part): string => JSON.stringify(part));
@@ -779,9 +804,13 @@ export function AttributeDiff({
             <div key={lineKeys[lineIndex]} className="flex items-baseline whitespace-pre">
               <code>
                 <span className="text-muted-foreground/70">{" ".repeat(line.depth * 2)}</span>
-                {line.parts.map((part, partIndex): React.JSX.Element => (
-                  <span key={partKeys[partIndex]} className={part.cls}>{part.text}</span>
-                ))}
+                {line.parts.map(
+                  (part, partIndex): React.JSX.Element => (
+                    <span key={partKeys[partIndex]} className={part.cls}>
+                      {part.text}
+                    </span>
+                  ),
+                )}
               </code>
               {line.replacement && (
                 <span className="ml-1 text-2xs font-semibold uppercase tracking-wide text-warning">
@@ -819,8 +848,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   }, []);
   // Plan JSON always names the resource; fall back to the final address element
   // so the structured header renders for hand-built fixtures too.
-  const fallbackName = resource.name
-    ?? (resource.address.split(".").pop() ?? undefined);
+  const fallbackName = resource.name ?? resource.address.split(".").pop() ?? undefined;
 
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
@@ -839,13 +867,18 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   return (
     <details
       className="group/resource border-b border-border last:border-b-0"
-      onToggle={(event): void => { setOpen(event.currentTarget.open); }}
+      onToggle={(event): void => {
+        setOpen(event.currentTarget.open);
+      }}
     >
-      <summary
-        className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
-      >
-        <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open/resource:rotate-90" aria-hidden="true" />
-        <span className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open/resource:rotate-90"
+          aria-hidden="true"
+        />
+        <span
+          className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}
+        >
           {"icon" in config ? (
             <config.icon className="size-3.5" aria-hidden="true" />
           ) : (
@@ -883,18 +916,26 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
               {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
             </button>
           </div>
-
         </div>
       </summary>
-      {operation === "unsupported" && <p role="alert" className="px-4 py-2 text-sm text-warning">Unsupported operation: review the CLI plan before approval. Actions: {resource.change.actions.join(" → ") || "missing"}.</p>}
-      {operation === "remove" && <p className="px-4 py-2 text-sm text-muted-foreground">Remove from state without destroying the object.</p>}
-      {open && <AttributeDiff
-        change={resource.change}
-        address={resource.address}
-        type={resource.type}
-        name={fallbackName}
-        actionReason={resource.action_reason}
-      />}
+      {operation === "unsupported" && (
+        <p role="alert" className="px-4 py-2 text-sm text-warning">
+          Unsupported operation: review the CLI plan before approval. Actions:{" "}
+          {resource.change.actions.join(" → ") || "missing"}.
+        </p>
+      )}
+      {operation === "remove" && (
+        <p className="px-4 py-2 text-sm text-muted-foreground">Remove from state without destroying the object.</p>
+      )}
+      {open && (
+        <AttributeDiff
+          change={resource.change}
+          address={resource.address}
+          type={resource.type}
+          name={fallbackName}
+          actionReason={resource.action_reason}
+        />
+      )}
     </details>
   );
 }
@@ -920,24 +961,36 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
       </summary>
       <div className="divide-y divide-border/60 border-t border-border/60">
         {actions.map((action, index): React.JSX.Element => {
-          const configuredLabel = action.address
-            ?? [action.type, action.name].filter((value): value is string => value !== undefined && value !== "").join(".");
+          const configuredLabel =
+            action.address ??
+            [action.type, action.name]
+              .filter((value): value is string => value !== undefined && value !== "")
+              .join(".");
           const label = configuredLabel === "" ? `Action ${index + 1}` : configuredLabel;
           const trigger = action.lifecycle_action_trigger;
           return (
             <div key={actionKeys[index]} className="flex items-start gap-3 px-5 py-3 text-xs">
-              <span className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs font-semibold leading-5 text-primary">invoke</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs font-semibold leading-5 text-primary">
+                invoke
+              </span>
               <div className="min-w-0">
                 <code className="break-all font-mono font-semibold text-foreground">{label}</code>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-2xs text-muted-foreground">
                   {action.provider_name !== undefined && (
-                    <span className="inline-flex items-center gap-1.5"><ProviderIcon providerName={action.provider_name} size={14} /><code className="font-mono text-foreground/70">{(action.provider_name.split("/").pop() ?? action.provider_name)}</code></span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <ProviderIcon providerName={action.provider_name} size={14} />
+                      <code className="font-mono text-foreground/70">
+                        {action.provider_name.split("/").pop() ?? action.provider_name}
+                      </code>
+                    </span>
                   )}
                   {trigger?.action_trigger_event !== undefined && (
                     <span>{trigger.action_trigger_event.replace(/_/g, " ")}</span>
                   )}
                   {trigger?.triggering_resource_address !== undefined && (
-                    <span>Triggered by <code className="font-mono">{trigger.triggering_resource_address}</code></span>
+                    <span>
+                      Triggered by <code className="font-mono">{trigger.triggering_resource_address}</code>
+                    </span>
                   )}
                   {action.invoke_action_trigger !== undefined && <span>Explicit invocation</span>}
                 </div>
@@ -973,43 +1026,44 @@ function summaryCounts(resources: readonly ResourceChange[]) {
  * Render the plan resource summary as a copy-pasteable Markdown block.
  * Mirrors the on-screen summary order: import, create, change, destroy.
  */
-export function planSummaryMarkdown(counts: Readonly<{
-  add: number;
-  change: number;
-  destroy: number;
-  replace: number;
-  importCount: number;
-  removeCount?: number;
-  unsupportedCount?: number;
-  moveCount?: number;
-}>): string {
+export function planSummaryMarkdown(
+  counts: Readonly<{
+    add: number;
+    change: number;
+    destroy: number;
+    replace: number;
+    importCount: number;
+    removeCount?: number;
+    unsupportedCount?: number;
+    moveCount?: number;
+  }>,
+): string {
   return [
     "## Plan summary",
     "",
-    ...([
-      { count: counts.importCount, label: "to import" },
-      { count: counts.add, label: "to create" },
-      { count: counts.change, label: "to change" },
-      { count: counts.destroy, label: "to destroy" },
-      { count: counts.removeCount ?? 0, label: "to remove from state" },
-      { count: counts.unsupportedCount ?? 0, label: "unsupported operations — review the CLI plan before approval" },
-      { count: counts.moveCount ?? 0, label: "to move" },
-    ] as const)
+    ...(
+      [
+        { count: counts.importCount, label: "to import" },
+        { count: counts.add, label: "to create" },
+        { count: counts.change, label: "to change" },
+        { count: counts.destroy, label: "to destroy" },
+        { count: counts.removeCount ?? 0, label: "to remove from state" },
+        { count: counts.unsupportedCount ?? 0, label: "unsupported operations — review the CLI plan before approval" },
+        { count: counts.moveCount ?? 0, label: "to move" },
+      ] as const
+    )
       .filter((item): boolean => item.count > 0)
       .map((item): string => `- ${item.count} ${item.label}`),
     "",
   ].join("\n");
 }
 
-function resourceMatches(
-  resource: ResourceChange,
-  selectedOps: ReadonlySet<Operation>,
-  query: string,
-): boolean {
+function resourceMatches(resource: ResourceChange, selectedOps: ReadonlySet<Operation>, query: string): boolean {
   const primaryOp = operationForResource(resource);
-  const matchesOp = selectedOps.has(primaryOp)
-    || (resource.previous_address !== undefined && selectedOps.has("move"))
-    || (resource.change.importing !== undefined && selectedOps.has("import"));
+  const matchesOp =
+    selectedOps.has(primaryOp) ||
+    (resource.previous_address !== undefined && selectedOps.has("move")) ||
+    (resource.change.importing !== undefined && selectedOps.has("import"));
   if (!matchesOp) return false;
   if (query === "") return true;
   return [
@@ -1031,15 +1085,40 @@ function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change
         Output changes <span className="font-normal text-muted-foreground">({outputs.length})</span>
       </summary>
       <div className="border-t border-border/60">
-        {outputs.map(([name, output]): React.JSX.Element => (
-          <details key={name} className="border-b border-border/60 last:border-b-0">
-            <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-              <span className="inline-flex items-center rounded border border-input bg-muted px-1.5 py-0.5 font-mono text-2xs font-medium leading-5">{name}</span>
-              <span className="text-muted-foreground">{(() => { const op = operationFor(output.actions); return op === "delete" ? "−" : op === "no-op" ? "·" : op === "create" ? "+" : op === "update" ? "~" : op === "read" ? "◎" : op === "replace" ? "±" : op === "import" ? "&" : op === "move" ? "→" : ""; })()}</span>
-            </summary>
-            <AttributeDiff change={output} address={`output.${name}`} name={name} />
-          </details>
-        ))}
+        {outputs.map(
+          ([name, output]): React.JSX.Element => (
+            <details key={name} className="border-b border-border/60 last:border-b-0">
+              <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                <span className="inline-flex items-center rounded border border-input bg-muted px-1.5 py-0.5 font-mono text-2xs font-medium leading-5">
+                  {name}
+                </span>
+                <span className="text-muted-foreground">
+                  {(() => {
+                    const op = operationFor(output.actions);
+                    return op === "delete"
+                      ? "−"
+                      : op === "no-op"
+                        ? "·"
+                        : op === "create"
+                          ? "+"
+                          : op === "update"
+                            ? "~"
+                            : op === "read"
+                              ? "◎"
+                              : op === "replace"
+                                ? "±"
+                                : op === "import"
+                                  ? "&"
+                                  : op === "move"
+                                    ? "→"
+                                    : "";
+                  })()}
+                </span>
+              </summary>
+              <AttributeDiff change={output} address={`output.${name}`} name={name} />
+            </details>
+          ),
+        )}
       </div>
     </details>
   );
@@ -1058,27 +1137,33 @@ function settleLoadFailure(
     scheduleDegraded();
     return;
   }
-  if (reason instanceof ApiError
-    && reason.status === 404
-    && PLANLESS_TERMINAL_STATUSES.has(status)
-    && planStatus !== "finished") {
+  if (
+    reason instanceof ApiError &&
+    reason.status === 404 &&
+    PLANLESS_TERMINAL_STATUSES.has(status) &&
+    planStatus !== "finished"
+  ) {
     setLoadState({ kind: "unavailable" });
     return;
   }
   setLoadState({
     kind: "error",
-    message: reason instanceof ApiError && reason.status === 404
-      ? "Plan output is not available for this run."
-      : reason instanceof Error
-        ? reason.message
-        : "Failed to load structured plan output.",
+    message:
+      reason instanceof ApiError && reason.status === 404
+        ? "Plan output is not available for this run."
+        : reason instanceof Error
+          ? reason.message
+          : "Failed to load structured plan output.",
   });
 }
 
 function PlanLoadingState({ planStatus }: Readonly<{ planStatus?: string | undefined }>): React.JSX.Element {
   if (planStatus === "running") return <></>;
   return (
-    <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
+    <div
+      role="status"
+      className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground"
+    >
       <Spinner className="size-4" />
       Loading structured plan output…
     </div>
@@ -1088,7 +1173,10 @@ function PlanLoadingState({ planStatus }: Readonly<{ planStatus?: string | undef
 function PlanWaitingState({ planStatus }: Readonly<{ planStatus?: string | undefined }>): React.JSX.Element {
   if (planStatus === "running") return <></>;
   return (
-    <div role="status" className="flex items-start gap-3 border-t border-border bg-primary/10 px-5 py-4 text-sm text-muted-foreground">
+    <div
+      role="status"
+      className="flex items-start gap-3 border-t border-border bg-primary/10 px-5 py-4 text-sm text-muted-foreground"
+    >
       <Spinner className="mt-0.5 size-4 text-primary" />
       <div>
         <p className="font-medium text-foreground/85">Preparing structured plan output…</p>
@@ -1168,25 +1256,32 @@ function PlanOperationSummary({
   return (
     <div aria-label="Resource change summary" className="flex flex-wrap gap-2 border-b border-border p-4">
       {operationSummary.length === 0 ? (
-        <div aria-label="No resource changes" className="w-full rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground">
+        <div
+          aria-label="No resource changes"
+          className="w-full rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground"
+        >
           No resource changes
         </div>
-      ) : operationSummary.map((item): React.JSX.Element => (
-        <button
-          type="button"
-          key={item.label}
-          aria-label={`${item.count} ${item.label}`}
-          aria-controls="plan-resource-list"
-          title="Show these changes"
-          className={`inline-flex items-center gap-1 rounded px-1 text-xs font-semibold leading-5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${item.className}`}
-          onClick={(): void => {
-            onSelect(item.label);
-          }}
-        >
-          <span aria-hidden="true">{item.symbol}</span>
-          {item.count} <span className="font-normal">{item.label}</span>
-        </button>
-      ))}
+      ) : (
+        operationSummary.map(
+          (item): React.JSX.Element => (
+            <button
+              type="button"
+              key={item.label}
+              aria-label={`${item.count} ${item.label}`}
+              aria-controls="plan-resource-list"
+              title="Show these changes"
+              className={`inline-flex items-center gap-1 rounded px-1 text-xs font-semibold leading-5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${item.className}`}
+              onClick={(): void => {
+                onSelect(item.label);
+              }}
+            >
+              <span aria-hidden="true">{item.symbol}</span>
+              {item.count} <span className="font-normal">{item.label}</span>
+            </button>
+          ),
+        )
+      )}
     </div>
   );
 }
@@ -1205,11 +1300,25 @@ function PlanExtraCounts({
   if (replaceCount === 0 && moveCount === 0 && driftCount === 0 && actionCount === 0) return null;
   return (
     <div className="flex flex-wrap gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-      {replaceCount > 0 && <span>{replaceCount} replacement{replaceCount === 1 ? "" : "s"}</span>}
-      {moveCount > 0 && <span>{moveCount} move{moveCount === 1 ? "" : "s"}</span>}
-      {driftCount > 0 && <span>{driftCount} drifted resource{driftCount === 1 ? "" : "s"}</span>}
+      {replaceCount > 0 && (
+        <span>
+          {replaceCount} replacement{replaceCount === 1 ? "" : "s"}
+        </span>
+      )}
+      {moveCount > 0 && (
+        <span>
+          {moveCount} move{moveCount === 1 ? "" : "s"}
+        </span>
+      )}
+      {driftCount > 0 && (
+        <span>
+          {driftCount} drifted resource{driftCount === 1 ? "" : "s"}
+        </span>
+      )}
       {actionCount > 0 && (
-        <span>{actionCount} action{actionCount === 1 ? "" : "s"} to invoke</span>
+        <span>
+          {actionCount} action{actionCount === 1 ? "" : "s"} to invoke
+        </span>
       )}
     </div>
   );
@@ -1233,25 +1342,30 @@ function PlanResourceList({
   if (filteredResources.length !== 0) {
     return (
       <div id="plan-resource-list" aria-label={`Resource list, ${filteredResources.length} items`}>
-        {filteredResources.map((resource): React.JSX.Element => (
-          <ResourceRow key={resourceIdentity(resource)} resource={resource} />
-        ))}
+        {filteredResources.map(
+          (resource): React.JSX.Element => (
+            <ResourceRow key={resourceIdentity(resource)} resource={resource} />
+          ),
+        )}
       </div>
     );
   }
-  const showMascot = changedResources.length === 0
-    && driftResources.length === 0
-    && actionInvocations.length === 0
-    && outputs.length === 0
-    && planStatus === "finished";
+  const showMascot =
+    changedResources.length === 0 &&
+    driftResources.length === 0 &&
+    actionInvocations.length === 0 &&
+    outputs.length === 0 &&
+    planStatus === "finished";
   return (
     <div className="px-5 py-6 text-center text-sm text-muted-foreground">
       {showMascot && <Terrence pose="healthy" detail="small" className="mx-auto mb-3 w-32" />}
-      <p>{changedResources.length === 0
-        ? actionInvocations.length === 0
-          ? "This plan has no resource changes."
-          : `This plan has no resource changes, but it will invoke ${actionInvocations.length} action${actionInvocations.length === 1 ? "" : "s"}.`
-        : "No resources match these filters."}</p>
+      <p>
+        {changedResources.length === 0
+          ? actionInvocations.length === 0
+            ? "This plan has no resource changes."
+            : `This plan has no resource changes, but it will invoke ${actionInvocations.length} action${actionInvocations.length === 1 ? "" : "s"}.`
+          : "No resources match these filters."}
+      </p>
     </div>
   );
 }
@@ -1275,9 +1389,11 @@ function PlanDriftSection({
         </p>
       ) : (
         <div className="border-t border-border/60">
-          {filteredDrift.map((resource): React.JSX.Element => (
-            <ResourceRow key={resourceIdentity(resource)} resource={resource} />
-          ))}
+          {filteredDrift.map(
+            (resource): React.JSX.Element => (
+              <ResourceRow key={resourceIdentity(resource)} resource={resource} />
+            ),
+          )}
         </div>
       )}
     </details>
@@ -1303,9 +1419,11 @@ function PlanSummaryHeader({
           className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onCopySummary}
         >
-          {summaryCopied
-            ? <Check className="size-3.5" aria-hidden="true" />
-            : <Copy className="size-3.5" aria-hidden="true" />}
+          {summaryCopied ? (
+            <Check className="size-3.5" aria-hidden="true" />
+          ) : (
+            <Copy className="size-3.5" aria-hidden="true" />
+          )}
         </button>
       </div>
       <span className="text-xs text-muted-foreground">
@@ -1401,7 +1519,9 @@ export function PlanOutput({
         settleLoadFailure(reason, shouldPoll, planStatus, status, setLoadState, scheduleDegraded);
       }
     };
-    loadRef.current = (): void => { void load(); };
+    loadRef.current = (): void => {
+      void load();
+    };
 
     if (readyRunId.current !== runId) void load();
     return (): void => {
@@ -1415,46 +1535,56 @@ export function PlanOutput({
 
   // The worker publishes plan.output.ready once the artifact is persisted:
   // fetch it once instead of polling every second while planning runs.
-  useTerrenceEvent("plan.output.ready", (data): boolean => data["run-id"] === runId, (): void => {
-    if (readyRunId.current === runId) return;
-    loadRef.current();
-  });
+  useTerrenceEvent(
+    "plan.output.ready",
+    (data): boolean => data["run-id"] === runId,
+    (): void => {
+      if (readyRunId.current === runId) return;
+      loadRef.current();
+    },
+  );
 
   useEffect((): void => {
-    const ready = activeRunId.current === runId
-      && readyRunId.current === runId
-      && loadState.kind === "ready";
-    onSummaryChange?.(ready
-      ? {
-          actionCount: loadState.plan.action_invocations?.length ?? 0,
-          importCount: (loadState.plan.resource_changes ?? [])
-            .filter((resource): boolean => resource.change.importing !== undefined).length,
-        }
-      : null);
+    const ready = activeRunId.current === runId && readyRunId.current === runId && loadState.kind === "ready";
+    onSummaryChange?.(
+      ready
+        ? {
+            actionCount: loadState.plan.action_invocations?.length ?? 0,
+            importCount: (loadState.plan.resource_changes ?? []).filter(
+              (resource): boolean => resource.change.importing !== undefined,
+            ).length,
+          }
+        : null,
+    );
   }, [loadState, onSummaryChange, runId]);
 
   const derived = useMemo((): PlanDerived | null => {
     if (loadState.kind !== "ready") return null;
     const planJson = loadState.plan;
-    const changedResources = (planJson.resource_changes ?? [])
-      .filter((resource): boolean => operationForResource(resource) !== "no-op");
-    const driftResources = (planJson.resource_drift ?? [])
-      .filter((resource): boolean => operationForResource(resource) !== "no-op");
+    const changedResources = (planJson.resource_changes ?? []).filter(
+      (resource): boolean => operationForResource(resource) !== "no-op",
+    );
+    const driftResources = (planJson.resource_drift ?? []).filter(
+      (resource): boolean => operationForResource(resource) !== "no-op",
+    );
     const counts = summaryCounts(changedResources);
     const query = search.trim().toLocaleLowerCase();
-    const filteredResources = changedResources
-      .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
-    const filteredDrift = driftResources
-      .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
-    const importCount = changedResources
-      .filter((resource): boolean => resource.change.importing !== undefined).length;
-    const moveCount = changedResources
-      .filter((resource): boolean => resource.previous_address !== undefined).length;
-    const outputs = Object.entries(planJson.output_changes ?? {})
-      .filter(([, change]): boolean => change.actions.some((action): boolean => action !== "no-op"));
+    const filteredResources = changedResources.filter((resource): boolean =>
+      resourceMatches(resource, selectedOps, query),
+    );
+    const filteredDrift = driftResources.filter((resource): boolean => resourceMatches(resource, selectedOps, query));
+    const importCount = changedResources.filter((resource): boolean => resource.change.importing !== undefined).length;
+    const moveCount = changedResources.filter((resource): boolean => resource.previous_address !== undefined).length;
+    const outputs = Object.entries(planJson.output_changes ?? {}).filter(([, change]): boolean =>
+      change.actions.some((action): boolean => action !== "no-op"),
+    );
     const actionInvocations = planJson.action_invocations ?? [];
-    const removeCount = changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length;
-    const unsupportedCount = changedResources.filter((resource): boolean => operationForResource(resource) === "unsupported").length;
+    const removeCount = changedResources.filter(
+      (resource): boolean => operationForResource(resource) === "remove",
+    ).length;
+    const unsupportedCount = changedResources.filter(
+      (resource): boolean => operationForResource(resource) === "unsupported",
+    ).length;
     const operationSummary = [
       { count: removeCount, label: "to remove from state", symbol: "−", className: "text-muted-foreground" },
       { count: unsupportedCount, label: "unsupported operations", symbol: "?", className: "text-warning" },
@@ -1557,17 +1687,21 @@ export function PlanOutput({
       // Replacement resources contribute to both the create and
       // destroy summary counts, so keep them in either summary
       // filter as well.
-      setSelectedOps(new Set(
-        operation === "create" || operation === "delete"
-          ? [operation, "replace"]
-          : [operation],
-      ));
+      setSelectedOps(new Set(operation === "create" || operation === "delete" ? [operation, "replace"] : [operation]));
     }
     document.getElementById("plan-resource-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const handleCopySummary = (): void => {
-    void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount, moveCount, removeCount: opCounts.remove, unsupportedCount: opCounts.unsupported })).then((didCopy): void => {
+    void copyTextToClipboard(
+      planSummaryMarkdown({
+        ...counts,
+        importCount,
+        moveCount,
+        removeCount: opCounts.remove,
+        unsupportedCount: opCounts.unsupported,
+      }),
+    ).then((didCopy): void => {
       if (!didCopy || !mountedRef.current) return;
       setSummaryCopied(true);
       if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
@@ -1583,7 +1717,12 @@ export function PlanOutput({
       <PlanSummaryHeader planJson={planJson} summaryCopied={summaryCopied} onCopySummary={handleCopySummary} />
 
       <PlanOperationSummary operationSummary={operationSummary} onSelect={handleSelectOperation} />
-      <PlanExtraCounts replaceCount={counts.replace} moveCount={moveCount} driftCount={driftResources.length} actionCount={actionInvocations.length} />
+      <PlanExtraCounts
+        replaceCount={counts.replace}
+        moveCount={moveCount}
+        driftCount={driftResources.length}
+        actionCount={actionInvocations.length}
+      />
 
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex flex-1 flex-wrap gap-2">
@@ -1599,7 +1738,9 @@ export function PlanOutput({
               placeholder="Filter resources by address…"
               aria-label="Filter resources by address or type"
               className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
-              onInput={(event): void => { setSearch(event.currentTarget.value); }}
+              onInput={(event): void => {
+                setSearch(event.currentTarget.value);
+              }}
             />
           </label>
           <OperationFilterDropdown

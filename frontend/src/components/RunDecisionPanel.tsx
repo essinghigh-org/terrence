@@ -84,17 +84,12 @@ function ConfirmStep({
   // at exactly the moment it matters.
   const needsJustification = action === "override-policy" && comment.trim() === "";
   return (
-    <section
-      aria-labelledby="run-decision-heading"
-      className={cn("rounded-lg border p-4 sm:p-5", surface)}
-    >
+    <section aria-labelledby="run-decision-heading" className={cn("rounded-lg border p-4 sm:p-5", surface)}>
       <h2 id="run-decision-heading" className="text-base font-semibold text-foreground">
         {copy.title}
       </h2>
       <p className="mt-1.5 max-w-prose text-sm text-muted-foreground">{copy.body}</p>
-      {risk !== null && (
-        <p className="mt-2 max-w-prose text-sm font-medium text-warning">{risk}</p>
-      )}
+      {risk !== null && <p className="mt-2 max-w-prose text-sm font-medium text-warning">{risk}</p>}
       {canComment && (
         <div className="mt-4">
           <label htmlFor="run-action-comment" className="mb-1.5 block text-sm font-medium text-foreground">
@@ -120,9 +115,9 @@ function ConfirmStep({
             onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => {
               onCommentChange(event.currentTarget.value);
             }}
-            placeholder={action === "override-policy"
-              ? "Why is this finding acceptable?"
-              : "Add context for this decision"}
+            placeholder={
+              action === "override-policy" ? "Why is this finding acceptable?" : "Add context for this decision"
+            }
           />
         </div>
       )}
@@ -131,9 +126,7 @@ function ConfirmStep({
           type="button"
           variant={action === "apply" ? "default" : "destructive"}
           disabled={busy || needsJustification}
-          {...(needsJustification
-            ? { title: "Say why this finding is acceptable before overriding it." }
-            : {})}
+          {...(needsJustification ? { title: "Say why this finding is acceptable before overriding it." } : {})}
           onClick={onConfirm}
         >
           {busy ? "Sending…" : copy.confirmLabel}
@@ -166,24 +159,30 @@ function isSilentDecision(decision: RunDecision): boolean {
   return decision.detail === "" && decision.offers.length === 0;
 }
 
-function resolveConfirming(
-  requested: RunActionKind | null,
-  offers: readonly RunActionOffer[],
-): RunActionKind | null {
-  return requested !== null
-    && offers.some((item: RunActionOffer): boolean => item.kind === requested)
+function resolveConfirming(requested: RunActionKind | null, offers: readonly RunActionOffer[]): RunActionKind | null {
+  return requested !== null && offers.some((item: RunActionOffer): boolean => item.kind === requested)
     ? requested
     : null;
 }
 
-function DecisionHeading({ decision, rail }: Readonly<{
+function DecisionHeading({
+  decision,
+  rail,
+}: Readonly<{
   decision: RunDecision;
   rail: boolean;
 }>): React.JSX.Element {
   return (
     <>
-      {rail && <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground col-span-full">Decision</p>}
-      <h2 id="run-decision-heading" className={decision.kind === "waiting" && !rail ? "sr-only" : "text-sm font-semibold text-foreground"}>
+      {rail && (
+        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground col-span-full">
+          Decision
+        </p>
+      )}
+      <h2
+        id="run-decision-heading"
+        className={decision.kind === "waiting" && !rail ? "sr-only" : "text-sm font-semibold text-foreground"}
+      >
         {decision.headline}
       </h2>
       {decision.detail !== "" && (
@@ -193,7 +192,12 @@ function DecisionHeading({ decision, rail }: Readonly<{
   );
 }
 
-function DecisionOffers({ decision, pending, rail, onRequest }: Readonly<{
+function DecisionOffers({
+  decision,
+  pending,
+  rail,
+  onRequest,
+}: Readonly<{
   decision: RunDecision;
   pending: string;
   rail: boolean;
@@ -202,51 +206,73 @@ function DecisionOffers({ decision, pending, rail, onRequest }: Readonly<{
   return (
     <>
       {decision.offers.length > 0 && (
-        <div className={cn("mt-3 flex flex-wrap items-center gap-2", !rail && "sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:mt-0")}>
-          {decision.offers.map((item: RunActionOffer): React.JSX.Element => (
-            <Button
-              key={item.kind}
-              type="button"
-              {...offerButtonProps(item.emphasis)}
-              size={decision.kind === "waiting" ? "sm" : "default"}
-              disabled={item.blockedReason !== null || pending !== ""}
-              // The blocker rides on the button it blocks; the list below
-              // repeats it as text so the reason stays reachable by
-              // keyboard and screen readers (title alone is not).
-              title={item.blockedReason ?? undefined}
-              onClick={(): void => { onRequest(item.kind); }}
-            >
-              {item.label}
-            </Button>
-          ))}
+        <div
+          className={cn(
+            "mt-3 flex flex-wrap items-center gap-2",
+            !rail && "sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:mt-0",
+          )}
+        >
+          {decision.offers.map(
+            (item: RunActionOffer): React.JSX.Element => (
+              <Button
+                key={item.kind}
+                type="button"
+                {...offerButtonProps(item.emphasis)}
+                size={decision.kind === "waiting" ? "sm" : "default"}
+                disabled={item.blockedReason !== null || pending !== ""}
+                // The blocker rides on the button it blocks; the list below
+                // repeats it as text so the reason stays reachable by
+                // keyboard and screen readers (title alone is not).
+                title={item.blockedReason ?? undefined}
+                onClick={(): void => {
+                  onRequest(item.kind);
+                }}
+              >
+                {item.label}
+              </Button>
+            ),
+          )}
         </div>
       )}
       {decision.offers.some((item: RunActionOffer): boolean => item.blockedReason !== null) && (
         <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
           {decision.offers
             .filter((item: RunActionOffer): boolean => item.blockedReason !== null)
-            .map((item: RunActionOffer): React.JSX.Element => (
-              <li key={item.kind}>{item.blockedReason}</li>
-            ))}
+            .map(
+              (item: RunActionOffer): React.JSX.Element => (
+                <li key={item.kind}>{item.blockedReason}</li>
+              ),
+            )}
         </ul>
       )}
     </>
   );
 }
 
-function StaleWarningNote({ rail, context }: Readonly<{
+function StaleWarningNote({
+  rail,
+  context,
+}: Readonly<{
   rail: boolean;
   context: DecisionContext | undefined;
 }>): React.JSX.Element | null {
-  if (!(rail && context?.staleWarning !== undefined && context.staleWarning !== null && context.staleWarning !== "")) return null;
+  if (!(rail && context?.staleWarning !== undefined && context.staleWarning !== null && context.staleWarning !== ""))
+    return null;
   return (
-    <p role="status" className="mt-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning col-span-full">
+    <p
+      role="status"
+      className="mt-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning col-span-full"
+    >
       {context.staleWarning}
     </p>
   );
 }
 
-function PlannedChangesRow({ additions, changes, destructions }: Readonly<{
+function PlannedChangesRow({
+  additions,
+  changes,
+  destructions,
+}: Readonly<{
   additions?: number | null | undefined;
   changes?: number | null | undefined;
   destructions?: number | null | undefined;
@@ -264,7 +290,16 @@ function PlannedChangesRow({ additions, changes, destructions }: Readonly<{
   );
 }
 
-function ContextTextRow({ label, value, wide, mono, truncate, title, prefix, allowEmpty }: Readonly<{
+function ContextTextRow({
+  label,
+  value,
+  wide,
+  mono,
+  truncate,
+  title,
+  prefix,
+  allowEmpty,
+}: Readonly<{
   label: string;
   value: string | null | undefined;
   wide?: boolean;
@@ -278,14 +313,27 @@ function ContextTextRow({ label, value, wide, mono, truncate, title, prefix, all
   return (
     <div className={wide === true ? "col-span-2 min-w-0" : undefined}>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className={mono === true ? "mt-0.5 truncate font-mono text-foreground" : truncate === true ? "mt-0.5 truncate text-foreground" : "mt-0.5 text-foreground"} title={title ?? undefined}>
-        {prefix}{value}
+      <dd
+        className={
+          mono === true
+            ? "mt-0.5 truncate font-mono text-foreground"
+            : truncate === true
+              ? "mt-0.5 truncate text-foreground"
+              : "mt-0.5 text-foreground"
+        }
+        title={title ?? undefined}
+      >
+        {prefix}
+        {value}
       </dd>
     </div>
   );
 }
 
-function DecisionContextList({ rail, context }: Readonly<{
+function DecisionContextList({
+  rail,
+  context,
+}: Readonly<{
   rail: boolean;
   context: DecisionContext | undefined;
 }>): React.JSX.Element | null {
@@ -361,8 +409,13 @@ export function RunDecisionPanel({
         pending={pending}
         surface={surface}
         onCommentChange={setComment}
-        onConfirm={(): void => { onConfirm(confirming, comment); }}
-        onBack={(): void => { setRequested(null); setComment(""); }}
+        onConfirm={(): void => {
+          onConfirm(confirming, comment);
+        }}
+        onBack={(): void => {
+          setRequested(null);
+          setComment("");
+        }}
       />
     );
   }
@@ -371,13 +424,23 @@ export function RunDecisionPanel({
     <section
       data-decision-rail={rail ? "true" : undefined}
       aria-labelledby="run-decision-heading"
-      className={decision.kind === "waiting" && !rail ? "flex justify-end" : cn("rounded-lg border p-4 sm:p-5", surface)}
+      className={
+        decision.kind === "waiting" && !rail ? "flex justify-end" : cn("rounded-lg border p-4 sm:p-5", surface)
+      }
     >
       <div className="flex items-start gap-3">
         {decision.kind !== "waiting" && <ToneIcon decision={decision} />}
         <div className={cn("grid min-w-0 flex-1 items-center gap-x-6", !rail && "sm:grid-cols-[minmax(0,1fr)_auto]")}>
           <DecisionHeading decision={decision} rail={rail} />
-          <DecisionOffers decision={decision} pending={pending} rail={rail} onRequest={(kind: RunActionKind): void => { setRequested(kind); setComment(""); }} />
+          <DecisionOffers
+            decision={decision}
+            pending={pending}
+            rail={rail}
+            onRequest={(kind: RunActionKind): void => {
+              setRequested(kind);
+              setComment("");
+            }}
+          />
           <StaleWarningNote rail={rail} context={context} />
           <DecisionContextList rail={rail} context={context} />
         </div>

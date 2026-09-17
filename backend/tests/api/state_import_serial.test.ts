@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, organizationMemberships, organizations, stateVersions, users, workspaces,
+  apiTokens,
+  organizationMemberships,
+  organizations,
+  stateVersions,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { desc, eq } from "drizzle-orm";
@@ -19,19 +24,25 @@ describe("state import accepts migrated serials (#569)", () => {
   const lineage = `lineage-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
-  const upload = (serial: unknown) => request(
-    `/api/v2/workspaces/${wsId}/state-versions/upload`, "POST",
-    { version: 4, serial, lineage, outputs: {}, resources: [] },
-  );
+  const upload = (serial: unknown) =>
+    request(`/api/v2/workspaces/${wsId}/state-versions/upload`, "POST", {
+      version: 4,
+      serial,
+      lineage,
+      outputs: {},
+      resources: [],
+    });
 
   const latestSerial = async (): Promise<number | null> => {
     const row = await db.query.stateVersions.findFirst({
@@ -46,12 +57,14 @@ describe("state import accepts migrated serials (#569)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
-    await db.insert(workspaces).values([
-      { id: wsId, name: `stimport-ws-${suffix}`, orgId, executionMode: "remote" },
-    ]);
+    await db.insert(workspaces).values([{ id: wsId, name: `stimport-ws-${suffix}`, orgId, executionMode: "remote" }]);
     const lockRes = await request(`/api/v2/workspaces/${wsId}/actions/lock`, "POST", {
       data: { attributes: { reason: "migration" } },
     });
@@ -59,12 +72,30 @@ describe("state import accepts migrated serials (#569)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(stateVersions).where(eq(stateVersions.workspaceId, wsId)).catch((): void => undefined);
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
+    await db
+      .delete(stateVersions)
+      .where(eq(stateVersions.workspaceId, wsId))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(eq(workspaces.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.id, `tok-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizationMemberships)
+      .where(eq(organizationMemberships.id, `mem-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .catch((): void => undefined);
   });
 
   it("accepts a migrated serial on an empty workspace and stores it", async () => {
@@ -87,7 +118,7 @@ describe("state import accepts migrated serials (#569)", () => {
   it("rejects non-positive serials", async () => {
     const res = await upload(0);
     expect(res.status).toBe(422);
-    const body = await res.json() as { errors?: { detail?: string }[] };
+    const body = (await res.json()) as { errors?: { detail?: string }[] };
     expect(body.errors?.[0]?.detail).toContain("positive integer");
   });
 });

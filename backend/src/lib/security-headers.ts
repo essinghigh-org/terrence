@@ -23,9 +23,7 @@ export function buildContentSecurityPolicy(options?: Readonly<{ strict?: boolean
   const strict = options?.strict ?? booleanSetting("TERRENCE_CSP_STRICT");
   if (memoizedCsp !== null && !strict) return memoizedCsp;
   const imgSrc = DEFAULT_IMG_SRC.join(" ");
-  const styleSrc = strict
-    ? "style-src 'self'"
-    : "style-src 'self' 'unsafe-inline'";
+  const styleSrc = strict ? "style-src 'self'" : "style-src 'self' 'unsafe-inline'";
   const policy = [
     "default-src 'self'",
     "base-uri 'none'",
@@ -62,7 +60,8 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "X-Robots-Tag": "noindex, nofollow, noarchive",
   // Browser capabilities Terrence does not use (clipboard deliberately left
   // enabled — the UI writes tokens/config to the clipboard).
-  "Permissions-Policy": "geolocation=(), camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), battery=(), accelerometer=(), gyroscope=(), magnetometer=(), xr-spatial-tracking=(), display-capture=(), idle-detection=(), gamepad=(), picture-in-picture=()",
+  "Permissions-Policy":
+    "geolocation=(), camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), battery=(), accelerometer=(), gyroscope=(), magnetometer=(), xr-spatial-tracking=(), display-capture=(), idle-detection=(), gamepad=(), picture-in-picture=()",
 };
 
 const IMMUTABLE_ASSET_AGE = 31_536_000; // 1 year, hashed filenames never change
@@ -99,7 +98,9 @@ export function applySecurityHeaders(
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
 
 /** Whether a response should carry HSTS. Caller passes the request so we can check the scheme / X-Forwarded-Proto. */
-export function shouldSendHsts(request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>): boolean {
+export function shouldSendHsts(
+  request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>,
+): boolean {
   // Lazy require: a static import cycles back through settings/run-logs and
   // crashes module init with a TDZ error (verified 2026-09-11).
   try {

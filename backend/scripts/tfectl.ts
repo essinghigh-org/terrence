@@ -40,12 +40,17 @@ function takeFlag(name: string): boolean {
   return true;
 }
 
-
 function assertNoExtraArgs(): void {
   if (args.length > 0) throw new Error(`unknown option: ${args[0] ?? ""}`);
 }
 
-function boundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number, name: string): number {
+function boundedInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  name: string,
+): number {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
@@ -68,14 +73,24 @@ function defaultSystemAddress(applicationAddress: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-const applicationAddress = normalizedAddress(takeOption("--address") ?? process.env.TFE_ADDRESS ?? "http://localhost:3000");
-const systemAddress = normalizedAddress(takeOption("--system-address") ?? process.env.TFE_SYSTEM_ADDRESS ?? defaultSystemAddress(applicationAddress));
+const applicationAddress = normalizedAddress(
+  takeOption("--address") ?? process.env.TFE_ADDRESS ?? "http://localhost:3000",
+);
+const systemAddress = normalizedAddress(
+  takeOption("--system-address") ?? process.env.TFE_SYSTEM_ADDRESS ?? defaultSystemAddress(applicationAddress),
+);
 const applicationToken = takeOption("--token") ?? process.env.TFE_TOKEN;
 const systemToken = takeOption("--system-token") ?? process.env.TFE_SYSTEM_TOKEN;
 const jsonOutput = takeFlag("--json");
 
-async function request(base: string, path: string, token: string | undefined, init: RequestInit = {}): Promise<unknown> {
-  if (token === undefined || token === "") throw new Error(`missing ${base === systemAddress ? "TFE_SYSTEM_TOKEN" : "TFE_TOKEN"}`);
+async function request(
+  base: string,
+  path: string,
+  token: string | undefined,
+  init: RequestInit = {},
+): Promise<unknown> {
+  if (token === undefined || token === "")
+    throw new Error(`missing ${base === systemAddress ? "TFE_SYSTEM_TOKEN" : "TFE_TOKEN"}`);
   const response = await fetch(`${base}${path}`, {
     ...init,
     headers: {
@@ -89,9 +104,10 @@ async function request(base: string, path: string, token: string | undefined, in
   const contentType = response.headers.get("content-type") ?? "";
   const body: unknown = contentType.includes("json") ? await response.json() : await response.text();
   if (!response.ok) {
-    const errors = body !== null && typeof body === "object" && Array.isArray((body as Record<string, unknown>).errors)
-      ? (body as { errors: { detail?: string; title?: string }[] }).errors
-      : [];
+    const errors =
+      body !== null && typeof body === "object" && Array.isArray((body as Record<string, unknown>).errors)
+        ? (body as { errors: { detail?: string; title?: string }[] }).errors
+        : [];
     throw new Error(errors[0]?.detail ?? errors[0]?.title ?? `request failed with HTTP ${response.status}`);
   }
   return body;
@@ -115,11 +131,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  const commandLength = args[0] === "admin" && args[1] === "api-token"
-    ? 3
-    : args[0] === "app" && args[1] === "health"
-      ? 3
-      : 2;
+  const commandLength =
+    args[0] === "admin" && args[1] === "api-token" ? 3 : args[0] === "app" && args[1] === "health" ? 3 : 2;
   const command = args.splice(0, commandLength).join(" ");
   if (command === "admin api-token generate") {
     const description = takeOption("--description");
@@ -142,7 +155,9 @@ async function main(): Promise<void> {
     const id = takeOption("--id");
     if (id === undefined || id === "") throw new Error("--id is required");
     assertNoExtraArgs();
-    await request(applicationAddress, `/api/v2/admin/system-api-tokens/${encodeURIComponent(id)}`, applicationToken, { method: "DELETE" });
+    await request(applicationAddress, `/api/v2/admin/system-api-tokens/${encodeURIComponent(id)}`, applicationToken, {
+      method: "DELETE",
+    });
     console.log(`Revoked ${id}`);
     return;
   }
@@ -185,10 +200,12 @@ async function main(): Promise<void> {
     const all = takeFlag("--all");
     if (node !== undefined && all) throw new Error("--node and --all are mutually exclusive");
     const data = all ? { all: true } : node === undefined ? {} : { nodes: [node] };
-    print(await request(systemAddress, "/api/v1/support/bundle-requests", systemToken, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }));
+    print(
+      await request(systemAddress, "/api/v1/support/bundle-requests", systemToken, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    );
     return;
   }
   throw new Error(`unknown command\n\n${HELP}`);

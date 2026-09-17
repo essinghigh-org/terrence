@@ -35,9 +35,7 @@ export function FullscreenLogOverlay(props: FullscreenLogOverlayProps): React.JS
       className="fixed inset-0 z-50 flex flex-col bg-background"
     >
       <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-3">
-        <h2 className="text-sm font-semibold text-foreground">
-          {isPlan ? "Raw plan log" : "Raw apply log"}
-        </h2>
+        <h2 className="text-sm font-semibold text-foreground">{isPlan ? "Raw plan log" : "Raw apply log"}</h2>
         <Button
           ref={props.closeRef}
           type="button"
@@ -61,8 +59,12 @@ export function FullscreenLogOverlay(props: FullscreenLogOverlayProps): React.JS
         className={`flex-1 overflow-auto ${props.logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
       >
         {isPlan
-          ? props.planLogs !== "" ? truncateLogForDisplay(props.planLogs) : props.planRawLogMessage
-          : props.applyLogs !== "" ? truncateLogForDisplay(props.applyLogs) : props.applyRawLogMessage}
+          ? props.planLogs !== ""
+            ? truncateLogForDisplay(props.planLogs)
+            : props.planRawLogMessage
+          : props.applyLogs !== ""
+            ? truncateLogForDisplay(props.applyLogs)
+            : props.applyRawLogMessage}
       </RunLogOutput>
     </div>
   );

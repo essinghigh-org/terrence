@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { organizations, users } from "../../src/db/schema";import {
+import { organizations, users } from "../../src/db/schema";
+import {
   cleanupSeed,
   expectCollection,
   expectErrorResponse,
@@ -112,7 +113,9 @@ describe("remote-workflow organizations and users contract", () => {
       "organizations",
     );
     // the reference format persists the email; Terrence does not store one for this org.
-    expect(resource.attributes["email"] === null || resource.attributes["email"] === "new-owner@example.com").toBe(true);
+    expect(resource.attributes["email"] === null || resource.attributes["email"] === "new-owner@example.com").toBe(
+      true,
+    );
   });
 
   it("creates and lists organization memberships", async () => {
@@ -143,7 +146,10 @@ describe("remote-workflow organizations and users contract", () => {
       data: { id: seed.orgName, type: "organizations" },
     });
 
-    const response = await request(`/api/v2/organizations/${seed.orgName}/organization-memberships?page[number]=1&page[size]=10`, { headers });
+    const response = await request(
+      `/api/v2/organizations/${seed.orgName}/organization-memberships?page[number]=1&page[size]=10`,
+      { headers },
+    );
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "organization-memberships");
@@ -173,7 +179,11 @@ describe("remote-workflow organizations and users contract", () => {
   });
 
   it("shows the current user", async () => {
-    const resource = await expectSuccessResponse(await request(`/api/v2/users/${seed.userId}`, { headers }), 200, "users");
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/users/${seed.userId}`, { headers }),
+      200,
+      "users",
+    );
     expect(resource.attributes["username"]).toBe(seed.username);
     expect(resource.attributes["is-service-account"]).toBe(false);
     expect(resource.attributes["auth-method"]).toBe("password");
@@ -186,7 +196,9 @@ describe("remote-workflow organizations and users contract", () => {
   });
 
   it("lists organization members", async () => {
-    const response = await request(`/api/v2/organizations/${seed.orgName}/users?page[number]=1&page[size]=10`, { headers });
+    const response = await request(`/api/v2/organizations/${seed.orgName}/users?page[number]=1&page[size]=10`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "users");
@@ -195,7 +207,9 @@ describe("remote-workflow organizations and users contract", () => {
   });
 
   it("removes an organization membership", async () => {
-    await expectNoContent(await request(`/api/v2/organization-memberships/${membershipId}`, { method: "DELETE", headers }));
+    await expectNoContent(
+      await request(`/api/v2/organization-memberships/${membershipId}`, { method: "DELETE", headers }),
+    );
     await expectErrorResponse(await request(`/api/v2/organization-memberships/${membershipId}`, { headers }), 404);
   });
 

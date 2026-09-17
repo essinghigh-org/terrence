@@ -131,77 +131,75 @@ export function useRunView(runId: string): RunView {
   const controllerRunIdRef = useRef<string>("");
   const statusRef = useRef<string | null>(null);
 
-  const loadRun = useCallback(async (signal: Readonly<AbortSignal>): Promise<string | null> => {
-    const seq = claim();
-    try {
-      const response = await fetchApi<{ data: RunResource; included?: unknown }>(
-        `/api/v2/runs/${runId}`,
-        { signal },
-      );
-      if (signal.aborted || !isCurrent("run", seq)) return null;
-      const creator = resolveCreator(response.data, response.included);
-      dispatch({
-        type: "run-loaded",
-        run: response.data,
-        creatorUsername: creator.username,
-        creatorAvatarUrl: creator.avatarUrl,
-      });
-      return response.data.attributes.status;
-    } catch (error: unknown) {
-      if (signal.aborted || !isCurrent("run", seq)) return null;
-      if (error instanceof ApiError && error.status === 404) {
-        dispatch({ type: "run-missing" });
+  const loadRun = useCallback(
+    async (signal: Readonly<AbortSignal>): Promise<string | null> => {
+      const seq = claim();
+      try {
+        const response = await fetchApi<{ data: RunResource; included?: unknown }>(`/api/v2/runs/${runId}`, { signal });
+        if (signal.aborted || !isCurrent("run", seq)) return null;
+        const creator = resolveCreator(response.data, response.included);
+        dispatch({
+          type: "run-loaded",
+          run: response.data,
+          creatorUsername: creator.username,
+          creatorAvatarUrl: creator.avatarUrl,
+        });
+        return response.data.attributes.status;
+      } catch (error: unknown) {
+        if (signal.aborted || !isCurrent("run", seq)) return null;
+        if (error instanceof ApiError && error.status === 404) {
+          dispatch({ type: "run-missing" });
+          return null;
+        }
+        dispatch({
+          type: "run-failed",
+          message: error instanceof Error ? error.message : "Could not load run",
+        });
         return null;
       }
-      dispatch({
-        type: "run-failed",
-        message: error instanceof Error ? error.message : "Could not load run",
+    },
+    [runId, claim, isCurrent],
+  );
+
+  const loadSections = useCallback(
+    async (kinds: readonly AuxKind[], signal: Readonly<AbortSignal>): Promise<void> => {
+      if (kinds.length === 0) return;
+      const tickets = kinds.map((): number => claim());
+      const results = await Promise.allSettled(
+        kinds.map(async (kind: AuxKind): Promise<unknown> => fetchApi(AUX_ENDPOINTS[kind](runId), { signal })),
+      );
+      if (signal.aborted) return;
+      const failed: AuxKind[] = [];
+      kinds.forEach((kind: AuxKind, index: number): void => {
+        const result = results[index];
+        const seq = tickets[index] ?? 0;
+        if (result === undefined || result.status === "rejected") {
+          failed.push(kind);
+          return;
+        }
+        if (!isCurrent(kind, seq)) return;
+        dispatch({ type: "section", kind, value: result.value });
       });
-      return null;
-    }
-  }, [runId, claim, isCurrent]);
+      dispatch({ type: "aux-status", kinds, failed });
+    },
+    [runId, claim, isCurrent],
+  );
 
-  const loadSections = useCallback(async (
-    kinds: readonly AuxKind[],
-    signal: Readonly<AbortSignal>,
-  ): Promise<void> => {
-    if (kinds.length === 0) return;
-    const tickets = kinds.map((): number => claim());
-    const results = await Promise.allSettled(
-      kinds.map(async (kind: AuxKind): Promise<unknown> =>
-        fetchApi(AUX_ENDPOINTS[kind](runId), { signal })),
-    );
-    if (signal.aborted) return;
-    const failed: AuxKind[] = [];
-    kinds.forEach((kind: AuxKind, index: number): void => {
-      const result = results[index];
-      const seq = tickets[index] ?? 0;
-      if (result === undefined || result.status === "rejected") {
-        failed.push(kind);
-        return;
+  const loadLogTail = useCallback(
+    async (phase: "plan" | "apply", offset: number, signal: Readonly<AbortSignal>): Promise<void> => {
+      const key = `log:${phase}`;
+      const seq = claim();
+      try {
+        const tail = await fetchRunLogTail(runId, phase, offset, signal);
+        if (signal.aborted || !isCurrent(key, seq)) return;
+        dispatch({ type: "log-chunk", phase, requestedOffset: offset, tail });
+      } catch {
+        // A phase whose log does not exist yet 404s; that is not an error worth
+        // surfacing, and the next tick retries.
       }
-      if (!isCurrent(kind, seq)) return;
-      dispatch({ type: "section", kind, value: result.value });
-    });
-    dispatch({ type: "aux-status", kinds, failed });
-  }, [runId, claim, isCurrent]);
-
-  const loadLogTail = useCallback(async (
-    phase: "plan" | "apply",
-    offset: number,
-    signal: Readonly<AbortSignal>,
-  ): Promise<void> => {
-    const key = `log:${phase}`;
-    const seq = claim();
-    try {
-      const tail = await fetchRunLogTail(runId, phase, offset, signal);
-      if (signal.aborted || !isCurrent(key, seq)) return;
-      dispatch({ type: "log-chunk", phase, requestedOffset: offset, tail });
-    } catch {
-      // A phase whose log does not exist yet 404s; that is not an error worth
-      // surfacing, and the next tick retries.
-    }
-  }, [runId, claim, isCurrent]);
+    },
+    [runId, claim, isCurrent],
+  );
 
   /**
    * Run every queued unit of work, then check whether more arrived while we
@@ -244,20 +242,35 @@ export function useRunView(runId: string): RunView {
     }
   }, [runId, loadRun, loadSections]);
 
-  const enqueue = useCallback((kinds: readonly AuxKind[], withRun: boolean): void => {
-    if (withRun) pendingRunRef.current = true;
-    for (const kind of kinds) pendingKindsRef.current.add(kind);
-    void drain();
-  }, [drain]);
+  const enqueue = useCallback(
+    (kinds: readonly AuxKind[], withRun: boolean): void => {
+      if (withRun) pendingRunRef.current = true;
+      for (const kind of kinds) pendingKindsRef.current.add(kind);
+      void drain();
+    },
+    [drain],
+  );
 
-  const refreshAll = useCallback((): void => { enqueue(ALL_AUX_KINDS, true); }, [enqueue]);
-  const refresh = useCallback((kinds: readonly AuxKind[]): void => { enqueue(kinds, false); }, [enqueue]);
-
-  const markActionSent = useCallback((action: string): void => {
-    dispatch({ type: "action-sent", action, fromStatus: statusRef.current ?? "" });
+  const refreshAll = useCallback((): void => {
     enqueue(ALL_AUX_KINDS, true);
   }, [enqueue]);
-  const markActionSettled = useCallback((): void => { dispatch({ type: "action-settled" }); }, []);
+  const refresh = useCallback(
+    (kinds: readonly AuxKind[]): void => {
+      enqueue(kinds, false);
+    },
+    [enqueue],
+  );
+
+  const markActionSent = useCallback(
+    (action: string): void => {
+      dispatch({ type: "action-sent", action, fromStatus: statusRef.current ?? "" });
+      enqueue(ALL_AUX_KINDS, true);
+    },
+    [enqueue],
+  );
+  const markActionSettled = useCallback((): void => {
+    dispatch({ type: "action-settled" });
+  }, []);
 
   // Lifecycle: one controller per run id. Everything in flight is aborted and
   // all state is discarded when the id changes, so a fast navigation between
@@ -321,7 +334,9 @@ export function useRunView(runId: string): RunView {
   useTerrenceEvent(
     "comment.created",
     (data): boolean => data["run-id"] === runId,
-    (): void => { refresh(["comments"]); },
+    (): void => {
+      refresh(["comments"]);
+    },
   );
 
   // One cadence for the whole page, derived from run status. `pollMs` is a
@@ -350,15 +365,19 @@ export function useRunView(runId: string): RunView {
   // 404s on every tick for the life of the run, and the tail's catch is silent,
   // so it costs a request every 2s to learn nothing.
   const timestamps = state.run?.attributes["status-timestamps"] ?? {};
-  const planStarted = typeof timestamps["planning-at"] === "string"
-    || typeof timestamps["pre-plan-running-at"] === "string";
-  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => typeof timestamps[key] === "string");
+  const planStarted =
+    typeof timestamps["planning-at"] === "string" || typeof timestamps["pre-plan-running-at"] === "string";
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"].some(
+    (key: string): boolean => typeof timestamps[key] === "string",
+  );
 
-  const tailPhases = useCallback((signal: Readonly<AbortSignal>): void => {
-    if (planStarted) void loadLogTail("plan", planOffsetRef.current, signal);
-    if (applyStarted) void loadLogTail("apply", applyOffsetRef.current, signal);
-  }, [loadLogTail, planStarted, applyStarted]);
+  const tailPhases = useCallback(
+    (signal: Readonly<AbortSignal>): void => {
+      if (planStarted) void loadLogTail("plan", planOffsetRef.current, signal);
+      if (applyStarted) void loadLogTail("apply", applyOffsetRef.current, signal);
+    },
+    [loadLogTail, planStarted, applyStarted],
+  );
 
   useEffect((): (() => void) => {
     const controller = controllerRef.current;
@@ -379,7 +398,9 @@ export function useRunView(runId: string): RunView {
       }
     };
     const timer = window.setInterval(tick, pollMs);
-    return (): void => { window.clearInterval(timer); };
+    return (): void => {
+      window.clearInterval(timer);
+    };
   }, [pollMs, tailPhases, enqueue]);
 
   /**
@@ -413,14 +434,19 @@ export function useRunView(runId: string): RunView {
       tailPhases(controller.signal);
     };
     document.addEventListener("visibilitychange", onVisibility);
-    return (): void => { document.removeEventListener("visibilitychange", onVisibility); };
+    return (): void => {
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [enqueue, tailPhases, active]);
 
-  return useMemo((): RunView => ({
-    state,
-    refreshAll,
-    refresh,
-    markActionSent,
-    markActionSettled,
-  }), [state, refreshAll, refresh, markActionSent, markActionSettled]);
+  return useMemo(
+    (): RunView => ({
+      state,
+      refreshAll,
+      refresh,
+      markActionSent,
+      markActionSettled,
+    }),
+    [state, refreshAll, refresh, markActionSent, markActionSettled],
+  );
 }

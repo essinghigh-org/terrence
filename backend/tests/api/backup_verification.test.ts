@@ -28,14 +28,17 @@ describe("admin backup verification API", () => {
     await db.delete(users).where(inArray(users.id, [adminId, memberId]));
   });
 
-  const request = (path: string, token = adminToken, method = "GET", body?: unknown): Promise<Response> => app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  const request = (path: string, token = adminToken, method = "GET", body?: unknown): Promise<Response> =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   test("creates an admin-only manifest without exposing key values and reports restore state", async () => {
     expect((await request("/api/v2/admin/backups/status", memberToken)).status).toBe(404);
@@ -43,7 +46,14 @@ describe("admin backup verification API", () => {
       data: { attributes: { persist: false } },
     });
     expect(created.status).toBe(201);
-    const body = await created.json() as { data: { attributes: { manifest: { version: number; manifestSha256: string; keys: unknown }; "manifest-path": string | null } } };
+    const body = (await created.json()) as {
+      data: {
+        attributes: {
+          manifest: { version: number; manifestSha256: string; keys: unknown };
+          "manifest-path": string | null;
+        };
+      };
+    };
     expect(body.data.attributes.manifest.version).toBe(1);
     expect(body.data.attributes.manifest.manifestSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(body)).not.toContain(process.env["ENCRYPTION_PASSWORD"] ?? "definitely-not-a-password");
@@ -55,8 +65,12 @@ describe("admin backup verification API", () => {
   });
 
   test("does not expose a live restore endpoint and validates rehearsal input", async () => {
-    expect((await request("/api/v2/admin/backups/restore", adminToken, "POST", { data: { attributes: {} } })).status).toBe(404);
-    const response = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", { data: { attributes: {} } });
+    expect(
+      (await request("/api/v2/admin/backups/restore", adminToken, "POST", { data: { attributes: {} } })).status,
+    ).toBe(404);
+    const response = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+      data: { attributes: {} },
+    });
     expect(response.status).toBe(422);
   });
 });

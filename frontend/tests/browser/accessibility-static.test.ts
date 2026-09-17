@@ -60,7 +60,6 @@ describe("accessibility-static: public routes across themes", () => {
   }
 });
 
-
 test("standalone 404 stays accessible and fits a mobile viewport", async (): Promise<void> => {
   const mobile = await createBrowser({ width: 390, height: 844 });
   try {

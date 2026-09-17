@@ -10,7 +10,9 @@ function CurrentLocation(): React.JSX.Element {
   const location = useLocation();
   return (
     <output aria-label="Current location">
-      {location.pathname}{location.search}{location.hash}
+      {location.pathname}
+      {location.search}
+      {location.hash}
     </output>
   );
 }
@@ -41,27 +43,21 @@ afterEach((): void => {
 test("redirects Terraform CLI legacy run URL to canonical workspace run URL", async () => {
   const view = renderRoutes("/app/acme/production/runs/run-123");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/workspaces/production/runs/run-123",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/runs/run-123");
   });
 });
 
 test("redirects legacy workspace runs list URL to canonical runs list", async () => {
   const view = renderRoutes("/app/acme/production/runs");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/workspaces/production/runs",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/runs");
   });
 });
 
 test("redirects legacy workspace variables URL to canonical variables page", async () => {
   const view = renderRoutes("/app/acme/production/variables");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/workspaces/production/variables",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/variables");
   });
 });
 
@@ -86,9 +82,7 @@ test("encodes workspace and run id route parameters in the redirect", async () =
 test("canonical URLs are unaffected by the legacy aliases", async () => {
   const view = renderRoutes("/app/acme/workspaces/production/runs/run-123");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/workspaces/production/runs/run-123",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/runs/run-123");
   });
 });
 
@@ -102,9 +96,7 @@ test("static-segment ranking protects canonical route from legacy alias collisio
   // been rewritten to /app/acme/workspaces/projects/runs.
   const view = renderRoutes("/app/acme/projects/runs");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/projects/runs",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/projects/runs");
   });
 });
 
@@ -112,9 +104,7 @@ test("a legacy redirect shows a one-time dismissible notice (issue #641)", async
   sessionStorage.clear();
   const view = renderRoutes("/app/acme/production/runs/run-123");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/workspaces/production/runs/run-123",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/runs/run-123");
   });
   // The notice names the legacy path that was replaced.
   const notice = await view.findByText(/You followed a Terraform CLI link/);
@@ -129,9 +119,7 @@ test("canonical navigation shows no redirect notice (issue #641)", async () => {
   sessionStorage.clear();
   const view = renderRoutes("/app/acme/workspaces/production/runs/run-123");
   await waitFor((): void => {
-    expect(view.getByLabelText("Current location").textContent).toBe(
-      "/app/acme/workspaces/production/runs/run-123",
-    );
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/runs/run-123");
   });
   expect(view.queryByText(/You followed a Terraform CLI link/)).toBeNull();
 });

@@ -40,9 +40,7 @@ export type AgentProtocolCapability = (typeof AGENT_PROTOCOL_CAPABILITIES)[numbe
  * the existing API.  This keeps old agents usable while making an explicit
  * capability offer authoritative for newer agents.
  */
-export const LEGACY_AGENT_CAPABILITIES: readonly AgentProtocolCapability[] = [
-  ...AGENT_PROTOCOL_CAPABILITIES,
-];
+export const LEGACY_AGENT_CAPABILITIES: readonly AgentProtocolCapability[] = [...AGENT_PROTOCOL_CAPABILITIES];
 
 export const AGENT_ARTIFACT_FORMATS = ["tar.gz", "json", "text"] as const;
 export type AgentArtifactFormat = (typeof AGENT_ARTIFACT_FORMATS)[number];
@@ -89,7 +87,10 @@ const capabilitySet = new Set<string>(AGENT_PROTOCOL_CAPABILITIES);
 const artifactFormatSet = new Set<string>(AGENT_ARTIFACT_FORMATS);
 
 function stringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 128)) {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 128)
+  ) {
     return undefined;
   }
   return [...new Set(value)];
@@ -97,7 +98,10 @@ function stringList(value: unknown): string[] | undefined {
 
 function commaList(value: string | null): string[] | undefined {
   if (value === null || value.trim() === "") return undefined;
-  const result = value.split(",").map((item): string => item.trim()).filter((item): boolean => item !== "");
+  const result = value
+    .split(",")
+    .map((item): string => item.trim())
+    .filter((item): boolean => item !== "");
   return result.length === 0 ? undefined : [...new Set(result)];
 }
 
@@ -107,29 +111,29 @@ function versionList(value: unknown): string[] | undefined {
 }
 
 function offerVersions(body: Readonly<Record<string, unknown>>, headerVersion: string | null): string[] {
-  return versionList(body["protocol_versions"])
-    ?? versionList(body["protocol_version"])
-    ?? commaList(headerVersion)
-    ?? [];
+  return (
+    versionList(body["protocol_versions"]) ?? versionList(body["protocol_version"]) ?? commaList(headerVersion) ?? []
+  );
 }
 
-function offerCapabilities(body: Readonly<Record<string, unknown>>, headerCapabilities: string | null): string[] | undefined {
-  return stringList(body["capabilities"])
-    ?? commaList(headerCapabilities);
+function offerCapabilities(
+  body: Readonly<Record<string, unknown>>,
+  headerCapabilities: string | null,
+): string[] | undefined {
+  return stringList(body["capabilities"]) ?? commaList(headerCapabilities);
 }
 
 function offerRequiredCapabilities(body: Readonly<Record<string, unknown>>, headerRequired: string | null): string[] {
-  return stringList(body["required_capabilities"])
-    ?? stringList(body["requiredCapabilities"])
-    ?? commaList(headerRequired)
-    ?? [];
+  return (
+    stringList(body["required_capabilities"]) ??
+    stringList(body["requiredCapabilities"]) ??
+    commaList(headerRequired) ??
+    []
+  );
 }
 
 function offerArtifactFormats(body: Readonly<Record<string, unknown>>, headerFormats: string | null): string[] {
-  return stringList(body["artifact_formats"])
-    ?? stringList(body["artifactFormats"])
-    ?? commaList(headerFormats)
-    ?? [];
+  return stringList(body["artifact_formats"]) ?? stringList(body["artifactFormats"]) ?? commaList(headerFormats) ?? [];
 }
 
 /** Parse protocol metadata from the registration request. */
@@ -139,7 +143,8 @@ export function parseAgentProtocolOffer(
 ): AgentProtocolOffer {
   const headerVersion = headers.get("tfc-agent-protocol-version") ?? headers.get("terrence-agent-protocol-version");
   const headerCapabilities = headers.get("tfc-agent-capabilities") ?? headers.get("terrence-agent-capabilities");
-  const headerRequired = headers.get("tfc-agent-required-capabilities") ?? headers.get("terrence-agent-required-capabilities");
+  const headerRequired =
+    headers.get("tfc-agent-required-capabilities") ?? headers.get("terrence-agent-required-capabilities");
   const headerFormats = headers.get("tfc-agent-artifact-formats") ?? headers.get("terrence-agent-artifact-formats");
   const versions = offerVersions(body, headerVersion);
   const rawCapabilities = offerCapabilities(body, headerCapabilities);
@@ -172,7 +177,9 @@ export function negotiateAgentProtocol(offer: AgentProtocolOffer): AgentProtocol
       { versions },
     );
   }
-  const unsupportedRequired = offer.requiredCapabilities.filter((capability): boolean => !capabilitySet.has(capability));
+  const unsupportedRequired = offer.requiredCapabilities.filter(
+    (capability): boolean => !capabilitySet.has(capability),
+  );
   if (unsupportedRequired.length > 0) {
     throw new AgentProtocolNegotiationError(
       422,
@@ -183,10 +190,13 @@ export function negotiateAgentProtocol(offer: AgentProtocolOffer): AgentProtocol
   }
   return {
     version: AGENT_PROTOCOL_VERSION,
-    capabilities: offer.capabilities.filter((capability): capability is AgentProtocolCapability => capabilitySet.has(capability)),
+    capabilities: offer.capabilities.filter((capability): capability is AgentProtocolCapability =>
+      capabilitySet.has(capability),
+    ),
     unsupportedCapabilities: offer.capabilities.filter((capability): boolean => !capabilitySet.has(capability)),
-    artifactFormats: (offer.artifactFormats.length === 0 ? [...AGENT_ARTIFACT_FORMATS] : offer.artifactFormats)
-      .filter((format): format is AgentArtifactFormat => artifactFormatSet.has(format)),
+    artifactFormats: (offer.artifactFormats.length === 0 ? [...AGENT_ARTIFACT_FORMATS] : offer.artifactFormats).filter(
+      (format): format is AgentArtifactFormat => artifactFormatSet.has(format),
+    ),
     unsupportedArtifactFormats: offer.artifactFormats.filter((format): boolean => !artifactFormatSet.has(format)),
     legacy: offer.legacy,
   };
@@ -212,17 +222,46 @@ export function agentProtocolDescription(): Readonly<Record<string, unknown>> {
   };
 }
 
-export function agentSupportsCapability(agent: Readonly<{ capabilities?: readonly string[] | null }>, capability: AgentProtocolCapability): boolean {
+export function agentSupportsCapability(
+  agent: Readonly<{ capabilities?: readonly string[] | null }>,
+  capability: AgentProtocolCapability,
+): boolean {
   const capabilities = agent.capabilities ?? LEGACY_AGENT_CAPABILITIES;
   return capabilities.includes(capability);
 }
 
 const PHASE_REQUIREMENTS: Readonly<Record<string, readonly AgentProtocolCapability[]>> = {
-  plan: ["operation.plan", "artifact.configuration", "artifact.filesystem", "artifact.log", "artifact.plan-json", "lease.heartbeat", "lease.fencing"],
-  apply: ["operation.apply", "artifact.configuration", "artifact.filesystem", "artifact.log", "artifact.state-json", "lease.heartbeat", "lease.fencing", "cancellation", "state.publication"],
+  plan: [
+    "operation.plan",
+    "artifact.configuration",
+    "artifact.filesystem",
+    "artifact.log",
+    "artifact.plan-json",
+    "lease.heartbeat",
+    "lease.fencing",
+  ],
+  apply: [
+    "operation.apply",
+    "artifact.configuration",
+    "artifact.filesystem",
+    "artifact.log",
+    "artifact.state-json",
+    "lease.heartbeat",
+    "lease.fencing",
+    "cancellation",
+    "state.publication",
+  ],
   stack_prepare: ["operation.stack", "artifact.configuration", "lease.heartbeat", "lease.fencing"],
   stack_plan: ["operation.stack", "artifact.configuration", "lease.heartbeat", "lease.fencing"],
-  stack_apply: ["operation.stack", "artifact.configuration", "artifact.state-json", "lease.heartbeat", "lease.fencing", "cancellation", "state.publication"],
+  stack_apply: [
+    "operation.stack",
+    "artifact.configuration",
+    "artifact.state-json",
+    "lease.heartbeat",
+    "lease.fencing",
+    "cancellation",
+    "state.publication",
+  ],
 };
 
 export function agentSupportsPhase(
@@ -250,16 +289,24 @@ export type AgentExecutionPolicy = Readonly<{
 }>;
 
 export function effectiveAgentExecutionPolicy(
-  agent: Readonly<{ protocolVersion?: string | null; capabilities?: readonly string[] | null; artifactFormats?: readonly string[] | null }>,
+  agent: Readonly<{
+    protocolVersion?: string | null;
+    capabilities?: readonly string[] | null;
+    artifactFormats?: readonly string[] | null;
+  }>,
   operation: string,
   iacBinary: string,
 ): AgentExecutionPolicy {
   return {
     protocolVersion: agent.protocolVersion ?? AGENT_PROTOCOL_VERSION,
-    capabilities: [...(agent.capabilities ?? LEGACY_AGENT_CAPABILITIES)].sort((left, right): number => left.localeCompare(right)),
+    capabilities: [...(agent.capabilities ?? LEGACY_AGENT_CAPABILITIES)].sort((left, right): number =>
+      left.localeCompare(right),
+    ),
     operation,
     iacBinary,
-    artifactFormats: (agent.artifactFormats ?? AGENT_ARTIFACT_FORMATS).filter((format): format is AgentArtifactFormat => artifactFormatSet.has(format)),
+    artifactFormats: (agent.artifactFormats ?? AGENT_ARTIFACT_FORMATS).filter((format): format is AgentArtifactFormat =>
+      artifactFormatSet.has(format),
+    ),
     lease: { heartbeat: "status", fencing: true },
     cancellation: "cooperative",
     statePublication: "finalize-once",

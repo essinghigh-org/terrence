@@ -28,7 +28,6 @@ const NIL = "-";
  * this constant. IANA PEN registration is not required for local use. */
 const ENTERPRISE_ID = 65024;
 
-
 export type SyslogFormat = "rfc5424" | "json";
 
 /** Resolve the syslog message format defensively: unknown values warn
@@ -39,7 +38,7 @@ export function resolveSyslogFormat(raw: unknown): SyslogFormat {
   if (normalized !== "") {
     console.warn(
       `[terrence] Unknown syslog format ${JSON.stringify(raw)}; ` +
-      `expected "rfc5424" or "json". Falling back to "rfc5424".`,
+        `expected "rfc5424" or "json". Falling back to "rfc5424".`,
     );
   }
   return "rfc5424";
@@ -48,7 +47,11 @@ export function resolveSyslogFormat(raw: unknown): SyslogFormat {
 /** RFC 5424 §6.2.4 PARAM-VALUE escaping: "\" -> "\\", "]" -> "\]",
  * '"' -> '\"', and control characters are removed. */
 function sdEscape(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/]/g, "\\]").replace(/[\x00-\x1f\x7f]/g, "");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/]/g, "\\]")
+    .replace(/[\x00-\x1f\x7f]/g, "");
 }
 
 function paramSafeKey(key: string): string {
@@ -63,7 +66,11 @@ function paramSafeKey(key: string): string {
 const MAX_FLATTEN_DEPTH = 5;
 const MAX_FLATTEN_PARAMS = 128;
 
-function pushScalarMetaParam(key: string, value: unknown, out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>): boolean {
+function pushScalarMetaParam(
+  key: string,
+  value: unknown,
+  out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>,
+): boolean {
   if (typeof value === "string") {
     out.push([key, value]);
     return true;
@@ -75,7 +82,11 @@ function pushScalarMetaParam(key: string, value: unknown, out: Readonly<Pick<(re
   return false;
 }
 
-function pushJsonMetaParam(key: string, value: unknown, out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>): void {
+function pushJsonMetaParam(
+  key: string,
+  value: unknown,
+  out: Readonly<Pick<(readonly [string, string])[], "push" | "length">>,
+): void {
   try {
     const json = JSON.stringify(value) ?? NIL;
     out.push([key, json]);
@@ -221,14 +232,15 @@ function fitJsonBody(body: Readonly<Record<string, unknown>>, maxBytes: number):
   // (everything except the resizable message) fits the budget.
   const droppable = Object.keys(shortened)
     .filter((key): boolean => !["timestamp", "level", "message", "hostname", "app", "truncated"].includes(key))
-    .map((key): readonly [string, number] => [key, Buffer.byteLength(stringifySyslogBody({ [key]: shortened[key] }), "utf8")])
+    .map((key): readonly [string, number] => [
+      key,
+      Buffer.byteLength(stringifySyslogBody({ [key]: shortened[key] }), "utf8"),
+    ])
     .sort((a, b): number => b[1] - a[1]);
   const dropped = new Set<string>();
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Set has no rule-verifiable readonly form; drop is only read here
   const baseFor = (drop: ReadonlySet<string>): Record<string, unknown> =>
-    Object.fromEntries(
-      Object.entries({ ...shortened, message: "" }).filter(([key]): boolean => !drop.has(key)),
-    );
+    Object.fromEntries(Object.entries({ ...shortened, message: "" }).filter(([key]): boolean => !drop.has(key)));
   for (const [key] of droppable) {
     if (sizeOf(baseFor(dropped)) <= maxBytes) break;
     dropped.add(key);
@@ -238,7 +250,7 @@ function fitJsonBody(body: Readonly<Record<string, unknown>>, maxBytes: number):
   if (baseBytes > maxBytes) return fallbackJsonBody(maxBytes);
   const budget = maxBytes - baseBytes;
   // 2. Binary-search the longest message prefix (plus marker) that fits.
-  const message = typeof shortened["message"] === "string" ? (shortened["message"]) : "";
+  const message = typeof shortened["message"] === "string" ? shortened["message"] : "";
   let lo = 0;
   let hi = message.length;
   while (lo < hi) {
@@ -348,9 +360,8 @@ export function formatSyslogMessage(
  * unavailable (some sandboxed environments). Kept stable per boot. */
 export function resolveHostname(env: NodeJS.ProcessEnv = process.env, override?: string | null): string {
   const overrideValue = override?.trim();
-  const configured = overrideValue === undefined || overrideValue === ""
-    ? env["TERRENCE_SYSLOG_HOSTNAME"]?.trim()
-    : overrideValue;
+  const configured =
+    overrideValue === undefined || overrideValue === "" ? env["TERRENCE_SYSLOG_HOSTNAME"]?.trim() : overrideValue;
   if (configured !== undefined && configured !== "") return configured;
   try {
     const name = readFileSync("/etc/hostname", "utf8").trim();
@@ -358,5 +369,8 @@ export function resolveHostname(env: NodeJS.ProcessEnv = process.env, override?:
   } catch {
     /* fall through */
   }
-  return createHash("sha256").update(env["STORAGE_DIR"] ?? "terrence").digest("hex").slice(0, 12);
+  return createHash("sha256")
+    .update(env["STORAGE_DIR"] ?? "terrence")
+    .digest("hex")
+    .slice(0, 12);
 }

@@ -2,7 +2,14 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, organizationMemberships, workspaces, stateVersions } from "../../src/db/schema";
+import {
+  users,
+  apiTokens,
+  organizations,
+  organizationMemberships,
+  workspaces,
+  stateVersions,
+} from "../../src/db/schema";
 
 describe("State Version Outputs & Temporal Upload API", () => {
   let token: string;
@@ -52,10 +59,12 @@ describe("State Version Outputs & Temporal Upload API", () => {
   });
 
   test("POST /workspaces/:id/state-versions returns temporal upload URLs when state omitted", async () => {
-    const lock = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    }));
+    const lock = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
     expect(lock.status).toBe(200);
     const res = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
@@ -72,7 +81,7 @@ describe("State Version Outputs & Temporal Upload API", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(res.status).toBe(201);
@@ -109,7 +118,7 @@ describe("State Version Outputs & Temporal Upload API", () => {
         headers: {
           Authorization: `Bearer ${token}`,
         },
-      })
+      }),
     );
 
     expect(res.status).toBe(201);

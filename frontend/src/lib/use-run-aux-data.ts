@@ -21,12 +21,14 @@ export function useSpeculativeRun(runId: string, run: RunResource | null): boole
     fetchApi(`/api/v2/configuration-versions/${encodeURIComponent(cvId)}`, { signal: controller.signal })
       .then((data: unknown): void => {
         if (controller.signal.aborted) return;
-// SAFETY: the configuration-version endpoint returns the JSON:API envelope; speculative is read as unknown below.
+        // SAFETY: the configuration-version endpoint returns the JSON:API envelope; speculative is read as unknown below.
         const attrs = (data as { data?: { attributes?: { speculative?: unknown } } }).data?.attributes;
         setSpeculativeRun(attrs?.speculative === true);
       })
       .catch((): void => undefined);
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [runId, planOnlyRun, cvId]);
 
   return speculativeRun;
@@ -46,7 +48,9 @@ export function useTaskOutcome(runId: string): string {
       .catch((): void => {
         if (!controller.signal.aborted) setTaskOutcome("Unavailable");
       });
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [runId]);
 
   return taskOutcome;
@@ -76,8 +80,9 @@ function isProvenanceManifest(value: unknown): value is RunProvenanceManifest {
   if (!Array.isArray(value["variables"])) return false;
   if (!isRecord(value["sandbox"])) return false;
   const rerun = value["rerun"];
-  return rerun === undefined
-    || (isRecord(rerun) && isString(rerun["mode"]) && Array.isArray(rerun["changedSinceSource"]));
+  return (
+    rerun === undefined || (isRecord(rerun) && isString(rerun["mode"]) && Array.isArray(rerun["changedSinceSource"]))
+  );
 }
 
 export function useProvenanceManifest(runId: string): ProvenanceState {
@@ -102,7 +107,9 @@ export function useProvenanceManifest(runId: string): ProvenanceState {
       .catch((error: unknown): void => {
         if (!controller.signal.aborted) setProvenanceError(error instanceof Error ? error.message : String(error));
       });
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [runId]);
 
   return { provenanceManifest, provenanceError };

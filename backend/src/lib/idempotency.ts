@@ -35,12 +35,14 @@ export function idempotencyHash(value: unknown): string {
 }
 
 /** Caller identity used for the key binding; object authorization remains separate. */
-export function idempotencyPrincipal(input: Readonly<{
-  userId?: string | null | undefined;
-  teamId?: string | null | undefined;
-  orgId?: string | null | undefined;
-  runId?: string | null | undefined;
-}>): string {
+export function idempotencyPrincipal(
+  input: Readonly<{
+    userId?: string | null | undefined;
+    teamId?: string | null | undefined;
+    orgId?: string | null | undefined;
+    runId?: string | null | undefined;
+  }>,
+): string {
   if (typeof input.userId === "string" && input.userId !== "") return `user:${input.userId}`;
   if (typeof input.teamId === "string" && input.teamId !== "") return `team:${input.teamId}`;
   if (typeof input.orgId === "string" && input.orgId !== "") return `organization:${input.orgId}`;
@@ -78,11 +80,15 @@ export async function beginIdempotency(
 ): Promise<IdempotencyBegin> {
   if (context === null) return { kind: "none" };
   const now = Date.now();
-  await db.delete(apiIdempotencyKeys).where(and(
-    eq(apiIdempotencyKeys.scope, context.scope),
-    eq(apiIdempotencyKeys.key, context.key),
-    lt(apiIdempotencyKeys.expiresAt, now),
-  ));
+  await db
+    .delete(apiIdempotencyKeys)
+    .where(
+      and(
+        eq(apiIdempotencyKeys.scope, context.scope),
+        eq(apiIdempotencyKeys.key, context.key),
+        lt(apiIdempotencyKeys.expiresAt, now),
+      ),
+    );
   let existing = await db.query.apiIdempotencyKeys.findFirst({
     where: and(eq(apiIdempotencyKeys.scope, context.scope), eq(apiIdempotencyKeys.key, context.key)),
   });
@@ -112,23 +118,42 @@ export async function beginIdempotency(
       });
     }
   }
-  if (existing === undefined) return { kind: "error", status: 409, detail: "The idempotency key could not be reserved" };
-  if (existing.principal !== context.principal || existing.requestHash !== context.requestHash || existing.resourceType !== resourceType) {
+  if (existing === undefined)
+    return { kind: "error", status: 409, detail: "The idempotency key could not be reserved" };
+  if (
+    existing.principal !== context.principal ||
+    existing.requestHash !== context.requestHash ||
+    existing.resourceType !== resourceType
+  ) {
     if (set !== undefined) (set as { status?: number | string }).status = 409;
-    return { kind: "error", status: 409, detail: "Idempotency-Key was already used with a different principal, resource, or request body" };
+    return {
+      kind: "error",
+      status: 409,
+      detail: "Idempotency-Key was already used with a different principal, resource, or request body",
+    };
   }
   if (existing.status !== "completed" || existing.responseStatus === null || existing.responseBody === null) {
     if (set !== undefined) {
       (set as { status?: number | string }).status = 409;
       (set as { headers: Record<string, string | number> }).headers["Retry-After"] = 1;
     }
-    return { kind: "error", status: 409, detail: "An operation with this Idempotency-Key is already in progress", retryAfter: 1 };
+    return {
+      kind: "error",
+      status: 409,
+      detail: "An operation with this Idempotency-Key is already in progress",
+      retryAfter: 1,
+    };
   }
   if (set !== undefined) {
     (set as { status?: number | string }).status = existing.responseStatus;
     (set as { headers: Record<string, string | number> }).headers["Idempotency-Replayed"] = "true";
   }
-  return { kind: "replay", status: existing.responseStatus, body: existing.responseBody, resourceId: existing.resourceId };
+  return {
+    kind: "replay",
+    status: existing.responseStatus,
+    body: existing.responseBody,
+    resourceId: existing.resourceId,
+  };
 }
 
 /** Remove a reservation when validation or a precondition fails before a resource is created. */
@@ -142,23 +167,28 @@ export async function completeIdempotency(
   responseBody: Readonly<Record<string, unknown>>,
   resourceId?: string | null,
 ): Promise<void> {
-  await db.update(apiIdempotencyKeys).set({
-    status: "completed",
-    responseStatus,
-    responseBody,
-    resourceId: resourceId ?? null,
-    completedAt: Date.now(),
-  }).where(eq(apiIdempotencyKeys.id, id));
+  await db
+    .update(apiIdempotencyKeys)
+    .set({
+      status: "completed",
+      responseStatus,
+      responseBody,
+      resourceId: resourceId ?? null,
+      completedAt: Date.now(),
+    })
+    .where(eq(apiIdempotencyKeys.id, id));
 }
 
-export function idempotencyError(
-  result: Extract<IdempotencyBegin, { kind: "error" }>,
-): { errors: { status: string; title: string; detail: string }[] } {
+export function idempotencyError(result: Extract<IdempotencyBegin, { kind: "error" }>): {
+  errors: { status: string; title: string; detail: string }[];
+} {
   return {
-    errors: [{
-      status: String(result.status),
-      title: result.status === 400 ? "Bad Request" : "Conflict",
-      detail: result.detail,
-    }],
+    errors: [
+      {
+        status: String(result.status),
+        title: result.status === 400 ? "Bad Request" : "Conflict",
+        detail: result.detail,
+      },
+    ],
   };
 }

@@ -121,7 +121,9 @@ describe("runtime logging configuration", () => {
       expect(body["message"]).toBe("json shape");
       expect(body["http"]).toEqual({ status: 201 });
 
-      expect((): void => { applyLoggingSettings({ "syslog-format": "bogus" }); }).toThrow("Invalid logging.syslog-format");
+      expect((): void => {
+        applyLoggingSettings({ "syslog-format": "bogus" });
+      }).toThrow("Invalid logging.syslog-format");
       log.info("preserved shape", { http: { status: 500 } });
       await Bun.sleep(25);
       expect(collector.received).toHaveLength(3);

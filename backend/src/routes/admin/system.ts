@@ -22,19 +22,34 @@ import { TOKEN_FORMAT_VERSION } from "../../lib/token-service";
 export const systemRoutes = new Elysia({ name: "admin-system" })
   .use(authPlugin)
   .get("/api/v2/admin/system-info", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (user?.isSiteAdmin !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const storageDir = process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage");
-    let storage: { dir: string; "free-bytes": number | null; "total-bytes": number | null } = { dir: storageDir, "free-bytes": null, "total-bytes": null };
+    let storage: { dir: string; "free-bytes": number | null; "total-bytes": number | null } = {
+      dir: storageDir,
+      "free-bytes": null,
+      "total-bytes": null,
+    };
     try {
       const s = statfsSync(storageDir);
       storage = { dir: storageDir, "free-bytes": s.bavail * s.bsize, "total-bytes": s.blocks * s.bsize };
-    } catch { /* statfs unavailable (non-POSIX) — leave nulls */ }
+    } catch {
+      /* statfs unavailable (non-POSIX) — leave nulls */
+    }
     const abi = probeLandlockAbi();
     const [agentRows, saml, oidc, ldap] = await Promise.all([
       db.select({ status: agents.status, n: count() }).from(agents).groupBy(agents.status),
-      currentSamlSettings().then((s: SamlSettings): boolean => s.enabled).catch((): boolean => false),
-      getSettings("oidc").then((s: Settings): boolean => s["enabled"] === true).catch((): boolean => false),
-      getSettings("ldap").then((s: Settings): boolean => s["enabled"] === true).catch((): boolean => false),
+      currentSamlSettings()
+        .then((s: SamlSettings): boolean => s.enabled)
+        .catch((): boolean => false),
+      getSettings("oidc")
+        .then((s: Settings): boolean => s["enabled"] === true)
+        .catch((): boolean => false),
+      getSettings("ldap")
+        .then((s: Settings): boolean => s["enabled"] === true)
+        .catch((): boolean => false),
     ]);
     const sandboxRequired = runSandboxRequired();
     let sandboxReason: string | null = null;
@@ -54,7 +69,12 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
         database: await databaseMetrics(),
         "deployment-configuration": [
           ...runtimeConfigurationReport(),
-          { name: "database.driver", value: databaseDriver, origin: databaseConfigurationOrigin, restartRequired: true },
+          {
+            name: "database.driver",
+            value: databaseDriver,
+            origin: databaseConfigurationOrigin,
+            restartRequired: true,
+          },
           { name: "database.url", value: "[redacted]", origin: databaseConfigurationOrigin, restartRequired: true },
         ],
         "persisted-configuration": await persistedConfigurationReport(),
@@ -78,12 +98,15 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
           "saml-enabled": saml,
           "oidc-enabled": oidc,
           "ldap-enabled": ldap,
-          "github-app-configured": typeof process.env["GITHUB_APP_ID"] === "string" && process.env["GITHUB_APP_ID"] !== "",
+          "github-app-configured":
+            typeof process.env["GITHUB_APP_ID"] === "string" && process.env["GITHUB_APP_ID"] !== "",
         },
         agents: {
           total: agentRows.reduce((sum: number, row: { status: string; n: number }): number => sum + row.n, 0),
-          "by-status": Object.fromEntries(agentRows.map((row: { status: string; n: number }): [string, number] => [row.status, row.n])),
-        }
+          "by-status": Object.fromEntries(
+            agentRows.map((row: { status: string; n: number }): [string, number] => [row.status, row.n]),
+          ),
+        },
       },
       "token-format-version": TOKEN_FORMAT_VERSION,
     };

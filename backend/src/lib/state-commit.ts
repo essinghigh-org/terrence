@@ -31,7 +31,13 @@ export async function commitStateVersionAtSerialTx(
 ): Promise<void> {
   const tx = transaction as typeof db;
   await tx.insert(stateVersionsTable).values(values);
-  const statePayload = indexedStatePayload ?? (values.statePayload === null || values.statePayload === undefined ? null : decodeStatePayload(values.statePayload));
-  const jsonState = indexedJsonState ?? (values.jsonState === null || values.jsonState === undefined ? null : decodeStatePayload(values.jsonState));
+  const statePayload =
+    indexedStatePayload ??
+    (values.statePayload === null || values.statePayload === undefined
+      ? null
+      : decodeStatePayload(values.statePayload));
+  const jsonState =
+    indexedJsonState ??
+    (values.jsonState === null || values.jsonState === undefined ? null : decodeStatePayload(values.jsonState));
   await insertStateOutputIndex(tx, values.id, values.workspaceId, jsonState, statePayload);
 }

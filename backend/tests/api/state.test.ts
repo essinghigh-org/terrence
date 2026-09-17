@@ -11,7 +11,16 @@ describe("the reference format API v2 - State Versions & Locking", () => {
 
   beforeAll(async () => {
     // Clear and setup
-    const { runs, configurationVersions, users, apiTokens, logs, workspaceTags, organizationMemberships, organizations } = await import("../../src/db/schema");
+    const {
+      runs,
+      configurationVersions,
+      users,
+      apiTokens,
+      logs,
+      workspaceTags,
+      organizationMemberships,
+      organizations,
+    } = await import("../../src/db/schema");
     await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
@@ -31,7 +40,7 @@ describe("the reference format API v2 - State Versions & Locking", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: "state-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
 
     const loginRes = await app.handle(
@@ -41,7 +50,7 @@ describe("the reference format API v2 - State Versions & Locking", () => {
         body: JSON.stringify({
           data: { attributes: { username: "state-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -51,22 +60,25 @@ describe("the reference format API v2 - State Versions & Locking", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
     const orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
-    const ws = await db.insert(workspaces).values({
-      id: "ws-state-test",
-      name: "state-workspace",
-      orgId: orgId,
-      locked: false
-    }).returning();
+    const ws = await db
+      .insert(workspaces)
+      .values({
+        id: "ws-state-test",
+        name: "state-workspace",
+        orgId: orgId,
+        locked: false,
+      })
+      .returning();
     workspaceId = ws[0]!.id;
   });
 
@@ -74,8 +86,8 @@ describe("the reference format API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${userToken}` },
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
 
     expect(response.status).toBe(200);
@@ -87,8 +99,8 @@ describe("the reference format API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/unlock`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${userToken}` },
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
 
     expect(response.status).toBe(200);
@@ -100,8 +112,8 @@ describe("the reference format API v2 - State Versions & Locking", () => {
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` },
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
 
     expect(response.status).toBe(404);
@@ -111,17 +123,23 @@ describe("the reference format API v2 - State Versions & Locking", () => {
     const lockResponse = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${userToken}` },
+        headers: { Authorization: `Bearer ${userToken}` },
       }),
     );
     expect(lockResponse.status).toBe(200);
-    const rawState = JSON.stringify({ version: 4, serial: 1, lineage: "state-test", terraform_version: "1.5.0", resources: [] });
+    const rawState = JSON.stringify({
+      version: 4,
+      serial: 1,
+      lineage: "state-test",
+      terraform_version: "1.5.0",
+      resources: [],
+    });
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -133,7 +151,7 @@ describe("the reference format API v2 - State Versions & Locking", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(response.status).toBe(201);
@@ -144,8 +162,8 @@ describe("the reference format API v2 - State Versions & Locking", () => {
     const currentRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, {
         method: "GET",
-        headers: { "Authorization": `Bearer ${userToken}` },
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(currentRes.status).toBe(200);
     const currentData = await currentRes.json();

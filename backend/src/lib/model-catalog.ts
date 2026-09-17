@@ -26,10 +26,7 @@ const CUSTOM_PROVIDER: CatalogProvider = Object.freeze({
   models: [],
 });
 
-const catalogDirectory = resolve(
-  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
-  "model-catalog",
-);
+const catalogDirectory = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "model-catalog");
 const catalogCacheFile = join(catalogDirectory, "catalog.json");
 
 /** One catalog provider: id, display name, OpenAI-compatible base URL (when
@@ -73,7 +70,7 @@ let inMemoryCache: ModelCatalog | null = null;
 
 function asObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Readonly<Record<string, unknown>>
+    ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 }
 
@@ -113,9 +110,8 @@ function parseCatalogProvider(id: string, rawProvider: unknown): CatalogProvider
     if (model !== undefined) models.push(model);
   }
   if (models.length === 0) return undefined;
-  const baseUrl = typeof provider["api"] === "string" && provider["api"] !== ""
-    ? provider["api"]
-    : (CURATED_BASE_URLS[id] ?? null);
+  const baseUrl =
+    typeof provider["api"] === "string" && provider["api"] !== "" ? provider["api"] : (CURATED_BASE_URLS[id] ?? null);
   return {
     id,
     name: typeof provider["name"] === "string" && provider["name"] !== "" ? provider["name"] : id,
@@ -145,8 +141,7 @@ export function parseModelCatalog(raw: string): CatalogProvider[] {
 }
 
 function isFresh(catalog: DeepReadonly<ModelCatalog>, now: number): boolean {
-  return Number.isFinite(catalog.fetchedAt)
-    && catalog.fetchedAt + MODEL_CATALOG_TTL_MS > now;
+  return Number.isFinite(catalog.fetchedAt) && catalog.fetchedAt + MODEL_CATALOG_TTL_MS > now;
 }
 
 /** Read the on-disk cache. Missing/unreadable/corrupt files degrade to null. */
@@ -218,12 +213,14 @@ export async function getModelCatalog(now: number = Date.now()): Promise<ModelCa
 /** Providers for the admin dropdown: id, name, base URL (when known), and
  * text-capable model count. Sorted by name, with the synthetic
  * "OpenAI Compatible (Custom)" entry pinned first (it is the default). */
-export async function listCatalogProviders(now: number = Date.now()): Promise<readonly Readonly<{
-  id: string;
-  name: string;
-  baseUrl: string | null;
-  modelCount: number;
-}>[]> {
+export async function listCatalogProviders(now: number = Date.now()): Promise<
+  readonly Readonly<{
+    id: string;
+    name: string;
+    baseUrl: string | null;
+    modelCount: number;
+  }>[]
+> {
   const catalog = await getModelCatalog(now);
   const rows = catalog.providers
     .filter((provider) => provider.id !== CUSTOM_PROVIDER_ID)

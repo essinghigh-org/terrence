@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  projects,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, projects, users, workspaces } from "../../src/db/schema";
 
 describe("agent pool workspace and project scoping", () => {
   const suffix = crypto.randomUUID();
@@ -27,14 +20,17 @@ describe("agent pool workspace and project scoping", () => {
   const deniedWorkspaceId = `ws-denied-${suffix}`;
   const foreignWorkspaceId = `ws-foreign-${suffix}`;
 
-  const request = (method: string, path: string, body?: unknown): Promise<Response> => app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  const request = (method: string, path: string, body?: unknown): Promise<Response> =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
@@ -90,12 +86,8 @@ describe("agent pool workspace and project scoping", () => {
     expect(created.status).toBe(201);
     const pool = (await created.json()).data;
     const poolId = pool.id as string;
-    expect(pool.relationships["allowed-workspaces"].data).toEqual([
-      { id: explicitWorkspaceId, type: "workspaces" },
-    ]);
-    expect(pool.relationships["allowed-projects"].data).toEqual([
-      { id: allowedProjectId, type: "projects" },
-    ]);
+    expect(pool.relationships["allowed-workspaces"].data).toEqual([{ id: explicitWorkspaceId, type: "workspaces" }]);
+    expect(pool.relationships["allowed-projects"].data).toEqual([{ id: allowedProjectId, type: "projects" }]);
 
     const malformed = await request("PATCH", `/api/v2/agent-pools/${poolId}`, {
       data: {

@@ -25,7 +25,11 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
         duration = options.duration;
       }
     },
-    async increment(key: string, requestDuration?: number, requestTime?: number): Promise<{ count: number; nextReset: Date; start: number }> {
+    async increment(
+      key: string,
+      requestDuration?: number,
+      requestTime?: number,
+    ): Promise<{ count: number; nextReset: Date; start: number }> {
       const effectiveDuration = requestDuration ?? duration;
       const now = requestTime ?? Date.now();
       const bucket = `${bucketPrefix}:${key}`;
@@ -41,7 +45,9 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
         // window if the stored one is stale. Uses the same ON CONFLICT pattern
         // as `locks` / `durable_jobs`.
         const { db } = await import("../db");
-        const rows = await (db as unknown as { execute: (q: unknown) => Promise<readonly { count: number }[]> }).execute(sql`
+        const rows = await (
+          db as unknown as { execute: (q: unknown) => Promise<readonly { count: number }[]> }
+        ).execute(sql`
           INSERT INTO rate_limit_buckets (bucket, window_start, count)
           VALUES (${bucket}, ${windowStart}, 1)
           ON CONFLICT (bucket) DO UPDATE SET
@@ -66,7 +72,7 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
           try {
             const { db: db2 } = await import("../db");
             await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
-              sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`
+              sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`,
             );
           } catch {}
         }
@@ -91,7 +97,9 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
       if (!isPostgres) return;
       try {
         const { db } = await import("../db");
-        await (db as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(sql`DELETE FROM rate_limit_buckets WHERE bucket LIKE ${bucketPrefix + ":%"}`);
+        await (db as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
+          sql`DELETE FROM rate_limit_buckets WHERE bucket LIKE ${bucketPrefix + ":%"}`,
+        );
       } catch {}
     },
   };

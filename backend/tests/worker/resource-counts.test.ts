@@ -36,7 +36,8 @@ async function runWorkerScript(script: string, env: Record<string, string> = {})
 }
 
 test("plan counts fall back to the log summary line when plan JSON has no counts", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     process.env.SIMULATED_PLAN_JSON = "{}";
 
     const { db } = await import("./src/db/index.ts");
@@ -69,7 +70,9 @@ test("plan counts fall back to the log summary line when plan JSON has no counts
       destructions: completed?.planResourceDestructions,
       imports: completed?.planResourceImports,
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result.status).toBe("planned_and_finished");
   expect(result).toMatchObject({ additions: 1, changes: 0, destructions: 0, imports: 0 });
@@ -85,9 +88,16 @@ for (const [name, exitCode, expectedStatus, change] of [
       format_version: "1.2",
       resource_changes: [{ address: "test_resource.example", mode: "managed", change }],
       resource_drift: [{ address: "test_resource.example", change: { actions: ["update"] } }],
-      output_changes: { value: { actions: [name === "output-only changes" ? "update" : "no-op"], before: "a", after: name === "output-only changes" ? "b" : "a" } },
+      output_changes: {
+        value: {
+          actions: [name === "output-only changes" ? "update" : "no-op"],
+          before: "a",
+          after: name === "output-only changes" ? "b" : "a",
+        },
+      },
     };
-    const result = await runWorkerScript(`
+    const result = await runWorkerScript(
+      `
       const { mkdir, writeFile, chmod } = await import("fs/promises");
       const { join } = await import("path");
       const { db } = await import("./src/db/index.ts");
@@ -111,10 +121,13 @@ for (const [name, exitCode, expectedStatus, change] of [
       await executeRun("run");
       const run = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
       console.log(JSON.stringify({ status: run?.status }));
-    `, {
-      NODE_ENV: "production", SIMULATED_RUNS: "false",
-      TEST_BINARY: `#!/bin/sh\ncase "$1" in\ninit) exit 0 ;;\nplan) case " $* " in *" -detailed-exitcode "*) : ;; *) exit 1 ;; esac; touch tfplan; exit ${exitCode} ;;\nshow) echo '${JSON.stringify(planJson)}' ;;\n*) exit 1 ;;\nesac\n`,
-    });
+    `,
+      {
+        NODE_ENV: "production",
+        SIMULATED_RUNS: "false",
+        TEST_BINARY: `#!/bin/sh\ncase "$1" in\ninit) exit 0 ;;\nplan) case " $* " in *" -detailed-exitcode "*) : ;; *) exit 1 ;; esac; touch tfplan; exit ${exitCode} ;;\nshow) echo '${JSON.stringify(planJson)}' ;;\n*) exit 1 ;;\nesac\n`,
+      },
+    );
     expect(result.status).toBe(expectedStatus);
   });
 }

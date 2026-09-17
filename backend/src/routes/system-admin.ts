@@ -149,13 +149,25 @@ function bundleManifest(
 ): BundleManifest {
   const entries: BundleManifestEntry[] = [
     { path: "_manifest.json", purpose: "Bundle projection, retention and redaction metadata", redaction: "allowlist" },
-    { path: "_effective-configuration.json", purpose: "Safe runtime and sandbox configuration", redaction: "allowlist" },
-    { path: "_request-correlation.json", purpose: "Bundle request identity for incident correlation", redaction: "allowlist" },
+    {
+      path: "_effective-configuration.json",
+      purpose: "Safe runtime and sandbox configuration",
+      redaction: "allowlist",
+    },
+    {
+      path: "_request-correlation.json",
+      purpose: "Bundle request identity for incident correlation",
+      redaction: "allowlist",
+    },
   ];
   for (const node of nodes) {
     const prefix = `${id}/${bundleNodePath(node)}`;
     entries.push(
-      { path: `${prefix}/diagnostics.json`, purpose: "Selected health and security check results", redaction: "allowlist" },
+      {
+        path: `${prefix}/diagnostics.json`,
+        purpose: "Selected health and security check results",
+        redaction: "allowlist",
+      },
       { path: `${prefix}/usage.json`, purpose: "Privacy-limited usage counters", redaction: "allowlist" },
       { path: `${prefix}/instance.json`, purpose: "Build and node identity", redaction: "allowlist" },
     );
@@ -202,11 +214,13 @@ function safeEffectiveConfiguration(node: string): Record<string, unknown> {
 function errorResponse(set: SetObject, status: number, title: string, detail?: string): Record<string, unknown> {
   (set as { status: number }).status = status;
   return {
-    errors: [{
-      status: String(status),
-      title,
-      ...(detail === undefined ? {} : { detail }),
-    }],
+    errors: [
+      {
+        status: String(status),
+        title,
+        ...(detail === undefined ? {} : { detail }),
+      },
+    ],
   };
 }
 
@@ -239,14 +253,22 @@ function requestedChecks(url: QueryUrl): ReadonlyMap<string, ReadonlySet<string>
 
   for (const value of values) {
     const [group, check, extra] = value.trim().split(".");
-    const available = group === undefined
-      ? undefined
-      : ALL_CHECKS[group as keyof typeof ALL_CHECKS] as readonly string[] | undefined;
-    if (group === undefined || group === "" || extra !== undefined || available === undefined || (check !== undefined && !available.includes(check))) {
+    const available =
+      group === undefined ? undefined : (ALL_CHECKS[group as keyof typeof ALL_CHECKS] as readonly string[] | undefined);
+    if (
+      group === undefined ||
+      group === "" ||
+      extra !== undefined ||
+      available === undefined ||
+      (check !== undefined && !available.includes(check))
+    ) {
       return undefined;
     }
     const checks = selected.get(group) ?? new Set<string>();
-    if (check === undefined) available.forEach((name): void => { checks.add(name); });
+    if (check === undefined)
+      available.forEach((name): void => {
+        checks.add(name);
+      });
     else checks.add(check);
     selected.set(group, checks);
   }
@@ -258,19 +280,29 @@ type CheckRegistry = Map<string, Promise<DiagnosticCheck>>;
 
 function addStorageChecks(selected: CheckSelection, checks: CheckRegistry): void {
   if (selected.get("database")?.has("connection") === true) {
-    checks.set("database.connection", db.query.users.findFirst()
-      .then((): DiagnosticCheck => ({ name: "connection", status: "OK" }))
-      .catch((): DiagnosticCheck => ({ name: "connection", status: "ERROR" })));
+    checks.set(
+      "database.connection",
+      db.query.users
+        .findFirst()
+        .then((): DiagnosticCheck => ({ name: "connection", status: "OK" }))
+        .catch((): DiagnosticCheck => ({ name: "connection", status: "ERROR" })),
+    );
   }
   if (selected.get("disk")?.has("read_write") === true) {
-    checks.set("disk.read_write", access(storageDirectory(), constants.R_OK | constants.W_OK)
-      .then((): DiagnosticCheck => ({ name: "read_write", status: "OK" }))
-      .catch((): DiagnosticCheck => ({ name: "read_write", status: "ERROR" })));
+    checks.set(
+      "disk.read_write",
+      access(storageDirectory(), constants.R_OK | constants.W_OK)
+        .then((): DiagnosticCheck => ({ name: "read_write", status: "OK" }))
+        .catch((): DiagnosticCheck => ({ name: "read_write", status: "ERROR" })),
+    );
   }
   if (selected.get("storage")?.has("read_write") === true) {
-    checks.set("storage.read_write", access(storageDirectory(), constants.R_OK | constants.W_OK)
-      .then((): DiagnosticCheck => ({ name: "read_write", status: "OK" }))
-      .catch((): DiagnosticCheck => ({ name: "read_write", status: "ERROR" })));
+    checks.set(
+      "storage.read_write",
+      access(storageDirectory(), constants.R_OK | constants.W_OK)
+        .then((): DiagnosticCheck => ({ name: "read_write", status: "OK" }))
+        .catch((): DiagnosticCheck => ({ name: "read_write", status: "ERROR" })),
+    );
   }
 }
 
@@ -278,20 +310,26 @@ function addDependencyChecks(selected: CheckSelection, checks: CheckRegistry): v
   for (const dependency of ["archivist", "atlas", "vault", "redis"] as const) {
     if (selected.get(dependency)?.has("connection") !== true) continue;
     const endpoint = process.env[`TERRENCE_${dependency.toUpperCase()}_URL`];
-    checks.set(`${dependency}.connection`, endpoint === undefined || endpoint === ""
-      ? Promise.resolve({ name: "connection", status: "OK" })
-      : fetchDependencyEndpoint(endpoint)
-        .then((response): DiagnosticCheck => ({ name: "connection", status: response.ok ? "OK" : "ERROR" }))
-        .catch((): DiagnosticCheck => ({ name: "connection", status: "ERROR" })));
+    checks.set(
+      `${dependency}.connection`,
+      endpoint === undefined || endpoint === ""
+        ? Promise.resolve({ name: "connection", status: "OK" })
+        : fetchDependencyEndpoint(endpoint)
+            .then((response): DiagnosticCheck => ({ name: "connection", status: response.ok ? "OK" : "ERROR" }))
+            .catch((): DiagnosticCheck => ({ name: "connection", status: "ERROR" })),
+    );
   }
 }
 
 function addWorkerChecks(selected: CheckSelection, checks: CheckRegistry): void {
   if (selected.get("task-worker")?.has("running") === true) {
-    checks.set("task-worker.running", Promise.resolve({
-      name: "running",
-      status: envFlag("TERRENCE_DISABLE_WORKER") ? "WARNING" : "OK",
-    }));
+    checks.set(
+      "task-worker.running",
+      Promise.resolve({
+        name: "running",
+        status: envFlag("TERRENCE_DISABLE_WORKER") ? "WARNING" : "OK",
+      }),
+    );
   }
   if (selected.get("runtime")?.has("version") === true) {
     checks.set("runtime.version", Promise.resolve({ name: "version", status: "OK" }));
@@ -302,33 +340,42 @@ function addSecurityChecks(selected: CheckSelection, checks: CheckRegistry): voi
   if (selected.get("security")?.has("run_sandbox") === true) {
     const abi = probeLandlockAbi();
     const flags = landlockAccessFlagsForAbi(abi);
-    checks.set("security.run_sandbox", Promise.resolve({
-      name: "run_sandbox",
-      // WARNING when the sandbox is explicitly disabled or Landlock is
-      // unavailable; OK when required AND usable. Never includes key data.
-      status: runSandboxRequired() && abi >= 1 ? "OK" : "WARNING",
-      data: {
-        abi,
-        required: runSandboxRequired(),
-        extraRwAllowed: envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"),
-        access: flags,
-      },
-    }));
+    checks.set(
+      "security.run_sandbox",
+      Promise.resolve({
+        name: "run_sandbox",
+        // WARNING when the sandbox is explicitly disabled or Landlock is
+        // unavailable; OK when required AND usable. Never includes key data.
+        status: runSandboxRequired() && abi >= 1 ? "OK" : "WARNING",
+        data: {
+          abi,
+          required: runSandboxRequired(),
+          extraRwAllowed: envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"),
+          access: flags,
+        },
+      }),
+    );
   }
   if (selected.get("security")?.has("encryption_key") === true) {
-    checks.set("security.encryption_key", access(join(storageDirectory(), ".encryption-key"), constants.R_OK)
-      .then((): DiagnosticCheck => ({ name: "encryption_key", status: "OK" }))
-      .catch((): DiagnosticCheck => ({ name: "encryption_key", status: "WARNING" })));
+    checks.set(
+      "security.encryption_key",
+      access(join(storageDirectory(), ".encryption-key"), constants.R_OK)
+        .then((): DiagnosticCheck => ({ name: "encryption_key", status: "OK" }))
+        .catch((): DiagnosticCheck => ({ name: "encryption_key", status: "WARNING" })),
+    );
   }
   if (selected.get("security")?.has("extra_rw") === true) {
     // Todo 66: surface TERRENCE_SANDBOX_EXTRA_RW_ALLOWED as a warning so
     // operators (and the UI) notice when the sandbox allow-list is widened.
     const enabled = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED");
-    checks.set("security.extra_rw", Promise.resolve({
-      name: "extra_rw",
-      status: enabled ? "WARNING" : "OK",
-      ...(enabled ? { data: { allowed: true } } : {}),
-    }));
+    checks.set(
+      "security.extra_rw",
+      Promise.resolve({
+        name: "extra_rw",
+        status: enabled ? "WARNING" : "OK",
+        ...(enabled ? { data: { allowed: true } } : {}),
+      }),
+    );
   }
 }
 
@@ -387,16 +434,19 @@ async function activeControlPlaneNodes(): Promise<readonly (typeof controlPlaneN
   });
   if (nodes.some((node): boolean => node.id === readinessNodeId())) return nodes;
   const now = Date.now();
-  return [{
-    id: readinessNodeId(),
-    hostname: readinessNodeId(),
-    address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
-    version: process.env["BUILD_VERSION"] ?? "dev",
-    status: "active",
-    readinessChecks: [],
-    registeredAt: now,
-    lastHeartbeatAt: now,
-  }, ...nodes];
+  return [
+    {
+      id: readinessNodeId(),
+      hostname: readinessNodeId(),
+      address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+      version: process.env["BUILD_VERSION"] ?? "dev",
+      status: "active",
+      readinessChecks: [],
+      registeredAt: now,
+      lastHeartbeatAt: now,
+    },
+    ...nodes,
+  ];
 }
 
 function diagnosticFailure(node: string, detail: string): DiagnosticResult {
@@ -415,10 +465,10 @@ function parseNodeDiagnostic(nodeId: string, payload: unknown): DiagnosticResult
   const record = result as Record<string, unknown>;
   return {
     node: typeof record["node"] === "string" ? record["node"] : nodeId,
-    status: ["OK", "WARNING", "ERROR"].includes(String(record["status"])) ? record["status"] as Status : "ERROR",
+    status: ["OK", "WARNING", "ERROR"].includes(String(record["status"])) ? (record["status"] as Status) : "ERROR",
     createdAt: typeof record["created_at"] === "string" ? record["created_at"] : new Date().toISOString(),
     duration: typeof record["duration"] === "number" ? record["duration"] : 0,
-    checks: Array.isArray(record["checks"]) ? record["checks"] as DiagnosticGroup[] : [],
+    checks: Array.isArray(record["checks"]) ? (record["checks"] as DiagnosticGroup[]) : [],
   };
 }
 
@@ -446,7 +496,8 @@ async function collectNodeDiagnostics(
   // (they need DNS resolution, which privateHostReason cannot classify).
   const host = nodeUrl.hostname;
   const isIpLiteral = host.includes(":") || /^[\d.]+$/.test(host);
-  if (nodeUrl.protocol !== "http:" && nodeUrl.protocol !== "https:") return diagnosticFailure(node.id, "node_unreachable");
+  if (nodeUrl.protocol !== "http:" && nodeUrl.protocol !== "https:")
+    return diagnosticFailure(node.id, "node_unreachable");
   if (isIpLiteral && privateHostReason(host) === null) return diagnosticFailure(node.id, "node_unreachable");
   try {
     const url = new URL("/api/v1/diagnostics", node.address);
@@ -472,14 +523,19 @@ async function collectDiagnostics(
   authorization: string | null,
 ): Promise<readonly DiagnosticResult[]> {
   const activeNodes = await activeControlPlaneNodes();
-  const targets = nodeIds.length === 0
-    ? activeNodes
-    : nodeIds.map((id): (typeof controlPlaneNodes.$inferSelect) | undefined => activeNodes.find((node): boolean => node.id === id));
+  const targets =
+    nodeIds.length === 0
+      ? activeNodes
+      : nodeIds.map((id): typeof controlPlaneNodes.$inferSelect | undefined =>
+          activeNodes.find((node): boolean => node.id === id),
+        );
   if (targets.some((node): boolean => node === undefined)) throw new Error("Unknown or empty node identifier");
-  return Promise.all(targets.map(async (node): Promise<DiagnosticResult> => {
-    if (node === undefined) return diagnosticFailure("unknown", "node_not_found");
-    return collectNodeDiagnostics(node, selected, timeoutSeconds, authorization);
-  }));
+  return Promise.all(
+    targets.map(async (node): Promise<DiagnosticResult> => {
+      if (node === undefined) return diagnosticFailure("unknown", "node_not_found");
+      return collectNodeDiagnostics(node, selected, timeoutSeconds, authorization);
+    }),
+  );
 }
 
 function diagnosticResource(result: DiagnosticResult): Record<string, unknown> {
@@ -528,17 +584,20 @@ function isBundleRecord(value: unknown): value is BundleRecord {
   if (value === null || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   const nodes = record["nodes"];
-  return typeof record["id"] === "string"
-    && BUNDLE_ID_PATTERN.test(record["id"])
-    && ["generating", "finished", "errored", "deleted"].includes(String(record["status"]))
-    && typeof record["createdAt"] === "string"
-    && Array.isArray(nodes)
-    && nodes.every((node): boolean => node !== null
-      && typeof node === "object"
-      && typeof (node as Record<string, unknown>)["node"] === "string"
-      && ["generating", "finished", "errored", "deleted"].includes(
-        String((node as Record<string, unknown>)["status"]),
-      ));
+  return (
+    typeof record["id"] === "string" &&
+    BUNDLE_ID_PATTERN.test(record["id"]) &&
+    ["generating", "finished", "errored", "deleted"].includes(String(record["status"])) &&
+    typeof record["createdAt"] === "string" &&
+    Array.isArray(nodes) &&
+    nodes.every(
+      (node): boolean =>
+        node !== null &&
+        typeof node === "object" &&
+        typeof (node as Record<string, unknown>)["node"] === "string" &&
+        ["generating", "finished", "errored", "deleted"].includes(String((node as Record<string, unknown>)["status"])),
+    )
+  );
 }
 
 async function saveBundle(record: BundleRecord): Promise<void> {
@@ -573,12 +632,14 @@ async function expireBundle(record: BundleRecord): Promise<BundleRecord> {
     status: "deleted",
     completedAt: new Date().toISOString(),
     error: "Support bundle expired and was removed",
-    nodes: record.nodes.map((node): BundleNode => ({
-      ...node,
-      status: "deleted",
-      error: "Support bundle expired and was removed",
-      completedAt: new Date().toISOString(),
-    })),
+    nodes: record.nodes.map(
+      (node): BundleNode => ({
+        ...node,
+        status: "deleted",
+        error: "Support bundle expired and was removed",
+        completedAt: new Date().toISOString(),
+      }),
+    ),
   };
   await saveBundle(expired);
   return expired;
@@ -586,16 +647,19 @@ async function expireBundle(record: BundleRecord): Promise<BundleRecord> {
 
 async function loadBundles(): Promise<readonly BundleRecord[]> {
   try {
-    const names = (await readdir(supportBundleDirectory()))
-      .filter((name): boolean => BUNDLE_ID_PATTERN.test(name.slice(0, -5)) && name.endsWith(".json"));
-    const records = await Promise.all(names.map(async (name): Promise<BundleRecord | undefined> => {
-      try {
-        const parsed: unknown = JSON.parse(await readFile(join(supportBundleDirectory(), name), "utf8"));
-        return isBundleRecord(parsed) ? await expireBundle(parsed) : undefined;
-      } catch {
-        return undefined;
-      }
-    }));
+    const names = (await readdir(supportBundleDirectory())).filter(
+      (name): boolean => BUNDLE_ID_PATTERN.test(name.slice(0, -5)) && name.endsWith(".json"),
+    );
+    const records = await Promise.all(
+      names.map(async (name): Promise<BundleRecord | undefined> => {
+        try {
+          const parsed: unknown = JSON.parse(await readFile(join(supportBundleDirectory(), name), "utf8"));
+          return isBundleRecord(parsed) ? await expireBundle(parsed) : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
+    );
     return records.filter((record): record is BundleRecord => record !== undefined && record.status !== "deleted");
   } catch {
     return [];
@@ -603,13 +667,15 @@ async function loadBundles(): Promise<readonly BundleRecord[]> {
 }
 
 function bundleResource(record: BundleRecord): Record<string, unknown> {
-  const manifest = record.manifest ?? bundleManifest(
-    record.id,
-    record.createdAt,
-    record.expiresAt ?? supportBundleExpiry(record.createdAt),
-    record.nodes.map((node): string => node.node),
-    record.sizeBytes,
-  );
+  const manifest =
+    record.manifest ??
+    bundleManifest(
+      record.id,
+      record.createdAt,
+      record.expiresAt ?? supportBundleExpiry(record.createdAt),
+      record.nodes.map((node): string => node.node),
+      record.sizeBytes,
+    );
   const attributes: Record<string, unknown> = {
     status: record.status,
     created_at: record.createdAt,
@@ -624,13 +690,15 @@ function bundleResource(record: BundleRecord): Record<string, unknown> {
       excluded: manifest.excluded,
       ...(manifest.archiveSizeBytes === undefined ? {} : { "archive-size-bytes": manifest.archiveSizeBytes }),
     },
-    nodes: record.nodes.map((node): Record<string, unknown> => ({
-      node: node.node,
-      status: node.status,
-      error: node.error ?? null,
-      ...(node.sizeBytes === undefined ? {} : { size_bytes: node.sizeBytes }),
-      ...(node.completedAt === undefined ? {} : { completed_at: node.completedAt }),
-    })),
+    nodes: record.nodes.map(
+      (node): Record<string, unknown> => ({
+        node: node.node,
+        status: node.status,
+        error: node.error ?? null,
+        ...(node.sizeBytes === undefined ? {} : { size_bytes: node.sizeBytes }),
+        ...(node.completedAt === undefined ? {} : { completed_at: node.completedAt }),
+      }),
+    ),
     ...(record.completedAt === undefined ? {} : { completed_at: record.completedAt }),
     ...(record.sizeBytes === undefined ? {} : { size_bytes: record.sizeBytes }),
     ...(record.error === undefined ? {} : { error: record.error }),
@@ -655,19 +723,29 @@ function writeBundleEntries(
 ): Record<string, string> {
   const entries: Record<string, string> = {};
   entries["_manifest.json"] = `${JSON.stringify(manifest, null, 2)}\n`;
-  entries["_effective-configuration.json"] = `${JSON.stringify(safeEffectiveConfiguration(readinessNodeId()), null, 2)}\n`;
+  entries["_effective-configuration.json"] =
+    `${JSON.stringify(safeEffectiveConfiguration(readinessNodeId()), null, 2)}\n`;
   // 457: stamp request/correlation identity into the bundle for trace continuity.
-  entries["_request-correlation.json"] = JSON.stringify({ bundleId: record.id, createdAt: record.createdAt, generatedAt: new Date().toISOString() }, null, 2) + "\n";
+  entries["_request-correlation.json"] =
+    JSON.stringify(
+      { bundleId: record.id, createdAt: record.createdAt, generatedAt: new Date().toISOString() },
+      null,
+      2,
+    ) + "\n";
   for (const diagnostic of diagnostics) {
     const prefix = `${record.id}/${bundleNodePath(diagnostic.node)}`;
     entries[`${prefix}/diagnostics.json`] = `${JSON.stringify([diagnosticResource(diagnostic)], null, 2)}\n`;
     entries[`${prefix}/usage.json`] = `${JSON.stringify(usage, null, 2)}\n`;
-    entries[`${prefix}/instance.json`] = `${JSON.stringify({
-      version: process.env["BUILD_VERSION"] ?? "dev",
-      build: process.env["BUILD_SHA"] ?? "unknown",
-      node: diagnostic.node,
-      created_at: record.createdAt,
-    }, null, 2)}\n`;
+    entries[`${prefix}/instance.json`] = `${JSON.stringify(
+      {
+        version: process.env["BUILD_VERSION"] ?? "dev",
+        build: process.env["BUILD_SHA"] ?? "unknown",
+        node: diagnostic.node,
+        created_at: record.createdAt,
+      },
+      null,
+      2,
+    )}\n`;
   }
   return entries;
 }
@@ -679,12 +757,14 @@ async function failOversizeBundle(current: BundleRecord, maxBytes: number): Prom
     status: "errored",
     completedAt,
     error: `Bundle exceeds the ${maxBytes} byte size limit`,
-    nodes: current.nodes.map((bundleNode): BundleNode => ({
-      ...bundleNode,
-      status: "errored",
-      error: "Bundle exceeds the configured size limit",
-      completedAt,
-    })),
+    nodes: current.nodes.map(
+      (bundleNode): BundleNode => ({
+        ...bundleNode,
+        status: "errored",
+        error: "Bundle exceeds the configured size limit",
+        completedAt,
+      }),
+    ),
   });
 }
 
@@ -701,13 +781,21 @@ async function finalizeFinishedBundle(
     completedAt,
     sizeBytes: size,
     manifest: { ...manifest, archiveSizeBytes: size },
-    nodes: current.nodes.map((bundleNode): BundleNode => ({
-      ...bundleNode,
-      status: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "errored" : "finished",
-      sizeBytes: size,
-      error: diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR" ? "Diagnostics failed" : null,
-      completedAt,
-    })),
+    nodes: current.nodes.map(
+      (bundleNode): BundleNode => ({
+        ...bundleNode,
+        status:
+          diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR"
+            ? "errored"
+            : "finished",
+        sizeBytes: size,
+        error:
+          diagnostics.find((result): boolean => result.node === bundleNode.node)?.status === "ERROR"
+            ? "Diagnostics failed"
+            : null,
+        completedAt,
+      }),
+    ),
   });
 }
 
@@ -720,12 +808,14 @@ async function failBundleGeneration(record: BundleRecord): Promise<void> {
     status: "errored",
     completedAt,
     error: "Bundle generation failed",
-    nodes: current.nodes.map((node): BundleNode => ({
-      ...node,
-      status: "errored",
-      error: "Bundle generation failed",
-      completedAt,
-    })),
+    nodes: current.nodes.map(
+      (node): BundleNode => ({
+        ...node,
+        status: "errored",
+        error: "Bundle generation failed",
+        completedAt,
+      }),
+    ),
   });
 }
 
@@ -735,15 +825,22 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
     if (initial === undefined || initial.status === "deleted" || bundleIsExpired(initial)) return;
     const selected = requestedChecks(new URL("http://localhost")) ?? new Map<string, Set<string>>();
     const [diagnostics, usage] = await Promise.all([
-      collectDiagnostics(selected, 30, record.nodes.map((node): string => node.node), authorization),
+      collectDiagnostics(
+        selected,
+        30,
+        record.nodes.map((node): string => node.node),
+        authorization,
+      ),
       createUsageBundle(),
     ]);
-    const manifest = record.manifest ?? bundleManifest(
-      record.id,
-      record.createdAt,
-      record.expiresAt ?? supportBundleExpiry(record.createdAt),
-      record.nodes.map((node): string => node.node),
-    );
+    const manifest =
+      record.manifest ??
+      bundleManifest(
+        record.id,
+        record.createdAt,
+        record.expiresAt ?? supportBundleExpiry(record.createdAt),
+        record.nodes.map((node): string => node.node),
+      );
     const entries = writeBundleEntries(record, diagnostics, usage, manifest);
     const bundlePath = join(supportBundleDirectory(), `${record.id}.tar.gz`);
     await Bun.Archive.write(bundlePath, entries, { compress: "gzip" });
@@ -772,17 +869,23 @@ function requestedNodes(url: QueryUrl): readonly string[] | undefined {
 }
 
 async function createSupportBundle({ body, request, set }: SystemContext): Promise<unknown> {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const suppliedNodes = payload["nodes"];
-  if (suppliedNodes !== undefined && (!Array.isArray(suppliedNodes)
-    || suppliedNodes.length === 0
-    || suppliedNodes.some((node): boolean => typeof node !== "string" || node === ""))) {
+  if (
+    suppliedNodes !== undefined &&
+    (!Array.isArray(suppliedNodes) ||
+      suppliedNodes.length === 0 ||
+      suppliedNodes.some((node): boolean => typeof node !== "string" || node === ""))
+  ) {
     return errorResponse(set, 400, "Bad Request", "nodes must be a non-empty array of node identifiers");
   }
   const activeNodes = await activeControlPlaneNodes();
-  const nodes = payload["all"] === true
-    ? activeNodes.map((node): string => node.id)
-    : suppliedNodes === undefined ? [readinessNodeId()] : [...new Set(suppliedNodes as string[])];
+  const nodes =
+    payload["all"] === true
+      ? activeNodes.map((node): string => node.id)
+      : suppliedNodes === undefined
+        ? [readinessNodeId()]
+        : [...new Set(suppliedNodes as string[])];
   if (nodes.some((node): boolean => !activeNodes.some((active): boolean => active.id === node))) {
     return errorResponse(set, 404, "Not Found", "Node not found");
   }
@@ -807,27 +910,44 @@ async function createSupportBundle({ body, request, set }: SystemContext): Promi
 }
 
 function validBundlePagination(pageNumber: number, pageSize: number): boolean {
-  return Number.isInteger(pageNumber) && pageNumber >= 1 && Number.isInteger(pageSize) && pageSize >= 1 && pageSize <= 100;
+  return (
+    Number.isInteger(pageNumber) && pageNumber >= 1 && Number.isInteger(pageSize) && pageSize >= 1 && pageSize <= 100
+  );
 }
 
 function validBundleDateFilters(createdAfter: string | null, createdBefore: string | null): boolean {
-  return (createdAfter === null || !Number.isNaN(Date.parse(createdAfter)))
-    && (createdBefore === null || !Number.isNaN(Date.parse(createdBefore)));
+  return (
+    (createdAfter === null || !Number.isNaN(Date.parse(createdAfter))) &&
+    (createdBefore === null || !Number.isNaN(Date.parse(createdBefore)))
+  );
 }
 
 function bundleMatchesNodes(record: BundleRecord, nodeFilters: readonly string[]): boolean {
-  return nodeFilters.length === 0
-    || nodeFilters.every((node): boolean => record.nodes.some((item): boolean => item.node === node));
+  return (
+    nodeFilters.length === 0 ||
+    nodeFilters.every((node): boolean => record.nodes.some((item): boolean => item.node === node))
+  );
 }
 
 function filterBundleRecords(
   records: readonly BundleRecord[],
-  filters: Readonly<{ statusFilter: string | null; createdAfter: string | null; createdBefore: string | null; nodeFilters: readonly string[] }>,
+  filters: Readonly<{
+    statusFilter: string | null;
+    createdAfter: string | null;
+    createdBefore: string | null;
+    nodeFilters: readonly string[];
+  }>,
 ): BundleRecord[] {
   return records
     .filter((record): boolean => filters.statusFilter === null || record.status === filters.statusFilter)
-    .filter((record): boolean => filters.createdAfter === null || Date.parse(record.createdAt) > Date.parse(filters.createdAfter))
-    .filter((record): boolean => filters.createdBefore === null || Date.parse(record.createdAt) < Date.parse(filters.createdBefore))
+    .filter(
+      (record): boolean =>
+        filters.createdAfter === null || Date.parse(record.createdAt) > Date.parse(filters.createdAfter),
+    )
+    .filter(
+      (record): boolean =>
+        filters.createdBefore === null || Date.parse(record.createdAt) < Date.parse(filters.createdBefore),
+    )
     .filter((record): boolean => bundleMatchesNodes(record, filters.nodeFilters))
     .sort((left, right): number => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 }
@@ -887,7 +1007,8 @@ async function downloadSupportBundle({ params, request, set }: SystemContext): P
     return errorResponse(set, 400, "Bad Request", "Unknown or empty node identifier");
   }
   const path = join(supportBundleDirectory(), `${record.id}.tar.gz`);
-  if (!(await Bun.file(path).exists())) return errorResponse(set, 500, "Internal Server Error", "Support bundle artifact is missing");
+  if (!(await Bun.file(path).exists()))
+    return errorResponse(set, 500, "Internal Server Error", "Support bundle artifact is missing");
   const headers = set.headers as Record<string, string | number>;
   headers["Content-Type"] = "application/gzip";
   headers["Content-Disposition"] = `attachment; filename=support-bundle-${record.id}.tar.gz`;
@@ -914,12 +1035,14 @@ async function deleteSupportBundle({ params, set }: SystemContext): Promise<unkn
       status: "deleted",
       completedAt,
       error: "Support bundle generation canceled",
-      nodes: record.nodes.map((node): BundleNode => ({
-        ...node,
-        status: "deleted",
-        error: "Support bundle generation canceled",
-        completedAt,
-      })),
+      nodes: record.nodes.map(
+        (node): BundleNode => ({
+          ...node,
+          status: "deleted",
+          error: "Support bundle generation canceled",
+          completedAt,
+        }),
+      ),
     });
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
@@ -936,20 +1059,33 @@ async function deleteSupportBundle({ params, set }: SystemContext): Promise<unkn
 
 export const systemAdminRoutes = new Elysia({ name: "system-admin" })
   .use(authPlugin)
-  .onBeforeHandle(({ systemToken, token, user, orgId, teamId, run, set }: SystemContext): Record<string, unknown> | undefined => {
-    const authError = systemAuthError({ systemToken, token, user, orgId, teamId, run }, set as { status?: number; headers: Record<string, string | number> });
-    if (authError !== undefined) return authError;
-    if (systemToken !== null && systemToken !== undefined && systemRateLimited(systemToken.id, set as { status?: number; headers: Record<string, string | number> })) {
-      return errorResponse(set, 429, "Too Many Requests", "System API rate limit exceeded");
-    }
-    return undefined;
-  })
+  .onBeforeHandle(
+    ({ systemToken, token, user, orgId, teamId, run, set }: SystemContext): Record<string, unknown> | undefined => {
+      const authError = systemAuthError(
+        { systemToken, token, user, orgId, teamId, run },
+        set as { status?: number; headers: Record<string, string | number> },
+      );
+      if (authError !== undefined) return authError;
+      if (
+        systemToken !== null &&
+        systemToken !== undefined &&
+        systemRateLimited(systemToken.id, set as { status?: number; headers: Record<string, string | number> })
+      ) {
+        return errorResponse(set, 429, "Too Many Requests", "System API rate limit exceeded");
+      }
+      return undefined;
+    },
+  )
   .get("/api/v1/diagnostics", async ({ request, set }: SystemContext): Promise<unknown> => {
     const accept = request.headers.get("accept");
-    if (accept !== null && !accept.split(",").some((value): boolean => {
-      const mediaType = value.split(";")[0]?.trim();
-      return mediaType === "application/json" || mediaType === "*/*";
-    })) return errorResponse(set, 406, "Not Acceptable", "Only application/json is supported");
+    if (
+      accept !== null &&
+      !accept.split(",").some((value): boolean => {
+        const mediaType = value.split(";")[0]?.trim();
+        return mediaType === "application/json" || mediaType === "*/*";
+      })
+    )
+      return errorResponse(set, 406, "Not Acceptable", "Only application/json is supported");
 
     const url = new URL(request.url);
     const timeoutValue = url.searchParams.get("timeout") ?? "30";
@@ -960,7 +1096,8 @@ export const systemAdminRoutes = new Elysia({ name: "system-admin" })
     if (selected === undefined) return errorResponse(set, 400, "Bad Request", "Unknown or empty diagnostic check");
     const nodes = requestedNodes(url);
     if (nodes === undefined) return errorResponse(set, 400, "Bad Request", "Unknown or empty node identifier");
-    if (diagnosticsRunning) return errorResponse(set, 429, "Too Many Requests", "Another diagnostic check is already running");
+    if (diagnosticsRunning)
+      return errorResponse(set, 429, "Too Many Requests", "Another diagnostic check is already running");
 
     diagnosticsRunning = true;
     try {

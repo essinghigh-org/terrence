@@ -22,10 +22,7 @@ afterEach((): void => {
 test("respects permissions and fully manages workspace run task bindings", async () => {
   let costTaskAttached = false;
   let scannerTaskAttached = true;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/run-tasks") {
       return json({
@@ -83,20 +80,23 @@ test("respects permissions and fully manages workspace run task bindings", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(
-    <WorkspaceRunTasks orgName="acme" workspaceId="ws-1" canManage={false} />,
-  );
+  const view = render(<WorkspaceRunTasks orgName="acme" workspaceId="ws-1" canManage={false} />);
 
-  await waitFor((): void => { expect(view.getByText("Security scanner")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Security scanner")).toBeTruthy();
+  });
   expect(view.getByText(/only workspace administrators/i)).toBeTruthy();
   expect(view.queryByRole("button", { name: "Attach run task" })).toBeNull();
-  expect(fetchMock.mock.calls.some(([input]): boolean =>
-    urlOf(input) === "/api/v2/organizations/acme/run-tasks")).toBe(false);
+  expect(fetchMock.mock.calls.some(([input]): boolean => urlOf(input) === "/api/v2/organizations/acme/run-tasks")).toBe(
+    false,
+  );
 
   view.rerender(<WorkspaceRunTasks orgName="acme" workspaceId="ws-1" canManage />);
-  await waitFor((): void => { expect(view.getByText("Security scanner")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Security scanner")).toBeTruthy();
+  });
 
   fireEvent.change(view.getByLabelText("Run task"), { target: { value: "task-cost" } });
   fireEvent.change(view.getByLabelText("Stage"), { target: { value: "pre_apply" } });
@@ -106,11 +106,14 @@ test("respects permissions and fully manages workspace run task bindings", async
     if (form !== null) fireEvent.submit(form);
   });
 
-  await waitFor((): void => { expect(view.getByText("Run task attached.")).toBeTruthy(); });
-  const attachCall = fetchMock.mock.calls.find(([input, init]): boolean =>
-    urlOf(input) === "/api/v2/workspaces/ws-1/run-tasks" && init?.method === "POST");
+  await waitFor((): void => {
+    expect(view.getByText("Run task attached.")).toBeTruthy();
+  });
+  const attachCall = fetchMock.mock.calls.find(
+    ([input, init]): boolean => urlOf(input) === "/api/v2/workspaces/ws-1/run-tasks" && init?.method === "POST",
+  );
   expect(attachCall).toBeDefined();
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+  // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(attachCall?.[1]?.body as string)).toEqual({
     data: {
       type: "workspace-run-tasks",
@@ -130,9 +133,14 @@ test("respects permissions and fully manages workspace run task bindings", async
     expect(view.getByRole("heading", { name: "Remove run task?" })).toBeTruthy();
   });
   fireEvent.click(view.getByRole("button", { name: "Remove run task" }));
-  await waitFor((): void => { expect(view.getByText("Run task removed.")).toBeTruthy(); });
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    urlOf(input) === "/api/v2/workspaces/ws-1/run-tasks/task-scanner"
-    && init?.method === "DELETE")).toBe(true);
+  await waitFor((): void => {
+    expect(view.getByText("Run task removed.")).toBeTruthy();
+  });
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]): boolean =>
+        urlOf(input) === "/api/v2/workspaces/ws-1/run-tasks/task-scanner" && init?.method === "DELETE",
+    ),
+  ).toBe(true);
   expect(view.queryByRole("button", { name: "Remove Security scanner" })).toBeNull();
 });

@@ -182,7 +182,13 @@ export type IncludedUser = Readonly<{
 /** Run sections that can be refetched independently. */
 export type AuxKind = "plan" | "apply" | "cost" | "policy" | "assessments" | "events" | "comments";
 export const ALL_AUX_KINDS: readonly AuxKind[] = [
-  "plan", "apply", "cost", "policy", "assessments", "events", "comments",
+  "plan",
+  "apply",
+  "cost",
+  "policy",
+  "assessments",
+  "events",
+  "comments",
 ];
 
 /** Reader-facing name for a section, for messages that name what went wrong. */
@@ -228,11 +234,7 @@ export function isRunActive(status: string | null): boolean {
  * refreshes. Mirrors the `settled` branch of `resolveRunDecision`, which is
  * the user-visible statement of the same fact.
  */
-const SETTLED_PLAN_STATUSES: ReadonlySet<string> = new Set([
-  "planned",
-  "planned_and_saved",
-  "needs_confirmation",
-]);
+const SETTLED_PLAN_STATUSES: ReadonlySet<string> = new Set(["planned", "planned_and_saved", "needs_confirmation"]);
 
 export function isSettledPlanOnly(attributes: RunAttributes | undefined): boolean {
   if (attributes === undefined) return false;
@@ -281,8 +283,14 @@ const PLAN_PHASE_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 const APPLY_PHASE_STATUSES: ReadonlySet<string> = new Set([
-  "confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed",
-  "applying", "post_apply_running", "post_apply_completed", "applied",
+  "confirmed",
+  "apply_queued",
+  "pre_apply_running",
+  "pre_apply_completed",
+  "applying",
+  "post_apply_running",
+  "post_apply_completed",
+  "applied",
 ]);
 
 /**
@@ -350,9 +358,7 @@ export function appendLogChunk(
     if (tail.totalKnown && tail.totalBytes > requestedOffset) {
       return { text: "", offset: 0, truncated: tail.truncated };
     }
-    return current.truncated === tail.truncated
-      ? current
-      : { ...current, truncated: tail.truncated };
+    return current.truncated === tail.truncated ? current : { ...current, truncated: tail.truncated };
   }
 
   return {
@@ -427,7 +433,13 @@ export type RunViewAction =
       type: "log-chunk";
       phase: "plan" | "apply";
       requestedOffset: number;
-      tail: Readonly<{ chunk: string; totalBytes: number; totalKnown: boolean; nextOffset: number; truncated: boolean }>;
+      tail: Readonly<{
+        chunk: string;
+        totalBytes: number;
+        totalKnown: boolean;
+        nextOffset: number;
+        truncated: boolean;
+      }>;
     }
   | { type: "action-sent"; action: string; fromStatus: string }
   | { type: "action-settled" };
@@ -483,8 +495,7 @@ function runLoadedTransition(
   // Clear the in-flight action as soon as the run actually leaves the
   // status it was sent from. This is what makes the busy state truthful
   // rather than a fixed timeout.
-  const stillAwaiting = state.awaitingTransitionFrom !== null
-    && state.awaitingTransitionFrom === status;
+  const stillAwaiting = state.awaitingTransitionFrom !== null && state.awaitingTransitionFrom === status;
   return {
     ...state,
     run: action.run,
@@ -510,11 +521,12 @@ function auxStatusTransition(
   // passes that happened to fetch different subsets.
   const touched = new Set(action.kinds);
   const nowFailing = new Set(action.failed);
-  const next = ALL_AUX_KINDS.filter((kind: AuxKind): boolean =>
-    nowFailing.has(kind)
-    || (!touched.has(kind) && state.failedSections.includes(kind)));
-  const unchanged = next.length === state.failedSections.length
-    && next.every((kind: AuxKind, index: number): boolean => state.failedSections[index] === kind);
+  const next = ALL_AUX_KINDS.filter(
+    (kind: AuxKind): boolean => nowFailing.has(kind) || (!touched.has(kind) && state.failedSections.includes(kind)),
+  );
+  const unchanged =
+    next.length === state.failedSections.length &&
+    next.every((kind: AuxKind, index: number): boolean => state.failedSections[index] === kind);
   return unchanged ? state : { ...state, failedSections: next };
 }
 
@@ -534,10 +546,7 @@ function logChunkTransition(
  * impossible for a status to be updated without the sections that depend on it
  * being reconciled in the same commit.
  */
-export function runViewReducer(
-  state: RunViewState,
-  action: Readonly<RunViewAction>,
-): RunViewState {
+export function runViewReducer(state: RunViewState, action: Readonly<RunViewAction>): RunViewState {
   switch (action.type) {
     case "reset":
       return INITIAL_RUN_VIEW_STATE;

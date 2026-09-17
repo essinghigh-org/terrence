@@ -28,8 +28,12 @@ describe("dependency supply-chain manifest", () => {
     const manifest = manifestFor("1.2.3");
     expect(manifest.packageManager).toBe("bun@1.4.0");
     expect(manifest.lockfile.lockfileVersion).toBe(2);
-    expect(manifest.packages).toEqual([expect.objectContaining({ name: "example-package", version: "1.2.3", integrity })]);
-    expect(manifest.workspaces[0]?.dependencies).toEqual([{ name: "example-package", range: "^1.2.3", section: "dependencies" }]);
+    expect(manifest.packages).toEqual([
+      expect.objectContaining({ name: "example-package", version: "1.2.3", integrity }),
+    ]);
+    expect(manifest.workspaces[0]?.dependencies).toEqual([
+      { name: "example-package", range: "^1.2.3", section: "dependencies" },
+    ]);
   });
 
   it("emits SPDX checksums and reports version changes against a baseline", (): void => {

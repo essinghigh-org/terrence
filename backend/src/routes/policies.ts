@@ -1,10 +1,38 @@
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
+import {
+  policySets,
+  policySetVersions,
+  policySetWorkspaces,
+  policySetProjects,
+  policySetExclusions,
+  policySetProjectExclusions,
+  policySetTagSelectors,
+  policySetParameters,
+  policies,
+  policyChecks,
+  projects,
+  runs,
+  workspaces,
+  organizations,
+  oauthClients,
+  oauthTokens,
+  githubAppInstallations,
+  type users,
+} from "../db/schema";
 import { eq, and, inArray, asc, isNull, like, ilike, count, exists, notExists, or, type SQL } from "drizzle-orm";
 import { isPostgres } from "../db/driver";
-import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL, pageRequest, pagination, type DeepReadonly, type OrganizationPermission } from "../lib/utils";
+import {
+  checkOrganizationPermission,
+  checkWorkspacePermission,
+  signedApiURL,
+  validSignedApiURL,
+  pageRequest,
+  pagination,
+  type DeepReadonly,
+  type OrganizationPermission,
+} from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -14,7 +42,10 @@ import { variableValueForRead, variableValueForWrite } from "../lib/variable-cry
 import { vcsRepoResource } from "../lib/vcs-repo";
 import { parsePersistedStatusMetadata } from "../lib/validation";
 
-const POLICY_ARCHIVE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
+const POLICY_ARCHIVE_DIR = resolve(
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
+  "policy-set-versions",
+);
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -28,7 +59,6 @@ type ParamCtx = Readonly<{
   readonly request: Readonly<{ readonly url: string; readonly arrayBuffer: () => Promise<ArrayBuffer> }>;
   readonly set: SetObj;
 }>;
-
 
 type PsItem = DeepReadonly<typeof policySets.$inferSelect>;
 type PolItem = DeepReadonly<typeof policies.$inferSelect>;
@@ -73,7 +103,9 @@ function extractPolicyRefIds(body: unknown): string[] {
   const b = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const collect = (refs: unknown): string[] => {
     const arr = Array.isArray(refs) ? refs : [];
-    return arr.map((r): string => (typeof (r as { id?: unknown })?.id === "string" ? (r as { id: string }).id : "")).filter((id: string): boolean => id !== "");
+    return arr
+      .map((r): string => (typeof (r as { id?: unknown })?.id === "string" ? (r as { id: string }).id : ""))
+      .filter((id: string): boolean => id !== "");
   };
   if (Array.isArray(b["policies"])) return collect(b["policies"]);
   const data = b["data"] as Record<string, unknown> | undefined;
@@ -86,7 +118,9 @@ function extractPolicyRefIds(body: unknown): string[] {
 }
 
 async function policySetAttributes(policySet: PsItem): Promise<Record<string, unknown>> {
-  const selectors = await db.query.policySetTagSelectors.findMany({ where: eq(policySetTagSelectors.policySetId, policySet.id) });
+  const selectors = await db.query.policySetTagSelectors.findMany({
+    where: eq(policySetTagSelectors.policySetId, policySet.id),
+  });
   return {
     name: policySet.name,
     description: policySet.description,
@@ -98,11 +132,13 @@ async function policySetAttributes(policySet: PsItem): Promise<Record<string, un
     "policies-path": policySet.policiesPath,
     "policy-update-patterns": policySet.policyUpdatePatterns,
     "vcs-repo": vcsRepoResource(policySet.vcsRepo),
-    "tag-selectors": selectors.map((s): Record<string, unknown> => ({
-      "tag-key": s.key,
-      "tag-value": s.value,
-      "is-exclude": s.isExclude === true,
-    })),
+    "tag-selectors": selectors.map(
+      (s): Record<string, unknown> => ({
+        "tag-key": s.key,
+        "tag-value": s.value,
+        "is-exclude": s.isExclude === true,
+      }),
+    ),
   };
 }
 
@@ -120,10 +156,16 @@ async function policySetRelationships(policySet: PsItem): Promise<Record<string,
   const orgName = await organizationName(policySet.orgId);
   return {
     organization: { data: { id: orgName ?? policySet.orgId, type: "organizations" } },
-    workspaces: { data: workspaceLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
+    workspaces: {
+      data: workspaceLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })),
+    },
     projects: { data: projLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
-    "workspace-exclusions": { data: exclLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
-    "project-exclusions": { data: projExclLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
+    "workspace-exclusions": {
+      data: exclLinks.map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })),
+    },
+    "project-exclusions": {
+      data: projExclLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })),
+    },
     policies: { data: policyRows.map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
   };
 }
@@ -133,13 +175,15 @@ function resolveVcsRepoIdentifier(
   existing?: DeepReadonly<PolicySetVcsRepo>,
 ): Readonly<{ value: string }> | Readonly<{ error: string }> {
   const rawIdentifier = raw["identifier"];
-  if (rawIdentifier !== undefined && typeof rawIdentifier !== "string") return { error: "vcs-repo.identifier must be a string" };
-  const identifier = typeof rawIdentifier === "string" ? rawIdentifier.trim() : existing?.identifier ?? "";
+  if (rawIdentifier !== undefined && typeof rawIdentifier !== "string")
+    return { error: "vcs-repo.identifier must be a string" };
+  const identifier = typeof rawIdentifier === "string" ? rawIdentifier.trim() : (existing?.identifier ?? "");
   const repositoryParts = identifier.split("/");
   if (
-    repositoryParts.length < 2
-    || repositoryParts.some((part: string): boolean => !/^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part))
-  ) return { error: "vcs-repo.identifier must identify a repository as namespace/name" };
+    repositoryParts.length < 2 ||
+    repositoryParts.some((part: string): boolean => !/^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part))
+  )
+    return { error: "vcs-repo.identifier must identify a repository as namespace/name" };
   return { value: identifier };
 }
 
@@ -158,9 +202,12 @@ function extractOAuthTokenId(
   if (rawOAuthTokenId !== undefined && rawOAuthTokenId !== null && typeof rawOAuthTokenId !== "string") {
     return { error: "vcs-repo.oauth-token-id must be a string or null" };
   }
-  const value = rawOAuthTokenId === null
-    ? undefined
-    : typeof rawOAuthTokenId === "string" ? rawOAuthTokenId.trim() : existing?.oauthTokenId;
+  const value =
+    rawOAuthTokenId === null
+      ? undefined
+      : typeof rawOAuthTokenId === "string"
+        ? rawOAuthTokenId.trim()
+        : existing?.oauthTokenId;
   return { value };
 }
 
@@ -172,9 +219,12 @@ function extractInstallationId(
   if (rawInstallationId !== undefined && rawInstallationId !== null && typeof rawInstallationId !== "string") {
     return { error: "vcs-repo.github-app-installation-id must be a string or null" };
   }
-  const value = rawInstallationId === null
-    ? undefined
-    : typeof rawInstallationId === "string" ? rawInstallationId.trim() : existing?.githubAppInstallationId;
+  const value =
+    rawInstallationId === null
+      ? undefined
+      : typeof rawInstallationId === "string"
+        ? rawInstallationId.trim()
+        : existing?.githubAppInstallationId;
   return { value };
 }
 
@@ -205,30 +255,31 @@ async function verifyVcsCredentialRefs(orgId: string, refs: VcsCredentialRefs): 
   const oauthTokenId = refs.oauthTokenId;
   if (refs.hasOAuthToken && oauthTokenId !== undefined) {
     const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
-    const client = token === undefined
-      ? undefined
-      : await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
-      });
+    const client =
+      token === undefined
+        ? undefined
+        : await db.query.oauthClients.findFirst({
+            where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+          });
     if (
-      client === undefined
-      || !["github", "github_enterprise", "gitlab", "gitlab_ce", "gitlab_ee", "bitbucket"].includes(client.serviceProvider)
-    ) return "vcs-repo OAuth token is not available in this organization";
+      client === undefined ||
+      !["github", "github_enterprise", "gitlab", "gitlab_ce", "gitlab_ee", "bitbucket"].includes(client.serviceProvider)
+    )
+      return "vcs-repo OAuth token is not available in this organization";
   }
   const githubAppInstallationId = refs.githubAppInstallationId;
   if (refs.hasInstallation && githubAppInstallationId !== undefined) {
     const installation = await db.query.githubAppInstallations.findFirst({
-      where: and(
-        eq(githubAppInstallations.id, githubAppInstallationId),
-        eq(githubAppInstallations.orgId, orgId),
-      ),
+      where: and(eq(githubAppInstallations.id, githubAppInstallationId), eq(githubAppInstallations.orgId, orgId)),
     });
     if (installation === undefined) return "vcs-repo GitHub App installation is not available in this organization";
   }
   return null;
 }
 
-function vcsCredentialAttrs(refs: VcsCredentialRefs): Readonly<{ oauthTokenId?: string; githubAppInstallationId?: string }> {
+function vcsCredentialAttrs(
+  refs: VcsCredentialRefs,
+): Readonly<{ oauthTokenId?: string; githubAppInstallationId?: string }> {
   if (refs.hasOAuthToken && refs.oauthTokenId !== undefined) return { oauthTokenId: refs.oauthTokenId };
   if (refs.hasInstallation && refs.githubAppInstallationId !== undefined) {
     return { githubAppInstallationId: refs.githubAppInstallationId };
@@ -239,21 +290,20 @@ function vcsCredentialAttrs(refs: VcsCredentialRefs): Readonly<{ oauthTokenId?: 
 function resolveVcsRepoOptions(
   raw: Record<string, unknown>,
   existing?: DeepReadonly<PolicySetVcsRepo>,
-): Readonly<{ value: Readonly<{ branch: string | undefined; ingressSubmodules: boolean }> }> | Readonly<{ error: string }> {
+):
+  | Readonly<{ value: Readonly<{ branch: string | undefined; ingressSubmodules: boolean }> }>
+  | Readonly<{ error: string }> {
   const rawBranch = raw["branch"];
   if (rawBranch !== undefined && rawBranch !== null && typeof rawBranch !== "string") {
     return { error: "vcs-repo.branch must be a string or null" };
   }
-  const branch = rawBranch === null
-    ? undefined
-    : typeof rawBranch === "string" ? rawBranch.trim() : existing?.branch;
+  const branch = rawBranch === null ? undefined : typeof rawBranch === "string" ? rawBranch.trim() : existing?.branch;
   const rawIngressSubmodules = raw["ingress-submodules"] ?? raw["ingressSubmodules"];
   if (rawIngressSubmodules !== undefined && typeof rawIngressSubmodules !== "boolean") {
     return { error: "vcs-repo.ingress-submodules must be a boolean" };
   }
-  const ingressSubmodules = typeof rawIngressSubmodules === "boolean"
-    ? rawIngressSubmodules
-    : existing?.ingressSubmodules ?? false;
+  const ingressSubmodules =
+    typeof rawIngressSubmodules === "boolean" ? rawIngressSubmodules : (existing?.ingressSubmodules ?? false);
   return { value: { branch, ingressSubmodules } };
 }
 
@@ -293,12 +343,13 @@ function normalizePolicyUpdatePatterns(input: unknown): Readonly<{ value: string
     if (typeof value !== "string") return { error: "policy-update-patterns entries must be strings" };
     const pattern = value.trim().replaceAll("\\", "/");
     if (
-      pattern === ""
-      || pattern.length > 512
-      || pattern.startsWith("/")
-      || pattern.split("/").includes("..")
-      || pattern.includes("\0")
-    ) return { error: "policy-update-patterns entries must be non-empty repository-relative globs" };
+      pattern === "" ||
+      pattern.length > 512 ||
+      pattern.startsWith("/") ||
+      pattern.split("/").includes("..") ||
+      pattern.includes("\0")
+    )
+      return { error: "policy-update-patterns entries must be non-empty repository-relative globs" };
     try {
       new Bun.Glob(pattern);
     } catch {
@@ -320,9 +371,14 @@ function normalizePoliciesPath(input: unknown): Readonly<{ value: string | null 
   return { value: value === "" || relativePath === "" ? null : value };
 }
 
-function policySetVersionResource(version: PolicySetVersionItem, request: Readonly<{ readonly url: string }>): Record<string, unknown> {
+function policySetVersionResource(
+  version: PolicySetVersionItem,
+  request: Readonly<{ readonly url: string }>,
+): Record<string, unknown> {
   const uploadPath = `/api/v2/policy-set-versions/${version.id}/upload`;
-  const statusTimestamps = parsePersistedStatusMetadata(version.statusTimestamps, version.statusMetadataSchemaVersion, version.id, false) ?? {};
+  const statusTimestamps =
+    parsePersistedStatusMetadata(version.statusTimestamps, version.statusMetadataSchemaVersion, version.id, false) ??
+    {};
   return {
     id: version.id,
     type: "policy-set-versions",
@@ -344,23 +400,34 @@ function policySetVersionResource(version: PolicySetVersionItem, request: Readon
     },
     links: {
       self: `/api/v2/policy-set-versions/${version.id}`,
-      ...(version.status === "pending" && version.source === "tfe-api" ? { upload: signedApiURL(request, uploadPath, "PUT", 3600) } : {}),
+      ...(version.status === "pending" && version.source === "tfe-api"
+        ? { upload: signedApiURL(request, uploadPath, "PUT", 3600) }
+        : {}),
     },
   };
 }
 
-
 type PolicyRow = Readonly<{
-  id: string; orgId: string | null; policySetId: string | null; policySetVersionId: string | null;
-  name: string; description: string | null; kind: string; enforcementLevel: string | null; query: string | null;
-  source: string | null; sourcePath: string | null; createdAt: number;
+  id: string;
+  orgId: string | null;
+  policySetId: string | null;
+  policySetVersionId: string | null;
+  name: string;
+  description: string | null;
+  kind: string;
+  enforcementLevel: string | null;
+  query: string | null;
+  source: string | null;
+  sourcePath: string | null;
+  createdAt: number;
 }>;
 
 function requestedPolicyEnforcementLevel(attributes: Record<string, unknown>): string | undefined {
   if (typeof attributes["enforcement-level"] === "string") return attributes["enforcement-level"];
   const { enforce_mode: enforceMode, enforce } = attributes;
   if (typeof enforceMode === "string") return enforceMode;
-  if (!Array.isArray(enforce) || enforce.length === 0 || enforce[0] === null || typeof enforce[0] !== "object") return undefined;
+  if (!Array.isArray(enforce) || enforce.length === 0 || enforce[0] === null || typeof enforce[0] !== "object")
+    return undefined;
   const { mode } = enforce[0] as Record<string, unknown>;
   return typeof mode === "string" ? mode : undefined;
 }
@@ -431,18 +498,18 @@ async function resolvePolicySetPatchContent(
 ): Promise<Readonly<{ value: PolicySetPatchContent }> | Readonly<{ error: string }>> {
   const normalizedVcsRepo = await normalizePolicySetVcsRepo(attributes["vcs-repo"], ps.orgId, ps.vcsRepo ?? undefined);
   if ("error" in normalizedVcsRepo) return normalizedVcsRepo;
-  const normalizedPath = attributes["policies-path"] === undefined
-    ? { value: ps.policiesPath }
-    : normalizePoliciesPath(attributes["policies-path"]);
+  const normalizedPath =
+    attributes["policies-path"] === undefined
+      ? { value: ps.policiesPath }
+      : normalizePoliciesPath(attributes["policies-path"]);
   if ("error" in normalizedPath) return normalizedPath;
-  const normalizedPatterns = attributes["policy-update-patterns"] === undefined
-    ? { value: [...ps.policyUpdatePatterns] }
-    : normalizePolicyUpdatePatterns(attributes["policy-update-patterns"]);
+  const normalizedPatterns =
+    attributes["policy-update-patterns"] === undefined
+      ? { value: [...ps.policyUpdatePatterns] }
+      : normalizePolicyUpdatePatterns(attributes["policy-update-patterns"]);
   if ("error" in normalizedPatterns) return normalizedPatterns;
-  if (
-    normalizedVcsRepo.value === null
-    && (normalizedPath.value !== null || normalizedPatterns.value.length > 0)
-  ) return { error: "policies-path and policy-update-patterns require vcs-repo" };
+  if (normalizedVcsRepo.value === null && (normalizedPath.value !== null || normalizedPatterns.value.length > 0))
+    return { error: "policies-path and policy-update-patterns require vcs-repo" };
   return {
     value: {
       vcsRepo: normalizedVcsRepo.value,
@@ -459,12 +526,14 @@ async function resolvePolicySetPatchLinks(
   vcsRepoProvided: boolean,
   hadVcsRepo: boolean,
 ): Promise<string | null> {
-  const relationships = data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
-    ? data["relationships"] as Record<string, unknown>
-    : {};
-  const policyRelationship = relationships["policies"] !== null && typeof relationships["policies"] === "object"
-    ? relationships["policies"] as Record<string, unknown>
-    : {};
+  const relationships =
+    data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
+  const policyRelationship =
+    relationships["policies"] !== null && typeof relationships["policies"] === "object"
+      ? (relationships["policies"] as Record<string, unknown>)
+      : {};
   if (vcsRepo !== null && Array.isArray(policyRelationship["data"]) && policyRelationship["data"].length > 0) {
     return "vcs-repo and policies relationships are mutually exclusive";
   }
@@ -477,10 +546,17 @@ async function resolvePolicySetPatchLinks(
   return null;
 }
 
-async function checkPolicySetKindChange(kind: string, currentKind: string, policySetId: string): Promise<string | null> {
+async function checkPolicySetKindChange(
+  kind: string,
+  currentKind: string,
+  policySetId: string,
+): Promise<string | null> {
   if (!["sentinel", "opa"].includes(kind)) return "kind must be sentinel or opa";
   if (kind !== currentKind) {
-    const attached = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId), columns: { id: true } });
+    const attached = await db.query.policies.findFirst({
+      where: eq(policies.policySetId, policySetId),
+      columns: { id: true },
+    });
     if (attached !== undefined) return "Remove policies before changing the policy set kind";
   }
   return null;
@@ -494,7 +570,8 @@ async function applyPolicySetPatchFields(
   updates: Partial<typeof policySets.$inferInsert>,
 ): Promise<string | null> {
   if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  if (attributes["description"] !== undefined)
+    updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
   if (typeof attributes["kind"] === "string") {
     const kindError = await checkPolicySetKindChange(attributes["kind"], ps.kind, policySetId);
     if (kindError !== null) return kindError;
@@ -503,7 +580,9 @@ async function applyPolicySetPatchFields(
   if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
   if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
   if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
-  if (attributes["policy-tool-version"] !== undefined) updates.policyToolVersion = typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null;
+  if (attributes["policy-tool-version"] !== undefined)
+    updates.policyToolVersion =
+      typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null;
   if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
   if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
   if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
@@ -528,21 +607,35 @@ async function loadPolicyPatchScope(
   const resolvedOrgId = await resolvePolicyOrgId(pol);
   if (resolvedOrgId === null) return { notFound: true as const };
   const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
-  if (org === undefined || !(await checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId ?? null, permission))) {
+  if (
+    org === undefined ||
+    !(await checkOrganizationPermission(org.id, userId, tokenOrgId, tokenTeamId ?? null, permission))
+  ) {
     return { notFound: true as const };
   }
-  const ps = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
+  const ps =
+    pol.policySetId !== null
+      ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) })
+      : undefined;
   return { value: { pol, org, ps } };
 }
 
-function parsePatchPayload(body: unknown): Readonly<{ data: Record<string, unknown> | undefined; attributes: Record<string, unknown> }> {
+function parsePatchPayload(
+  body: unknown,
+): Readonly<{ data: Record<string, unknown> | undefined; attributes: Record<string, unknown> }> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const attributes =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   return { data, attributes };
 }
 
-function checkPolicyPatchable(ps: { vcsRepo: unknown } | undefined, dataType: unknown): Readonly<{ detail?: string }> | null {
+function checkPolicyPatchable(
+  ps: { vcsRepo: unknown } | undefined,
+  dataType: unknown,
+): Readonly<{ detail?: string }> | null {
   if (ps !== undefined && ps.vcsRepo !== null) return {};
   if (dataType !== "policies") return { detail: "data.type must be policies" };
   return null;
@@ -553,13 +646,21 @@ function applyPolicyPatchScalars(
   updates: Partial<typeof policies.$inferInsert>,
 ): string | null {
   if (typeof attributes["name"] === "string") updates.name = attributes["name"];
-  if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+  if (attributes["description"] !== undefined)
+    updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
   if (typeof attributes["kind"] === "string") {
     if (attributes["kind"] !== "sentinel" && attributes["kind"] !== "opa") return "kind must be sentinel or opa";
     updates.kind = attributes["kind"];
   }
-  if (attributes["policy"] !== undefined || attributes["source"] !== undefined) updates.source = typeof attributes["policy"] === "string" ? attributes["policy"] : typeof attributes["source"] === "string" ? attributes["source"] : null;
-  if (attributes["query"] !== undefined) updates.query = typeof attributes["query"] === "string" ? attributes["query"] : null;
+  if (attributes["policy"] !== undefined || attributes["source"] !== undefined)
+    updates.source =
+      typeof attributes["policy"] === "string"
+        ? attributes["policy"]
+        : typeof attributes["source"] === "string"
+          ? attributes["source"]
+          : null;
+  if (attributes["query"] !== undefined)
+    updates.query = typeof attributes["query"] === "string" ? attributes["query"] : null;
   return null;
 }
 
@@ -569,7 +670,8 @@ function applyPolicyQueryDefaults(
   currentQuery: string | null,
   updates: Partial<typeof policies.$inferInsert>,
 ): void {
-  if (policyKind === "opa" && updates.query === undefined && (currentQuery === null || currentQuery === "")) updates.query = "data";
+  if (policyKind === "opa" && updates.query === undefined && (currentQuery === null || currentQuery === ""))
+    updates.query = "data";
   if (policyKind === "sentinel" && attributes["kind"] !== undefined) updates.query = null;
 }
 
@@ -633,17 +735,19 @@ function resolvePolicySetCreateScalars(
       global: typeof attributes["global"] === "boolean" ? attributes["global"] : false,
       overridable: typeof attributes["overridable"] === "boolean" ? attributes["overridable"] : false,
       agentEnabled: typeof attributes["agent-enabled"] === "boolean" ? attributes["agent-enabled"] : false,
-      policyToolVersion: typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null,
+      policyToolVersion:
+        typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null,
     },
   };
 }
 
 function extractPolicyRelationship(data: Record<string, unknown> | undefined): Record<string, unknown> {
-  const relationships = data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
-    ? data["relationships"] as Record<string, unknown>
-    : {};
+  const relationships =
+    data?.["relationships"] !== null && typeof data?.["relationships"] === "object"
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
   return relationships["policies"] !== null && typeof relationships["policies"] === "object"
-    ? relationships["policies"] as Record<string, unknown>
+    ? (relationships["policies"] as Record<string, unknown>)
     : {};
 }
 
@@ -665,12 +769,14 @@ async function resolvePolicySetCreateContent(
   if ("error" in normalizedPath) return normalizedPath;
   const normalizedPatterns = normalizePolicyUpdatePatterns(attributes["policy-update-patterns"] ?? []);
   if ("error" in normalizedPatterns) return normalizedPatterns;
-  if (
-    normalizedVcsRepo.value === null
-    && (normalizedPath.value !== null || normalizedPatterns.value.length > 0)
-  ) return { error: "policies-path and policy-update-patterns require vcs-repo" };
+  if (normalizedVcsRepo.value === null && (normalizedPath.value !== null || normalizedPatterns.value.length > 0))
+    return { error: "policies-path and policy-update-patterns require vcs-repo" };
   const policyRelationship = extractPolicyRelationship(data);
-  if (normalizedVcsRepo.value !== null && Array.isArray(policyRelationship["data"]) && policyRelationship["data"].length > 0) {
+  if (
+    normalizedVcsRepo.value !== null &&
+    Array.isArray(policyRelationship["data"]) &&
+    policyRelationship["data"].length > 0
+  ) {
     return { error: "vcs-repo and policies relationships are mutually exclusive" };
   }
   return {
@@ -686,14 +792,32 @@ async function resolvePolicySetCreateContent(
 async function attachPoliciesToSet(policyData: unknown, orgId: string, policySetId: string): Promise<void> {
   if (!Array.isArray(policyData)) return;
   const validPolicyIds = policyData
-    .map((ref: unknown): string => (ref !== null && typeof ref === "object" && typeof (ref as { id?: unknown }).id === "string" ? (ref as { id: string }).id : ""))
+    .map((ref: unknown): string =>
+      ref !== null && typeof ref === "object" && typeof (ref as { id?: unknown }).id === "string"
+        ? (ref as { id: string }).id
+        : "",
+    )
     .filter((pid: string): boolean => pid !== "");
-  const validated = validPolicyIds.length === 0
-    ? []
-    : await db.query.policies.findMany({ where: and(eq(policies.orgId, orgId), inArray(policies.id, validPolicyIds)), columns: { id: true } });
+  const validated =
+    validPolicyIds.length === 0
+      ? []
+      : await db.query.policies.findMany({
+          where: and(eq(policies.orgId, orgId), inArray(policies.id, validPolicyIds)),
+          columns: { id: true },
+        });
   if (validated.length > 0) {
-    await db.update(policies).set({ policySetId: policySetId })
-      .where(and(eq(policies.orgId, orgId), inArray(policies.id, validated.map((p): string => p.id))));
+    await db
+      .update(policies)
+      .set({ policySetId: policySetId })
+      .where(
+        and(
+          eq(policies.orgId, orgId),
+          inArray(
+            policies.id,
+            validated.map((p): string => p.id),
+          ),
+        ),
+      );
   }
 }
 
@@ -713,14 +837,20 @@ function resolvePolicyCreateScalars(
   if (name === "") return { error: "Name is required" };
   const kind = typeof attributes["kind"] === "string" ? attributes["kind"] : "sentinel";
   if (kind !== "sentinel" && kind !== "opa") return { error: "kind must be sentinel or opa" };
-  const source = typeof attributes["policy"] === "string"
-    ? attributes["policy"]
-    : typeof attributes["source"] === "string" ? attributes["source"] : null;
-  const query = kind === "opa"
-    ? typeof attributes["query"] === "string" && attributes["query"].trim() !== "" ? attributes["query"].trim() : "data"
-    : null;
-  const enforcementLevel = requestedPolicyEnforcementLevel(attributes)
-    ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
+  const source =
+    typeof attributes["policy"] === "string"
+      ? attributes["policy"]
+      : typeof attributes["source"] === "string"
+        ? attributes["source"]
+        : null;
+  const query =
+    kind === "opa"
+      ? typeof attributes["query"] === "string" && attributes["query"].trim() !== ""
+        ? attributes["query"].trim()
+        : "data"
+      : null;
+  const enforcementLevel =
+    requestedPolicyEnforcementLevel(attributes) ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
   const allowedLevels = policyEnforcementLevels(kind);
   if (!allowedLevels.includes(enforcementLevel)) {
     return { error: `enforcement-level must be ${allowedLevels.join(", ")}` };
@@ -741,8 +871,14 @@ async function resolvePolicySetAttachment(
   data: Record<string, unknown> | undefined,
   orgId: string,
 ): Promise<Readonly<{ value: string | null }> | Readonly<{ error: string }>> {
-  const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
-  const psRel = typeof rels["policy-sets"] === "object" && rels["policy-sets"] !== null ? (rels["policy-sets"] as Record<string, unknown>) : {};
+  const rels =
+    typeof data?.["relationships"] === "object" && data["relationships"] !== null
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
+  const psRel =
+    typeof rels["policy-sets"] === "object" && rels["policy-sets"] !== null
+      ? (rels["policy-sets"] as Record<string, unknown>)
+      : {};
   const psData = Array.isArray(psRel["data"]) ? (psRel["data"] as Record<string, string>[]) : [];
   if (psData.length > 1) {
     return { error: "a policy can belong to at most one policy set" };
@@ -780,14 +916,17 @@ async function resolveParameterValueUpdate(
     // The downgrade guard above guarantees sensitive is still true here
     // unless a replacement value was supplied, so decrypting the stored
     // row can only re-encrypt, never expose.
-    const effectiveValue = suppliedValue ?? (sensitive || param.sensitive === true ? await variableValueForRead(param) : param.value);
+    const effectiveValue =
+      suppliedValue ?? (sensitive || param.sensitive === true ? await variableValueForRead(param) : param.value);
     const stored = await variableValueForWrite(sensitive, effectiveValue);
     return { value: stored.value, valueEncrypted: stored.valueEncrypted, sensitive };
   }
   return null;
 }
 
-function resolvePolicySetListQuery(request: Readonly<{ url: string }>): Readonly<{ kind: string | null; searchName: string | undefined; number: number; size: number }> {
+function resolvePolicySetListQuery(
+  request: Readonly<{ url: string }>,
+): Readonly<{ kind: string | null; searchName: string | undefined; number: number; size: number }> {
   const paramsUrl = new URL(request.url).searchParams;
   const kind = paramsUrl.get("filter[kind]");
   const searchName = paramsUrl.get("search[name]")?.trim() ?? paramsUrl.get("q")?.trim();
@@ -799,7 +938,9 @@ function policySetListWhere(orgId: string, kind: string | null, searchName: stri
   const conditions = [eq(policySets.orgId, orgId)];
   if (kind !== null && kind !== "") conditions.push(eq(policySets.kind, kind));
   if (searchName !== undefined && searchName !== "") {
-    const nameFilter = isPostgres ? ilike(policySets.name, `%${searchName}%`) : like(policySets.name, `%${searchName}%`);
+    const nameFilter = isPostgres
+      ? ilike(policySets.name, `%${searchName}%`)
+      : like(policySets.name, `%${searchName}%`);
     conditions.push(nameFilter);
   }
   return and(...conditions);
@@ -823,14 +964,20 @@ function resolveSetPolicyCreateScalars(
   const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
   if (name === "") return { error: "Name is required" };
   const kind = setKind === "opa" ? "opa" : "sentinel";
-  const source = typeof attributes["policy"] === "string"
-    ? attributes["policy"]
-    : typeof attributes["source"] === "string" ? attributes["source"] : null;
-  const query = kind === "opa"
-    ? typeof attributes["query"] === "string" && attributes["query"].trim() !== "" ? attributes["query"].trim() : "data"
-    : null;
-  const enforcementLevel = requestedPolicyEnforcementLevel(attributes)
-    ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
+  const source =
+    typeof attributes["policy"] === "string"
+      ? attributes["policy"]
+      : typeof attributes["source"] === "string"
+        ? attributes["source"]
+        : null;
+  const query =
+    kind === "opa"
+      ? typeof attributes["query"] === "string" && attributes["query"].trim() !== ""
+        ? attributes["query"].trim()
+        : "data"
+      : null;
+  const enforcementLevel =
+    requestedPolicyEnforcementLevel(attributes) ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
   const allowedLevels = policyEnforcementLevels(kind);
   if (!allowedLevels.includes(enforcementLevel)) {
     return { error: `enforcement-level must be ${allowedLevels.join(", ")}` };
@@ -852,7 +999,8 @@ function resolveSetPolicyCreateScalars(
 function coerceUploadText(body: unknown): string | null {
   if (typeof body === "string") return body;
   if (body instanceof Uint8Array) return new TextDecoder().decode(body);
-  if (ArrayBuffer.isView(body)) return new TextDecoder().decode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+  if (ArrayBuffer.isView(body))
+    return new TextDecoder().decode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
   if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
   if (body === null || body === undefined) return "";
   return null;
@@ -866,7 +1014,12 @@ async function upsertTagSelector(policySetId: string, item: unknown): Promise<bo
   const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
   const isExclude = rec["is-exclude"] === true;
   const existing = await db.query.policySetTagSelectors.findFirst({
-    where: and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)),
+    where: and(
+      eq(policySetTagSelectors.policySetId, policySetId),
+      eq(policySetTagSelectors.key, key),
+      value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value),
+      eq(policySetTagSelectors.isExclude, isExclude),
+    ),
   });
   if (existing === undefined) {
     await db.insert(policySetTagSelectors).values({ id: crypto.randomUUID(), policySetId, key, value, isExclude });
@@ -881,12 +1034,23 @@ async function deleteTagSelector(policySetId: string, item: unknown): Promise<vo
   if (key === "") return;
   const value = typeof rec["tag-value"] === "string" ? rec["tag-value"] : null;
   const isExclude = rec["is-exclude"] === true;
-  await db.delete(policySetTagSelectors).where(and(eq(policySetTagSelectors.policySetId, policySetId), eq(policySetTagSelectors.key, key), value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value), eq(policySetTagSelectors.isExclude, isExclude)));
+  await db
+    .delete(policySetTagSelectors)
+    .where(
+      and(
+        eq(policySetTagSelectors.policySetId, policySetId),
+        eq(policySetTagSelectors.key, key),
+        value === null ? isNull(policySetTagSelectors.value) : eq(policySetTagSelectors.value, value),
+        eq(policySetTagSelectors.isExclude, isExclude),
+      ),
+    );
 }
 
 function resolveParameterCreateFields(
   attrs: Record<string, unknown>,
-): Readonly<{ value: Readonly<{ key: string; value: string; sensitive: boolean; hcl: boolean }> }> | Readonly<{ error: true }> {
+):
+  | Readonly<{ value: Readonly<{ key: string; value: string; sensitive: boolean; hcl: boolean }> }>
+  | Readonly<{ error: true }> {
   const key = typeof attrs["key"] === "string" ? attrs["key"] : "";
   if (key === "") return { error: true as const };
   return {
@@ -914,843 +1078,1674 @@ function policyListWhere(orgId: string, kind: string | null, searchName: string 
 async function resolvePolicyCheckContext(
   pc: Pick<typeof policyChecks.$inferSelect, "policyId" | "policySetId">,
 ): Promise<Readonly<{ policy: typeof policies.$inferSelect | undefined; isOverridable: boolean }>> {
-  const policy = pc.policyId === null
-    ? undefined
-    : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
+  const policy =
+    pc.policyId === null ? undefined : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
   const setId = pc.policySetId ?? policy?.policySetId ?? null;
-  const pset = setId === null
-    ? undefined
-    : await db.query.policySets.findFirst({ where: eq(policySets.id, setId), columns: { overridable: true } });
+  const pset =
+    setId === null
+      ? undefined
+      : await db.query.policySets.findFirst({ where: eq(policySets.id, setId), columns: { overridable: true } });
   return { policy, isOverridable: pset?.overridable === true };
 }
 
 export const policyRoutes = new Elysia({ name: "policies" })
   .use(authPlugin)
   // Org-scoped (standalone) policies — go-tfe Policies.Create/List hit these.
-  .get("/api/v2/organizations/:org_name/policies", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // the reference format list filters (policies.mdx): filter[kind]=sentinel|opa, and a
-    // name search. the reference format documents search[name]; the legacy q alias is kept
-    // for backward compatibility (matches the workspaces list endpoint).
-    const { kind, searchName, number, size } = resolvePolicySetListQuery(request);
-    const where = policyListWhere(org.id, kind, searchName);
-    const [polList, countRows] = await Promise.all([
-      db.query.policies.findMany({
-        where,
-        orderBy: [asc(policies.name), asc(policies.id)],
-        limit: size,
-        offset: (number - 1) * size,
-      }),
-      db.select({ total: count() }).from(policies).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    return {
-      data: await Promise.all((polList as unknown as PolicyRow[]).map(async (pol): Promise<Record<string, unknown>> => policyResource(pol, org.name))),
-      ...pagination(request, number, size, totalCount),
-    };
-  })
-  .post("/api/v2/organizations/:org_name/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { data, attributes } = parsePatchPayload(body);
-    if (data?.["type"] !== "policies") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] }; }
-    const scalars = resolvePolicyCreateScalars(attributes);
-    if ("error" in scalars) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
-    }
-    const id = newResourceId("pol");
-    const attachment = await resolvePolicySetAttachment(data, org.id);
-    if ("error" in attachment) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: attachment.error }] };
-    }
-    const createdAt = Date.now();
-    const { name, description, kind, enforcementLevel, query, source } = scalars.value;
-    const policySetId = attachment.value;
-    await db.insert(policies).values({ id, orgId: org.id, policySetId, name, description, kind, enforcementLevel, query, source, createdAt });
-    (set as { status: number }).status = 201;
-    return { data: await policyResource({ id, orgId: org.id, policySetId, policySetVersionId: null, name, description, kind, enforcementLevel, query, source, sourcePath: null, createdAt }, org.name) };
-  })
-  .put("/api/v2/policies/:policy_id/upload", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    // go-tfe Policies.Upload PUTs the raw policy content to
-    // /policies/:id/upload; store the uploaded policy source separately from an OPA query.
-    const policyId = params["policy_id"] ?? "";
-    const scope = await loadPolicyPatchScope(policyId, user?.id, tokenOrgId, tokenTeamId, "manage-policies");
-    if ("notFound" in scope) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // VCS-backed policy sets own their policy content in the repository.
-    const parentSet = scope.value.ps;
-    if (parentSet !== undefined && parentSet.vcsRepo !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content is managed by VCS" }] };
-    }
-    const content = coerceUploadText(body);
-    if (content === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content must be uploaded as text or binary data" }] };
-    }
-    await db.update(policies).set({ source: content.trim() === "" ? null : content }).where(eq(policies.id, policyId));
-    (set as { status: number }).status = 204;
-    return new Response(null, { status: 204 });
-  })
-  .get("/api/v2/policies/:policy_id/download", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Response | { errors: { status: string; title: string }[] }> => {
-    // go-tfe Policies.Download GETs the raw policy content from
-    // /policies/:id/download.
-    const policyId = params["policy_id"] ?? "";
-    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const resolvedOrgId = await resolvePolicyOrgId(pol);
-    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return new Response(pol.source ?? "", { status: 200, headers: { "Content-Type": "application/octet-stream" } });
-  })
-  .get("/api/v2/workspaces/:workspace_id/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params["workspace_id"] ?? "";
-    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-    if (workspace === undefined || !(await checkWorkspacePermission(workspace, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
+  .get(
+    "/api/v2/organizations/:org_name/policies",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // the reference format list filters (policies.mdx): filter[kind]=sentinel|opa, and a
+      // name search. the reference format documents search[name]; the legacy q alias is kept
+      // for backward compatibility (matches the workspaces list endpoint).
+      const { kind, searchName, number, size } = resolvePolicySetListQuery(request);
+      const where = policyListWhere(org.id, kind, searchName);
+      const [polList, countRows] = await Promise.all([
+        db.query.policies.findMany({
+          where,
+          orderBy: [asc(policies.name), asc(policies.id)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(policies).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return {
+        data: await Promise.all(
+          (polList as unknown as PolicyRow[]).map(
+            async (pol): Promise<Record<string, unknown>> => policyResource(pol, org.name),
+          ),
+        ),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/policies",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { data, attributes } = parsePatchPayload(body);
+      if (data?.["type"] !== "policies") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] };
+      }
+      const scalars = resolvePolicyCreateScalars(attributes);
+      if ("error" in scalars) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
+      }
+      const id = newResourceId("pol");
+      const attachment = await resolvePolicySetAttachment(data, org.id);
+      if ("error" in attachment) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: attachment.error }] };
+      }
+      const createdAt = Date.now();
+      const { name, description, kind, enforcementLevel, query, source } = scalars.value;
+      const policySetId = attachment.value;
+      await db.insert(policies).values({
+        id,
+        orgId: org.id,
+        policySetId,
+        name,
+        description,
+        kind,
+        enforcementLevel,
+        query,
+        source,
+        createdAt,
+      });
+      (set as { status: number }).status = 201;
+      return {
+        data: await policyResource(
+          {
+            id,
+            orgId: org.id,
+            policySetId,
+            policySetVersionId: null,
+            name,
+            description,
+            kind,
+            enforcementLevel,
+            query,
+            source,
+            sourcePath: null,
+            createdAt,
+          },
+          org.name,
+        ),
+      };
+    },
+  )
+  .put(
+    "/api/v2/policies/:policy_id/upload",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      // go-tfe Policies.Upload PUTs the raw policy content to
+      // /policies/:id/upload; store the uploaded policy source separately from an OPA query.
+      const policyId = params["policy_id"] ?? "";
+      const scope = await loadPolicyPatchScope(policyId, user?.id, tokenOrgId, tokenTeamId, "manage-policies");
+      if ("notFound" in scope) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // VCS-backed policy sets own their policy content in the repository.
+      const parentSet = scope.value.ps;
+      if (parentSet !== undefined && parentSet.vcsRepo !== null) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content is managed by VCS" }],
+        };
+      }
+      const content = coerceUploadText(body);
+      if (content === null) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Policy content must be uploaded as text or binary data",
+            },
+          ],
+        };
+      }
+      await db
+        .update(policies)
+        .set({ source: content.trim() === "" ? null : content })
+        .where(eq(policies.id, policyId));
+      (set as { status: number }).status = 204;
+      return new Response(null, { status: 204 });
+    },
+  )
+  .get(
+    "/api/v2/policies/:policy_id/download",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Response | { errors: { status: string; title: string }[] }> => {
+      // go-tfe Policies.Download GETs the raw policy content from
+      // /policies/:id/download.
+      const policyId = params["policy_id"] ?? "";
+      const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+      if (pol === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const resolvedOrgId = await resolvePolicyOrgId(pol);
+      if (resolvedOrgId === null) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return new Response(pol.source ?? "", { status: 200, headers: { "Content-Type": "application/octet-stream" } });
+    },
+  )
+  .get(
+    "/api/v2/workspaces/:workspace_id/policy-sets",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
+      const workspaceId = params["workspace_id"] ?? "";
+      const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+      if (
+        workspace === undefined ||
+        !(await checkWorkspacePermission(workspace, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
 
-    const directMembership = exists(db.select({ id: policySetWorkspaces.id }).from(policySetWorkspaces).where(and(
-      eq(policySetWorkspaces.policySetId, policySets.id),
-      eq(policySetWorkspaces.workspaceId, workspaceId),
-    )));
-    const projectMembership = workspace.projectId === null
-      ? undefined
-      : exists(db.select({ id: policySetProjects.id }).from(policySetProjects).where(and(
-        eq(policySetProjects.policySetId, policySets.id),
-        eq(policySetProjects.projectId, workspace.projectId),
-      )));
-    const exclusion = notExists(db.select({ id: policySetExclusions.id }).from(policySetExclusions).where(and(
-      eq(policySetExclusions.policySetId, policySets.id),
-      eq(policySetExclusions.workspaceId, workspaceId),
-    )));
-    const effectiveWhere = and(
-      eq(policySets.orgId, workspace.orgId),
-      exclusion,
-      or(eq(policySets.global, true), directMembership, projectMembership),
-    );
-    const { number, size } = pageRequest(request);
-    const [effectiveSets, countRows] = await Promise.all([
-      db.select().from(policySets).where(effectiveWhere).orderBy(asc(policySets.name), asc(policySets.id)).limit(size).offset((number - 1) * size),
-      db.select({ total: count() }).from(policySets).where(effectiveWhere),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    if (effectiveSets.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
+      const directMembership = exists(
+        db
+          .select({ id: policySetWorkspaces.id })
+          .from(policySetWorkspaces)
+          .where(
+            and(eq(policySetWorkspaces.policySetId, policySets.id), eq(policySetWorkspaces.workspaceId, workspaceId)),
+          ),
+      );
+      const projectMembership =
+        workspace.projectId === null
+          ? undefined
+          : exists(
+              db
+                .select({ id: policySetProjects.id })
+                .from(policySetProjects)
+                .where(
+                  and(
+                    eq(policySetProjects.policySetId, policySets.id),
+                    eq(policySetProjects.projectId, workspace.projectId),
+                  ),
+                ),
+            );
+      const exclusion = notExists(
+        db
+          .select({ id: policySetExclusions.id })
+          .from(policySetExclusions)
+          .where(
+            and(eq(policySetExclusions.policySetId, policySets.id), eq(policySetExclusions.workspaceId, workspaceId)),
+          ),
+      );
+      const effectiveWhere = and(
+        eq(policySets.orgId, workspace.orgId),
+        exclusion,
+        or(eq(policySets.global, true), directMembership, projectMembership),
+      );
+      const { number, size } = pageRequest(request);
+      const [effectiveSets, countRows] = await Promise.all([
+        db
+          .select()
+          .from(policySets)
+          .where(effectiveWhere)
+          .orderBy(asc(policySets.name), asc(policySets.id))
+          .limit(size)
+          .offset((number - 1) * size),
+        db.select({ total: count() }).from(policySets).where(effectiveWhere),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      if (effectiveSets.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
 
-    const effectiveIds = effectiveSets.map((policySet: PsItem): string => policySet.id);
-    const [directLinks, projectLinks, effectivePolicies] = await Promise.all([
-      db.query.policySetWorkspaces.findMany({ where: and(eq(policySetWorkspaces.workspaceId, workspaceId), inArray(policySetWorkspaces.policySetId, effectiveIds)) }),
-      workspace.projectId === null
-        ? Promise.resolve([])
-        : db.query.policySetProjects.findMany({ where: and(eq(policySetProjects.projectId, workspace.projectId), inArray(policySetProjects.policySetId, effectiveIds)) }),
-      db.query.policies.findMany({ where: inArray(policies.policySetId, effectiveIds) }),
-    ]);
-    const directIds = new Set(directLinks.map((link: Readonly<{ policySetId: string }>): string => link.policySetId));
-    const projectIds = new Set(projectLinks.map((link: Readonly<{ policySetId: string }>): string => link.policySetId));
-    const policyCounts = new Map<string, number>();
-    for (const policy of effectivePolicies) {
-      if (policy.policySetId !== null) policyCounts.set(policy.policySetId, (policyCounts.get(policy.policySetId) ?? 0) + 1);
-    }
+      const effectiveIds = effectiveSets.map((policySet: PsItem): string => policySet.id);
+      const [directLinks, projectLinks, effectivePolicies] = await Promise.all([
+        db.query.policySetWorkspaces.findMany({
+          where: and(
+            eq(policySetWorkspaces.workspaceId, workspaceId),
+            inArray(policySetWorkspaces.policySetId, effectiveIds),
+          ),
+        }),
+        workspace.projectId === null
+          ? Promise.resolve([])
+          : db.query.policySetProjects.findMany({
+              where: and(
+                eq(policySetProjects.projectId, workspace.projectId),
+                inArray(policySetProjects.policySetId, effectiveIds),
+              ),
+            }),
+        db.query.policies.findMany({ where: inArray(policies.policySetId, effectiveIds) }),
+      ]);
+      const directIds = new Set(directLinks.map((link: Readonly<{ policySetId: string }>): string => link.policySetId));
+      const projectIds = new Set(
+        projectLinks.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
+      );
+      const policyCounts = new Map<string, number>();
+      for (const policy of effectivePolicies) {
+        if (policy.policySetId !== null)
+          policyCounts.set(policy.policySetId, (policyCounts.get(policy.policySetId) ?? 0) + 1);
+      }
 
-    return {
-      data: await Promise.all(effectiveSets.map(async (policySet: PsItem): Promise<Record<string, unknown>> => ({
-        id: policySet.id,
-        type: "policy-sets",
-        attributes: {
-          ...(await policySetAttributes(policySet)),
-          "policy-count": policyCounts.get(policySet.id) ?? 0,
-          scope: policySet.global === true ? "global" : directIds.has(policySet.id) ? "workspace" : projectIds.has(policySet.id) ? "project" : "global",
+      return {
+        data: await Promise.all(
+          effectiveSets.map(
+            async (policySet: PsItem): Promise<Record<string, unknown>> => ({
+              id: policySet.id,
+              type: "policy-sets",
+              attributes: {
+                ...(await policySetAttributes(policySet)),
+                "policy-count": policyCounts.get(policySet.id) ?? 0,
+                scope:
+                  policySet.global === true
+                    ? "global"
+                    : directIds.has(policySet.id)
+                      ? "workspace"
+                      : projectIds.has(policySet.id)
+                        ? "project"
+                        : "global",
+              },
+            }),
+          ),
+        ),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/policy-sets",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // the reference format list filters (policy-sets.mdx): filter[kind]=sentinel|opa, and a
+      // name search. the reference format documents search[name]; the legacy q alias is kept
+      // for backward compatibility (matches the workspaces list endpoint).
+      // Policy-set kind mirrors the kind of its child policies (mixed sets
+      // expose the set-level kind column).
+      const { kind, searchName, number, size } = resolvePolicySetListQuery(request);
+      const where = policySetListWhere(org.id, kind, searchName);
+      const [filters, countRows] = await Promise.all([
+        db.query.policySets.findMany({
+          where,
+          orderBy: [asc(policySets.name), asc(policySets.id)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(policySets).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      if (filters.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
+      const psIds = filters.map((ps: PsItem): string => ps.id);
+      // Batch the per-set relationships (workspaces/projects/exclusions/policies).
+      const [wsRows, projRows, exclRows, policyRows] = await Promise.all([
+        db.query.policySetWorkspaces.findMany({ where: inArray(policySetWorkspaces.policySetId, psIds) }),
+        db.query.policySetProjects.findMany({ where: inArray(policySetProjects.policySetId, psIds) }),
+        db.query.policySetExclusions.findMany({ where: inArray(policySetExclusions.policySetId, psIds) }),
+        db.query.policies.findMany({
+          where: inArray(policies.policySetId, psIds),
+          columns: { id: true, policySetId: true },
+        }),
+      ]);
+      const projBySet = groupByPolicySetId(projRows);
+      const exclBySet = groupByPolicySetId(exclRows);
+      const wsBySet = groupByPolicySetId(wsRows);
+      const polBySet = groupByPolicySetId(policyRows);
+      const data = await Promise.all(
+        filters.map(
+          async (ps: PsItem): Promise<Record<string, unknown>> => ({
+            id: ps.id,
+            type: "policy-sets",
+            attributes: await policySetAttributes(ps),
+            relationships: {
+              organization: { data: { id: org.name, type: "organizations" } },
+              workspaces: {
+                data: (wsBySet.get(ps.id) ?? []).map(
+                  (l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" }),
+                ),
+              },
+              projects: {
+                data: (projBySet.get(ps.id) ?? []).map(
+                  (l): Record<string, string> => ({ id: l.projectId, type: "projects" }),
+                ),
+              },
+              "workspace-exclusions": {
+                data: (exclBySet.get(ps.id) ?? []).map(
+                  (l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" }),
+                ),
+              },
+              policies: {
+                data: (polBySet.get(ps.id) ?? []).map((p): Record<string, string> => ({ id: p.id, type: "policies" })),
+              },
+            },
+          }),
+        ),
+      );
+      return { data, ...pagination(request, number, size, totalCount) };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/policy-sets",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { data, attributes } = parsePatchPayload(body);
+      const scalars = resolvePolicySetCreateScalars(attributes);
+      if ("error" in scalars) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
+      }
+      const id = `polset-${Array.from(crypto.getRandomValues(new Uint8Array(8)))
+        .map((b: number): string => b.toString(16).padStart(2, "0"))
+        .join("")}`;
+      const content = await resolvePolicySetCreateContent(attributes, data, org.id);
+      if ("error" in content) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
+      }
+      await db.insert(policySets).values({
+        id,
+        orgId: org.id,
+        ...scalars.value,
+        policiesPath: content.value.policiesPath,
+        vcsRepo: content.value.vcsRepo,
+        policyUpdatePatterns: content.value.patterns,
+        createdAt: Date.now(),
+      });
+      const created = await db.query.policySets.findFirst({ where: eq(policySets.id, id) });
+      if (created === undefined) throw new Error("Policy set disappeared after creation");
+      // Attach any policy_ids supplied at create so the policies relationship
+      // round-trips (otherwise the provider sees drift on every re-apply).
+      await attachPoliciesToSet(content.value.policyRelationship["data"], org.id, id);
+      (set as { status: number }).status = 201;
+      return {
+        data: {
+          id,
+          type: "policy-sets",
+          attributes: await policySetAttributes(created),
+          relationships: await policySetRelationships(created),
         },
-      }))),
-      ...pagination(request, number, size, totalCount),
-    };
-  })
-  .get("/api/v2/organizations/:org_name/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // the reference format list filters (policy-sets.mdx): filter[kind]=sentinel|opa, and a
-    // name search. the reference format documents search[name]; the legacy q alias is kept
-    // for backward compatibility (matches the workspaces list endpoint).
-    // Policy-set kind mirrors the kind of its child policies (mixed sets
-    // expose the set-level kind column).
-    const { kind, searchName, number, size } = resolvePolicySetListQuery(request);
-    const where = policySetListWhere(org.id, kind, searchName);
-    const [filters, countRows] = await Promise.all([
-      db.query.policySets.findMany({
-        where,
-        orderBy: [asc(policySets.name), asc(policySets.id)],
-        limit: size,
-        offset: (number - 1) * size,
-      }),
-      db.select({ total: count() }).from(policySets).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    if (filters.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
-    const psIds = filters.map((ps: PsItem): string => ps.id);
-    // Batch the per-set relationships (workspaces/projects/exclusions/policies).
-    const [wsRows, projRows, exclRows, policyRows] = await Promise.all([
-      db.query.policySetWorkspaces.findMany({ where: inArray(policySetWorkspaces.policySetId, psIds) }),
-      db.query.policySetProjects.findMany({ where: inArray(policySetProjects.policySetId, psIds) }),
-      db.query.policySetExclusions.findMany({ where: inArray(policySetExclusions.policySetId, psIds) }),
-      db.query.policies.findMany({ where: inArray(policies.policySetId, psIds), columns: { id: true, policySetId: true } }),
-    ]);
-    const projBySet = groupByPolicySetId(projRows);
-    const exclBySet = groupByPolicySetId(exclRows);
-    const wsBySet = groupByPolicySetId(wsRows);
-    const polBySet = groupByPolicySetId(policyRows);
-    const data = await Promise.all(filters.map(async (ps: PsItem): Promise<Record<string, unknown>> => ({
-      id: ps.id,
-      type: "policy-sets",
-      attributes: await policySetAttributes(ps),
-      relationships: {
-        organization: { data: { id: org.name, type: "organizations" } },
-        workspaces: { data: (wsBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
-        projects: { data: (projBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })) },
-        "workspace-exclusions": { data: (exclBySet.get(ps.id) ?? []).map((l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" })) },
-        policies: { data: (polBySet.get(ps.id) ?? []).map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
-      },
-    })));
-    return { data, ...pagination(request, number, size, totalCount) };
-  })
-  .post("/api/v2/organizations/:org_name/policy-sets", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { data, attributes } = parsePatchPayload(body);
-    const scalars = resolvePolicySetCreateScalars(attributes);
-    if ("error" in scalars) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
-    }
-    const id = `polset-${Array.from(crypto.getRandomValues(new Uint8Array(8))).map((b: number): string => b.toString(16).padStart(2, "0")).join("")}`;
-    const content = await resolvePolicySetCreateContent(attributes, data, org.id);
-    if ("error" in content) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
-    }
-    await db.insert(policySets).values({
-      id,
-      orgId: org.id,
-      ...scalars.value,
-      policiesPath: content.value.policiesPath,
-      vcsRepo: content.value.vcsRepo,
-      policyUpdatePatterns: content.value.patterns,
-      createdAt: Date.now(),
-    });
-    const created = await db.query.policySets.findFirst({ where: eq(policySets.id, id) });
-    if (created === undefined) throw new Error("Policy set disappeared after creation");
-    // Attach any policy_ids supplied at create so the policies relationship
-    // round-trips (otherwise the provider sees drift on every re-apply).
-    await attachPoliciesToSet(content.value.policyRelationship["data"], org.id, id);
-    (set as { status: number }).status = 201;
-    return { data: { id, type: "policy-sets", attributes: await policySetAttributes(created), relationships: await policySetRelationships(created) } };
-  })
-  .get("/api/v2/policy-sets/:policy_set_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: ps.id, type: "policy-sets", attributes: await policySetAttributes(ps), relationships: await policySetRelationships(ps) } };
-  })
-  .patch("/api/v2/policy-sets/:policy_set_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { data, attributes } = parsePatchPayload(body);
-    const updates: Partial<typeof policySets.$inferInsert> = {};
-    const content = await resolvePolicySetPatchContent(ps, attributes);
-    if ("error" in content) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
-    }
-    const linksError = await resolvePolicySetPatchLinks(data, policySetId, content.value.vcsRepo, attributes["vcs-repo"] !== undefined, ps.vcsRepo !== null);
-    if (linksError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: linksError }] };
-    }
-    const fieldsError = await applyPolicySetPatchFields(attributes, ps, policySetId, content.value, updates);
-    if (fieldsError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldsError }] };
-    }
-    if (Object.keys(updates).length > 0) await db.update(policySets).set(updates).where(eq(policySets.id, policySetId));
-    const updated = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: updated.id, type: "policy-sets", attributes: await policySetAttributes(updated), relationships: await policySetRelationships(updated) } };
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const versions = await db.query.policySetVersions.findMany({ where: eq(policySetVersions.policySetId, policySetId) });
-    await db.delete(policySets).where(eq(policySets.id, policySetId));
-    await Promise.all(versions.map(async (version: PolicySetVersionItem): Promise<void> => {
-      if (version.archivePath !== null) await rm(version.archivePath, { force: true });
-    }));
-    (set as { status: number }).status = 204;
-    return {};
-  })
+      };
+    },
+  )
+  .get(
+    "/api/v2/policy-sets/:policy_set_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        data: {
+          id: ps.id,
+          type: "policy-sets",
+          attributes: await policySetAttributes(ps),
+          relationships: await policySetRelationships(ps),
+        },
+      };
+    },
+  )
+  .patch(
+    "/api/v2/policy-sets/:policy_set_id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { data, attributes } = parsePatchPayload(body);
+      const updates: Partial<typeof policySets.$inferInsert> = {};
+      const content = await resolvePolicySetPatchContent(ps, attributes);
+      if ("error" in content) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
+      }
+      const linksError = await resolvePolicySetPatchLinks(
+        data,
+        policySetId,
+        content.value.vcsRepo,
+        attributes["vcs-repo"] !== undefined,
+        ps.vcsRepo !== null,
+      );
+      if (linksError !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: linksError }] };
+      }
+      const fieldsError = await applyPolicySetPatchFields(attributes, ps, policySetId, content.value, updates);
+      if (fieldsError !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: fieldsError }] };
+      }
+      if (Object.keys(updates).length > 0)
+        await db.update(policySets).set(updates).where(eq(policySets.id, policySetId));
+      const updated = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return {
+        data: {
+          id: updated.id,
+          type: "policy-sets",
+          attributes: await policySetAttributes(updated),
+          relationships: await policySetRelationships(updated),
+        },
+      };
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const versions = await db.query.policySetVersions.findMany({
+        where: eq(policySetVersions.policySetId, policySetId),
+      });
+      await db.delete(policySets).where(eq(policySets.id, policySetId));
+      await Promise.all(
+        versions.map(async (version: PolicySetVersionItem): Promise<void> => {
+          if (version.archivePath !== null) await rm(version.archivePath, { force: true });
+        }),
+      );
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
   // --- Policy Set Versions ---
-  .post("/api/v2/policy-sets/:policy_set_id/versions", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (policySet === undefined || !(await checkOrganizationPermission(policySet.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const attachedPolicy = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId) });
-    if (policySet.vcsRepo !== null || attachedPolicy !== undefined) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy set does not support direct version uploads" }] };
-    }
-    const now = Date.now();
-    const version = {
-      id: newResourceId("polsetver"),
-      policySetId,
-      source: "tfe-api",
-      status: "pending",
-      statusTimestamps: {},
-      statusMetadataSchemaVersion: 1,
-      ingressAttributes: null,
-      error: null,
-      archivePath: null,
-      createdAt: now,
-      updatedAt: now,
-    } satisfies typeof policySetVersions.$inferInsert;
-    await db.insert(policySetVersions).values(version);
-    (set as { status: number }).status = 201;
-    return { data: policySetVersionResource(version, request) };
-  })
-  .get("/api/v2/policy-set-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const version = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
-    if (version === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, version.policySetId) });
-    if (policySet === undefined || !(await checkOrganizationPermission(policySet.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    return { data: policySetVersionResource(version, request) };
-  })
-  .put("/api/v2/policy-set-versions/:version_id/upload", async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params["version_id"] ?? "";
-    const uploadPath = `/api/v2/policy-set-versions/${versionId}/upload`;
-    if (!validSignedApiURL(request, uploadPath, "PUT")) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Upload URL is invalid or expired" }] };
-    }
-    const version = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
-    if (version === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (version.source !== "tfe-api" || version.status !== "pending" || version.archivePath !== null) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Policy set version content was already uploaded" }] };
-    }
-    const archive = body instanceof ArrayBuffer
-      ? new Uint8Array(body)
-      : ArrayBuffer.isView(body)
-        ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
-        : body instanceof Blob
-          ? new Uint8Array(await body.arrayBuffer())
-          : new Uint8Array(await request.arrayBuffer());
-    if (archive.byteLength < 2 || archive[0] !== 0x1f || archive[1] !== 0x8b) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A non-empty tar.gz archive is required" }] };
-    }
-    await mkdir(POLICY_ARCHIVE_DIR, { recursive: true, mode: 0o700 });
-    const archivePath = join(POLICY_ARCHIVE_DIR, `${versionId}.tar.gz`);
-    const temporaryPath = `${archivePath}.${crypto.randomUUID()}.tmp`;
-    try {
-      await writeFile(temporaryPath, archive, { mode: 0o600 });
-      await rename(temporaryPath, archivePath);
-    } finally {
-      await rm(temporaryPath, { force: true });
-    }
-    const readyAt = new Date().toISOString();
-    await db.update(policySetVersions).set({
-      status: "ready",
-      statusTimestamps: { uploadedAt: readyAt, readyAt },
-      statusMetadataSchemaVersion: 1,
-      archivePath,
-      updatedAt: Date.now(),
-    }).where(eq(policySetVersions.id, versionId));
-    const updated = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
-    if (updated === undefined) throw new Error("Policy set version disappeared after upload");
-    return { data: policySetVersionResource(updated, request) };
-  })
-  // --- Policy Set Relationships ---
-  .post("/api/v2/policy-sets/:policy_set_id/relationships/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ps.vcsRepo !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    const policyIds = extractPolicyRefIds(body);
-    if (policyIds.length > 0) {
-      await db.update(policies).set({ policySetId })
-        .where(and(eq(policies.orgId, ps.orgId), inArray(policies.id, policyIds)));
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/relationships/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ps.vcsRepo !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    const policyIds = extractPolicyRefIds(body);
-    if (policyIds.length === 0) {
-      // go-tfe's RemovePolicies with a set detaches everything when no ids given.
-      await db.update(policies).set({ policySetId: null }).where(eq(policies.policySetId, policySetId));
-    } else {
-      await db.update(policies).set({ policySetId: null }).where(and(eq(policies.policySetId, policySetId), inArray(policies.id, policyIds)));
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/policy-sets/:policy_set_id/relationships/workspaces", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const wsItems = payload["data"];
-    if (Array.isArray(wsItems)) {
-      const workspaceIds = wsItems
-        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
-          ? (item as Record<string, unknown>)["id"] as string
-          : "")
-        .filter((id: string): boolean => id !== "");
-      const workspacesInOrg = workspaceIds.length === 0
-        ? []
-        : await db.query.workspaces.findMany({
-          where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
-        });
-      const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
-        id: newResourceId("psw"),
-        policySetId,
-        workspaceId: workspace.id,
-      }));
-      if (batch.length > 0) await db.insert(policySetWorkspaces).values(batch).onConflictDoNothing();
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/policy-sets/:policy_set_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const projItems = payload["data"];
-    if (Array.isArray(projItems)) {
-      const projectIds = projItems
-        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
-          ? (item as Record<string, unknown>)["id"] as string
-          : "")
-        .filter((id: string): boolean => id !== "");
-      const projectsInOrg = projectIds.length === 0
-        ? []
-        : await db.query.projects.findMany({
-          where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
-        });
-      const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
-        id: newResourceId("pspj"),
-        policySetId,
-        projectId: project.id,
-      }));
-      if (batch.length > 0) await db.insert(policySetProjects).values(batch).onConflictDoNothing();
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const projItems = payload["data"];
-    if (Array.isArray(projItems)) { const projIds = projItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== ""); if (projIds.length > 0) await db.delete(policySetProjects).where(and(eq(policySetProjects.policySetId, policySetId), inArray(policySetProjects.projectId, projIds))); }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/policy-sets/:policy_set_id/relationships/workspace-exclusions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const wsItems = payload["data"];
-    if (Array.isArray(wsItems)) {
-      const workspaceIds = wsItems
-        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
-          ? (item as Record<string, unknown>)["id"] as string
-          : "")
-        .filter((id: string): boolean => id !== "");
-      const workspacesInOrg = workspaceIds.length === 0
-        ? []
-        : await db.query.workspaces.findMany({
-          where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
-        });
-      const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
-        id: newResourceId("psex"),
-        policySetId,
-        workspaceId: workspace.id,
-      }));
-      if (batch.length > 0) await db.insert(policySetExclusions).values(batch).onConflictDoNothing();
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/relationships/workspace-exclusions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const wsItems = payload["data"];
-    if (Array.isArray(wsItems)) {
-      const wsIds = wsItems
-        .map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "")
-        .filter((s: string): boolean => s !== "");
-      if (wsIds.length > 0) {
-        await db.delete(policySetExclusions).where(and(eq(policySetExclusions.policySetId, policySetId), inArray(policySetExclusions.workspaceId, wsIds)));
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/versions",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        policySet === undefined ||
+        !(await checkOrganizationPermission(
+          policySet.orgId,
+          user?.id,
+          tokenOrgId,
+          tokenTeamId ?? null,
+          "manage-policies",
+        ))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .post("/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const projItems = payload["data"];
-    if (Array.isArray(projItems)) {
-      const projectIds = projItems
-        .map((item: unknown): string => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
-          ? (item as Record<string, unknown>)["id"] as string
-          : "")
-        .filter((id: string): boolean => id !== "");
-      const projectsInOrg = projectIds.length === 0
-        ? []
-        : await db.query.projects.findMany({
-          where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
-        });
-      const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
-        id: newResourceId("pspex"),
-        policySetId,
-        projectId: project.id,
-      }));
-      if (batch.length > 0) await db.insert(policySetProjectExclusions).values(batch).onConflictDoNothing();
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = Array.isArray(payload["data"]) ? (payload["data"] as { id?: unknown }[]) : [];
-    const projectIds = items.filter((item): item is { id: string } => typeof item?.id === "string").map((item): string => item.id);
-    if (projectIds.length === 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must list at least one project to un-exclude" }] }; }
-    await db.delete(policySetProjectExclusions).where(and(eq(policySetProjectExclusions.policySetId, policySetId), inArray(policySetProjectExclusions.projectId, projectIds)));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/relationships/workspaces", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const wsItems = payload["data"];
-    if (Array.isArray(wsItems)) { const wsIds = wsItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== ""); if (wsIds.length > 0) await db.delete(policySetWorkspaces).where(and(eq(policySetWorkspaces.policySetId, policySetId), inArray(policySetWorkspaces.workspaceId, wsIds))); }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  // --- Tag selectors (tag inclusion / exclusion) ---
-  .post("/api/v2/policy-sets/:policy_set_id/tag-selectors", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (!Array.isArray(items)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    for (const item of items) {
-      if (!(await upsertTagSelector(policySetId, item))) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/tag-selectors", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload["data"];
-    if (Array.isArray(items)) {
-      for (const item of items) {
-        await deleteTagSelector(policySetId, item);
+      const attachedPolicy = await db.query.policies.findFirst({ where: eq(policies.policySetId, policySetId) });
+      if (policySet.vcsRepo !== null || attachedPolicy !== undefined) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Policy set does not support direct version uploads",
+            },
+          ],
+        };
       }
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  // --- Policies ---
-  .get("/api/v2/policy-sets/:policy_set_id/policies", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { number, size } = pageRequest(request);
-    const where = eq(policies.policySetId, policySetId);
-    const [polList, countRows] = await Promise.all([
-      db.query.policies.findMany({ where, orderBy: [asc(policies.name), asc(policies.id)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(policies).where(where),
-    ]);
-    const totalCount = countRows[0]?.total ?? 0;
-    const orgName = await organizationName(ps.orgId);
-    return {
-      data: await Promise.all(polList.map(async (p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))),
-      ...pagination(request, number, size, totalCount),
-    };
-  })
-  .post("/api/v2/policy-sets/:policy_set_id/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ps.vcsRepo !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    const { data, attributes } = parsePatchPayload(body);
-    if (data?.["type"] !== "policies") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] }; }
-    const scalars = resolveSetPolicyCreateScalars(attributes, ps.kind);
-    if ("error" in scalars) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
-    }
-    const id = newResourceId("pol");
-    const createdAt = Date.now();
-    const { name, description, kind, enforcementLevel, query, source } = scalars.value;
-    await db.insert(policies).values({ id, orgId: ps.orgId, policySetId, name, description, kind, enforcementLevel, query, source, createdAt });
-    (set as { status: number }).status = 201;
-    return { data: await policyResource({ id, orgId: ps.orgId, policySetId, policySetVersionId: null, name, description, kind, enforcementLevel, query, source, sourcePath: null, createdAt }, await organizationName(ps.orgId)) };
-  })
-  .get("/api/v2/policies/:policy_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policyId = params["policy_id"] ?? "";
-        const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-        if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        const resolvedOrgId = await resolvePolicyOrgId(pol);
-        if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
-        if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-        return { data: await policyResource(pol, org.name) };
-  })
-  .patch("/api/v2/policies/:policy_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policyId = params["policy_id"] ?? "";
-    const scope = await loadPolicyPatchScope(policyId, user?.id, tokenOrgId, tokenTeamId, "manage-policies");
-    if ("notFound" in scope) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { pol, org, ps } = scope.value;
-    const { data, attributes } = parsePatchPayload(body);
-    const patchable = checkPolicyPatchable(ps, data?.["type"]);
-    if (patchable !== null) {
-      (set as { status: number }).status = 422;
-      return patchable.detail === undefined
-        ? { errors: [{ status: "422", title: "Unprocessable Entity" }] }
-        : { errors: [{ status: "422", title: "Unprocessable Entity", detail: patchable.detail }] };
-    }
-    const updates: Partial<typeof policies.$inferInsert> = {};
-    const scalarsError = applyPolicyPatchScalars(attributes, updates);
-    if (scalarsError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalarsError }] };
-    }
-    const enforcementError = resolvePolicyPatchEnforcement(attributes, pol, ps, updates);
-    if (enforcementError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: enforcementError }] };
-    }
-    if (Object.keys(updates).length > 0) await db.update(policies).set(updates).where(eq(policies.id, policyId));
-    const updated = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: await policyResource(updated, org.name) };
-  })
-  .delete("/api/v2/policies/:policy_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policyId = params["policy_id"] ?? "";
-    const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
-    if (pol === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const resolvedOrgId = await resolvePolicyOrgId(pol);
-    if (resolvedOrgId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ps = pol.policySetId !== null ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) }) : undefined;
-    if (ps !== undefined && ps.vcsRepo !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
-    await db.delete(policies).where(eq(policies.id, policyId));
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  // --- Policy Checks ---
-  .get("/api/v2/runs/:run_id/policy-checks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params["run_id"] ?? "";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const pcList = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
-    const policyIds = [...new Set(pcList.flatMap((check): string[] =>
-      check.policyId === null ? [] : [check.policyId]))];
-    const policyList = policyIds.length === 0
-      ? []
-      : await db.query.policies.findMany({ where: inArray(policies.id, policyIds) });
-    const policiesById = new Map(policyList.map((policy): [string, PolItem] => [policy.id, policy]));
-    const setIds = [...new Set(pcList.flatMap((check): string[] => {
-      const setId = check.policySetId ?? policiesById.get(check.policyId ?? "")?.policySetId ?? null;
-      return setId === null ? [] : [setId];
-    }))];
-    const setList = setIds.length === 0
-      ? []
-      : await db.query.policySets.findMany({ where: inArray(policySets.id, setIds), columns: { id: true, overridable: true } });
-    const overridableBySet = new Map(setList.map((row): [string, boolean] => [row.id, row.overridable === true]));
-    const canOverride = await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override");
-    return {
-      data: pcList.map((check: PcItem): Record<string, unknown> => {
-        const policy = check.policyId === null ? undefined : policiesById.get(check.policyId);
-        const setId = check.policySetId ?? policy?.policySetId ?? null;
-        return policyCheckResource(check, policy, {
-          isOverridable: setId === null ? false : overridableBySet.get(setId) ?? false,
-          canOverride,
-        });
-      }),
-    };
-  })
-  .get("/api/v2/policy-checks/:check_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const checkId = params["check_id"] ?? "";
-    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
-    if (pc === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
-    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { policy, isOverridable } = await resolvePolicyCheckContext(pc);
-    const canOverride = await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override");
-    return { data: policyCheckResource(pc, policy, { isOverridable, canOverride }) };
-  })
-  .get("/api/v2/policy-checks/:check_id/output", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    // Audit finding 4: go-tfe PolicyChecks.Logs polls Read until finished,
-    // then GETs this path and reads the RAW body as the log stream (not
-    // JSON:API), so this returns text/plain rendered from the stored
-    // evaluation outcome. Same read gate as the check itself.
-    const checkId = params["check_id"] ?? "";
-    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
-    if (pc === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
-    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const lines = [`Policy check ${pc.id} status: ${pc.status}`];
-    if (pc.result !== null && pc.result !== undefined) {
+      const now = Date.now();
+      const version = {
+        id: newResourceId("polsetver"),
+        policySetId,
+        source: "tfe-api",
+        status: "pending",
+        statusTimestamps: {},
+        statusMetadataSchemaVersion: 1,
+        ingressAttributes: null,
+        error: null,
+        archivePath: null,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies typeof policySetVersions.$inferInsert;
+      await db.insert(policySetVersions).values(version);
+      (set as { status: number }).status = 201;
+      return { data: policySetVersionResource(version, request) };
+    },
+  )
+  .get(
+    "/api/v2/policy-set-versions/:version_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const version = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
+      if (version === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, version.policySetId) });
+      if (
+        policySet === undefined ||
+        !(await checkOrganizationPermission(
+          policySet.orgId,
+          user?.id,
+          tokenOrgId,
+          tokenTeamId ?? null,
+          "read-policies",
+        ))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: policySetVersionResource(version, request) };
+    },
+  )
+  .put(
+    "/api/v2/policy-set-versions/:version_id/upload",
+    async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
+      const versionId = params["version_id"] ?? "";
+      const uploadPath = `/api/v2/policy-set-versions/${versionId}/upload`;
+      if (!validSignedApiURL(request, uploadPath, "PUT")) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Upload URL is invalid or expired" }] };
+      }
+      const version = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
+      if (version === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (version.source !== "tfe-api" || version.status !== "pending" || version.archivePath !== null) {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [{ status: "409", title: "Conflict", detail: "Policy set version content was already uploaded" }],
+        };
+      }
+      const archive =
+        body instanceof ArrayBuffer
+          ? new Uint8Array(body)
+          : ArrayBuffer.isView(body)
+            ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+            : body instanceof Blob
+              ? new Uint8Array(await body.arrayBuffer())
+              : new Uint8Array(await request.arrayBuffer());
+      if (archive.byteLength < 2 || archive[0] !== 0x1f || archive[1] !== 0x8b) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [{ status: "422", title: "Unprocessable Entity", detail: "A non-empty tar.gz archive is required" }],
+        };
+      }
+      await mkdir(POLICY_ARCHIVE_DIR, { recursive: true, mode: 0o700 });
+      const archivePath = join(POLICY_ARCHIVE_DIR, `${versionId}.tar.gz`);
+      const temporaryPath = `${archivePath}.${crypto.randomUUID()}.tmp`;
       try {
-        lines.push(JSON.stringify(pc.result, null, 2) ?? "");
-      } catch {
-        lines.push("[unserializable result]");
+        await writeFile(temporaryPath, archive, { mode: 0o600 });
+        await rename(temporaryPath, archivePath);
+      } finally {
+        await rm(temporaryPath, { force: true });
       }
-    }
-    return new Response(`${lines.join("\n")}\n`, {
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  })
-  .post("/api/v2/policy-checks/:check_id/actions/override", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const checkId = params["check_id"] ?? "";
-    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
-    if (pc === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
-    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
-    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, checkId));
-    return { data: { id: pc.id, type: "policy-checks", attributes: { status: "overridden", result: pc.result } } };
-  })
+      const readyAt = new Date().toISOString();
+      await db
+        .update(policySetVersions)
+        .set({
+          status: "ready",
+          statusTimestamps: { uploadedAt: readyAt, readyAt },
+          statusMetadataSchemaVersion: 1,
+          archivePath,
+          updatedAt: Date.now(),
+        })
+        .where(eq(policySetVersions.id, versionId));
+      const updated = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
+      if (updated === undefined) throw new Error("Policy set version disappeared after upload");
+      return { data: policySetVersionResource(updated, request) };
+    },
+  )
+  // --- Policy Set Relationships ---
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/relationships/policies",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (ps.vcsRepo !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      const policyIds = extractPolicyRefIds(body);
+      if (policyIds.length > 0) {
+        await db
+          .update(policies)
+          .set({ policySetId })
+          .where(and(eq(policies.orgId, ps.orgId), inArray(policies.id, policyIds)));
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/relationships/policies",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (ps.vcsRepo !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      const policyIds = extractPolicyRefIds(body);
+      if (policyIds.length === 0) {
+        // go-tfe's RemovePolicies with a set detaches everything when no ids given.
+        await db.update(policies).set({ policySetId: null }).where(eq(policies.policySetId, policySetId));
+      } else {
+        await db
+          .update(policies)
+          .set({ policySetId: null })
+          .where(and(eq(policies.policySetId, policySetId), inArray(policies.id, policyIds)));
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/relationships/workspaces",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const wsItems = payload["data"];
+      if (Array.isArray(wsItems)) {
+        const workspaceIds = wsItems
+          .map((item: unknown): string =>
+            item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
+              ? ((item as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((id: string): boolean => id !== "");
+        const workspacesInOrg =
+          workspaceIds.length === 0
+            ? []
+            : await db.query.workspaces.findMany({
+                where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
+              });
+        const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
+          id: newResourceId("psw"),
+          policySetId,
+          workspaceId: workspace.id,
+        }));
+        if (batch.length > 0) await db.insert(policySetWorkspaces).values(batch).onConflictDoNothing();
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/relationships/projects",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const projItems = payload["data"];
+      if (Array.isArray(projItems)) {
+        const projectIds = projItems
+          .map((item: unknown): string =>
+            item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
+              ? ((item as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((id: string): boolean => id !== "");
+        const projectsInOrg =
+          projectIds.length === 0
+            ? []
+            : await db.query.projects.findMany({
+                where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
+              });
+        const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
+          id: newResourceId("pspj"),
+          policySetId,
+          projectId: project.id,
+        }));
+        if (batch.length > 0) await db.insert(policySetProjects).values(batch).onConflictDoNothing();
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/relationships/projects",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const projItems = payload["data"];
+      if (Array.isArray(projItems)) {
+        const projIds = projItems
+          .map((i: unknown): string =>
+            i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string"
+              ? ((i as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((s: string): boolean => s !== "");
+        if (projIds.length > 0)
+          await db
+            .delete(policySetProjects)
+            .where(and(eq(policySetProjects.policySetId, policySetId), inArray(policySetProjects.projectId, projIds)));
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/relationships/workspace-exclusions",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const wsItems = payload["data"];
+      if (Array.isArray(wsItems)) {
+        const workspaceIds = wsItems
+          .map((item: unknown): string =>
+            item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
+              ? ((item as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((id: string): boolean => id !== "");
+        const workspacesInOrg =
+          workspaceIds.length === 0
+            ? []
+            : await db.query.workspaces.findMany({
+                where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
+              });
+        const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
+          id: newResourceId("psex"),
+          policySetId,
+          workspaceId: workspace.id,
+        }));
+        if (batch.length > 0) await db.insert(policySetExclusions).values(batch).onConflictDoNothing();
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/relationships/workspace-exclusions",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const wsItems = payload["data"];
+      if (Array.isArray(wsItems)) {
+        const wsIds = wsItems
+          .map((i: unknown): string =>
+            i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string"
+              ? ((i as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((s: string): boolean => s !== "");
+        if (wsIds.length > 0) {
+          await db
+            .delete(policySetExclusions)
+            .where(
+              and(eq(policySetExclusions.policySetId, policySetId), inArray(policySetExclusions.workspaceId, wsIds)),
+            );
+        }
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const projItems = payload["data"];
+      if (Array.isArray(projItems)) {
+        const projectIds = projItems
+          .map((item: unknown): string =>
+            item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string"
+              ? ((item as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((id: string): boolean => id !== "");
+        const projectsInOrg =
+          projectIds.length === 0
+            ? []
+            : await db.query.projects.findMany({
+                where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
+              });
+        const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
+          id: newResourceId("pspex"),
+          policySetId,
+          projectId: project.id,
+        }));
+        if (batch.length > 0) await db.insert(policySetProjectExclusions).values(batch).onConflictDoNothing();
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/relationships/project-exclusions",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = Array.isArray(payload["data"]) ? (payload["data"] as { id?: unknown }[]) : [];
+      const projectIds = items
+        .filter((item): item is { id: string } => typeof item?.id === "string")
+        .map((item): string => item.id);
+      if (projectIds.length === 0) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "data must list at least one project to un-exclude",
+            },
+          ],
+        };
+      }
+      await db
+        .delete(policySetProjectExclusions)
+        .where(
+          and(
+            eq(policySetProjectExclusions.policySetId, policySetId),
+            inArray(policySetProjectExclusions.projectId, projectIds),
+          ),
+        );
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/relationships/workspaces",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const wsItems = payload["data"];
+      if (Array.isArray(wsItems)) {
+        const wsIds = wsItems
+          .map((i: unknown): string =>
+            i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string"
+              ? ((i as Record<string, unknown>)["id"] as string)
+              : "",
+          )
+          .filter((s: string): boolean => s !== "");
+        if (wsIds.length > 0)
+          await db
+            .delete(policySetWorkspaces)
+            .where(
+              and(eq(policySetWorkspaces.policySetId, policySetId), inArray(policySetWorkspaces.workspaceId, wsIds)),
+            );
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  // --- Tag selectors (tag inclusion / exclusion) ---
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/tag-selectors",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = payload["data"];
+      if (!Array.isArray(items)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      for (const item of items) {
+        if (!(await upsertTagSelector(policySetId, item))) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+        }
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/tag-selectors",
+    async ({
+      params,
+      body,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const items = payload["data"];
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          await deleteTagSelector(policySetId, item);
+        }
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  // --- Policies ---
+  .get(
+    "/api/v2/policy-sets/:policy_set_id/policies",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { number, size } = pageRequest(request);
+      const where = eq(policies.policySetId, policySetId);
+      const [polList, countRows] = await Promise.all([
+        db.query.policies.findMany({
+          where,
+          orderBy: [asc(policies.name), asc(policies.id)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(policies).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      const orgName = await organizationName(ps.orgId);
+      return {
+        data: await Promise.all(
+          polList.map(async (p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName)),
+        ),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/policies",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (ps.vcsRepo !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      const { data, attributes } = parsePatchPayload(body);
+      if (data?.["type"] !== "policies") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] };
+      }
+      const scalars = resolveSetPolicyCreateScalars(attributes, ps.kind);
+      if ("error" in scalars) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
+      }
+      const id = newResourceId("pol");
+      const createdAt = Date.now();
+      const { name, description, kind, enforcementLevel, query, source } = scalars.value;
+      await db.insert(policies).values({
+        id,
+        orgId: ps.orgId,
+        policySetId,
+        name,
+        description,
+        kind,
+        enforcementLevel,
+        query,
+        source,
+        createdAt,
+      });
+      (set as { status: number }).status = 201;
+      return {
+        data: await policyResource(
+          {
+            id,
+            orgId: ps.orgId,
+            policySetId,
+            policySetVersionId: null,
+            name,
+            description,
+            kind,
+            enforcementLevel,
+            query,
+            source,
+            sourcePath: null,
+            createdAt,
+          },
+          await organizationName(ps.orgId),
+        ),
+      };
+    },
+  )
+  .get(
+    "/api/v2/policies/:policy_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policyId = params["policy_id"] ?? "";
+      const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+      if (pol === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const resolvedOrgId = await resolvePolicyOrgId(pol);
+      if (resolvedOrgId === null) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: await policyResource(pol, org.name) };
+    },
+  )
+  .patch(
+    "/api/v2/policies/:policy_id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policyId = params["policy_id"] ?? "";
+      const scope = await loadPolicyPatchScope(policyId, user?.id, tokenOrgId, tokenTeamId, "manage-policies");
+      if ("notFound" in scope) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { pol, org, ps } = scope.value;
+      const { data, attributes } = parsePatchPayload(body);
+      const patchable = checkPolicyPatchable(ps, data?.["type"]);
+      if (patchable !== null) {
+        (set as { status: number }).status = 422;
+        return patchable.detail === undefined
+          ? { errors: [{ status: "422", title: "Unprocessable Entity" }] }
+          : { errors: [{ status: "422", title: "Unprocessable Entity", detail: patchable.detail }] };
+      }
+      const updates: Partial<typeof policies.$inferInsert> = {};
+      const scalarsError = applyPolicyPatchScalars(attributes, updates);
+      if (scalarsError !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalarsError }] };
+      }
+      const enforcementError = resolvePolicyPatchEnforcement(attributes, pol, ps, updates);
+      if (enforcementError !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: enforcementError }] };
+      }
+      if (Object.keys(updates).length > 0) await db.update(policies).set(updates).where(eq(policies.id, policyId));
+      const updated = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: await policyResource(updated, org.name) };
+    },
+  )
+  .delete(
+    "/api/v2/policies/:policy_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policyId = params["policy_id"] ?? "";
+      const pol = await db.query.policies.findFirst({ where: eq(policies.id, policyId) });
+      if (pol === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const resolvedOrgId = await resolvePolicyOrgId(pol);
+      if (resolvedOrgId === null) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, resolvedOrgId) });
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ps =
+        pol.policySetId !== null
+          ? await db.query.policySets.findFirst({ where: eq(policySets.id, pol.policySetId) })
+          : undefined;
+      if (ps !== undefined && ps.vcsRepo !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      await db.delete(policies).where(eq(policies.id, policyId));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  // --- Policy Checks ---
+  .get(
+    "/api/v2/runs/:run_id/policy-checks",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const runId = params["run_id"] ?? "";
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+      if (run === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+      if (
+        ws === undefined ||
+        !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const pcList = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
+      const policyIds = [
+        ...new Set(pcList.flatMap((check): string[] => (check.policyId === null ? [] : [check.policyId]))),
+      ];
+      const policyList =
+        policyIds.length === 0 ? [] : await db.query.policies.findMany({ where: inArray(policies.id, policyIds) });
+      const policiesById = new Map(policyList.map((policy): [string, PolItem] => [policy.id, policy]));
+      const setIds = [
+        ...new Set(
+          pcList.flatMap((check): string[] => {
+            const setId = check.policySetId ?? policiesById.get(check.policyId ?? "")?.policySetId ?? null;
+            return setId === null ? [] : [setId];
+          }),
+        ),
+      ];
+      const setList =
+        setIds.length === 0
+          ? []
+          : await db.query.policySets.findMany({
+              where: inArray(policySets.id, setIds),
+              columns: { id: true, overridable: true },
+            });
+      const overridableBySet = new Map(setList.map((row): [string, boolean] => [row.id, row.overridable === true]));
+      const canOverride = await checkWorkspacePermission(
+        ws,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+        "policy-override",
+      );
+      return {
+        data: pcList.map((check: PcItem): Record<string, unknown> => {
+          const policy = check.policyId === null ? undefined : policiesById.get(check.policyId);
+          const setId = check.policySetId ?? policy?.policySetId ?? null;
+          return policyCheckResource(check, policy, {
+            isOverridable: setId === null ? false : (overridableBySet.get(setId) ?? false),
+            canOverride,
+          });
+        }),
+      };
+    },
+  )
+  .get(
+    "/api/v2/policy-checks/:check_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const checkId = params["check_id"] ?? "";
+      const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
+      if (pc === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+      if (run === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+      if (
+        ws === undefined ||
+        !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { policy, isOverridable } = await resolvePolicyCheckContext(pc);
+      const canOverride = await checkWorkspacePermission(
+        ws,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+        "policy-override",
+      );
+      return { data: policyCheckResource(pc, policy, { isOverridable, canOverride }) };
+    },
+  )
+  .get(
+    "/api/v2/policy-checks/:check_id/output",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      // Audit finding 4: go-tfe PolicyChecks.Logs polls Read until finished,
+      // then GETs this path and reads the RAW body as the log stream (not
+      // JSON:API), so this returns text/plain rendered from the stored
+      // evaluation outcome. Same read gate as the check itself.
+      const checkId = params["check_id"] ?? "";
+      const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
+      if (pc === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+      if (run === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+      if (
+        ws === undefined ||
+        !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const lines = [`Policy check ${pc.id} status: ${pc.status}`];
+      if (pc.result !== null && pc.result !== undefined) {
+        try {
+          lines.push(JSON.stringify(pc.result, null, 2) ?? "");
+        } catch {
+          lines.push("[unserializable result]");
+        }
+      }
+      return new Response(`${lines.join("\n")}\n`, {
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    },
+  )
+  .post(
+    "/api/v2/policy-checks/:check_id/actions/override",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const checkId = params["check_id"] ?? "";
+      const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
+      if (pc === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+      if (run === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+      if (
+        ws === undefined ||
+        !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, checkId));
+      return { data: { id: pc.id, type: "policy-checks", attributes: { status: "overridden", result: pc.result } } };
+    },
+  )
   // --- Policy Set Parameters ---
-  .get("/api/v2/policy-sets/:policy_set_id/parameters", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const paramsList = await db.query.policySetParameters.findMany({ where: eq(policySetParameters.policySetId, policySetId) });
-    return { data: paramsList.map((p: ParamItem): Record<string, unknown> => policySetParameterResource(p, policySetId)) };
-  })
-  .post("/api/v2/policy-sets/:policy_set_id/parameters", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { attributes: attrs } = parsePatchPayload(body);
-    const fields = resolveParameterCreateFields(attrs);
-    if ("error" in fields) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const id = newResourceId("psparam");
-    const { key, value, sensitive, hcl } = fields.value;
-    // Sensitive values are encrypted at rest like workspace variables
-    // (issue #577): plaintext never lands in the value column.
-    const stored = await variableValueForWrite(sensitive, value);
-    await db.insert(policySetParameters).values({ id, policySetId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, sensitive, hcl });
-    (set as { status: number }).status = 201;
-    const created = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, id) });
-    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
-    return { data: policySetParameterResource(created, policySetId) };
-  })
-  .get("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const paramId = params["param_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)) });
-    if (param === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: policySetParameterResource(param, policySetId) };
-  })
-  .patch("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const paramId = params["param_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)) });
-    if (param === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { attributes: attrs } = parsePatchPayload(body);
-    const updates: Partial<typeof policySetParameters.$inferInsert> = {};
-    if (typeof attrs["key"] === "string") updates.key = attrs["key"];
-    if (typeof attrs["hcl"] === "boolean") updates.hcl = attrs["hcl"];
-    const resolvedValue = await resolveParameterValueUpdate(attrs, param);
-    if (resolvedValue !== null) {
-      updates.value = resolvedValue.value;
-      updates.valueEncrypted = resolvedValue.valueEncrypted;
-      updates.sensitive = resolvedValue.sensitive;
-    }
-    if (Object.keys(updates).length > 0) await db.update(policySetParameters).set(updates).where(eq(policySetParameters.id, paramId));
-    const updated = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, paramId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: policySetParameterResource(updated, policySetId) };
-  })
-  .delete("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const policySetId = params["policy_set_id"] ?? "";
-    const paramId = params["param_id"] ?? "";
-    const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
-    if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const param = await db.query.policySetParameters.findFirst({ where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)) });
-    if (param === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(policySetParameters).where(eq(policySetParameters.id, paramId));
-    (set as { status: number }).status = 204;
-    return {};
-  });
+  .get(
+    "/api/v2/policy-sets/:policy_set_id/parameters",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const paramsList = await db.query.policySetParameters.findMany({
+        where: eq(policySetParameters.policySetId, policySetId),
+      });
+      return {
+        data: paramsList.map((p: ParamItem): Record<string, unknown> => policySetParameterResource(p, policySetId)),
+      };
+    },
+  )
+  .post(
+    "/api/v2/policy-sets/:policy_set_id/parameters",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { attributes: attrs } = parsePatchPayload(body);
+      const fields = resolveParameterCreateFields(attrs);
+      if ("error" in fields) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      const id = newResourceId("psparam");
+      const { key, value, sensitive, hcl } = fields.value;
+      // Sensitive values are encrypted at rest like workspace variables
+      // (issue #577): plaintext never lands in the value column.
+      const stored = await variableValueForWrite(sensitive, value);
+      await db
+        .insert(policySetParameters)
+        .values({ id, policySetId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, sensitive, hcl });
+      (set as { status: number }).status = 201;
+      const created = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, id) });
+      if (created === undefined) {
+        (set as { status: number }).status = 500;
+        return { errors: [{ status: "500", title: "Internal Server Error" }] };
+      }
+      return { data: policySetParameterResource(created, policySetId) };
+    },
+  )
+  .get(
+    "/api/v2/policy-sets/:policy_set_id/parameters/:param_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const paramId = params["param_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const param = await db.query.policySetParameters.findFirst({
+        where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)),
+      });
+      if (param === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: policySetParameterResource(param, policySetId) };
+    },
+  )
+  .patch(
+    "/api/v2/policy-sets/:policy_set_id/parameters/:param_id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const paramId = params["param_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const param = await db.query.policySetParameters.findFirst({
+        where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)),
+      });
+      if (param === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { attributes: attrs } = parsePatchPayload(body);
+      const updates: Partial<typeof policySetParameters.$inferInsert> = {};
+      if (typeof attrs["key"] === "string") updates.key = attrs["key"];
+      if (typeof attrs["hcl"] === "boolean") updates.hcl = attrs["hcl"];
+      const resolvedValue = await resolveParameterValueUpdate(attrs, param);
+      if (resolvedValue !== null) {
+        updates.value = resolvedValue.value;
+        updates.valueEncrypted = resolvedValue.valueEncrypted;
+        updates.sensitive = resolvedValue.sensitive;
+      }
+      if (Object.keys(updates).length > 0)
+        await db.update(policySetParameters).set(updates).where(eq(policySetParameters.id, paramId));
+      const updated = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, paramId) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: policySetParameterResource(updated, policySetId) };
+    },
+  )
+  .delete(
+    "/api/v2/policy-sets/:policy_set_id/parameters/:param_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      const policySetId = params["policy_set_id"] ?? "";
+      const paramId = params["param_id"] ?? "";
+      const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+      if (
+        ps === undefined ||
+        !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const param = await db.query.policySetParameters.findFirst({
+        where: and(eq(policySetParameters.id, paramId), eq(policySetParameters.policySetId, policySetId)),
+      });
+      if (param === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(policySetParameters).where(eq(policySetParameters.id, paramId));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  );

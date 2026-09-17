@@ -46,29 +46,38 @@ await db.insert(runs).values(
 );
 
 const authHeaders = { Authorization: `Bearer ${token}` };
-const runsList = async (): Promise<Response> => app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs?page%5Bnumber%5D=1&page%5Bsize%5D=50`, { headers: authHeaders }));
+const runsList = async (): Promise<Response> =>
+  app.handle(
+    new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs?page%5Bnumber%5D=1&page%5Bsize%5D=50`, {
+      headers: authHeaders,
+    }),
+  );
 const ping = async (): Promise<Response> => app.handle(new Request("http://localhost/api/v2/ping"));
 const readyz = async (): Promise<Response> => app.handle(new Request("http://localhost/readyz"));
 
 // 5 iterations: the app's rate limiter allows 30 requests/min per key, and
 // each iteration here is one real HTTP request.
-await suite("http-end-to-end", {
-  "GET /api/v2/ping (unauth)": async () => {
-    const res = await ping();
-    if (!res.ok) throw new Error(`ping failed: ${res.status}`);
-    await res.arrayBuffer();
+await suite(
+  "http-end-to-end",
+  {
+    "GET /api/v2/ping (unauth)": async () => {
+      const res = await ping();
+      if (!res.ok) throw new Error(`ping failed: ${res.status}`);
+      await res.arrayBuffer();
+    },
+    "GET /readyz": async () => {
+      const res = await readyz();
+      if (!res.ok) throw new Error(`readyz failed: ${res.status}`);
+      await res.text();
+    },
+    "GET workspace runs list (50/page, authed)": async () => {
+      const res = await runsList();
+      if (res.status !== 200) throw new Error(`runs list failed: ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      await res.arrayBuffer();
+    },
   },
-  "GET /readyz": async () => {
-    const res = await readyz();
-    if (!res.ok) throw new Error(`readyz failed: ${res.status}`);
-    await res.text();
-  },
-  "GET workspace runs list (50/page, authed)": async () => {
-    const res = await runsList();
-    if (res.status !== 200) throw new Error(`runs list failed: ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    await res.arrayBuffer();
-  },
-}, 5);
+  5,
+);
 
 report();
 

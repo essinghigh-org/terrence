@@ -67,7 +67,11 @@ describe("remote-workflow variable sets contract", () => {
   });
 
   it("shows a variable set", async () => {
-    const resource = await expectSuccessResponse(await request(`/api/v2/varsets/${varsetId}`, { headers }), 200, "varsets");
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/varsets/${varsetId}`, { headers }),
+      200,
+      "varsets",
+    );
     expect(resource.attributes["name"]).toBe(`contract-varset-${seed.suffix}`);
     expect(resource.relationships?.["parent"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
@@ -75,7 +79,9 @@ describe("remote-workflow variable sets contract", () => {
   });
 
   it("lists variable sets with pagination metadata", async () => {
-    const response = await request(`/api/v2/organizations/${seed.orgName}/varsets?page[number]=1&page[size]=10`, { headers });
+    const response = await request(`/api/v2/organizations/${seed.orgName}/varsets?page[number]=1&page[size]=10`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "varsets");
@@ -93,7 +99,11 @@ describe("remote-workflow variable sets contract", () => {
     });
     expect(response.status).toBe(204);
 
-    const resource = await expectSuccessResponse(await request(`/api/v2/varsets/${varsetId}`, { headers }), 200, "varsets");
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/varsets/${varsetId}`, { headers }),
+      200,
+      "varsets",
+    );
     const workspacesData = (resource.relationships?.["workspaces"] as { data: unknown[] }).data;
     expect(workspacesData).toEqual([{ type: "workspaces", id: workspaceId }]);
   });

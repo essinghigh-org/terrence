@@ -28,14 +28,16 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
   const runId2 = `run-email2-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   /** Minimal SMTP server capturing the delivered message. */
   let smtpServer: { port: number; stop(force?: boolean): void } | undefined;
@@ -80,26 +82,27 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
 
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-email-${suffix}`, orgId }]);
-    await db.insert(runs).values([{
-      id: runId,
-      workspaceId,
-      status: "completed",
-      message: "email delivery test",
-      createdBy: userId,
-      createdAt: Date.now(),
-    }, {
-      id: runId2,
-      workspaceId,
-      status: "completed",
-      message: "email delivery test two",
-      createdBy: userId,
-      createdAt: Date.now(),
-    }]);
+    await db.insert(runs).values([
+      {
+        id: runId,
+        workspaceId,
+        status: "completed",
+        message: "email delivery test",
+        createdBy: userId,
+        createdAt: Date.now(),
+      },
+      {
+        id: runId2,
+        workspaceId,
+        status: "completed",
+        message: "email delivery test two",
+        createdBy: userId,
+        createdAt: Date.now(),
+      },
+    ]);
   });
 
   afterAll(async () => {
@@ -135,7 +138,7 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
       emailPayload({ "email-addresses": ["alice@example.com", "bob@example.com"] }),
     );
     expect(response.status).toBe(201);
-    const body = await response.json() as { data: { id: string; attributes: Record<string, unknown> } };
+    const body = (await response.json()) as { data: { id: string; attributes: Record<string, unknown> } };
     expect(body.data.attributes["email-addresses"]).toEqual(["alice@example.com", "bob@example.com"]);
     expect(body.data.attributes["destination-type"]).toBe("email");
   });
@@ -147,7 +150,7 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
       emailPayload({}),
     );
     expect(response.status).toBe(422);
-    const body = await response.json() as { errors: { source?: { pointer?: string } }[] };
+    const body = (await response.json()) as { errors: { source?: { pointer?: string } }[] };
     expect(body.errors.some((error) => error.source?.pointer === "/data/attributes/email-addresses")).toBe(true);
   });
 
@@ -161,47 +164,47 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
   });
 
   it("still requires a url for generic destinations", async () => {
-    const response = await request(
-      `/api/v2/workspaces/${workspaceId}/notification-configurations`,
-      "POST",
-      {
-        data: {
-          type: "notification-configurations",
-          attributes: { name: "webhook", "destination-type": "generic", triggers: ["run:created"] },
-        },
+    const response = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
+      data: {
+        type: "notification-configurations",
+        attributes: { name: "webhook", "destination-type": "generic", triggers: ["run:created"] },
       },
-    );
+    });
     expect(response.status).toBe(422);
   });
 
   it("updates email-addresses via PATCH", async () => {
-    const created = await (await request(
-      `/api/v2/workspaces/${workspaceId}/notification-configurations`,
-      "POST",
-      emailPayload({ "email-addresses": ["alice@example.com"] }),
-    )).json() as { data: { id: string } };
+    const created = (await (
+      await request(
+        `/api/v2/workspaces/${workspaceId}/notification-configurations`,
+        "POST",
+        emailPayload({ "email-addresses": ["alice@example.com"] }),
+      )
+    ).json()) as { data: { id: string } };
     const response = await request(`/api/v2/notification-configurations/${created.data.id}`, "PATCH", {
       data: { type: "notification-configurations", attributes: { "email-addresses": ["carol@example.com"] } },
     });
     expect(response.status).toBe(200);
-    const body = await response.json() as { data: { attributes: Record<string, unknown> } };
+    const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
     expect(body.data.attributes["email-addresses"]).toEqual(["carol@example.com"]);
   });
 
   it("records an unsuccessful delivery when SMTP is not configured", async () => {
     invalidateSettingsCache();
     await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
-    await db.insert(notificationConfigurations).values([{
-      id: `nc-email-nosmtp-${suffix}`,
-      workspaceId,
-      name: "no-smtp",
-      destinationType: "email",
-      url: "",
-      emailAddresses: ["alice@example.com"],
-      triggers: ["run:completed"],
-      enabled: true,
-      createdAt: Date.now(),
-    }]);
+    await db.insert(notificationConfigurations).values([
+      {
+        id: `nc-email-nosmtp-${suffix}`,
+        workspaceId,
+        name: "no-smtp",
+        destinationType: "email",
+        url: "",
+        emailAddresses: ["alice@example.com"],
+        triggers: ["run:completed"],
+        enabled: true,
+        createdAt: Date.now(),
+      },
+    ]);
     const deliveries = await deliverRunNotifications(runId, "run:completed", "completed");
     const delivery = deliveries.find((item) => item.url === "" && item.body.startsWith("Email delivery skipped"));
     expect(delivery).toBeDefined();
@@ -212,32 +215,36 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
   it("delivers a run notification via SMTP end to end", async () => {
     invalidateSettingsCache();
     await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
-    await db.insert(adminSettings).values([{
-      id: "smtp",
-      values: {
-        enabled: true,
-        host: "127.0.0.1",
-        port: smtpPort,
-        username: "terrence",
-        password: "test-pass",
-        "sender-email": "terrence@example.com",
-        auth: "plain",
-        encryption: "plain",
+    await db.insert(adminSettings).values([
+      {
+        id: "smtp",
+        values: {
+          enabled: true,
+          host: "127.0.0.1",
+          port: smtpPort,
+          username: "terrence",
+          password: "test-pass",
+          "sender-email": "terrence@example.com",
+          auth: "plain",
+          encryption: "plain",
+        },
+        updatedAt: Date.now(),
       },
-      updatedAt: Date.now(),
-    }]);
+    ]);
     received = [];
-    await db.insert(notificationConfigurations).values([{
-      id: `nc-email-smtp-${suffix}`,
-      workspaceId,
-      name: "with-smtp",
-      destinationType: "email",
-      url: "",
-      emailAddresses: ["alice@example.com"],
-      triggers: ["run:completed"],
-      enabled: true,
-      createdAt: Date.now(),
-    }]);
+    await db.insert(notificationConfigurations).values([
+      {
+        id: `nc-email-smtp-${suffix}`,
+        workspaceId,
+        name: "with-smtp",
+        destinationType: "email",
+        url: "",
+        emailAddresses: ["alice@example.com"],
+        triggers: ["run:completed"],
+        enabled: true,
+        createdAt: Date.now(),
+      },
+    ]);
 
     const deliveries = await deliverRunNotifications(runId2, "run:completed", "completed");
     const delivery = deliveries.find((item) => item.successful);

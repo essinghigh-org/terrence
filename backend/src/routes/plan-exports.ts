@@ -52,7 +52,10 @@ function parsePlanExportRequest(
   const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
   const rels: Record<string, unknown> = (data?.["relationships"] ?? {}) as Record<string, unknown>;
   const planRel = rels["plan"] as Record<string, unknown> | undefined;
-  const planId = typeof (planRel?.["data"] as Record<string, unknown> | undefined)?.["id"] === "string" ? ((planRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
+  const planId =
+    typeof (planRel?.["data"] as Record<string, unknown> | undefined)?.["id"] === "string"
+      ? ((planRel?.["data"] as Record<string, unknown>)["id"] as string)
+      : "";
   if (planId === "") {
     (set as { status: number }).status = 422;
     return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "plan ID is required" }] } };
@@ -66,9 +69,22 @@ function buildPlanExport(
   set: SetObj,
 ): { pe: PlanExportItem } | { error: unknown } {
   const id = newResourceId("pe");
-  if (typeof attributes["data-type"] !== "string" || !["sentinel-mock-bundle-v0", "configuration-version"].includes(attributes["data-type"])) {
+  if (
+    typeof attributes["data-type"] !== "string" ||
+    !["sentinel-mock-bundle-v0", "configuration-version"].includes(attributes["data-type"])
+  ) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data-type must be one of: sentinel-mock-bundle-v0, configuration-version" }] } };
+    return {
+      error: {
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "data-type must be one of: sentinel-mock-bundle-v0, configuration-version",
+          },
+        ],
+      },
+    };
   }
   const pe: PlanExportItem = {
     id,
@@ -123,64 +139,80 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
     }
     return { data: planExportResource(pe) };
   })
-  .get("/api/v2/plan-exports/:export_id/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, params["export_id"] ?? "") });
-    if (pe === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const runId = pe.planId.replace(/^plan-/, "");
-    const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
-    if (authorized === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    // The export embeds the raw plan, so it requires the state-read class
-    // or admin like the raw plan endpoints (issue #577).
-    const canReadRaw = await checkWorkspacePermission(authorized.workspace, user.id, orgId, teamId, "state-read")
-      || await checkWorkspacePermission(authorized.workspace, user.id, orgId, teamId, "admin");
-    if (!canReadRaw) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (pe.expiresAt !== null && pe.expiresAt <= Date.now()) {
-      (set as { status: number }).status = 410;
-      return { errors: [{ status: "410", title: "Gone", detail: "Plan export has expired" }] };
-    }
-    const plan = await readPlanJsonArtifact(runId);
-    if (plan === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: "Plan export artifact is unavailable" }] };
-    }
-    const headers = set.headers as Record<string, string | number>;
-    headers["Content-Type"] = "application/json";
-    headers["Content-Disposition"] = `attachment; filename=plan-export-${pe.id}.json`;
-    return new Response(JSON.stringify({ version: 1, dataType: pe.dataType, planId: pe.planId, plan }), {
-      status: 200,
-      headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename=plan-export-${pe.id}.json` },
-    });
-  })
-  .delete("/api/v2/plan-exports/:export_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (user === null || user === undefined) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized" }] };
-    }
-    const exportId = params["export_id"] ?? "";
-    const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, exportId) });
-    if (pe === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const authorized = await findAuthorizedRun(pe.planId.replace(/^plan-/, ""), user.id, orgId, teamId, "admin");
-    if (authorized === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    await db.delete(planExports).where(eq(planExports.id, exportId));
-    (set as { status: number }).status = 204;
-    return {};
-  });
+  .get(
+    "/api/v2/plan-exports/:export_id/download",
+    async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      if (user === null || user === undefined) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, params["export_id"] ?? "") });
+      if (pe === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const runId = pe.planId.replace(/^plan-/, "");
+      const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // The export embeds the raw plan, so it requires the state-read class
+      // or admin like the raw plan endpoints (issue #577).
+      const canReadRaw =
+        (await checkWorkspacePermission(authorized.workspace, user.id, orgId, teamId, "state-read")) ||
+        (await checkWorkspacePermission(authorized.workspace, user.id, orgId, teamId, "admin"));
+      if (!canReadRaw) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (pe.expiresAt !== null && pe.expiresAt <= Date.now()) {
+        (set as { status: number }).status = 410;
+        return { errors: [{ status: "410", title: "Gone", detail: "Plan export has expired" }] };
+      }
+      const plan = await readPlanJsonArtifact(runId);
+      if (plan === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: "Plan export artifact is unavailable" }] };
+      }
+      const headers = set.headers as Record<string, string | number>;
+      headers["Content-Type"] = "application/json";
+      headers["Content-Disposition"] = `attachment; filename=plan-export-${pe.id}.json`;
+      return new Response(JSON.stringify({ version: 1, dataType: pe.dataType, planId: pe.planId, plan }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Disposition": `attachment; filename=plan-export-${pe.id}.json`,
+        },
+      });
+    },
+  )
+  .delete(
+    "/api/v2/plan-exports/:export_id",
+    async ({
+      params,
+      user,
+      orgId,
+      teamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+      if (user === null || user === undefined) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized" }] };
+      }
+      const exportId = params["export_id"] ?? "";
+      const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, exportId) });
+      if (pe === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const authorized = await findAuthorizedRun(pe.planId.replace(/^plan-/, ""), user.id, orgId, teamId, "admin");
+      if (authorized === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      await db.delete(planExports).where(eq(planExports.id, exportId));
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  );

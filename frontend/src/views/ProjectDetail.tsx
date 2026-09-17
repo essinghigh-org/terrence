@@ -4,13 +4,7 @@ import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/Breadcrumbs";
 import { EmptyState } from "@/components/EmptyState";
 import { PageShell } from "@/components/PageHeader";
@@ -45,7 +39,7 @@ function dataArray<T>(response: unknown): T[] {
   const data = (response as { data?: unknown }).data;
   // SAFETY: guarded by Array.isArray above; elements are consumed through
   // the typed caller contract.
-  return Array.isArray(data) ? data as T[] : [];
+  return Array.isArray(data) ? (data as T[]) : [];
 }
 
 export type ProjectSection = "overview" | "workspaces" | "settings" | "variable-sets" | "notifications";
@@ -139,7 +133,11 @@ type ProjectDataBundle = {
   varsets: VariableSet[];
 };
 
-async function fetchProjectData(orgName: string, projectId: string, signal: Readonly<AbortSignal> | undefined): Promise<ProjectDataBundle> {
+async function fetchProjectData(
+  orgName: string,
+  projectId: string,
+  signal: Readonly<AbortSignal> | undefined,
+): Promise<ProjectDataBundle> {
   const [projectResponse, workspaceResponse, runResponse, varsetResponse] = await Promise.all([
     fetchApi<{ data?: Project }>(`/projects/${encodeURIComponent(projectId)}`, signal === undefined ? {} : { signal }),
     // Load EVERY workspace in the project: a project with more than one
@@ -149,7 +147,10 @@ async function fetchProjectData(orgName: string, projectId: string, signal: Read
       `/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`,
       signal,
     ),
-    fetchApi(`/organizations/${encodeURIComponent(orgName)}/runs?page%5Bsize%5D=100`, signal === undefined ? {} : { signal })
+    fetchApi(
+      `/organizations/${encodeURIComponent(orgName)}/runs?page%5Bsize%5D=100`,
+      signal === undefined ? {} : { signal },
+    )
       .then((response): RunSummary[] => dataArray<RunSummary>(response))
       .catch((): RunSummary[] => []),
     fetchApi(
@@ -168,7 +169,15 @@ async function fetchProjectData(orgName: string, projectId: string, signal: Read
   };
 }
 
-function ProjectHeader({ project, orgPath, projectPath, canUpdate, activeSection, isSettings, onEditRequest }: Readonly<{
+function ProjectHeader({
+  project,
+  orgPath,
+  projectPath,
+  canUpdate,
+  activeSection,
+  isSettings,
+  onEditRequest,
+}: Readonly<{
   project: Project | null;
   orgPath: string;
   projectPath: string;
@@ -194,7 +203,9 @@ function ProjectHeader({ project, orgPath, projectPath, canUpdate, activeSection
             {project === null ? "Project" : project.attributes.name}
           </h1>
           {project?.attributes["workspace-count"] !== undefined && (
-            <Badge variant="secondary">{project.attributes["workspace-count"]} workspace{project.attributes["workspace-count"] === 1 ? "" : "s"}</Badge>
+            <Badge variant="secondary">
+              {project.attributes["workspace-count"]} workspace{project.attributes["workspace-count"] === 1 ? "" : "s"}
+            </Badge>
           )}
         </div>
         <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
@@ -212,7 +223,9 @@ function ProjectHeader({ project, orgPath, projectPath, canUpdate, activeSection
         {project !== null && canUpdate && activeSection !== "settings" && (
           <Button
             variant="outline"
-            onClick={(): void => { onEditRequest(project); }}
+            onClick={(): void => {
+              onEditRequest(project);
+            }}
           >
             <Pencil data-icon="inline-start" />
             Edit project
@@ -236,7 +249,11 @@ function CopyProjectId({ projectId }: Readonly<{ projectId: string }>): React.JS
       aria-label="Copy project ID"
       onClick={(): void => {
         void copyTextToClipboard(projectId).then((didCopy): void => {
-          toast.add(didCopy ? { title: "Project ID copied", type: "success" } : { title: "Could not copy project ID", type: "error" });
+          toast.add(
+            didCopy
+              ? { title: "Project ID copied", type: "success" }
+              : { title: "Could not copy project ID", type: "error" },
+          );
         });
       }}
     >
@@ -245,7 +262,12 @@ function CopyProjectId({ projectId }: Readonly<{ projectId: string }>): React.JS
   );
 }
 
-function ProjectTabs({ tabs, activeSection, isSettings, onSelect }: Readonly<{
+function ProjectTabs({
+  tabs,
+  activeSection,
+  isSettings,
+  onSelect,
+}: Readonly<{
   tabs: readonly { readonly id: ProjectSection; readonly label: string }[];
   activeSection: ProjectSection;
   isSettings: boolean;
@@ -254,29 +276,39 @@ function ProjectTabs({ tabs, activeSection, isSettings, onSelect }: Readonly<{
   return (
     <div className="border-b">
       <nav aria-label="Project sections" className="flex flex-wrap gap-x-6 gap-y-2">
-        {tabs.map((tab): React.JSX.Element => (
-          <button
-            type="button"
-            key={tab.id}
-            onClick={(): void => { onSelect(tab.id); }}
-            aria-label={tab.label.toLowerCase()}
-            aria-current={isSettings && tab.id === "settings" ? "page" : activeSection === tab.id ? "page" : undefined}
-            className={cn(
-              "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              (isSettings && tab.id === "settings") || activeSection === tab.id
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {tabs.map(
+          (tab): React.JSX.Element => (
+            <button
+              type="button"
+              key={tab.id}
+              onClick={(): void => {
+                onSelect(tab.id);
+              }}
+              aria-label={tab.label.toLowerCase()}
+              aria-current={
+                isSettings && tab.id === "settings" ? "page" : activeSection === tab.id ? "page" : undefined
+              }
+              className={cn(
+                "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                (isSettings && tab.id === "settings") || activeSection === tab.id
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+              )}
+            >
+              {tab.label}
+            </button>
+          ),
+        )}
       </nav>
     </div>
   );
 }
 
-function WorkspaceTable({ orgPath, workspaces, latestRuns }: Readonly<{
+function WorkspaceTable({
+  orgPath,
+  workspaces,
+  latestRuns,
+}: Readonly<{
   orgPath: string;
   workspaces: readonly Workspace[];
   latestRuns: ReadonlyMap<string, RunSummary>;
@@ -292,32 +324,50 @@ function WorkspaceTable({ orgPath, workspaces, latestRuns }: Readonly<{
         </TableRow>
       </TableHeader>
       <TableBody>
-        {workspaces.map((workspace): React.JSX.Element => (
-          <TableRow key={workspace.id}>
-            <TableCell>
-              <Link
-                to={`${orgPath}/workspaces/${encodeURIComponent(workspace.attributes.name)}`}
-                className="font-semibold text-primary hover:underline"
-              >
-                {workspace.attributes.name}
-              </Link>
-              {workspace.attributes.locked === true && <Badge variant="outline" className="ml-2">Locked</Badge>}
-            </TableCell>
-            <TableCell><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
-            <TableCell><LatestChange run={latestRuns.get(workspace.id)} /></TableCell>
-            <TableCell>
-              {latestRuns.get(workspace.id) === undefined
-                ? <span className="text-muted-foreground">No runs</span>
-                : <StatusBadge status={latestRuns.get(workspace.id)?.attributes.status} />}
-            </TableCell>
-          </TableRow>
-        ))}
+        {workspaces.map(
+          (workspace): React.JSX.Element => (
+            <TableRow key={workspace.id}>
+              <TableCell>
+                <Link
+                  to={`${orgPath}/workspaces/${encodeURIComponent(workspace.attributes.name)}`}
+                  className="font-semibold text-primary hover:underline"
+                >
+                  {workspace.attributes.name}
+                </Link>
+                {workspace.attributes.locked === true && (
+                  <Badge variant="outline" className="ml-2">
+                    Locked
+                  </Badge>
+                )}
+              </TableCell>
+              <TableCell>
+                <WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} />
+              </TableCell>
+              <TableCell>
+                <LatestChange run={latestRuns.get(workspace.id)} />
+              </TableCell>
+              <TableCell>
+                {latestRuns.get(workspace.id) === undefined ? (
+                  <span className="text-muted-foreground">No runs</span>
+                ) : (
+                  <StatusBadge status={latestRuns.get(workspace.id)?.attributes.status} />
+                )}
+              </TableCell>
+            </TableRow>
+          ),
+        )}
       </TableBody>
     </Table>
   );
 }
 
-function ProjectOverview({ project, orgPath, projectPath, workspaces, latestRuns }: Readonly<{
+function ProjectOverview({
+  project,
+  orgPath,
+  projectPath,
+  workspaces,
+  latestRuns,
+}: Readonly<{
   project: Project | null;
   orgPath: string;
   projectPath: string;
@@ -351,7 +401,9 @@ function ProjectOverview({ project, orgPath, projectPath, workspaces, latestRuns
         <CardHeader>
           <CardTitle>Workspaces recently updated</CardTitle>
           <CardDescription>
-            <Link to={`${projectPath}/workspaces`} className="text-primary hover:underline">View all workspaces</Link>
+            <Link to={`${projectPath}/workspaces`} className="text-primary hover:underline">
+              View all workspaces
+            </Link>
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -375,7 +427,11 @@ function ProjectOverview({ project, orgPath, projectPath, workspaces, latestRuns
   );
 }
 
-function ProjectWorkspacesTab({ orgPath, workspaces, latestRuns }: Readonly<{
+function ProjectWorkspacesTab({
+  orgPath,
+  workspaces,
+  latestRuns,
+}: Readonly<{
   orgPath: string;
   workspaces: readonly Workspace[];
   latestRuns: ReadonlyMap<string, RunSummary>;
@@ -384,7 +440,9 @@ function ProjectWorkspacesTab({ orgPath, workspaces, latestRuns }: Readonly<{
     <Card>
       <CardHeader>
         <CardTitle>Workspaces</CardTitle>
-        <CardDescription>{workspaces.length} workspace{workspaces.length === 1 ? "" : "s"} in this project.</CardDescription>
+        <CardDescription>
+          {workspaces.length} workspace{workspaces.length === 1 ? "" : "s"} in this project.
+        </CardDescription>
       </CardHeader>
       <CardContent className="p-0">
         {workspaces.length === 0 ? (
@@ -406,7 +464,12 @@ function ProjectWorkspacesTab({ orgPath, workspaces, latestRuns }: Readonly<{
   );
 }
 
-function ProjectVariableSets({ orgPath, projectId, variableSets, onNew }: Readonly<{
+function ProjectVariableSets({
+  orgPath,
+  projectId,
+  variableSets,
+  onNew,
+}: Readonly<{
   orgPath: string;
   projectId: string | undefined;
   variableSets: readonly VariableSet[];
@@ -417,9 +480,7 @@ function ProjectVariableSets({ orgPath, projectId, variableSets, onNew }: Readon
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <CardTitle>Variable sets</CardTitle>
-          <CardDescription>
-            Reusable bundles of variables, shared by every workspace in this project.
-          </CardDescription>
+          <CardDescription>Reusable bundles of variables, shared by every workspace in this project.</CardDescription>
         </div>
         <Button type="button" onClick={onNew}>
           <Plus data-icon="inline-start" />
@@ -448,24 +509,32 @@ function ProjectVariableSets({ orgPath, projectId, variableSets, onNew }: Readon
               </TableRow>
             </TableHeader>
             <TableBody>
-              {variableSets.map((vs): React.JSX.Element => (
-                <TableRow key={vs.id}>
-                  <TableCell className="font-medium">
-                    <Link to={`${orgPath}/variable-sets`} className="text-primary hover:underline">
-                      {vs.attributes.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    {vs.attributes["parent-project-id"] === projectId
-                      ? <Badge variant="secondary">This project</Badge>
-                      : vs.attributes.global === true
-                        ? <Badge variant="outline">Global</Badge>
-                        : <Badge variant="outline">Applied</Badge>}
-                  </TableCell>
-                  <TableCell><Badge variant="secondary">{vs.attributes["var-count"] ?? 0}</Badge></TableCell>
-                  <TableCell><Badge variant="secondary">{vs.attributes["workspace-count"] ?? 0}</Badge></TableCell>
-                </TableRow>
-              ))}
+              {variableSets.map(
+                (vs): React.JSX.Element => (
+                  <TableRow key={vs.id}>
+                    <TableCell className="font-medium">
+                      <Link to={`${orgPath}/variable-sets`} className="text-primary hover:underline">
+                        {vs.attributes.name}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      {vs.attributes["parent-project-id"] === projectId ? (
+                        <Badge variant="secondary">This project</Badge>
+                      ) : vs.attributes.global === true ? (
+                        <Badge variant="outline">Global</Badge>
+                      ) : (
+                        <Badge variant="outline">Applied</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{vs.attributes["var-count"] ?? 0}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{vs.attributes["workspace-count"] ?? 0}</Badge>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
             </TableBody>
           </Table>
         )}
@@ -474,7 +543,27 @@ function ProjectVariableSets({ orgPath, projectId, variableSets, onNew }: Readon
   );
 }
 
-function ProjectSettingsForm({ name, onNameChange, description, onDescriptionChange, executionModeOverridden, onExecutionModeOverriddenChange, defaultExecutionMode, onDefaultExecutionModeChange, defaultAgentPoolId, onDefaultAgentPoolIdChange, agentPools, agentPoolsLoading, agentPoolsError, formError, saving, canUpdate, canDestroy, onSubmit, onDeleteRequest }: Readonly<{
+function ProjectSettingsForm({
+  name,
+  onNameChange,
+  description,
+  onDescriptionChange,
+  executionModeOverridden,
+  onExecutionModeOverriddenChange,
+  defaultExecutionMode,
+  onDefaultExecutionModeChange,
+  defaultAgentPoolId,
+  onDefaultAgentPoolIdChange,
+  agentPools,
+  agentPoolsLoading,
+  agentPoolsError,
+  formError,
+  saving,
+  canUpdate,
+  canDestroy,
+  onSubmit,
+  onDeleteRequest,
+}: Readonly<{
   name: string;
   onNameChange: (value: string) => void;
   description: string;
@@ -495,22 +584,23 @@ function ProjectSettingsForm({ name, onNameChange, description, onDescriptionCha
   onSubmit: (event: React.SyntheticEvent) => Promise<void>;
   onDeleteRequest: () => void;
 }>): React.JSX.Element {
-  const agentPoolOptions: AgentPoolResource[] = defaultAgentPoolId !== ""
-    && !agentPools.some((pool): boolean => pool.id === defaultAgentPoolId)
-    ? [
-        {
-          id: defaultAgentPoolId,
-          attributes: { name: `Configured pool (${defaultAgentPoolId})` },
-        },
-        ...agentPools,
-      ]
-    : [...agentPools];
+  const agentPoolOptions: AgentPoolResource[] =
+    defaultAgentPoolId !== "" && !agentPools.some((pool): boolean => pool.id === defaultAgentPoolId)
+      ? [
+          {
+            id: defaultAgentPoolId,
+            attributes: { name: `Configured pool (${defaultAgentPoolId})` },
+          },
+          ...agentPools,
+        ]
+      : [...agentPools];
   return (
     <Card>
       <CardHeader>
         <CardTitle>General settings</CardTitle>
         <CardDescription>
-          Set the default execution mode and agent pool for workspaces in this project. Workspaces can override these defaults.
+          Set the default execution mode and agent pool for workspaces in this project. Workspaces can override these
+          defaults.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -524,7 +614,9 @@ function ProjectSettingsForm({ name, onNameChange, description, onDescriptionCha
                 autoComplete="off"
                 spellCheck={false}
                 value={name}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNameChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onNameChange(event.currentTarget.value);
+                }}
                 placeholder="my-project"
               />
             </Field>
@@ -536,7 +628,9 @@ function ProjectSettingsForm({ name, onNameChange, description, onDescriptionCha
                 autoComplete="off"
                 spellCheck={false}
                 value={description}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onDescriptionChange(event.currentTarget.value);
+                }}
                 placeholder="What is this project for?"
               />
             </Field>
@@ -579,9 +673,13 @@ function ProjectSettingsForm({ name, onNameChange, description, onDescriptionCha
                   disabled={!canUpdate || agentPoolsLoading}
                 >
                   <SelectItem value="">Select an agent pool</SelectItem>
-                  {agentPoolOptions.map((pool): React.JSX.Element => (
-                    <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>
-                  ))}
+                  {agentPoolOptions.map(
+                    (pool): React.JSX.Element => (
+                      <SelectItem key={pool.id} value={pool.id}>
+                        {pool.attributes.name}
+                      </SelectItem>
+                    ),
+                  )}
                 </Select>
                 <FieldDescription>
                   Agent-mode workspaces use an available agent from this pool unless they override the pool.
@@ -609,7 +707,18 @@ function ProjectSettingsForm({ name, onNameChange, description, onDescriptionCha
   );
 }
 
-function ProjectEditDialog({ open, onOpenChange, name, onNameChange, description, onDescriptionChange, formError, saving, onSubmit, onCancel }: Readonly<{
+function ProjectEditDialog({
+  open,
+  onOpenChange,
+  name,
+  onNameChange,
+  description,
+  onDescriptionChange,
+  formError,
+  saving,
+  onSubmit,
+  onCancel,
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   name: string;
@@ -638,7 +747,9 @@ function ProjectEditDialog({ open, onOpenChange, name, onNameChange, description
                 autoComplete="off"
                 spellCheck={false}
                 value={name}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNameChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onNameChange(event.currentTarget.value);
+                }}
               />
             </Field>
             <Field>
@@ -649,14 +760,20 @@ function ProjectEditDialog({ open, onOpenChange, name, onNameChange, description
                 autoComplete="off"
                 spellCheck={false}
                 value={description}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onDescriptionChange(event.currentTarget.value);
+                }}
               />
             </Field>
           </FieldGroup>
           {formError !== "" && <FieldError>{formError}</FieldError>}
           <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -664,7 +781,13 @@ function ProjectEditDialog({ open, onOpenChange, name, onNameChange, description
   );
 }
 
-function ProjectDeleteConfirm({ open, onOpenChange, projectName, deleting, onConfirm }: Readonly<{
+function ProjectDeleteConfirm({
+  open,
+  onOpenChange,
+  projectName,
+  deleting,
+  onConfirm,
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectName: string | undefined;
@@ -683,7 +806,19 @@ function ProjectDeleteConfirm({ open, onOpenChange, projectName, deleting, onCon
   );
 }
 
-function ProjectCreateVsDialog({ open, onOpenChange, projectName, vsName, onVsNameChange, vsDescription, onVsDescriptionChange, vsError, savingVs, onSubmit, onCancel }: Readonly<{
+function ProjectCreateVsDialog({
+  open,
+  onOpenChange,
+  projectName,
+  vsName,
+  onVsNameChange,
+  vsDescription,
+  onVsDescriptionChange,
+  vsError,
+  savingVs,
+  onSubmit,
+  onCancel,
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectName: string | undefined;
@@ -702,8 +837,7 @@ function ProjectCreateVsDialog({ open, onOpenChange, projectName, vsName, onVsNa
         <DialogHeader>
           <DialogTitle>Create a new project variable set</DialogTitle>
           <DialogDescription>
-            This variable set is owned by {projectName ?? "this project"} and applies to
-            its workspaces.
+            This variable set is owned by {projectName ?? "this project"} and applies to its workspaces.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit}>
@@ -716,7 +850,9 @@ function ProjectCreateVsDialog({ open, onOpenChange, projectName, vsName, onVsNa
                 autoComplete="off"
                 spellCheck={false}
                 value={vsName}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onVsNameChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onVsNameChange(event.currentTarget.value);
+                }}
                 placeholder="Shared project variables"
               />
             </Field>
@@ -728,14 +864,18 @@ function ProjectCreateVsDialog({ open, onOpenChange, projectName, vsName, onVsNa
                 autoComplete="off"
                 spellCheck={false}
                 value={vsDescription}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onVsDescriptionChange(event.currentTarget.value); }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onVsDescriptionChange(event.currentTarget.value);
+                }}
                 placeholder="What is this variable set for?"
               />
             </Field>
           </FieldGroup>
           {vsError !== "" && <FieldError>{vsError}</FieldError>}
           <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
             <Button type="submit" disabled={savingVs || vsName.trim() === ""}>
               {savingVs ? "Creating…" : "Create variable set"}
             </Button>
@@ -746,7 +886,10 @@ function ProjectCreateVsDialog({ open, onOpenChange, projectName, vsName, onVsNa
   );
 }
 
-function resolveActiveSection(sectionProp: ProjectSection | undefined, embeddedSection: ProjectSection): ProjectSection {
+function resolveActiveSection(
+  sectionProp: ProjectSection | undefined,
+  embeddedSection: ProjectSection,
+): ProjectSection {
   return sectionProp ?? embeddedSection;
 }
 
@@ -762,7 +905,36 @@ function shouldQueryAgentPools(canUpdate: boolean, overridden: boolean, mode: Ex
   return canUpdate && overridden && mode === "agent";
 }
 
-function ProjectSectionBody({ activeSection, projectId, project, orgPath, projectPath, workspaces, latestRuns, variableSets, name, onNameChange, description, onDescriptionChange, executionModeOverridden, onExecutionModeOverriddenChange, defaultExecutionMode, onDefaultExecutionModeChange, defaultAgentPoolId, onDefaultAgentPoolIdChange, agentPools, agentPoolsLoading, agentPoolsError, formError, saving, canUpdate, canDestroy, onSubmitSettings, onDeleteRequest, onNewVariableSet }: Readonly<{
+function ProjectSectionBody({
+  activeSection,
+  projectId,
+  project,
+  orgPath,
+  projectPath,
+  workspaces,
+  latestRuns,
+  variableSets,
+  name,
+  onNameChange,
+  description,
+  onDescriptionChange,
+  executionModeOverridden,
+  onExecutionModeOverriddenChange,
+  defaultExecutionMode,
+  onDefaultExecutionModeChange,
+  defaultAgentPoolId,
+  onDefaultAgentPoolIdChange,
+  agentPools,
+  agentPoolsLoading,
+  agentPoolsError,
+  formError,
+  saving,
+  canUpdate,
+  canDestroy,
+  onSubmitSettings,
+  onDeleteRequest,
+  onNewVariableSet,
+}: Readonly<{
   activeSection: ProjectSection;
   projectId: string | undefined;
   project: Project | null;
@@ -804,13 +976,7 @@ function ProjectSectionBody({ activeSection, projectId, project, orgPath, projec
     );
   }
   if (activeSection === "workspaces") {
-    return (
-      <ProjectWorkspacesTab
-        orgPath={orgPath}
-        workspaces={workspaces}
-        latestRuns={latestRuns}
-      />
-    );
+    return <ProjectWorkspacesTab orgPath={orgPath} workspaces={workspaces} latestRuns={latestRuns} />;
   }
   if (activeSection === "notifications" && projectId !== undefined) {
     return <WorkspaceNotifications projectId={projectId} projectWorkspaces={workspaces} />;
@@ -850,9 +1016,7 @@ function ProjectSectionBody({ activeSection, projectId, project, orgPath, projec
   );
 }
 
-export function ProjectDetail({
-  section: sectionProp,
-}: Readonly<{ section?: ProjectSection }>): React.JSX.Element {
+export function ProjectDetail({ section: sectionProp }: Readonly<{ section?: ProjectSection }>): React.JSX.Element {
   const { orgName: rawOrgName, projectId } = useParams<{ orgName: string; projectId: string }>();
   const orgName = rawOrgName ?? "";
   const navigate = useNavigate();
@@ -888,42 +1052,47 @@ export function ProjectDetail({
   const [vsError, setVsError] = useState("");
   const [savingVs, setSavingVs] = useState(false);
 
-  const loadData = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
-    if (projectId === undefined) return;
-    setLoading(true);
-    setLoadError("");
-    try {
-      const bundle = await fetchProjectData(orgName, projectId, signal);
-      if (signal?.aborted === true) return;
-      const loadedProject = bundle.project;
-      setProject(loadedProject);
-      if (loadedProject !== null) {
-        setName(loadedProject.attributes.name);
-        setDescription(loadedProject.attributes.description ?? "");
-        setDefaultExecutionMode(parseExecutionMode(loadedProject.attributes["default-execution-mode"]));
-        setExecutionModeOverridden(loadedProject.attributes["setting-overwrites"]?.["execution-mode"] === true);
-        setDefaultAgentPoolId(projectAgentPoolId(loadedProject));
+  const loadData = useCallback(
+    async (signal?: Readonly<AbortSignal>): Promise<void> => {
+      if (projectId === undefined) return;
+      setLoading(true);
+      setLoadError("");
+      try {
+        const bundle = await fetchProjectData(orgName, projectId, signal);
+        if (signal?.aborted === true) return;
+        const loadedProject = bundle.project;
+        setProject(loadedProject);
+        if (loadedProject !== null) {
+          setName(loadedProject.attributes.name);
+          setDescription(loadedProject.attributes.description ?? "");
+          setDefaultExecutionMode(parseExecutionMode(loadedProject.attributes["default-execution-mode"]));
+          setExecutionModeOverridden(loadedProject.attributes["setting-overwrites"]?.["execution-mode"] === true);
+          setDefaultAgentPoolId(projectAgentPoolId(loadedProject));
+        }
+        setWorkspaces(bundle.workspaces);
+        setVariableSets(bundle.varsets);
+        const byWorkspace = new Map<string, RunSummary>();
+        for (const run of bundle.runs) {
+          const wsId = run.relationships.workspace.data.id;
+          if (!byWorkspace.has(wsId)) byWorkspace.set(wsId, run);
+        }
+        setLatestRuns(byWorkspace);
+      } catch (error: unknown) {
+        if (signal?.aborted === true) return;
+        setLoadError(error instanceof Error ? error.message : "Could not load project");
+      } finally {
+        if (signal?.aborted !== true) setLoading(false);
       }
-      setWorkspaces(bundle.workspaces);
-      setVariableSets(bundle.varsets);
-      const byWorkspace = new Map<string, RunSummary>();
-      for (const run of bundle.runs) {
-        const wsId = run.relationships.workspace.data.id;
-        if (!byWorkspace.has(wsId)) byWorkspace.set(wsId, run);
-      }
-      setLatestRuns(byWorkspace);
-    } catch (error: unknown) {
-      if (signal?.aborted === true) return;
-      setLoadError(error instanceof Error ? error.message : "Could not load project");
-    } finally {
-      if (signal?.aborted !== true) setLoading(false);
-    }
-  }, [orgName, projectId]);
+    },
+    [orgName, projectId],
+  );
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
     if (projectId !== undefined) void loadData(controller.signal);
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [loadData, projectId]);
 
   useEffect((): void => {
@@ -953,7 +1122,7 @@ export function ProjectDetail({
     setFormError("");
     try {
       // SAFETY: the endpoint contract returns { data: Project } on success.
-      const response = await fetchApi(`/projects/${encodeURIComponent(projectId)}`, {
+      const response = (await fetchApi(`/projects/${encodeURIComponent(projectId)}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -968,15 +1137,13 @@ export function ProjectDetail({
             relationships: executionModeOverridden
               ? {
                   "default-agent-pool": {
-                    data: defaultExecutionMode === "agent"
-                      ? { id: defaultAgentPoolId, type: "agent-pools" }
-                      : null,
+                    data: defaultExecutionMode === "agent" ? { id: defaultAgentPoolId, type: "agent-pools" } : null,
                   },
                 }
               : {},
           },
         }),
-      }) as { data?: Project };
+      })) as { data?: Project };
       const savedProject = response.data ?? project;
       setProject(savedProject);
       setDefaultExecutionMode(parseExecutionMode(savedProject.attributes["default-execution-mode"]));
@@ -1017,7 +1184,7 @@ export function ProjectDetail({
     setVsError("");
     try {
       // SAFETY: the endpoint contract returns { data: VariableSet } on success.
-      const response = await fetchApi(`/organizations/${encodeURIComponent(orgName)}/varsets`, {
+      const response = (await fetchApi(`/organizations/${encodeURIComponent(orgName)}/varsets`, {
         method: "POST",
         body: JSON.stringify({
           data: {
@@ -1029,12 +1196,12 @@ export function ProjectDetail({
             },
           },
         }),
-      }) as { data?: VariableSet };
+      })) as { data?: VariableSet };
       const created = response.data;
       if (created !== undefined) {
         setVariableSets((current: VariableSet[]): VariableSet[] =>
-          [...current, created].sort((a, b): number =>
-            a.attributes.name.localeCompare(b.attributes.name)));
+          [...current, created].sort((a, b): number => a.attributes.name.localeCompare(b.attributes.name)),
+        );
       }
       setCreateVsOpen(false);
       setVsName("");
@@ -1049,11 +1216,8 @@ export function ProjectDetail({
 
   const handleSelectTab = (tabId: ProjectSection): void => {
     setEmbeddedSection(tabId);
-    const target = tabId === "overview"
-      ? projectPath
-      : tabId === "workspaces"
-        ? `${projectPath}/workspaces`
-        : projectSettingsPath;
+    const target =
+      tabId === "overview" ? projectPath : tabId === "workspaces" ? `${projectPath}/workspaces` : projectSettingsPath;
     void navigate(target);
   };
 
@@ -1076,7 +1240,8 @@ export function ProjectDetail({
     { id: "workspaces", label: "Workspaces" },
     { id: "settings", label: "Settings" },
   ];
-  const isSettings = activeSection === "settings" || activeSection === "variable-sets" || activeSection === "notifications";
+  const isSettings =
+    activeSection === "settings" || activeSection === "variable-sets" || activeSection === "notifications";
 
   // Settings sections are forms, so they take the narrower form measure —
   // the same rule WorkspaceDetail follows, so the two detail pages don't
@@ -1094,21 +1259,28 @@ export function ProjectDetail({
       />
 
       {sectionProp === undefined && (
-        <ProjectTabs
-          tabs={tabs}
-          activeSection={activeSection}
-          isSettings={isSettings}
-          onSelect={handleSelectTab}
-        />
+        <ProjectTabs tabs={tabs} activeSection={activeSection} isSettings={isSettings} onSelect={handleSelectTab} />
       )}
 
       <div>
         {loading ? (
           <Spinner className="mx-auto my-12" />
         ) : loadError !== "" && project === null ? (
-          <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          >
             Could not load project: {loadError}
-            <Button size="sm" variant="outline" className="ml-3" onClick={(): void => { void loadData(); }}>Try again</Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-3"
+              onClick={(): void => {
+                void loadData();
+              }}
+            >
+              Try again
+            </Button>
           </div>
         ) : (
           <ProjectSectionBody
@@ -1138,7 +1310,9 @@ export function ProjectDetail({
             canUpdate={canUpdate}
             canDestroy={canDestroy}
             onSubmitSettings={saveProject}
-            onDeleteRequest={(): void => { setDeleteOpen(true); }}
+            onDeleteRequest={(): void => {
+              setDeleteOpen(true);
+            }}
             onNewVariableSet={handleNewVariableSet}
           />
         )}
@@ -1154,7 +1328,9 @@ export function ProjectDetail({
         formError={formError}
         saving={saving}
         onSubmit={saveProject}
-        onCancel={(): void => { setEditOpen(false); }}
+        onCancel={(): void => {
+          setEditOpen(false);
+        }}
       />
 
       <ProjectDeleteConfirm
@@ -1176,7 +1352,9 @@ export function ProjectDetail({
         vsError={vsError}
         savingVs={savingVs}
         onSubmit={createVariableSet}
-        onCancel={(): void => { setCreateVsOpen(false); }}
+        onCancel={(): void => {
+          setCreateVsOpen(false);
+        }}
       />
     </PageShell>
   );

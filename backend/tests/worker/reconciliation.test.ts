@@ -1,14 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
-import {
-  assessmentResults,
-  logs,
-  organizations,
-  runs,
-  runTokens,
-  workspaces,
-} from "../../src/db/schema";
+import { assessmentResults, logs, organizations, runs, runTokens, workspaces } from "../../src/db/schema";
 import { reconcileInterruptedLocalRuns } from "../../src/worker";
 
 // Startup-reconciliation suite (scratch review: local runs orphaned by a
@@ -55,13 +48,15 @@ describe("startup reconciliation of interrupted local runs", () => {
       { id: localWsId, name: `recon-local-${suffix}`, orgId, executionMode: "remote" },
       { id: agentWsId, name: `recon-agent-${suffix}`, orgId, executionMode: "agent" },
     ]);
-    await db.insert(runs).values(RUNS.map((run, index) => ({
-      id: run.id,
-      workspaceId: run.ws,
-      status: run.status,
-      createdAt: now - index,
-      ...(run.scheduledAt !== undefined ? { scheduledAt: run.scheduledAt } : {}),
-    })));
+    await db.insert(runs).values(
+      RUNS.map((run, index) => ({
+        id: run.id,
+        workspaceId: run.ws,
+        status: run.status,
+        createdAt: now - index,
+        ...(run.scheduledAt !== undefined ? { scheduledAt: run.scheduledAt } : {}),
+      })),
+    );
     await db.insert(assessmentResults).values([
       { id: RUNNING_ASSESSMENT_ID, workspaceId: localWsId, status: "running", createdAt: now },
       { id: PENDING_ASSESSMENT_ID, workspaceId: localWsId, status: "pending", createdAt: now },
@@ -82,12 +77,30 @@ describe("startup reconciliation of interrupted local runs", () => {
   });
 
   afterAll(async () => {
-    await db.delete(logs).where(inArray(logs.runId, RUN_IDS)).catch((): void => undefined);
-    await db.delete(runTokens).where(eq(runTokens.id, `rtok-recon-${suffix}`)).catch((): void => undefined);
-    await db.delete(runs).where(inArray(runs.id, RUN_IDS)).catch((): void => undefined);
-    await db.delete(assessmentResults).where(inArray(assessmentResults.id, [RUNNING_ASSESSMENT_ID, PENDING_ASSESSMENT_ID])).catch((): void => undefined);
-    await db.delete(workspaces).where(inArray(workspaces.id, WORKSPACE_IDS)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
+    await db
+      .delete(logs)
+      .where(inArray(logs.runId, RUN_IDS))
+      .catch((): void => undefined);
+    await db
+      .delete(runTokens)
+      .where(eq(runTokens.id, `rtok-recon-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(inArray(runs.id, RUN_IDS))
+      .catch((): void => undefined);
+    await db
+      .delete(assessmentResults)
+      .where(inArray(assessmentResults.id, [RUNNING_ASSESSMENT_ID, PENDING_ASSESSMENT_ID]))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(inArray(workspaces.id, WORKSPACE_IDS))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
   });
 
   it("requeues pre-execution states, errors execution states, re-arms orphaned applies, and never touches agent-mode or resting runs", async () => {
@@ -140,10 +153,14 @@ describe("startup reconciliation of interrupted local runs", () => {
   });
 
   it("errors only running assessments; pending survive for the next discovery cycle", async () => {
-    const running = await db.query.assessmentResults.findFirst({ where: eq(assessmentResults.id, RUNNING_ASSESSMENT_ID) });
+    const running = await db.query.assessmentResults.findFirst({
+      where: eq(assessmentResults.id, RUNNING_ASSESSMENT_ID),
+    });
     expect(running?.status).toBe("errored");
     expect(running?.errorMessage).toContain("restarted");
-    const pending = await db.query.assessmentResults.findFirst({ where: eq(assessmentResults.id, PENDING_ASSESSMENT_ID) });
+    const pending = await db.query.assessmentResults.findFirst({
+      where: eq(assessmentResults.id, PENDING_ASSESSMENT_ID),
+    });
     expect(pending?.status).toBe("pending");
   });
 

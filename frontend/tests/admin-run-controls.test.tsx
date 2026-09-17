@@ -46,12 +46,13 @@ test("renders and invokes only the advertised admin run actions", async () => {
       });
     }
     if (
-      url === "/api/v2/admin/runs/run-cancel/actions/cancel"
-      || url === "/api/v2/admin/runs/run-force/actions/force-cancel"
-    ) return json({ data: {} });
+      url === "/api/v2/admin/runs/run-cancel/actions/cancel" ||
+      url === "/api/v2/admin/runs/run-force/actions/force-cancel"
+    )
+      return json({ data: {} });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/runs"]}>
@@ -64,9 +65,9 @@ test("renders and invokes only the advertised admin run actions", async () => {
     </MemoryRouter>,
   );
 
-// SAFETY: closest() resolves to the row element that contains the queried text.
+  // SAFETY: closest() resolves to the row element that contains the queried text.
   const cancelRow = await waitFor((): HTMLElement => view.getByText("Cancel only").closest("tr") as HTMLElement);
-// SAFETY: closest() resolves to the row element that contains the queried text.
+  // SAFETY: closest() resolves to the row element that contains the queried text.
   const forceRow = view.getByText("Force only").closest("tr") as HTMLElement;
   expect(within(cancelRow).getByRole("button", { name: "Cancel" })).toBeTruthy();
   expect(within(cancelRow).queryByRole("button", { name: "Force Cancel" })).toBeNull();
@@ -81,10 +82,18 @@ test("renders and invokes only the advertised admin run actions", async () => {
   });
 
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/runs/run-cancel/actions/cancel" && init?.method === "POST")).toBeTrue();
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      urlOf(input) === "/api/v2/admin/runs/run-force/actions/force-cancel" && init?.method === "POST")).toBeTrue();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean =>
+          urlOf(input) === "/api/v2/admin/runs/run-cancel/actions/cancel" && init?.method === "POST",
+      ),
+    ).toBeTrue();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean =>
+          urlOf(input) === "/api/v2/admin/runs/run-force/actions/force-cancel" && init?.method === "POST",
+      ),
+    ).toBeTrue();
   });
 });
 
@@ -102,9 +111,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
     }
     if (url === "/api/v2/admin/terraform-versions") {
       return json({
-        data: [
-          { id: "tv-1110", attributes: { version: "1.11.0", url: "https://example.test/1.11.0" } },
-        ],
+        data: [{ id: "tv-1110", attributes: { version: "1.11.0", url: "https://example.test/1.11.0" } }],
       });
     }
     if (url === "/api/v2/admin/users/user-henry" && init?.method === "DELETE") {
@@ -117,7 +124,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/users"]}>
@@ -133,7 +140,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   await waitFor((): void => {
     expect(view.getByText("henry.essing")).toBeTruthy();
   });
-// SAFETY: closest() resolves to the row element that contains the queried text.
+  // SAFETY: closest() resolves to the row element that contains the queried text.
   const henryRow = view.getByText("henry.essing").closest("tr") as HTMLElement;
   fireEvent.click(within(henryRow).getByRole("button", { name: "More actions for henry.essing" }));
   fireEvent.click(await view.findByRole("menuitem", { name: "Delete user" }));
@@ -160,7 +167,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   await waitFor((): void => {
     expect(versionsView.getByText("1.11.0")).toBeTruthy();
   });
-// SAFETY: closest() resolves to the row element that contains the queried text.
+  // SAFETY: closest() resolves to the row element that contains the queried text.
   const versionRow = versionsView.getByText("1.11.0").closest("tr") as HTMLElement;
   fireEvent.click(within(versionRow).getByRole("button", { name: "Delete version" }));
 
@@ -183,7 +190,7 @@ test("runs tab surfaces live concurrency, executing, and queued counts", async (
     }
     throw new Error("Unexpected request: " + url);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/runs"]}>

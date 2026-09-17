@@ -59,20 +59,16 @@ function hotp(key: Buffer, counter: number): number {
   counterBuffer.writeBigUInt64BE(BigInt(counter));
   const hmac = createHmac("sha1", key).update(counterBuffer).digest();
   const offset = (hmac[hmac.length - 1] ?? 0) & 0x0f;
-  const binary = (((hmac[offset] ?? 0) & 0x7f) << 24)
-    | (((hmac[offset + 1] ?? 0) & 0xff) << 16)
-    | (((hmac[offset + 2] ?? 0) & 0xff) << 8)
-    | ((hmac[offset + 3] ?? 0) & 0xff);
+  const binary =
+    (((hmac[offset] ?? 0) & 0x7f) << 24) |
+    (((hmac[offset + 1] ?? 0) & 0xff) << 16) |
+    (((hmac[offset + 2] ?? 0) & 0xff) << 8) |
+    ((hmac[offset + 3] ?? 0) & 0xff);
   return binary % 1_000_000;
 }
 
 /** Return the moving-factor counter represented by a code, or null if invalid. */
-export function matchingTotpCounter(
-  secret: string,
-  code: string,
-  window = 1,
-  atMs = Date.now(),
-): number | null {
+export function matchingTotpCounter(secret: string, code: string, window = 1, atMs = Date.now()): number | null {
   if (!/^\d{6}$/.test(code)) return null;
   const key = base32Decode(secret);
   if (key.length === 0) return null;

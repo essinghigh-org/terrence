@@ -42,26 +42,25 @@ test("loads every workspace page and replaces specific remote-state consumers", 
       permissions: { "can-update": true },
     },
   };
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({ data: workspace });
     }
     if (
-      url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && (init?.method === undefined || init?.method === "GET")
+      url.startsWith("/api/v2/organizations/acme/workspaces?") &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       const page = new URL(url, "http://terrence.local").searchParams.get("page[number]");
       if (page === "2") {
         return json({
-          data: [{
-            id: "ws-staging",
-            type: "workspaces",
-            attributes: { name: "staging" },
-          }],
+          data: [
+            {
+              id: "ws-staging",
+              type: "workspaces",
+              attributes: { name: "staging" },
+            },
+          ],
           meta: { pagination: { "next-page": null } },
         });
       }
@@ -82,13 +81,13 @@ test("loads every workspace page and replaces specific remote-state consumers", 
       });
     }
     if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && (init?.method === undefined || init?.method === "GET")
+      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [{ id: "ws-staging", type: "workspaces" }] });
     }
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: JsonObject };
       };
@@ -99,15 +98,12 @@ test("loads every workspace page and replaces specific remote-state consumers", 
         },
       });
     }
-    if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === "PATCH"
-    ) {
+    if (url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" && init?.method === "PATCH") {
       return new Response(null, { status: 204 });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>
@@ -141,28 +137,37 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     if (form !== null) fireEvent.submit(form);
   });
 
-  await waitFor((): void => { expect(view.getByText("Settings saved.")).toBeTruthy(); });
-  expect(fetchMock.mock.calls.some(([input]): boolean => {
-    const url = getUrl(input);
-    return url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && new URL(url, "http://terrence.local").searchParams.get("page[number]") === "2";
-  })).toBe(true);
+  await waitFor((): void => {
+    expect(view.getByText("Settings saved.")).toBeTruthy();
+  });
+  expect(
+    fetchMock.mock.calls.some(([input]): boolean => {
+      const url = getUrl(input);
+      return (
+        url.startsWith("/api/v2/organizations/acme/workspaces?") &&
+        new URL(url, "http://terrence.local").searchParams.get("page[number]") === "2"
+      );
+    }),
+  ).toBe(true);
 
-  const workspacePatch = fetchMock.mock.calls.find(([input, init]): boolean =>
-    getUrl(input) === "/api/v2/workspaces/ws-production" && init?.method === "PATCH");
+  const workspacePatch = fetchMock.mock.calls.find(
+    ([input, init]): boolean => getUrl(input) === "/api/v2/workspaces/ws-production" && init?.method === "PATCH",
+  );
   if (workspacePatch === undefined) throw new Error("Expected workspace settings PATCH");
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+  // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   const workspacePayload = JSON.parse(workspacePatch[1]?.body as string) as {
     data: { attributes: JsonObject };
   };
   expect(workspacePayload.data.attributes["global-remote-state"]).toBe(false);
   expect(workspacePayload.data.attributes["project-remote-state"]).toBe(false);
 
-  const relationshipPatch = fetchMock.mock.calls.find(([input, init]): boolean =>
-    getUrl(input) === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-    && init?.method === "PATCH");
+  const relationshipPatch = fetchMock.mock.calls.find(
+    ([input, init]): boolean =>
+      getUrl(input) === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" &&
+      init?.method === "PATCH",
+  );
   if (relationshipPatch === undefined) throw new Error("Expected remote-state relationship PATCH");
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+  // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
   expect(JSON.parse(relationshipPatch[1]?.body as string)).toEqual({
     data: [{ id: "ws-application", type: "workspaces" }],
   });
@@ -183,25 +188,22 @@ test("reconciles general settings before reporting a remote-state replacement fa
       permissions: { "can-update": true },
     },
   };
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrl(input);
     if (
-      url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && (init?.method === undefined || init?.method === "GET")
+      url.startsWith("/api/v2/organizations/acme/workspaces?") &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [workspace] });
     }
     if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && (init?.method === undefined || init?.method === "GET")
+      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [] });
     }
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: JsonObject };
       };
@@ -212,19 +214,14 @@ test("reconciles general settings before reporting a remote-state replacement fa
         },
       });
     }
-    if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === "PATCH"
-    ) {
+    if (url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" && init?.method === "PATCH") {
       return relationshipPatch.promise;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(
-    <WorkspaceSettings orgName="acme" workspace={workspace} onSaved={onSaved} />,
-  );
+  const view = render(<WorkspaceSettings orgName="acme" workspace={workspace} onSaved={onSaved} />);
   await view.findByText("There are no other workspaces in this organization.");
   fireEvent.input(view.getByLabelText("Description"), {
     target: { value: "Saved before consumers" },
@@ -236,13 +233,17 @@ test("reconciles general settings before reporting a remote-state replacement fa
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(view.getByText("Settings saved.")).toBeTruthy();
   });
-  expect((view.getByLabelText("Description") as HTMLInputElement).value)
-    .toBe("Saved before consumers");
+  expect((view.getByLabelText("Description") as HTMLInputElement).value).toBe("Saved before consumers");
 
   await act(async (): Promise<void> => {
-    relationshipPatch.resolve(json({
-      errors: [{ title: "Service unavailable", detail: "consumer update failed" }],
-    }, 503));
+    relationshipPatch.resolve(
+      json(
+        {
+          errors: [{ title: "Service unavailable", detail: "consumer update failed" }],
+        },
+        503,
+      ),
+    );
   });
   await view.findByText(
     "Workspace settings were saved, but approved workspaces could not be updated: consumer update failed",
@@ -263,28 +264,25 @@ test("keeps general settings usable when remote-state consumers fail to load", a
       permissions: { "can-update": true },
     },
   };
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({ data: workspace });
     }
     if (
-      url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && (init?.method === undefined || init?.method === "GET")
+      url.startsWith("/api/v2/organizations/acme/workspaces?") &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return workspaceList.promise;
     }
     if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && (init?.method === undefined || init?.method === "GET")
+      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [{ id: "ws-existing", type: "workspaces" }] });
     }
     if (url === "/api/v2/workspaces/ws-production" && init?.method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
         data: { attributes: JsonObject };
       };
@@ -297,7 +295,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>
@@ -316,27 +314,36 @@ test("keeps general settings usable when remote-state consumers fail to load", a
   fireEvent.input(view.getByLabelText("Description"), {
     target: { value: "Edited while consumers were loading" },
   });
-  expect((view.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled)
-    .toBe(false);
+  expect((view.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false);
 
   await act(async (): Promise<void> => {
-    workspaceList.resolve(json({
-      errors: [{ title: "Service unavailable", detail: "temporarily unavailable" }],
-    }, 503));
+    workspaceList.resolve(
+      json(
+        {
+          errors: [{ title: "Service unavailable", detail: "temporarily unavailable" }],
+        },
+        503,
+      ),
+    );
   });
   await view.findByText("Could not load approved workspaces: temporarily unavailable");
   expect(view.getByRole("button", { name: "Try again" })).toBeTruthy();
-  expect((view.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled)
-    .toBe(false);
+  expect((view.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(false);
 
   await act(async (): Promise<void> => {
     const form = view.getByRole("button", { name: "Save settings" }).closest("form");
     if (form !== null) fireEvent.submit(form);
   });
-  await waitFor((): void => { expect(view.getByText("Settings saved.")).toBeTruthy(); });
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    getUrl(input) === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-    && init?.method === "PATCH")).toBe(false);
+  await waitFor((): void => {
+    expect(view.getByText("Settings saved.")).toBeTruthy();
+  });
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]): boolean =>
+        getUrl(input) === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" &&
+        init?.method === "PATCH",
+    ),
+  ).toBe(false);
 });
 
 test("configures a workspace-specific agent pool override", async () => {
@@ -353,10 +360,7 @@ test("configures a workspace-specific agent pool override", async () => {
     },
     relationships: { project: { data: { id: "prj-1", type: "projects" } } },
   };
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = getUrl(input);
     if (url === "/api/v2/projects/prj-1" && (init?.method === undefined || init?.method === "GET")) {
       return json({ data: { attributes: { "default-execution-mode": "agent" } } });
@@ -364,12 +368,15 @@ test("configures a workspace-specific agent pool override", async () => {
     if (url === "/api/v2/organizations/acme/agent-pools" && (init?.method === undefined || init?.method === "GET")) {
       return json({ data: [{ id: "apool-workspace", attributes: { name: "Workspace pool" } }] });
     }
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?") && (init?.method === undefined || init?.method === "GET")) {
+    if (
+      url.startsWith("/api/v2/organizations/acme/workspaces?") &&
+      (init?.method === undefined || init?.method === "GET")
+    ) {
       return json({ data: [] });
     }
     if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && (init?.method === undefined || init?.method === "GET")
+      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" &&
+      (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [] });
     }
@@ -385,21 +392,20 @@ test("configures a workspace-specific agent pool override", async () => {
         },
       });
     }
-    if (
-      url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === "PATCH"
-    ) {
+    if (url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers" && init?.method === "PATCH") {
       return new Response(null, { status: 204 });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <WorkspaceSettings
       orgName="acme"
       workspace={workspace}
-      onSaved={(): void => { /* asserted through the request body */ }}
+      onSaved={(): void => {
+        /* asserted through the request body */
+      }}
     />,
   );
 
@@ -419,7 +425,9 @@ test("configures a workspace-specific agent pool override", async () => {
   // SAFETY: the form is present because the preceding role query found its submit button.
   fireEvent.submit(form!);
 
-  await waitFor((): void => { expect(workspaceBody).toBeDefined(); });
+  await waitFor((): void => {
+    expect(workspaceBody).toBeDefined();
+  });
   if (workspaceBody === undefined) throw new Error("Expected a serialized workspace PATCH body");
   // SAFETY: the request body is JSON.stringify'd by the component and has the JSON:API shape asserted below.
   const payload = JSON.parse(workspaceBody) as {

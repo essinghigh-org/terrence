@@ -10,7 +10,20 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { Check, Copy, Globe2, KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User, X } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Globe2,
+  KeyRound,
+  Lock,
+  MonitorSmartphone,
+  Palette,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  User,
+  X,
+} from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { toast } from "../components/ui/toast";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -42,9 +55,23 @@ function formatSessionDate(value: string): string {
   return formatDateTime(date, "Unknown");
 }
 
-type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
+type Account = {
+  id: string;
+  attributes: {
+    username: string;
+    email: string | null;
+    "email-verified"?: boolean;
+    "must-change-password"?: boolean;
+    "avatar-url"?: string;
+    theme?: string;
+  };
+};
 
-function AccountAlerts({ error, successMsg, mustChangePassword }: Readonly<{
+function AccountAlerts({
+  error,
+  successMsg,
+  mustChangePassword,
+}: Readonly<{
   error: string;
   successMsg: string;
   mustChangePassword: boolean;
@@ -52,13 +79,28 @@ function AccountAlerts({ error, successMsg, mustChangePassword }: Readonly<{
   return (
     <>
       {error !== "" && (
-        <div role="alert" aria-live="polite" className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">{error}</div>
+        <div
+          role="alert"
+          aria-live="polite"
+          className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm"
+        >
+          {error}
+        </div>
       )}
       {successMsg !== "" && (
-        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success-text px-4 py-3 rounded-md text-sm">{successMsg}</div>
+        <div
+          role="status"
+          aria-live="polite"
+          className="bg-success/10 border border-success/30 text-success-text px-4 py-3 rounded-md text-sm"
+        >
+          {successMsg}
+        </div>
       )}
       {mustChangePassword && (
-        <div role="status" className="bg-warning/10 border border-warning/30 text-warning-text px-4 py-3 rounded-md text-sm">
+        <div
+          role="status"
+          className="bg-warning/10 border border-warning/30 text-warning-text px-4 py-3 rounded-md text-sm"
+        >
           Change your temporary password before continuing.
         </div>
       )}
@@ -66,7 +108,16 @@ function AccountAlerts({ error, successMsg, mustChangePassword }: Readonly<{
   );
 }
 
-function ProfileCard({ account, username, onUsernameChange, email, onEmailChange, updatingProfile, mustChangePassword, onSubmit }: Readonly<{
+function ProfileCard({
+  account,
+  username,
+  onUsernameChange,
+  email,
+  onEmailChange,
+  updatingProfile,
+  mustChangePassword,
+  onSubmit,
+}: Readonly<{
   account: Account;
   username: string;
   onUsernameChange: (value: string) => void;
@@ -97,18 +148,54 @@ function ProfileCard({ account, username, onUsernameChange, email, onEmailChange
             )}
           </Avatar>
           <div>
-            <p className="text-sm font-medium text-muted-foreground">Your avatar is provided by <a href="https://gravatar.com" target="_blank" rel="noreferrer" className="underline hover:no-underline">Gravatar</a> based on your email address.</p>
+            <p className="text-sm font-medium text-muted-foreground">
+              Your avatar is provided by{" "}
+              <a href="https://gravatar.com" target="_blank" rel="noreferrer" className="underline hover:no-underline">
+                Gravatar
+              </a>{" "}
+              based on your email address.
+            </p>
           </div>
         </div>
-        <form id="account-profile-form" onSubmit={(event): void => { event.preventDefault(); onSubmit(); }}>
+        <form
+          id="account-profile-form"
+          onSubmit={(event): void => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label htmlFor="account-username" className="text-sm font-medium">Username</label>
-              <Input id="account-username" name="username" autoComplete="username" spellCheck={false} value={username} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onUsernameChange(event.target.value); }} />
+              <label htmlFor="account-username" className="text-sm font-medium">
+                Username
+              </label>
+              <Input
+                id="account-username"
+                name="username"
+                autoComplete="username"
+                spellCheck={false}
+                value={username}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onUsernameChange(event.target.value);
+                }}
+              />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="account-email" className="text-sm font-medium">Email</label>
-              <Input id="account-email" name="email" autoComplete="email" spellCheck={false} type="email" value={email} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onEmailChange(event.target.value); }} placeholder="optional…" />
+              <label htmlFor="account-email" className="text-sm font-medium">
+                Email
+              </label>
+              <Input
+                id="account-email"
+                name="email"
+                autoComplete="email"
+                spellCheck={false}
+                type="email"
+                value={email}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onEmailChange(event.target.value);
+                }}
+                placeholder="optional…"
+              />
             </div>
           </div>
         </form>
@@ -122,7 +209,12 @@ function ProfileCard({ account, username, onUsernameChange, email, onEmailChange
   );
 }
 
-function EmailVerificationCard({ account, verificationLoading, updatingProfile, onSend }: Readonly<{
+function EmailVerificationCard({
+  account,
+  verificationLoading,
+  updatingProfile,
+  onSend,
+}: Readonly<{
   account: Account;
   verificationLoading: boolean;
   updatingProfile: boolean;
@@ -131,8 +223,13 @@ function EmailVerificationCard({ account, verificationLoading, updatingProfile, 
   return (
     <Card id="email-verification" className="scroll-mt-20">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-lg"><Check className="size-4" />Email verification</CardTitle>
-        <CardDescription>Verify your email address so organization invitations and account recovery can be trusted.</CardDescription>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Check className="size-4" />
+          Email verification
+        </CardTitle>
+        <CardDescription>
+          Verify your email address so organization invitations and account recovery can be trusted.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {account.attributes["email-verified"] === true ? (
@@ -152,7 +249,16 @@ function EmailVerificationCard({ account, verificationLoading, updatingProfile, 
   );
 }
 
-function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeChange, displayTimezone, onTimezoneChange, timeFormat, onTimeFormatChange }: Readonly<{
+function AppearanceCard({
+  mustChangePassword,
+  themeId,
+  updatingTheme,
+  onThemeChange,
+  displayTimezone,
+  onTimezoneChange,
+  timeFormat,
+  onTimeFormatChange,
+}: Readonly<{
   mustChangePassword: boolean;
   themeId: string;
   updatingTheme: boolean;
@@ -172,25 +278,36 @@ function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeCha
         <CardDescription>Choose the colors used across Terrence. Your selection follows your account.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
-        <label htmlFor="account-theme" className="text-sm font-medium">Theme</label>
+        <label htmlFor="account-theme" className="text-sm font-medium">
+          Theme
+        </label>
         <Select
           id="account-theme"
           name="theme"
           autoComplete="off"
           value={themeId}
           disabled={updatingTheme}
-          onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { onThemeChange(event.target.value); }}
-
+          onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+            onThemeChange(event.target.value);
+          }}
         >
           <optgroup label="Light themes">
-            {THEMES.filter((theme): boolean => theme.mode === "light").map((theme): React.JSX.Element => (
-              <option key={theme.id} value={theme.id}>{theme.label}</option>
-            ))}
+            {THEMES.filter((theme): boolean => theme.mode === "light").map(
+              (theme): React.JSX.Element => (
+                <option key={theme.id} value={theme.id}>
+                  {theme.label}
+                </option>
+              ),
+            )}
           </optgroup>
           <optgroup label="Dark themes">
-            {THEMES.filter((theme): boolean => theme.mode === "dark").map((theme): React.JSX.Element => (
-              <option key={theme.id} value={theme.id}>{theme.label}</option>
-            ))}
+            {THEMES.filter((theme): boolean => theme.mode === "dark").map(
+              (theme): React.JSX.Element => (
+                <option key={theme.id} value={theme.id}>
+                  {theme.label}
+                </option>
+              ),
+            )}
           </optgroup>
         </Select>
         <p className="text-xs text-muted-foreground" aria-live="polite">
@@ -200,7 +317,9 @@ function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeCha
           <Globe2 className="size-4" aria-hidden="true" />
           Date and time
         </div>
-        <label htmlFor="account-timezone" className="text-sm font-medium">Timezone</label>
+        <label htmlFor="account-timezone" className="text-sm font-medium">
+          Timezone
+        </label>
         <Select
           id="account-timezone"
           name="timezone"
@@ -209,12 +328,13 @@ function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeCha
           onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
             onTimezoneChange(event.target.value);
           }}
-
         >
           <option value="local">Browser local timezone</option>
           <option value="utc">UTC</option>
         </Select>
-        <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">Time format</label>
+        <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">
+          Time format
+        </label>
         <Select
           id="account-time-format"
           name="time-format"
@@ -223,7 +343,6 @@ function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeCha
           onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
             onTimeFormatChange(event.target.value);
           }}
-
         >
           <option value="24">24-hour (e.g. 14:30)</option>
           <option value="12">12-hour (e.g. 2:30 PM)</option>
@@ -234,7 +353,15 @@ function AppearanceCard({ mustChangePassword, themeId, updatingTheme, onThemeCha
   );
 }
 
-function SessionsCard({ mustChangePassword, sessionsLoading, sessionsError, sessions, revokingSessionId, onRetry, onRevokeRequest }: Readonly<{
+function SessionsCard({
+  mustChangePassword,
+  sessionsLoading,
+  sessionsError,
+  sessions,
+  revokingSessionId,
+  onRetry,
+  onRevokeRequest,
+}: Readonly<{
   mustChangePassword: boolean;
   sessionsLoading: boolean;
   sessionsError: string;
@@ -261,7 +388,10 @@ function SessionsCard({ mustChangePassword, sessionsLoading, sessionsError, sess
             Loading sessions…
           </div>
         ) : sessionsError !== "" ? (
-          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/25 bg-destructive/10 p-4 text-sm text-destructive">
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/25 bg-destructive/10 p-4 text-sm text-destructive"
+          >
             <span>Could not load browser sessions. {sessionsError}</span>
             <Button type="button" size="sm" variant="outline" onClick={onRetry}>
               Retry sessions
@@ -281,50 +411,65 @@ function SessionsCard({ mustChangePassword, sessionsLoading, sessionsError, sess
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sessions.map((session): React.JSX.Element => (
-                <TableRow key={session.id}>
-                  <TableCell>
-                    <p className="text-sm font-medium" title={`Session id ${session.id}`}>
-                      {session.attributes["ip-address"] ?? "Unknown IP"}
-                    </p>
-                    <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground" title={session.attributes["user-agent"] ?? undefined}>
-                      {session.attributes["user-agent"] ?? "Unknown device"}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Created {formatSessionDate(session.attributes["created-at"])}
-                    </p>
-                  </TableCell>
-                  <TableCell>
-                    {session.attributes.current && <Badge variant="secondary">Current</Badge>}
-                    <p className={session.attributes.current ? "mt-1 text-xs text-muted-foreground" : "text-xs text-muted-foreground"}>
-                      {session.attributes["last-rotated-at"] === null
-                        ? "Not rotated yet"
-                        : `Last rotated ${formatSessionDate(session.attributes["last-rotated-at"])}`}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Expires {formatSessionDate(session.attributes["expires-at"])}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {!session.attributes.current && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="text-destructive hover:text-destructive"
-                        disabled={revokingSessionId === session.id}
-                        aria-label={`Revoke session ${session.id}`}
-                        onClick={(): void => { onRevokeRequest(session); }}
+              {sessions.map(
+                (session): React.JSX.Element => (
+                  <TableRow key={session.id}>
+                    <TableCell>
+                      <p className="text-sm font-medium" title={`Session id ${session.id}`}>
+                        {session.attributes["ip-address"] ?? "Unknown IP"}
+                      </p>
+                      <p
+                        className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground"
+                        title={session.attributes["user-agent"] ?? undefined}
                       >
-                        {revokingSessionId === session.id
-                          ? <Spinner data-icon="inline-start" />
-                          : <Trash2 data-icon="inline-start" />}
-                        {revokingSessionId === session.id ? "Revoking…" : "Revoke session"}
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+                        {session.attributes["user-agent"] ?? "Unknown device"}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Created {formatSessionDate(session.attributes["created-at"])}
+                      </p>
+                    </TableCell>
+                    <TableCell>
+                      {session.attributes.current && <Badge variant="secondary">Current</Badge>}
+                      <p
+                        className={
+                          session.attributes.current
+                            ? "mt-1 text-xs text-muted-foreground"
+                            : "text-xs text-muted-foreground"
+                        }
+                      >
+                        {session.attributes["last-rotated-at"] === null
+                          ? "Not rotated yet"
+                          : `Last rotated ${formatSessionDate(session.attributes["last-rotated-at"])}`}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Expires {formatSessionDate(session.attributes["expires-at"])}
+                      </p>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {!session.attributes.current && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          disabled={revokingSessionId === session.id}
+                          aria-label={`Revoke session ${session.id}`}
+                          onClick={(): void => {
+                            onRevokeRequest(session);
+                          }}
+                        >
+                          {revokingSessionId === session.id ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <Trash2 data-icon="inline-start" />
+                          )}
+                          {revokingSessionId === session.id ? "Revoking…" : "Revoke session"}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
             </TableBody>
           </Table>
         )}
@@ -333,7 +478,17 @@ function SessionsCard({ mustChangePassword, sessionsLoading, sessionsError, sess
   );
 }
 
-function PasswordCard({ mustChangePassword, currentPassword, onCurrentPasswordChange, newPassword, onNewPasswordChange, confirmPassword, onConfirmPasswordChange, updatingPassword, onSubmit }: Readonly<{
+function PasswordCard({
+  mustChangePassword,
+  currentPassword,
+  onCurrentPasswordChange,
+  newPassword,
+  onNewPasswordChange,
+  confirmPassword,
+  onConfirmPasswordChange,
+  updatingPassword,
+  onSubmit,
+}: Readonly<{
   mustChangePassword: boolean;
   currentPassword: string;
   onCurrentPasswordChange: (value: string) => void;
@@ -351,44 +506,64 @@ function PasswordCard({ mustChangePassword, currentPassword, onCurrentPasswordCh
           <Lock className="w-4 h-4" />
           Change Password
         </CardTitle>
-        {mustChangePassword && <CardDescription>Choose a new password for your account before continuing.</CardDescription>}
+        {mustChangePassword && (
+          <CardDescription>Choose a new password for your account before continuing.</CardDescription>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1.5">
-          <label htmlFor="account-current-password" className="text-sm font-medium">Current password</label>
+          <label htmlFor="account-current-password" className="text-sm font-medium">
+            Current password
+          </label>
           <Input
             id="account-current-password"
             name="current-password"
             autoComplete="current-password"
             type="password"
             value={currentPassword}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onCurrentPasswordChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onCurrentPasswordChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onCurrentPasswordChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onCurrentPasswordChange(event.currentTarget.value);
+            }}
           />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <label htmlFor="account-new-password" className="text-sm font-medium">New password</label>
+            <label htmlFor="account-new-password" className="text-sm font-medium">
+              New password
+            </label>
             <Input
               id="account-new-password"
               name="new-password"
               autoComplete="new-password"
               type="password"
               value={newPassword}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNewPasswordChange(event.target.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNewPasswordChange(event.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onNewPasswordChange(event.target.value);
+              }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                onNewPasswordChange(event.currentTarget.value);
+              }}
             />
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="account-confirm-password" className="text-sm font-medium">Confirm new password</label>
+            <label htmlFor="account-confirm-password" className="text-sm font-medium">
+              Confirm new password
+            </label>
             <Input
               id="account-confirm-password"
               name="confirm-password"
               autoComplete="new-password"
               type="password"
               value={confirmPassword}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onConfirmPasswordChange(event.target.value); }}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onConfirmPasswordChange(event.currentTarget.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onConfirmPasswordChange(event.target.value);
+              }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                onConfirmPasswordChange(event.currentTarget.value);
+              }}
             />
           </div>
         </div>
@@ -402,7 +577,19 @@ function PasswordCard({ mustChangePassword, currentPassword, onCurrentPasswordCh
   );
 }
 
-function MfaCard({ mfaEnabled, mfaEnrollment, mfaCode, onCodeChange, mfaCurrentPassword, onPasswordChange, mfaLoading, onBegin, onConfirm, onDisable, onCancel }: Readonly<{
+function MfaCard({
+  mfaEnabled,
+  mfaEnrollment,
+  mfaCode,
+  onCodeChange,
+  mfaCurrentPassword,
+  onPasswordChange,
+  mfaLoading,
+  onBegin,
+  onConfirm,
+  onDisable,
+  onCancel,
+}: Readonly<{
   mfaEnabled: boolean;
   mfaEnrollment: Readonly<{ secret: string; "otpauth-url"?: string }> | null;
   mfaCode: string;
@@ -432,61 +619,148 @@ function MfaCard({ mfaEnabled, mfaEnrollment, mfaCode, onCodeChange, mfaCurrentP
               <span className="text-muted-foreground">Your account requires an authenticator code at sign in.</span>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="mfa-disable-code" className="text-sm font-medium">Authenticator code to disable MFA</label>
-              <Input id="mfa-disable-code" name="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { onCodeChange(event.target.value); }} onInput={(event): void => { onCodeChange(event.currentTarget.value); }} placeholder="6-digit code" />
+              <label htmlFor="mfa-disable-code" className="text-sm font-medium">
+                Authenticator code to disable MFA
+              </label>
+              <Input
+                id="mfa-disable-code"
+                name="mfa-disable-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={mfaCode}
+                onChange={(event): void => {
+                  onCodeChange(event.target.value);
+                }}
+                onInput={(event): void => {
+                  onCodeChange(event.currentTarget.value);
+                }}
+                placeholder="6-digit code"
+              />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="mfa-disable-password" className="text-sm font-medium">Current password to disable MFA</label>
-              <Input id="mfa-disable-password" name="mfa-disable-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { onPasswordChange(event.target.value); }} onInput={(event): void => { onPasswordChange(event.currentTarget.value); }} />
+              <label htmlFor="mfa-disable-password" className="text-sm font-medium">
+                Current password to disable MFA
+              </label>
+              <Input
+                id="mfa-disable-password"
+                name="mfa-disable-password"
+                type="password"
+                autoComplete="current-password"
+                value={mfaCurrentPassword}
+                onChange={(event): void => {
+                  onPasswordChange(event.target.value);
+                }}
+                onInput={(event): void => {
+                  onPasswordChange(event.currentTarget.value);
+                }}
+              />
             </div>
           </>
         ) : mfaEnrollment !== null ? (
           <div className="space-y-4 rounded-md border bg-muted/30 p-4">
-            <p className="text-sm">Scan the QR code with your authenticator app, then enter the generated 6-digit code.</p>
+            <p className="text-sm">
+              Scan the QR code with your authenticator app, then enter the generated 6-digit code.
+            </p>
             <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
               <div className="shrink-0 rounded-md border bg-background p-2">
-                {mfaEnrollment["otpauth-url"] !== undefined
-                  ? <QrCodeImage value={mfaEnrollment["otpauth-url"]} />
-                  : null}
+                {mfaEnrollment["otpauth-url"] !== undefined ? (
+                  <QrCodeImage value={mfaEnrollment["otpauth-url"]} />
+                ) : null}
               </div>
               <div className="min-w-0 flex-1 space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">Setup key</p>
-                <code className="block break-all rounded bg-background p-2 text-sm select-all">{mfaEnrollment.secret}</code>
+                <code className="block break-all rounded bg-background p-2 text-sm select-all">
+                  {mfaEnrollment.secret}
+                </code>
                 <p className="pt-1 text-xs text-muted-foreground">Can't scan? Enter this key manually.</p>
               </div>
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">Verification code</label>
-              <Input id="mfa-enrollment-code" name="mfa-enrollment-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { onCodeChange(event.target.value); }} onInput={(event): void => { onCodeChange(event.currentTarget.value); }} placeholder="6-digit code" />
+              <label htmlFor="mfa-enrollment-code" className="text-sm font-medium">
+                Verification code
+              </label>
+              <Input
+                id="mfa-enrollment-code"
+                name="mfa-enrollment-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={mfaCode}
+                onChange={(event): void => {
+                  onCodeChange(event.target.value);
+                }}
+                onInput={(event): void => {
+                  onCodeChange(event.currentTarget.value);
+                }}
+                placeholder="6-digit code"
+              />
             </div>
           </div>
         ) : (
           <>
             <p className="text-sm text-muted-foreground">MFA is not enabled on this account.</p>
             <div className="space-y-1.5">
-              <label htmlFor="mfa-enrollment-password" className="text-sm font-medium">Current password to set up MFA</label>
-              <Input id="mfa-enrollment-password" name="mfa-enrollment-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { onPasswordChange(event.target.value); }} onInput={(event): void => { onPasswordChange(event.currentTarget.value); }} />
+              <label htmlFor="mfa-enrollment-password" className="text-sm font-medium">
+                Current password to set up MFA
+              </label>
+              <Input
+                id="mfa-enrollment-password"
+                name="mfa-enrollment-password"
+                type="password"
+                autoComplete="current-password"
+                value={mfaCurrentPassword}
+                onChange={(event): void => {
+                  onPasswordChange(event.target.value);
+                }}
+                onInput={(event): void => {
+                  onPasswordChange(event.currentTarget.value);
+                }}
+              />
             </div>
           </>
         )}
       </CardContent>
       <CardFooter className="gap-2">
         {mfaEnabled ? (
-          <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === "" || mfaCurrentPassword.trim() === ""} onClick={onDisable}>Disable MFA</Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={mfaLoading || mfaCode.trim() === "" || mfaCurrentPassword.trim() === ""}
+            onClick={onDisable}
+          >
+            Disable MFA
+          </Button>
         ) : mfaEnrollment !== null ? (
           <>
-            <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={onConfirm}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
-            <Button type="button" variant="outline" disabled={mfaLoading} onClick={onCancel}>Cancel</Button>
+            <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={onConfirm}>
+              {mfaLoading ? "Verifying…" : "Verify and enable MFA"}
+            </Button>
+            <Button type="button" variant="outline" disabled={mfaLoading} onClick={onCancel}>
+              Cancel
+            </Button>
           </>
         ) : (
-          <Button type="button" disabled={mfaLoading || mfaCurrentPassword.trim() === ""} onClick={onBegin}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
+          <Button type="button" disabled={mfaLoading || mfaCurrentPassword.trim() === ""} onClick={onBegin}>
+            {mfaLoading ? "Preparing…" : "Set up MFA"}
+          </Button>
         )}
       </CardFooter>
     </Card>
   );
 }
 
-function TokensCard({ mustChangePassword, tokens, deletingTokenId, tokenDialogOpen, onTokenDialogOpenChange, onTokenCreated, createdTokenSecret, copiedToken, onCopyToken, onDismissTokenSecret, onDeleteRequest }: Readonly<{
+function TokensCard({
+  mustChangePassword,
+  tokens,
+  deletingTokenId,
+  tokenDialogOpen,
+  onTokenDialogOpenChange,
+  onTokenCreated,
+  createdTokenSecret,
+  copiedToken,
+  onCopyToken,
+  onDismissTokenSecret,
+  onDeleteRequest,
+}: Readonly<{
   mustChangePassword: boolean;
   tokens: readonly { id: string; attributes: JsonObject }[];
   deletingTokenId: string | null;
@@ -510,18 +784,20 @@ function TokensCard({ mustChangePassword, tokens, deletingTokenId, tokenDialogOp
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">Create a token for API access. Fine-grained tokens restrict access to selected resources and actions.</p>
-          <Button onClick={(): void => { onTokenDialogOpenChange(true); }}>
+          <p className="text-sm text-muted-foreground">
+            Create a token for API access. Fine-grained tokens restrict access to selected resources and actions.
+          </p>
+          <Button
+            onClick={(): void => {
+              onTokenDialogOpenChange(true);
+            }}
+          >
             <Plus className="w-4 h-4 mr-1" />
             New token
           </Button>
         </div>
 
-        <TokenScopeDialog
-          open={tokenDialogOpen}
-          onOpenChange={onTokenDialogOpenChange}
-          onCreated={onTokenCreated}
-        />
+        <TokenScopeDialog open={tokenDialogOpen} onOpenChange={onTokenDialogOpenChange} onCreated={onTokenCreated} />
 
         {createdTokenSecret != null && (
           <div className="bg-primary/10 border border-primary/30 text-primary px-4 py-3 rounded-md text-sm space-y-2">
@@ -561,9 +837,7 @@ function TokensCard({ mustChangePassword, tokens, deletingTokenId, tokenDialogOp
         )}
 
         {tokens.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No personal API tokens.
-          </p>
+          <p className="py-8 text-center text-sm text-muted-foreground">No personal API tokens.</p>
         ) : (
           <Table>
             <TableHeader>
@@ -576,56 +850,62 @@ function TokensCard({ mustChangePassword, tokens, deletingTokenId, tokenDialogOp
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tokens.map((token): React.JSX.Element => (
-                <TableRow key={token.id}>
-                  <TableCell className="font-medium">
-                    <div>
-                      <span>
-                        {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
-                          ? token.attributes["description"]
-                          : "No description"}
-                        {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
-                          <Badge variant="outline" className="ml-2 align-middle">fine-grained</Badge>
+              {tokens.map(
+                (token): React.JSX.Element => (
+                  <TableRow key={token.id}>
+                    <TableCell className="font-medium">
+                      <div>
+                        <span>
+                          {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
+                            ? token.attributes["description"]
+                            : "No description"}
+                          {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
+                            <Badge variant="outline" className="ml-2 align-middle">
+                              fine-grained
+                            </Badge>
+                          )}
+                        </span>
+                        <p className="mt-1 max-w-xl break-words text-xs font-normal text-muted-foreground">
+                          {summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"])}
+                        </p>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {isString(token.attributes["created-at"])
+                        ? formatSessionDate(token.attributes["created-at"])
+                        : "Unknown"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {isString(token.attributes["last-used-at"])
+                        ? formatSessionDate(token.attributes["last-used-at"])
+                        : "Never"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {isString(token.attributes["expired-at"])
+                        ? formatSessionDate(token.attributes["expired-at"])
+                        : "Never"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        aria-label={`Delete token ${token.id}`}
+                        title="Revoke token"
+                        disabled={deletingTokenId === token.id}
+                        onClick={(): void => {
+                          onDeleteRequest(token);
+                        }}
+                      >
+                        {deletingTokenId === token.id ? (
+                          <Spinner className="w-3 h-3" />
+                        ) : (
+                          <Trash2 className="w-3 h-3" />
                         )}
-                      </span>
-                      <p className="mt-1 max-w-xl break-words text-xs font-normal text-muted-foreground">
-                        {summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"])}
-                      </p>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {isString(token.attributes["created-at"])
-                      ? formatSessionDate(token.attributes["created-at"])
-                      : "Unknown"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {isString(token.attributes["last-used-at"])
-                      ? formatSessionDate(token.attributes["last-used-at"])
-                      : "Never"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {isString(token.attributes["expired-at"])
-                      ? formatSessionDate(token.attributes["expired-at"])
-                      : "Never"}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      aria-label={`Delete token ${token.id}`}
-                      title="Revoke token"
-                      disabled={deletingTokenId === token.id}
-                      onClick={(): void => { onDeleteRequest(token); }}
-                    >
-                      {deletingTokenId === token.id ? (
-                        <Spinner className="w-3 h-3" />
-                      ) : (
-                        <Trash2 className="w-3 h-3" />
-                      )}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
             </TableBody>
           </Table>
         )}
@@ -634,7 +914,16 @@ function TokensCard({ mustChangePassword, tokens, deletingTokenId, tokenDialogOp
   );
 }
 
-function AccountConfirmDialogs({ sessionToRevoke, revokingSessionId, onClearSession, onConfirmSession, tokenToDelete, deletingTokenId, onClearToken, onConfirmToken }: Readonly<{
+function AccountConfirmDialogs({
+  sessionToRevoke,
+  revokingSessionId,
+  onClearSession,
+  onConfirmSession,
+  tokenToDelete,
+  deletingTokenId,
+  onClearToken,
+  onConfirmToken,
+}: Readonly<{
   sessionToRevoke: BrowserSession | null;
   revokingSessionId: string | null;
   onClearSession: () => void;
@@ -648,7 +937,9 @@ function AccountConfirmDialogs({ sessionToRevoke, revokingSessionId, onClearSess
     <>
       <ConfirmDialog
         open={sessionToRevoke !== null}
-        onOpenChange={(open): void => { if (!open) onClearSession(); }}
+        onOpenChange={(open): void => {
+          if (!open) onClearSession();
+        }}
         title="Revoke Browser Session"
         description="Are you sure you want to revoke this browser session? You will be signed out from that device."
         confirmText="Revoke Session"
@@ -663,7 +954,9 @@ function AccountConfirmDialogs({ sessionToRevoke, revokingSessionId, onClearSess
 
       <ConfirmDialog
         open={tokenToDelete !== null}
-        onOpenChange={(open): void => { if (!open) onClearToken(); }}
+        onOpenChange={(open): void => {
+          if (!open) onClearToken();
+        }}
         title="Delete API Token"
         description={`Are you sure you want to delete the token "${tokenToDelete?.desc ?? ""}"? Any automated workflow using this token will stop working.`}
         confirmText="Delete Token"
@@ -797,7 +1090,7 @@ export function AccountSettings(): React.JSX.Element {
     setError("");
     try {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const details = await fetchApi("/account/details") as { data: Account };
+      const details = (await fetchApi("/account/details")) as { data: Account };
       const me = details.data;
       setAccount(me);
       setUsername(me.attributes.username);
@@ -812,7 +1105,9 @@ export function AccountSettings(): React.JSX.Element {
       if (!requiresChange) {
         void loadSessions();
         // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const tokensRes = await fetchApi(`/users/${me.id}/authentication-tokens`) as { data: { id: string; attributes: JsonObject }[] };
+        const tokensRes = (await fetchApi(`/users/${me.id}/authentication-tokens`)) as {
+          data: { id: string; attributes: JsonObject }[];
+        };
         setTokens(tokensRes.data);
         await loadMfa();
       }
@@ -827,7 +1122,7 @@ export function AccountSettings(): React.JSX.Element {
   async function loadMfa(): Promise<void> {
     try {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/account/mfa") as { data?: { attributes?: { enabled?: boolean } } };
+      const response = (await fetchApi("/account/mfa")) as { data?: { attributes?: { enabled?: boolean } } };
       setMfaEnabled(response.data?.attributes?.enabled === true);
     } catch (err: unknown) {
       // Only fall back silently for 404/501 (MFA not supported on this server);
@@ -856,10 +1151,10 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/account/mfa/enroll", {
+      const response = (await fetchApi("/account/mfa/enroll", {
         method: "POST",
         body: JSON.stringify({ data: { attributes: { current_password: mfaCurrentPassword } } }),
-      }) as {
+      })) as {
         data: { attributes: { secret: string; "otpauth-url"?: string } };
       };
       setMfaEnrollment(response.data.attributes);
@@ -919,7 +1214,7 @@ export function AccountSettings(): React.JSX.Element {
     setSessionsError("");
     try {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/account/sessions") as { data?: BrowserSession[] };
+      const response = (await fetchApi("/account/sessions")) as { data?: BrowserSession[] };
       setSessions(Array.isArray(response.data) ? response.data : []);
     } catch (err: unknown) {
       setSessions([]);
@@ -936,12 +1231,12 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       // SAFETY: the endpoint contract returns the updated account envelope.
-      const response = await fetchApi("/account/update", {
+      const response = (await fetchApi("/account/update", {
         method: "PATCH",
         body: JSON.stringify({
           data: { attributes: { username, email: email !== "" ? email : null } },
         }),
-      }) as { data: Account };
+      })) as { data: Account };
       const updated = response.data;
       setAccount(updated);
       setSuccessMsg("Profile updated");
@@ -955,7 +1250,12 @@ export function AccountSettings(): React.JSX.Element {
 
   async function handleRequestEmailVerification(): Promise<void> {
     if (updatingProfile) return;
-    if (account?.attributes.email === null || account?.attributes.email === undefined || account.attributes.email.trim() === "") return;
+    if (
+      account?.attributes.email === null ||
+      account?.attributes.email === undefined ||
+      account.attributes.email.trim() === ""
+    )
+      return;
     setVerificationLoading(true);
     setError("");
     setSuccessMsg("");
@@ -979,10 +1279,10 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       // SAFETY: the endpoint contract returns the updated account envelope.
-      const response = await fetchApi("/account/update", {
+      const response = (await fetchApi("/account/update", {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes: { theme: selectedTheme } } }),
-      }) as { data: Account };
+      })) as { data: Account };
       const persistedTheme = isString(response.data.attributes.theme)
         ? getTheme(response.data.attributes.theme).id
         : selectedTheme;
@@ -1043,7 +1343,9 @@ export function AccountSettings(): React.JSX.Element {
     setCreatedTokenSecret(isString(created.attributes["token"]) ? created.attributes["token"] : null);
     if (account !== null) {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const tokensRes = await fetchApi(`/users/${account.id}/authentication-tokens`) as { data: { id: string; attributes: JsonObject }[] };
+      const tokensRes = (await fetchApi(`/users/${account.id}/authentication-tokens`)) as {
+        data: { id: string; attributes: JsonObject }[];
+      };
       setTokens(tokensRes.data);
     }
   }
@@ -1055,7 +1357,9 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       await fetchApi(`/authentication-tokens/${tokenId}`, { method: "DELETE" });
-      setTokens((prev: { id: string; attributes: JsonObject }[]): { id: string; attributes: JsonObject }[] => prev.filter((t: { id: string; attributes: JsonObject }): boolean => t.id !== tokenId));
+      setTokens((prev: { id: string; attributes: JsonObject }[]): { id: string; attributes: JsonObject }[] =>
+        prev.filter((t: { id: string; attributes: JsonObject }): boolean => t.id !== tokenId),
+      );
       setSuccessMsg("Token deleted");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to delete token";
@@ -1072,8 +1376,7 @@ export function AccountSettings(): React.JSX.Element {
     setSuccessMsg("");
     try {
       await fetchApi(`/account/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
-      setSessions((current): BrowserSession[] =>
-        current.filter((candidate): boolean => candidate.id !== session.id));
+      setSessions((current): BrowserSession[] => current.filter((candidate): boolean => candidate.id !== session.id));
       setSuccessMsg("Session revoked");
     } catch (err: unknown) {
       setSessionsError(err instanceof Error ? err.message : "Could not revoke browser session.");
@@ -1127,7 +1430,11 @@ export function AccountSettings(): React.JSX.Element {
   if (loading) {
     return (
       <PageShell variant="form">
-        <div role="status" aria-label="Loading account settings" className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+        <div
+          role="status"
+          aria-label="Loading account settings"
+          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
+        >
           <Spinner className="size-4" />
           Loading account settings…
         </div>
@@ -1137,14 +1444,23 @@ export function AccountSettings(): React.JSX.Element {
   if (account === null) {
     return (
       <PageShell variant="form">
-        <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
-        <div>
-          <h1 className="text-lg font-semibold">Could not load account settings</h1>
-          <p className="mt-1 text-sm">{error !== "" ? error : "Your account details could not be loaded."}</p>
-        </div>
-        <Button type="button" variant="outline" onClick={(): void => { void loadAccount(); }}>
-          Try again
-        </Button>
+        <div
+          role="alert"
+          className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive"
+        >
+          <div>
+            <h1 className="text-lg font-semibold">Could not load account settings</h1>
+            <p className="mt-1 text-sm">{error !== "" ? error : "Your account details could not be loaded."}</p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={(): void => {
+              void loadAccount();
+            }}
+          >
+            Try again
+          </Button>
         </div>
       </PageShell>
     );
@@ -1171,27 +1487,40 @@ export function AccountSettings(): React.JSX.Element {
         onEmailChange={setEmail}
         updatingProfile={updatingProfile}
         mustChangePassword={mustChangePassword}
-        onSubmit={(): void => { void handleProfileSave(); }}
+        onSubmit={(): void => {
+          void handleProfileSave();
+        }}
       />
 
-      {!mustChangePassword && account?.attributes.email !== null && account?.attributes.email !== undefined && account.attributes.email !== "" && (
-        <EmailVerificationCard
-          account={account}
-          verificationLoading={verificationLoading}
-          updatingProfile={updatingProfile}
-          onSend={(): void => { void handleRequestEmailVerification(); }}
-        />
-      )}
+      {!mustChangePassword &&
+        account?.attributes.email !== null &&
+        account?.attributes.email !== undefined &&
+        account.attributes.email !== "" && (
+          <EmailVerificationCard
+            account={account}
+            verificationLoading={verificationLoading}
+            updatingProfile={updatingProfile}
+            onSend={(): void => {
+              void handleRequestEmailVerification();
+            }}
+          />
+        )}
 
       <AppearanceCard
         mustChangePassword={mustChangePassword}
         themeId={themeId}
         updatingTheme={updatingTheme}
-        onThemeChange={(nextThemeId: string): void => { void handleThemeChange(nextThemeId); }}
+        onThemeChange={(nextThemeId: string): void => {
+          void handleThemeChange(nextThemeId);
+        }}
         displayTimezone={displayTimezone}
-        onTimezoneChange={(value: string): void => { setDisplayTimezone(value === "utc" ? "utc" : "local"); }}
+        onTimezoneChange={(value: string): void => {
+          setDisplayTimezone(value === "utc" ? "utc" : "local");
+        }}
         timeFormat={timeFormat}
-        onTimeFormatChange={(value: string): void => { setDisplayTimeFormat(value === "12" ? "12" : "24"); }}
+        onTimeFormatChange={(value: string): void => {
+          setDisplayTimeFormat(value === "12" ? "12" : "24");
+        }}
       />
 
       {/* ── 2. Sessions ── */}
@@ -1201,7 +1530,9 @@ export function AccountSettings(): React.JSX.Element {
         sessionsError={sessionsError}
         sessions={sessions}
         revokingSessionId={revokingSessionId}
-        onRetry={(): void => { void loadSessions(); }}
+        onRetry={(): void => {
+          void loadSessions();
+        }}
         onRevokeRequest={handleSessionRevokeRequest}
       />
 
@@ -1215,7 +1546,9 @@ export function AccountSettings(): React.JSX.Element {
         confirmPassword={confirmPassword}
         onConfirmPasswordChange={setConfirmPassword}
         updatingPassword={updatingPassword}
-        onSubmit={(): void => { void handlePasswordChange(); }}
+        onSubmit={(): void => {
+          void handlePasswordChange();
+        }}
       />
 
       {/* ── 4. Multi-factor authentication ── */}
@@ -1228,9 +1561,15 @@ export function AccountSettings(): React.JSX.Element {
           mfaCurrentPassword={mfaCurrentPassword}
           onPasswordChange={setMfaCurrentPassword}
           mfaLoading={mfaLoading}
-          onBegin={(): void => { void handleBeginMfaEnrollment(); }}
-          onConfirm={(): void => { void handleConfirmMfaEnrollment(); }}
-          onDisable={(): void => { void handleDisableMfa(); }}
+          onBegin={(): void => {
+            void handleBeginMfaEnrollment();
+          }}
+          onConfirm={(): void => {
+            void handleConfirmMfaEnrollment();
+          }}
+          onDisable={(): void => {
+            void handleDisableMfa();
+          }}
           onCancel={handleCancelEnrollment}
         />
       )}
@@ -1246,7 +1585,9 @@ export function AccountSettings(): React.JSX.Element {
         createdTokenSecret={createdTokenSecret}
         copiedToken={copiedToken}
         onCopyToken={handleCopyToken}
-        onDismissTokenSecret={(): void => { setCreatedTokenSecret(null); }}
+        onDismissTokenSecret={(): void => {
+          setCreatedTokenSecret(null);
+        }}
         onDeleteRequest={handleTokenDeleteRequest}
       />
 
@@ -1254,11 +1595,15 @@ export function AccountSettings(): React.JSX.Element {
       <AccountConfirmDialogs
         sessionToRevoke={sessionToRevoke}
         revokingSessionId={revokingSessionId}
-        onClearSession={(): void => { setSessionToRevoke(null); }}
+        onClearSession={(): void => {
+          setSessionToRevoke(null);
+        }}
         onConfirmSession={handleRevokeSession}
         tokenToDelete={tokenToDelete}
         deletingTokenId={deletingTokenId}
-        onClearToken={(): void => { setTokenToDelete(null); }}
+        onClearToken={(): void => {
+          setTokenToDelete(null);
+        }}
         onConfirmToken={handleConfirmTokenDelete}
       />
     </PageShell>

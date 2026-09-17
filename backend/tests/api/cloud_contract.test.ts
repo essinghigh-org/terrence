@@ -107,19 +107,16 @@ describe("Terraform cloud protocol contract", () => {
   });
 
   it("supports configuration version creation, upload, and listing", async () => {
-    const createConfigurationResponse = await request(
-      `/api/v2/workspaces/${workspaceId}/configuration-versions`,
-      {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          data: {
-            type: "configuration-versions",
-            attributes: { speculative: true, provisional: false },
-          },
-        }),
-      },
-    );
+    const createConfigurationResponse = await request(`/api/v2/workspaces/${workspaceId}/configuration-versions`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        data: {
+          type: "configuration-versions",
+          attributes: { speculative: true, provisional: false },
+        },
+      }),
+    });
     expect(createConfigurationResponse.status).toBe(201);
     const createdConfiguration = await createConfigurationResponse.json();
     configurationVersionId = createdConfiguration.data.id;
@@ -138,14 +135,11 @@ describe("Terraform cloud protocol contract", () => {
       body: validTarGzip("cloud-contract"),
     });
     expect(uploadResponse.status).toBe(200);
-    const downloadResponse = await request(
-      `/api/v2/configuration-versions/${configurationVersionId}/download`,
-      { headers: authHeaders },
-    );
+    const downloadResponse = await request(`/api/v2/configuration-versions/${configurationVersionId}/download`, {
+      headers: authHeaders,
+    });
     expect(downloadResponse.status).toBe(200);
-    expect(new Uint8Array(await downloadResponse.arrayBuffer())).toEqual(
-      validTarGzip("cloud-contract"),
-    );
+    expect(new Uint8Array(await downloadResponse.arrayBuffer())).toEqual(validTarGzip("cloud-contract"));
 
     const configurationListResponse = await request(
       `/api/v2/workspaces/${workspaceId}/configuration-versions?page[number]=1&page[size]=1`,
@@ -153,14 +147,16 @@ describe("Terraform cloud protocol contract", () => {
     );
     expect(configurationListResponse.status).toBe(200);
     const configurationList = await configurationListResponse.json();
-    expect(configurationList.data).toContainEqual(expect.objectContaining({
-      id: configurationVersionId,
-      attributes: expect.objectContaining({
-        status: "uploaded",
-        source: "tfe-api",
-        speculative: true,
+    expect(configurationList.data).toContainEqual(
+      expect.objectContaining({
+        id: configurationVersionId,
+        attributes: expect.objectContaining({
+          status: "uploaded",
+          source: "tfe-api",
+          speculative: true,
+        }),
       }),
-    }));
+    );
     const listedUploadUrl = configurationList.data[0].attributes["upload-url"];
     expect(typeof listedUploadUrl).toBe("string");
     const listedUploadLocation = new URL(listedUploadUrl);
@@ -213,15 +209,13 @@ describe("Terraform cloud protocol contract", () => {
       "debugging-mode": true,
     });
     expect(speculativeRun.relationships["created-by"].data.id).toBe(userId);
-    const promotedWorkspace = (await (await request(
-      `/api/v2/workspaces/${workspaceId}`,
-      { headers: authHeaders },
-    )).json()).data;
+    const promotedWorkspace = (
+      await (await request(`/api/v2/workspaces/${workspaceId}`, { headers: authHeaders })).json()
+    ).data;
     expect(promotedWorkspace.attributes["iac-binary"]).toBe("terraform");
-    const speculativePlan = (await (await request(
-      `/api/v2/plans/plan-${speculativeRun.id}`,
-      { headers: authHeaders },
-    )).json()).data;
+    const speculativePlan = (
+      await (await request(`/api/v2/plans/plan-${speculativeRun.id}`, { headers: authHeaders })).json()
+    ).data;
     expect(speculativePlan.attributes["log-read-url"]).toMatch(
       new RegExp(`^http://terrence\\.test/api/v2/runs/${speculativeRun.id}/plan/log/[^/]+$`),
     );
@@ -234,10 +228,9 @@ describe("Terraform cloud protocol contract", () => {
     const historyIds = (await historyResponse.json()).data.map((run: any) => run.id);
     expect(historyIds).toContain(speculativeRun.id);
     await db.update(runs).set({ status: "planned_and_finished" }).where(eq(runs.id, speculativeRun.id));
-    expect((await request(
-      `/api/v2/runs/${speculativeRun.id}`,
-      { method: "DELETE", headers: authHeaders },
-    )).status).toBe(204);
+    expect(
+      (await request(`/api/v2/runs/${speculativeRun.id}`, { method: "DELETE", headers: authHeaders })).status,
+    ).toBe(204);
   });
 
   it("supports state version creation, current version retrieval, and state download", async () => {
@@ -247,16 +240,13 @@ describe("Terraform cloud protocol contract", () => {
     });
     expect(lockResponse.status).toBe(200);
     const state = { version: 4, serial: 1, lineage: suffix, resources: [] };
-    const metadataOnlyStateResponse = await request(
-      `/api/v2/workspaces/${workspaceId}/state-versions`,
-      {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          data: { type: "state-versions", attributes: { serial: 1 } },
-        }),
-      },
-    );
+    const metadataOnlyStateResponse = await request(`/api/v2/workspaces/${workspaceId}/state-versions`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        data: { type: "state-versions", attributes: { serial: 1 } },
+      }),
+    });
     expect(metadataOnlyStateResponse.status).toBe(201);
     const pendingState = (await metadataOnlyStateResponse.json()).data;
     expect(pendingState.attributes.status).toBe("pending");
@@ -265,21 +255,26 @@ describe("Terraform cloud protocol contract", () => {
     expect(stateUploadUrl).toMatch(
       /^http:\/\/terrence\.test\/api\/v2\/state-versions\/[^/]+\/upload\?expires=\d+&signature=[a-f0-9]+$/,
     );
-    expect((await request(stateUploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state),
-    })).status).toBe(200);
-    expect((await request(jsonStateUploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state),
-    })).status).toBe(200);
+    expect(
+      (
+        await request(stateUploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await request(jsonStateUploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state),
+        })
+      ).status,
+    ).toBe(200);
 
-    const createdStateResponse = await request(
-      `/api/v2/state-versions/${pendingState.id}`,
-      { headers: authHeaders },
-    );
+    const createdStateResponse = await request(`/api/v2/state-versions/${pendingState.id}`, { headers: authHeaders });
     expect(createdStateResponse.status).toBe(200);
     const createdState = await createdStateResponse.json();
     const stateDownloadUrl = createdState.data.attributes["hosted-state-download-url"];
@@ -287,10 +282,9 @@ describe("Terraform cloud protocol contract", () => {
       /^http:\/\/terrence\.test\/api\/v2\/state-versions\/[^/]+\/download\?expires=\d+&signature=[a-f0-9]+$/,
     );
 
-    const currentStateResponse = await request(
-      `/api/v2/workspaces/${workspaceId}/current-state-version`,
-      { headers: authHeaders },
-    );
+    const currentStateResponse = await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, {
+      headers: authHeaders,
+    });
     expect(currentStateResponse.status).toBe(200);
     const currentState = await currentStateResponse.json();
     expect(currentState.data.id).toBe(pendingState.id);
@@ -301,13 +295,16 @@ describe("Terraform cloud protocol contract", () => {
   });
 
   it("supports run resource management, logs, plan/apply resources, and run actions", async () => {
-    await db.update(configurationVersions).set({
-      source: "github",
-      ingressAttributes: {
-        branch: "feature/structured-output",
-        pullRequestNumber: 10,
-      },
-    }).where(eq(configurationVersions.id, configurationVersionId));
+    await db
+      .update(configurationVersions)
+      .set({
+        source: "github",
+        ingressAttributes: {
+          branch: "feature/structured-output",
+          pullRequestNumber: 10,
+        },
+      })
+      .where(eq(configurationVersions.id, configurationVersionId));
     await db.insert(runs).values({
       id: runId,
       workspaceId,
@@ -345,10 +342,12 @@ describe("Terraform cloud protocol contract", () => {
     const runResponse = await request(`/api/v2/runs/${runId}`, { headers: authHeaders });
     expect(runResponse.status).toBe(200);
     const run = (await runResponse.json()).data;
-    expect(run.attributes.actions).toEqual(expect.objectContaining({
-      "is-confirmable": true,
-      "is-discardable": true,
-    }));
+    expect(run.attributes.actions).toEqual(
+      expect.objectContaining({
+        "is-confirmable": true,
+        "is-discardable": true,
+      }),
+    );
     expect(run.attributes["has-changes"]).toBe(true);
     // RUN-006: run source is the transport taxonomy; the VCS provider is kept
     // as ingress metadata (branch/pull-request attr on the configuration
@@ -362,9 +361,7 @@ describe("Terraform cloud protocol contract", () => {
     expect(run.relationships["configuration-version"].data.id).toBe(configurationVersionId);
     expect(run.relationships.plan.data.id).toBe(`plan-${runId}`);
     expect(run.relationships.apply.data.id).toBe(`apply-${runId}`);
-    expect(run.relationships["run-events"].links.related).toBe(
-      `/api/v2/runs/${runId}/run-events`,
-    );
+    expect(run.relationships["run-events"].links.related).toBe(`/api/v2/runs/${runId}/run-events`);
 
     const historicalStatusFilter = await request(
       `/api/v2/organizations/${orgName}/workspaces?filter[current-run][status]=errored`,
@@ -403,10 +400,7 @@ describe("Terraform cloud protocol contract", () => {
     expect(await applyLogDownload.text()).toBe("");
     expect(applyLogDownload.headers.get("content-disposition")).toBe(`attachment; filename="${runId}-apply.txt"`);
 
-    const runEventsResponse = await request(
-      `/api/v2/runs/${runId}/run-events`,
-      { headers: authHeaders },
-    );
+    const runEventsResponse = await request(`/api/v2/runs/${runId}/run-events`, { headers: authHeaders });
     expect(runEventsResponse.status).toBe(200);
     const runEvents = await runEventsResponse.json();
     expect(runEvents).toMatchObject({
@@ -430,29 +424,33 @@ describe("Terraform cloud protocol contract", () => {
       expect(runEvents.links[linkName]).toContain(`/api/v2/runs/${runId}/run-events?`);
     }
 
-    const organizationRunsResponse = await request(
-      `/api/v2/organizations/${orgName}/runs`,
-      { headers: authHeaders },
-    );
+    const organizationRunsResponse = await request(`/api/v2/organizations/${orgName}/runs`, { headers: authHeaders });
     expect(organizationRunsResponse.status).toBe(200);
     const organizationRuns = await organizationRunsResponse.json();
     expect(organizationRuns.data.map((item: any) => item.id)).toContain(runId);
-    expect(organizationRuns.data.find((item: any) => item.id === runId).attributes)
-      .toMatchObject({ source: "github", "trigger-reason": "pull_request" });
+    expect(organizationRuns.data.find((item: any) => item.id === runId).attributes).toMatchObject({
+      source: "github",
+      "trigger-reason": "pull_request",
+    });
 
     for (const [action, status] of [
       ["discard", "discarded"],
       ["cancel", "canceled"],
       ["force-cancel", "force_canceled"],
     ]) {
-      await db.update(runs).set({
-        status: action === "cancel" ? "planning" : action === "force-cancel" ? "applying" : "planned",
-        ...(action === "force-cancel" ? { statusTimestamps: { "cancel-requested-at": new Date().toISOString() } } : {}),
-      }).where(eq(runs.id, runId));
-      const actionResponse = await request(
-        `/api/v2/runs/${runId}/actions/${action}`,
-        { method: "POST", headers: authHeaders },
-      );
+      await db
+        .update(runs)
+        .set({
+          status: action === "cancel" ? "planning" : action === "force-cancel" ? "applying" : "planned",
+          ...(action === "force-cancel"
+            ? { statusTimestamps: { "cancel-requested-at": new Date().toISOString() } }
+            : {}),
+        })
+        .where(eq(runs.id, runId));
+      const actionResponse = await request(`/api/v2/runs/${runId}/actions/${action}`, {
+        method: "POST",
+        headers: authHeaders,
+      });
       expect(actionResponse.status).toBe(202);
       let observed: string | undefined;
       for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -465,10 +463,7 @@ describe("Terraform cloud protocol contract", () => {
   });
 
   it("supports run deletion", async () => {
-    const deleteResponse = await request(
-      `/api/v2/runs/${runId}`,
-      { method: "DELETE", headers: authHeaders },
-    );
+    const deleteResponse = await request(`/api/v2/runs/${runId}`, { method: "DELETE", headers: authHeaders });
     expect(deleteResponse.status).toBe(204);
     expect((await request(`/api/v2/runs/${runId}`, { headers: authHeaders })).status).toBe(404);
   });

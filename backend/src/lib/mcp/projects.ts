@@ -37,9 +37,10 @@ export const projectTools: readonly McpTool[] = [
       const limit = Math.min(Math.max(Number(args["limit"] ?? 50), 1), 200);
       const offset = Math.max(Number(args["offset"] ?? 0), 0);
       const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
-      const where = search !== undefined
-        ? and(eq(projects.orgId, org.id), sql`${projects.name} LIKE ${pattern} ESCAPE '\\'`)
-        : eq(projects.orgId, org.id);
+      const where =
+        search !== undefined
+          ? and(eq(projects.orgId, org.id), sql`${projects.name} LIKE ${pattern} ESCAPE '\\'`)
+          : eq(projects.orgId, org.id);
       const rows = await db.query.projects.findMany({
         where,
         orderBy: [asc(projects.name)],
@@ -63,7 +64,16 @@ export const projectTools: readonly McpTool[] = [
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const projectId = String(args["project_id"]);
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
-      if (project === undefined || !(await checkOrganizationPermission(project.orgId, session.userId ?? undefined, session.orgId, session.teamId, "read-projects"))) {
+      if (
+        project === undefined ||
+        !(await checkOrganizationPermission(
+          project.orgId,
+          session.userId ?? undefined,
+          session.orgId,
+          session.teamId,
+          "read-projects",
+        ))
+      ) {
         return toolError("Project not found or not authorized");
       }
       const [workspaceCountRows, teamCountRows] = await Promise.all([
@@ -100,11 +110,21 @@ export const projectTools: readonly McpTool[] = [
       const name = (typeof args["name"] === "string" ? args["name"] : "").trim();
       const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
-      if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-projects"))) {
+      if (
+        !(await checkOrganizationPermission(
+          org.id,
+          session.userId ?? undefined,
+          session.orgId,
+          session.teamId,
+          "manage-projects",
+        ))
+      ) {
         return toolError("Not authorized to manage projects in this organization");
       }
       if (name === "" || name.length > 90) return toolBadRequest("Project name must be between 1 and 90 characters");
-      const existing = await db.query.projects.findFirst({ where: and(eq(projects.orgId, org.id), eq(projects.name, name)) });
+      const existing = await db.query.projects.findFirst({
+        where: and(eq(projects.orgId, org.id), eq(projects.name, name)),
+      });
       if (existing !== undefined) return toolBadRequest(`Project "${name}" already exists in this organization`);
       const id = newResourceId("prj");
       const createdAt = Date.now();
@@ -112,10 +132,17 @@ export const projectTools: readonly McpTool[] = [
         id,
         orgId: org.id,
         name,
-        description: typeof args["description"] === "string" && args["description"] !== "" ? args["description"].trim() : null,
+        description:
+          typeof args["description"] === "string" && args["description"] !== "" ? args["description"].trim() : null,
         createdAt,
       });
-      return { id, name, orgId: org.id, createdAt, description: typeof args["description"] === "string" ? args["description"].trim() : null };
+      return {
+        id,
+        name,
+        orgId: org.id,
+        createdAt,
+        description: typeof args["description"] === "string" ? args["description"].trim() : null,
+      };
     },
   },
 ];

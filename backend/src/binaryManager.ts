@@ -22,9 +22,11 @@ const BINARY_BASE_DIR = resolve(
  * root via an absolute path, a drive letter, or a `..` traversal segment. */
 export function zipEntryEscapes(entry: string): boolean {
   const normalized = entry.replaceAll("\\", "/");
-  return normalized.startsWith("/")
-    || /^[A-Za-z]:/.test(normalized)
-    || normalized.split("/").some((segment): boolean => segment === "..");
+  return (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.split("/").some((segment): boolean => segment === "..")
+  );
 }
 
 /** Official IaC zip packages contain exactly one member: the signed binary
@@ -45,7 +47,10 @@ async function listZipEntries(zipPath: string): Promise<string[] | null> {
   const listingProc = spawn(["unzip", "-Z1", zipPath], { stdout: "pipe", stderr: "pipe" });
   const listingText = await new Response(listingProc.stdout).text();
   if ((await listingProc.exited) !== 0) return null;
-  return listingText.split("\n").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  return listingText
+    .split("\n")
+    .map((entry): string => entry.trim())
+    .filter((entry): boolean => entry !== "");
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +67,7 @@ export type BinaryIntegrity = Readonly<{
   version: string;
   /** SHA-256 hex digest of the installed executable file, not the archive. */
   binarySha256: string;
-}>
+}>;
 
 export function integrityFilePath(targetDir: string): string {
   return join(targetDir, ".integrity.json");
@@ -95,23 +100,23 @@ export async function readBinaryIntegrity(targetDir: string): Promise<IntegrityR
     return { status: "invalid" };
   }
   if (
-    (parsed.tool === "tofu" || parsed.tool === "terraform")
-    && typeof parsed.version === "string"
-    && typeof parsed.binarySha256 === "string"
-    && /^[0-9a-f]{64}$/.test(parsed.binarySha256)
+    (parsed.tool === "tofu" || parsed.tool === "terraform") &&
+    typeof parsed.version === "string" &&
+    typeof parsed.binarySha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(parsed.binarySha256)
   ) {
-    return { status: "ok", integrity: { tool: parsed.tool, version: parsed.version, binarySha256: parsed.binarySha256 } };
+    return {
+      status: "ok",
+      integrity: { tool: parsed.tool, version: parsed.version, binarySha256: parsed.binarySha256 },
+    };
   }
   return { status: "invalid" };
 }
 
 /** True when the on-disk binary matches the persisted digest. */
-export async function verifyBinaryIntegrity(
-  binaryPath: string,
-  integrity: BinaryIntegrity,
-): Promise<boolean> {
+export async function verifyBinaryIntegrity(binaryPath: string, integrity: BinaryIntegrity): Promise<boolean> {
   try {
-    return await sha256File(binaryPath) === integrity.binarySha256.toLowerCase();
+    return (await sha256File(binaryPath)) === integrity.binarySha256.toLowerCase();
   } catch {
     return false;
   }
@@ -132,9 +137,7 @@ async function writeBinaryIntegrity(targetDir: string, integrity: BinaryIntegrit
  * is malformed or describes a different tool/version. Returns the removed
  * version dirs. Installations without a sidecar are left in place and logged
  * once (they predate integrity tracking). */
-export async function revalidateInstalledBinaries(
-  baseDir: string = BINARY_BASE_DIR,
-): Promise<string[]> {
+export async function revalidateInstalledBinaries(baseDir: string = BINARY_BASE_DIR): Promise<string[]> {
   const removed: string[] = [];
   let toolDir: string;
   try {
@@ -149,7 +152,7 @@ export async function revalidateInstalledBinaries(
         if (integrity.status === "missing") {
           log.warn(
             `[terrence] Installed ${toolDir} v${version} has no integrity metadata; ` +
-            "it will be re-verified on next use",
+              "it will be re-verified on next use",
           );
           continue;
         }
@@ -162,9 +165,7 @@ export async function revalidateInstalledBinaries(
           continue;
         }
         if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
-          log.warn(
-            `[terrence] Installed ${toolDir} v${version} failed integrity check; removing for re-download`,
-          );
+          log.warn(`[terrence] Installed ${toolDir} v${version} failed integrity check; removing for re-download`);
           await rm(targetDir, { recursive: true, force: true });
           removed.push(`${toolDir}/${version}`);
         }
@@ -213,7 +214,9 @@ function guardUpstreamRateLimit(response: DeepReadonly<Response>, context: strin
  * still open. Returns when the window has passed, throws otherwise. */
 function assertNotRateLimited(context: string): void {
   if (rateLimitedUntil > Date.now()) {
-    throw new Error(`GitHub API rate limit window active until ${new Date(rateLimitedUntil).toISOString()} (${context})`);
+    throw new Error(
+      `GitHub API rate limit window active until ${new Date(rateLimitedUntil).toISOString()} (${context})`,
+    );
   }
   rateLimitedUntil = 0;
 }
@@ -234,8 +237,8 @@ export function validateVersion(version: string): boolean {
   return false;
 }
 
-  // Strip pre-release suffix (everything after the first `-`) before numeric version segment parsing
-  function parseSemver(version: string): number[] {
+// Strip pre-release suffix (everything after the first `-`) before numeric version segment parsing
+function parseSemver(version: string): number[] {
   const clean = version.replace(/^v/, "").split("-")[0];
   return (clean ?? "").split(".").map((s: string): number => Number.parseInt(s, 10));
 }
@@ -303,9 +306,8 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       // IP across parallel jobs and exhaust it. Authenticate when a token is
       // available (5000 req/hr).
       const githubToken = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"] ?? "";
-      const authHeaders: Readonly<Record<string, string>> = githubToken !== ""
-        ? { Authorization: `Bearer ${githubToken}` }
-        : {};
+      const authHeaders: Readonly<Record<string, string>> =
+        githubToken !== "" ? { Authorization: `Bearer ${githubToken}` } : {};
       const res = await fetch("https://api.github.com/repos/opentofu/opentofu/releases/latest", {
         headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
         signal: AbortSignal.timeout(10000),
@@ -339,7 +341,9 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
   // binary; only fail explicitly when neither exists.
   const fallback = await lastKnownGoodVersion(tool);
   if (fallback !== undefined) return fallback;
-  throw new Error(`Could not resolve latest version for ${tool}: upstream unreachable and no cached or installed version exists`);
+  throw new Error(
+    `Could not resolve latest version for ${tool}: upstream unreachable and no cached or installed version exists`,
+  );
 }
 
 // Highest version from the persistent discovery cache (kanban 6.10), then
@@ -399,19 +403,18 @@ async function fetchTofuVersions(authHeaders: Readonly<Record<string, string>>):
   const versions: string[] = [];
   let page = 1;
   while (page <= 100) {
-    const res = await fetch(
-      `https://api.github.com/repos/opentofu/opentofu/releases?per_page=100&page=${page}`,
-      {
-        headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
-        signal: AbortSignal.timeout(15000),
-      },
-    );
+    const res = await fetch(`https://api.github.com/repos/opentofu/opentofu/releases?per_page=100&page=${page}`, {
+      headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
+      signal: AbortSignal.timeout(15000),
+    });
     try {
       guardUpstreamRateLimit(res, `releases enumeration page ${page}`);
     } catch (rateError: unknown) {
       // Stop paginating but keep whatever versions we already collected;
       // the persistent cache still serves them until the window passes.
-      log.warn(`[terrence] Stopping version enumeration early: ${rateError instanceof Error ? rateError.message : String(rateError)}`);
+      log.warn(
+        `[terrence] Stopping version enumeration early: ${rateError instanceof Error ? rateError.message : String(rateError)}`,
+      );
       break;
     }
     if (!res.ok) break;
@@ -430,8 +433,7 @@ async function fetchTerraformVersions(): Promise<string[]> {
   });
   if (!res.ok) return [];
   const data = (await res.json()) as { versions?: Record<string, unknown> };
-  return Object.keys(data.versions ?? {})
-    .filter((v: string): boolean => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
+  return Object.keys(data.versions ?? {}).filter((v: string): boolean => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v));
 }
 
 async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<string[]> {
@@ -504,7 +506,10 @@ async function readBoundedBody(res: Response): Promise<ArrayBuffer> {
       throw new BinaryDownloadError(`Binary download body read failed: ${message}`, true);
     });
     if (arrayBuffer.byteLength > MAX_BINARY_SIZE) {
-      throw new BinaryDownloadError(`Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
+      throw new BinaryDownloadError(
+        `Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`,
+        false,
+      );
     }
     return arrayBuffer;
   }
@@ -567,7 +572,10 @@ export async function fetchBinaryArchive(downloadUrl: string, timeoutMs: number)
   if (contentLength !== null) {
     const parsed = Number.parseInt(contentLength, 10);
     if (Number.isFinite(parsed) && parsed > MAX_BINARY_SIZE) {
-      throw new BinaryDownloadError(`Binary package too large: ${parsed} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
+      throw new BinaryDownloadError(
+        `Binary package too large: ${parsed} bytes exceeds ${MAX_BINARY_SIZE} limit`,
+        false,
+      );
     }
   }
   const arrayBuffer = await readBoundedBody(res);
@@ -631,7 +639,10 @@ export async function preflightBinaryAvailability(
   const tool = toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu";
   const raw = versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest";
   if (!validateVersion(raw)) {
-    return { ok: false, detail: `Invalid ${tool} version "${raw}": expected an exact version such as 1.9.0, "latest", or a constraint such as ">= 1.5, < 2.0".` };
+    return {
+      ok: false,
+      detail: `Invalid ${tool} version "${raw}": expected an exact version such as 1.9.0, "latest", or a constraint such as ">= 1.5, < 2.0".`,
+    };
   }
   const exact = /^v?([0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.]+)?)$/.exec(raw.trim())?.[1];
   if (exact === undefined) return { ok: true };
@@ -648,9 +659,10 @@ export async function preflightBinaryAvailability(
   const hint = closest === undefined ? "no versions are cached or known" : `closest known version: ${closest}`;
   return {
     ok: false,
-    detail: `${tool} version ${exact} is not available (${hint}). `
-      + `The run would fail while resolving its CLI binary. If the version was just released, wait for version discovery to refresh or pre-install the binary; `
-      + `set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`,
+    detail:
+      `${tool} version ${exact} is not available (${hint}). ` +
+      `The run would fail while resolving its CLI binary. If the version was just released, wait for version discovery to refresh or pre-install the binary; ` +
+      `set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`,
   };
 }
 
@@ -685,8 +697,12 @@ async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
   return hashArray.map((b: number): string => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function verifySha256(tool: "tofu" | "terraform", version: string, filename: string, buffer: Readonly<ArrayBuffer>): Promise<boolean> {
-
+async function verifySha256(
+  tool: "tofu" | "terraform",
+  version: string,
+  filename: string,
+  buffer: Readonly<ArrayBuffer>,
+): Promise<boolean> {
   const allowBypass = envFlag("ALLOW_UNVERIFIED_CHECKSUMS");
   try {
     let checksumUrl = "";
@@ -743,28 +759,37 @@ async function systemBinaryFallback(
       let settled = false;
       const timer = setTimeout((): void => {
         settled = true;
-        try { versionProcess.kill(); } catch {}
+        try {
+          versionProcess.kill();
+        } catch {}
         resolve(null);
       }, probeTimeout);
-      versionProcess.exited.then(async (exitCode): Promise<void> => {
-        const stdout = await new Response(versionProcess.stdout).text();
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(exitCode === 0 ? stdout.trim() : null);
-      }, (): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(null);
-      });
+      versionProcess.exited.then(
+        async (exitCode): Promise<void> => {
+          const stdout = await new Response(versionProcess.stdout).text();
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(exitCode === 0 ? stdout.trim() : null);
+        },
+        (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(null);
+        },
+      );
     });
     if (output === null) return null;
     const match = /(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)/.exec(output);
     const version = match?.[1];
     const normalizedConstraint = constraint.trim().replace(/^v/, "");
     const exactConstraint = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/.test(normalizedConstraint);
-    if (version === undefined || (exactConstraint ? version !== normalizedConstraint : !matchesConstraints(version, constraint))) return null;
+    if (
+      version === undefined ||
+      (exactConstraint ? version !== normalizedConstraint : !matchesConstraints(version, constraint))
+    )
+      return null;
     return { binaryPath, tool, version };
   } catch {
     return null;
@@ -777,7 +802,9 @@ const binaryInstallLocks = new Map<string, Promise<void>>();
 async function withBinaryInstallLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
   const previous = binaryInstallLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
-  const current = new Promise<void>((resolve): void => { release = resolve; });
+  const current = new Promise<void>((resolve): void => {
+    release = resolve;
+  });
   binaryInstallLocks.set(key, current);
   await previous;
   try {
@@ -788,9 +815,12 @@ async function withBinaryInstallLock<T>(key: string, operation: () => Promise<T>
   }
 }
 
-export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<BinaryResolution | null> {
-  const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu");
-  let version = (versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest");
+export async function ensureBinary(
+  toolInput?: string | null,
+  versionInput?: string | null,
+): Promise<BinaryResolution | null> {
+  const tool = toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu";
+  let version = versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest";
 
   if (!validateVersion(version)) {
     console.warn(`[terrence] Invalid version format requested: ${versionInput ?? ""}`);
@@ -816,224 +846,248 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   // whose managed cache disappeared during a restart, including exact-version
   // runs; ALLOW_TOOL_FALLBACK remains reserved for alternate-tool fallback.
 
-async function checkCachedBinary(tool: "tofu" | "terraform", version: string, targetDir: string, binaryPath: string): Promise<BinaryResolution | "stale" | "absent"> {
-  if (!(await exists(binaryPath))) return "absent";
-  // Cached binary: re-validate against the persisted digest before use so a
-  // tampered or partially-written executable is never trusted "because it
-  // exists" (kanban 6.5). A missing sidecar is a pre-integrity install:
-  // used as-is with a warning (the startup sweep keeps those too); malformed
-  // metadata or a digest mismatch deletes the install and falls through to
-  // a fresh download.
-  const integrity = await readBinaryIntegrity(targetDir);
-  if (integrity.status === "missing") {
-    log.warn(`[terrence] Using unverified cached ${tool} v${version} at ${binaryPath} (no integrity metadata)`);
+  async function checkCachedBinary(
+    tool: "tofu" | "terraform",
+    version: string,
+    targetDir: string,
+    binaryPath: string,
+  ): Promise<BinaryResolution | "stale" | "absent"> {
+    if (!(await exists(binaryPath))) return "absent";
+    // Cached binary: re-validate against the persisted digest before use so a
+    // tampered or partially-written executable is never trusted "because it
+    // exists" (kanban 6.5). A missing sidecar is a pre-integrity install:
+    // used as-is with a warning (the startup sweep keeps those too); malformed
+    // metadata or a digest mismatch deletes the install and falls through to
+    // a fresh download.
+    const integrity = await readBinaryIntegrity(targetDir);
+    if (integrity.status === "missing") {
+      log.warn(`[terrence] Using unverified cached ${tool} v${version} at ${binaryPath} (no integrity metadata)`);
+      return { binaryPath, tool, version };
+    }
+    if (integrity.status === "invalid") {
+      log.warn(`[terrence] Cached ${tool} v${version} has malformed integrity metadata; re-downloading`);
+      await rm(targetDir, { recursive: true, force: true });
+      return "stale";
+    }
+    if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
+      log.warn(`[terrence] Cached ${tool} v${version} failed integrity check; re-downloading`);
+      await rm(targetDir, { recursive: true, force: true });
+      return "stale";
+    }
     return { binaryPath, tool, version };
   }
-  if (integrity.status === "invalid") {
-    log.warn(`[terrence] Cached ${tool} v${version} has malformed integrity metadata; re-downloading`);
-    await rm(targetDir, { recursive: true, force: true });
-    return "stale";
-  }
-  if (!(await verifyBinaryIntegrity(binaryPath, integrity.integrity))) {
-    log.warn(`[terrence] Cached ${tool} v${version} failed integrity check; re-downloading`);
-    await rm(targetDir, { recursive: true, force: true });
-    return "stale";
-  }
-  return { binaryPath, tool, version };
-}
 
-async function fetchBinaryWithRetries(tool: "tofu" | "terraform", version: string, downloadUrl: string): Promise<ArrayBuffer> {
-  // Issue #602: retry slow-link timeouts and transient upstream failures
-  // with backoff; unpublished versions and rejected archives fail fast.
-  const downloadTimeoutMs = resolveBinaryDownloadTimeoutMs();
-  const downloadRetries = resolveBinaryDownloadRetries();
-  for (let attempt = 0; ; attempt++) {
-    if (attempt > 0) {
-      const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
-      log.info(`Retrying ${tool} v${version} download (attempt ${attempt + 1} of ${downloadRetries + 1})`);
-      await new Promise<void>((resolve): void => {
-        setTimeout(resolve, backoffMs);
-      });
+  async function fetchBinaryWithRetries(
+    tool: "tofu" | "terraform",
+    version: string,
+    downloadUrl: string,
+  ): Promise<ArrayBuffer> {
+    // Issue #602: retry slow-link timeouts and transient upstream failures
+    // with backoff; unpublished versions and rejected archives fail fast.
+    const downloadTimeoutMs = resolveBinaryDownloadTimeoutMs();
+    const downloadRetries = resolveBinaryDownloadRetries();
+    for (let attempt = 0; ; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+        log.info(`Retrying ${tool} v${version} download (attempt ${attempt + 1} of ${downloadRetries + 1})`);
+        await new Promise<void>((resolve): void => {
+          setTimeout(resolve, backoffMs);
+        });
+      }
+      try {
+        return await fetchBinaryArchive(downloadUrl, downloadTimeoutMs);
+      } catch (downloadErr: unknown) {
+        if (attempt >= downloadRetries || !isRetryableBinaryDownloadError(downloadErr)) throw downloadErr;
+      }
     }
+  }
+
+  async function downloadBinaryArchive(
+    tool: "tofu" | "terraform",
+    version: string,
+    targetDir: string,
+  ): Promise<{ zipPath: string; zipFilename: string }> {
+    await mkdir(targetDir, { recursive: true });
+    const zipPath = join(targetDir, "download.zip");
+
+    const arch = process.arch === "arm64" ? "arm64" : "amd64";
+    const os = process.platform === "darwin" ? "darwin" : "linux";
+
+    const zipFilename =
+      tool === "tofu" ? `tofu_${version}_${os}_${arch}.zip` : `terraform_${version}_${os}_${arch}.zip`;
+
+    const downloadUrl =
+      tool === "tofu"
+        ? `https://github.com/opentofu/opentofu/releases/download/v${version}/${zipFilename}`
+        : `https://releases.hashicorp.com/terraform/${version}/${zipFilename}`;
+
+    log.info(`Downloading ${tool} v${version} from ${downloadUrl}`);
+    const arrayBuffer = await fetchBinaryWithRetries(tool, version, downloadUrl);
+    // The loop only exits via return (arrayBuffer just assigned) or throw.
+
+    const isValidHash = await verifySha256(tool, version, zipFilename, arrayBuffer);
+    if (!isValidHash) {
+      throw new Error(`SHA256 verification failed for ${zipFilename}`);
+    }
+
+    await Bun.write(zipPath, arrayBuffer);
+    return { zipPath, zipFilename };
+  }
+
+  async function assertSafeZipMembers(
+    tool: "tofu" | "terraform",
+    targetDir: string,
+    zipPath: string,
+  ): Promise<string[]> {
+    // Zip Slip protection: verify the archive's member list BEFORE extraction
+    // so a malicious entry can never be written outside the target directory.
+    const zipEntries = await listZipEntries(zipPath);
+    if (zipEntries === null || zipEntries.some(zipEntryEscapes)) {
+      await rm(targetDir, { recursive: true, force: true });
+      throw new Error("Zip Slip detected: archive contains a path that escapes the target directory");
+    }
+
+    // Official packages contain the binary and standard release documentation;
+    // reject anything unexpected (kanban 6.7) so an archive smuggling extra files is never unpacked.
+    const ALLOWED_EXTRAS = new Set(["LICENSE", "LICENSE.txt", "README.md", "CHANGELOG.md"]);
+    const unexpected = unexpectedZipMembers(zipEntries, tool).filter(
+      (entry): boolean => !ALLOWED_EXTRAS.has(entry.replaceAll("\\", "/").replace(/^\.\//, "")),
+    );
+    if (unexpected.length > 0) {
+      await rm(targetDir, { recursive: true, force: true });
+      throw new Error(`Archive contains unexpected members (${unexpected.join(", ")}); refusing to extract`);
+    }
+    return zipEntries;
+  }
+
+  async function extractionEscaped(targetDir: string): Promise<boolean> {
+    // Defense in depth: confirm every extracted path still resolves under the
+    // target directory (path containment, not a string prefix check).
+    const resolvedTarget = resolve(targetDir);
+    const entries = await readdir(targetDir, { recursive: true, withFileTypes: false });
+    return entries.some((entry): boolean => {
+      const relativePath = relative(resolvedTarget, resolve(join(targetDir, entry)));
+      return relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
+    });
+  }
+
+  async function extractVerifiedArchive(targetDir: string, zipPath: string): Promise<number> {
+    let exitCode = -1;
     try {
-      return await fetchBinaryArchive(downloadUrl, downloadTimeoutMs);
-    } catch (downloadErr: unknown) {
-      if (attempt >= downloadRetries || !isRetryableBinaryDownloadError(downloadErr)) throw downloadErr;
-    }
-  }
-}
-
-async function downloadBinaryArchive(tool: "tofu" | "terraform", version: string, targetDir: string): Promise<{ zipPath: string; zipFilename: string }> {
-  await mkdir(targetDir, { recursive: true });
-  const zipPath = join(targetDir, "download.zip");
-
-  const arch = process.arch === "arm64" ? "arm64" : "amd64";
-  const os = process.platform === "darwin" ? "darwin" : "linux";
-
-  const zipFilename = tool === "tofu"
-    ? `tofu_${version}_${os}_${arch}.zip`
-    : `terraform_${version}_${os}_${arch}.zip`;
-
-  const downloadUrl = tool === "tofu"
-    ? `https://github.com/opentofu/opentofu/releases/download/v${version}/${zipFilename}`
-    : `https://releases.hashicorp.com/terraform/${version}/${zipFilename}`;
-
-  log.info(`Downloading ${tool} v${version} from ${downloadUrl}`);
-  const arrayBuffer = await fetchBinaryWithRetries(tool, version, downloadUrl);
-  // The loop only exits via return (arrayBuffer just assigned) or throw.
-
-  const isValidHash = await verifySha256(tool, version, zipFilename, arrayBuffer);
-  if (!isValidHash) {
-    throw new Error(`SHA256 verification failed for ${zipFilename}`);
-  }
-
-  await Bun.write(zipPath, arrayBuffer);
-  return { zipPath, zipFilename };
-}
-
-async function assertSafeZipMembers(tool: "tofu" | "terraform", targetDir: string, zipPath: string): Promise<string[]> {
-  // Zip Slip protection: verify the archive's member list BEFORE extraction
-  // so a malicious entry can never be written outside the target directory.
-  const zipEntries = await listZipEntries(zipPath);
-  if (zipEntries === null || zipEntries.some(zipEntryEscapes)) {
-    await rm(targetDir, { recursive: true, force: true });
-    throw new Error("Zip Slip detected: archive contains a path that escapes the target directory");
-  }
-
-  // Official packages contain the binary and standard release documentation;
-  // reject anything unexpected (kanban 6.7) so an archive smuggling extra files is never unpacked.
-  const ALLOWED_EXTRAS = new Set(["LICENSE", "LICENSE.txt", "README.md", "CHANGELOG.md"]);
-  const unexpected = unexpectedZipMembers(zipEntries, tool).filter(
-    (entry): boolean => !ALLOWED_EXTRAS.has(entry.replaceAll("\\", "/").replace(/^\.\//, "")),
-  );
-  if (unexpected.length > 0) {
-    await rm(targetDir, { recursive: true, force: true });
-    throw new Error(`Archive contains unexpected members (${unexpected.join(", ")}); refusing to extract`);
-  }
-  return zipEntries;
-}
-
-async function extractionEscaped(targetDir: string): Promise<boolean> {
-  // Defense in depth: confirm every extracted path still resolves under the
-  // target directory (path containment, not a string prefix check).
-  const resolvedTarget = resolve(targetDir);
-  const entries = await readdir(targetDir, { recursive: true, withFileTypes: false });
-  return entries.some((entry): boolean => {
-    const relativePath = relative(resolvedTarget, resolve(join(targetDir, entry)));
-    return relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
-  });
-}
-
-async function extractVerifiedArchive(targetDir: string, zipPath: string): Promise<number> {
-  let exitCode = -1;
-  try {
-    const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
-    exitCode = await unzipProc.exited;
-    if (exitCode === 0 && await extractionEscaped(targetDir)) {
+      const unzipProc = spawn(["unzip", "-o", zipPath, "-d", targetDir]);
+      exitCode = await unzipProc.exited;
+      if (exitCode === 0 && (await extractionEscaped(targetDir))) {
+        exitCode = -1;
+        try {
+          await rm(targetDir, { recursive: true, force: true });
+        } catch {
+          // Cleanup failure is secondary — Zip Slip error is primary
+        }
+      }
+    } catch (spawnErr: unknown) {
       exitCode = -1;
-      try {
-        await rm(targetDir, { recursive: true, force: true });
-      } catch {
-        // Cleanup failure is secondary — Zip Slip error is primary
-      }
+      const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+      console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);
     }
-  } catch (spawnErr: unknown) {
-    exitCode = -1;
-    const spawnMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
-    console.error(`[terrence] Failed to spawn unzip process: ${spawnMsg}`);
-  }
 
-  try {
-    await unlink(zipPath);
-  } catch {}
-
-  return exitCode;
-}
-
-async function finalizeInstalledBinary(
-  tool: "tofu" | "terraform",
-  version: string,
-  targetDir: string,
-  binaryPath: string,
-  exitCode: number,
-): Promise<BinaryResolution | null> {
-  if (exitCode === 0 && (await exists(binaryPath))) {
     try {
-      await chmod(binaryPath, 0o755);
-      // Record the on-disk digest so future runs can re-validate the cache
-      // without re-downloading (kanban 6.5).
-      await writeBinaryIntegrity(targetDir, {
-        tool,
-        version,
-        binarySha256: await sha256File(binaryPath),
-      });
-      log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
-      return { binaryPath, tool, version };
-    } catch (integrityErr: unknown) {
-      // Extraction succeeded but the install cannot be trusted (integrity
-      // metadata unreadable/unwritable); remove the whole directory so the
-      // next attempt starts clean and nothing half-recorded is reused.
-      try {
-        await rm(targetDir, { recursive: true, force: true });
-      } catch {
-        // Cleanup failure is secondary — install error is primary.
-      }
-      throw integrityErr;
-    }
-  }
-  console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
-  // A partial extraction is never trusted: remove whatever was unpacked
-  // so the cache cannot contain a half-written binary.
-  try {
-    await rm(targetDir, { recursive: true, force: true });
-  } catch {
-    // Cleanup failure is secondary — the unzip error is already reported.
-  }
-  return null;
-}
+      await unlink(zipPath);
+    } catch {}
 
-async function installBinary(tool: "tofu" | "terraform", version: string, targetDir: string, binaryPath: string): Promise<BinaryResolution | null> {
-  const { zipPath } = await downloadBinaryArchive(tool, version, targetDir);
-  await assertSafeZipMembers(tool, targetDir, zipPath);
-  const exitCode = await extractVerifiedArchive(targetDir, zipPath);
-  return finalizeInstalledBinary(tool, version, targetDir, binaryPath, exitCode);
-}
+    return exitCode;
+  }
+
+  async function finalizeInstalledBinary(
+    tool: "tofu" | "terraform",
+    version: string,
+    targetDir: string,
+    binaryPath: string,
+    exitCode: number,
+  ): Promise<BinaryResolution | null> {
+    if (exitCode === 0 && (await exists(binaryPath))) {
+      try {
+        await chmod(binaryPath, 0o755);
+        // Record the on-disk digest so future runs can re-validate the cache
+        // without re-downloading (kanban 6.5).
+        await writeBinaryIntegrity(targetDir, {
+          tool,
+          version,
+          binarySha256: await sha256File(binaryPath),
+        });
+        log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
+        return { binaryPath, tool, version };
+      } catch (integrityErr: unknown) {
+        // Extraction succeeded but the install cannot be trusted (integrity
+        // metadata unreadable/unwritable); remove the whole directory so the
+        // next attempt starts clean and nothing half-recorded is reused.
+        try {
+          await rm(targetDir, { recursive: true, force: true });
+        } catch {
+          // Cleanup failure is secondary — install error is primary.
+        }
+        throw integrityErr;
+      }
+    }
+    console.error(`[terrence] Unzip failed with exit code ${exitCode}`);
+    // A partial extraction is never trusted: remove whatever was unpacked
+    // so the cache cannot contain a half-written binary.
+    try {
+      await rm(targetDir, { recursive: true, force: true });
+    } catch {
+      // Cleanup failure is secondary — the unzip error is already reported.
+    }
+    return null;
+  }
+
+  async function installBinary(
+    tool: "tofu" | "terraform",
+    version: string,
+    targetDir: string,
+    binaryPath: string,
+  ): Promise<BinaryResolution | null> {
+    const { zipPath } = await downloadBinaryArchive(tool, version, targetDir);
+    await assertSafeZipMembers(tool, targetDir, zipPath);
+    const exitCode = await extractVerifiedArchive(targetDir, zipPath);
+    return finalizeInstalledBinary(tool, version, targetDir, binaryPath, exitCode);
+  }
 
   return withBinaryInstallLock(`${tool}:${version}`, async (): Promise<BinaryResolution | null> => {
     const targetDir = join(BINARY_BASE_DIR, tool, version);
-  const binaryPath = join(targetDir, tool);
+    const binaryPath = join(targetDir, tool);
 
-  const cached = await checkCachedBinary(tool, version, targetDir, binaryPath);
-  if (cached !== "stale" && cached !== "absent") return cached;
+    const cached = await checkCachedBinary(tool, version, targetDir, binaryPath);
+    if (cached !== "stale" && cached !== "absent") return cached;
 
-  try {
-    return await installBinary(tool, version, targetDir, binaryPath);
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${errMsg}`);
-  }
-
-  const fallback = await systemBinaryFallback(tool, version);
-  if (fallback !== null) {
-    log.info(`System-installed ${tool} v${fallback.version} satisfies constraint "${version}" at ${fallback.binaryPath}`);
-    return fallback;
-  }
-
-  // Alternate-tool fallback ONLY if opt-in via environment flag
-  if (envFlag("ALLOW_TOOL_FALLBACK")) {
-    const fallbackTool = tool === "tofu" ? "terraform" : "tofu";
     try {
-      const sysAlt = spawn(["which", fallbackTool]);
-      if ((await sysAlt.exited) === 0) {
-        const sysPath = (await new Response(sysAlt.stdout).text()).trim();
-        if (sysPath !== "") {
-          console.warn(`[terrence] ALLOW_TOOL_FALLBACK: using alternative tool ${fallbackTool} at ${sysPath}`);
-          return { binaryPath: sysPath, tool: fallbackTool, version: "system-fallback" };
-        }
-      }
-    } catch {}
-  }
+      return await installBinary(tool, version, targetDir, binaryPath);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[terrence] Dynamic download failed for ${tool} v${version}: ${errMsg}`);
+    }
 
-  return null;
+    const fallback = await systemBinaryFallback(tool, version);
+    if (fallback !== null) {
+      log.info(
+        `System-installed ${tool} v${fallback.version} satisfies constraint "${version}" at ${fallback.binaryPath}`,
+      );
+      return fallback;
+    }
+
+    // Alternate-tool fallback ONLY if opt-in via environment flag
+    if (envFlag("ALLOW_TOOL_FALLBACK")) {
+      const fallbackTool = tool === "tofu" ? "terraform" : "tofu";
+      try {
+        const sysAlt = spawn(["which", fallbackTool]);
+        if ((await sysAlt.exited) === 0) {
+          const sysPath = (await new Response(sysAlt.stdout).text()).trim();
+          if (sysPath !== "") {
+            console.warn(`[terrence] ALLOW_TOOL_FALLBACK: using alternative tool ${fallbackTool} at ${sysPath}`);
+            return { binaryPath: sysPath, tool: fallbackTool, version: "system-fallback" };
+          }
+        }
+      } catch {}
+    }
+
+    return null;
   });
 }

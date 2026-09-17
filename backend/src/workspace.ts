@@ -8,11 +8,15 @@ export const ARCHIVE_LIST_TIMEOUT_MS = 5_000;
  * buffer unbounded data. Kills and reaps the process when the byte cap or
  * the deadline is exceeded; null on any failure. Moved here from the
  * workspaces route so archive listing shares the same bounds. */
-export async function readBoundedProcessOutput(process: DeepReadonly<{
-  exited: Promise<number>;
-  stdout: Readonly<ReadableStream<Uint8Array>>;
-  kill: (exitCode?: number | NodeJS.Signals) => void;
-}>, maxBytes: number, timeoutMs: number): Promise<string | null> {
+export async function readBoundedProcessOutput(
+  process: DeepReadonly<{
+    exited: Promise<number>;
+    stdout: Readonly<ReadableStream<Uint8Array>>;
+    kill: (exitCode?: number | NodeJS.Signals) => void;
+  }>,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<string | null> {
   const read = async (): Promise<string | null> => {
     const reader = process.stdout.getReader();
     const decoder = new TextDecoder();
@@ -31,7 +35,7 @@ export async function readBoundedProcessOutput(process: DeepReadonly<{
         output += decoder.decode(result.value, { stream: true });
       }
       output += decoder.decode();
-      return await process.exited === 0 ? output : null;
+      return (await process.exited) === 0 ? output : null;
     } finally {
       reader.releaseLock();
     }

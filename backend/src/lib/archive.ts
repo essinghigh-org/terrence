@@ -58,12 +58,14 @@ export function tarMemberPathUnsafe(member: string): boolean {
 
 /** True when a tar verbose-listing type denotes a link or special file. */
 export function tarMemberIsForbiddenSpecial(firstChar: string): boolean {
-  return firstChar === "l"
-    || firstChar === "h"
-    || firstChar === "c"
-    || firstChar === "b"
-    || firstChar === "p"
-    || firstChar === "s";
+  return (
+    firstChar === "l" ||
+    firstChar === "h" ||
+    firstChar === "c" ||
+    firstChar === "b" ||
+    firstChar === "p" ||
+    firstChar === "s"
+  );
 }
 
 function tarVerboseMemberName(line: string): string | undefined {
@@ -90,7 +92,10 @@ function assertVerboseMemberPath(line: string, seen: Readonly<Pick<Set<string>, 
   if (member === undefined || tarMemberPathUnsafe(member) || member.includes("\\") || /^[A-Za-z]:/.test(member)) {
     throw new Error("Archive contains an unsafe path");
   }
-  const canonical = member.split("/").filter((part): boolean => part !== "" && part !== ".").join("/");
+  const canonical = member
+    .split("/")
+    .filter((part): boolean => part !== "" && part !== ".")
+    .join("/");
   if (seen.has(canonical)) throw new Error("Archive contains duplicate members");
   seen.add(canonical);
 }
@@ -104,7 +109,10 @@ function assertVerboseMemberSize(line: string, maxFileBytes: number | undefined)
 
 /** Validate every safety property before a tar archive is extracted. */
 export async function assertSafeTarArchive(path: string, options: ArchiveOptions = {}): Promise<void> {
-  const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(options.signal === undefined ? [] : [options.signal])]);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(30_000),
+    ...(options.signal === undefined ? [] : [options.signal]),
+  ]);
   signal.throwIfAborted();
   const compressed = await stat(path);
   if (!compressed.isFile() || compressed.size === 0) throw new Error("Archive is empty");
@@ -160,11 +168,24 @@ export async function extractSafeTarArchive(
   options: ArchiveOptions = {},
   excludes: readonly string[] = [],
 ): Promise<void> {
-  const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(options.signal === undefined ? [] : [options.signal])]);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(30_000),
+    ...(options.signal === undefined ? [] : [options.signal]),
+  ]);
   await assertSafeTarArchive(path, { ...options, signal });
   await assertExtractionDirectory(destination, signal);
-  await runBoundedProcess([
-    "tar", "-x", "-o", "-z", "-f", path, "-C", destination,
-    ...excludes.flatMap((pattern): string[] => ["--exclude", pattern]),
-  ], { signal });
+  await runBoundedProcess(
+    [
+      "tar",
+      "-x",
+      "-o",
+      "-z",
+      "-f",
+      path,
+      "-C",
+      destination,
+      ...excludes.flatMap((pattern): string[] => ["--exclude", pattern]),
+    ],
+    { signal },
+  );
 }

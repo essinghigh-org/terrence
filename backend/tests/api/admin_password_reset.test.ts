@@ -16,12 +16,18 @@ const adminToken = `reset-admin-token-${suffix}`;
 const memberToken = `reset-member-token-${suffix}`;
 const oldPassword = "Old-Lab-Password-832!";
 const newPassword = "Temporary-Lab-Password-946!";
-const request = (id: string, token = adminToken, attributes: unknown = { password: newPassword, "password-confirmation": newPassword }) =>
-  app.handle(new Request(`http://terrence.test/api/v2/admin/users/${id}/actions/reset_password`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/vnd.api+json" },
-    body: JSON.stringify({ data: { type: "users", attributes } }),
-  }));
+const request = (
+  id: string,
+  token = adminToken,
+  attributes: unknown = { password: newPassword, "password-confirmation": newPassword },
+) =>
+  app.handle(
+    new Request(`http://terrence.test/api/v2/admin/users/${id}/actions/reset_password`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({ data: { type: "users", attributes } }),
+    }),
+  );
 
 beforeAll(async () => {
   const passwordHash = await hashPassword(oldPassword);
@@ -36,8 +42,12 @@ beforeAll(async () => {
     { id: `reset-mt-${suffix}`, userId: memberId, token: hashAuthenticationToken(memberToken) },
   ]);
   await db.insert(refreshSessions).values({
-    id: `reset-refresh-${suffix}`, familyId: `reset-family-${suffix}`, userId: memberId,
-    tokenHash: `reset-refresh-hash-${suffix}`, accessTokenId: `reset-mt-${suffix}`, expiresAt: Date.now() + 60_000,
+    id: `reset-refresh-${suffix}`,
+    familyId: `reset-family-${suffix}`,
+    userId: memberId,
+    tokenHash: `reset-refresh-hash-${suffix}`,
+    accessTokenId: `reset-mt-${suffix}`,
+    expiresAt: Date.now() + 60_000,
   });
   await db.insert(user2FA).values({ userId: memberId, secret: "test-only-secret", enabled: true });
 });
@@ -60,8 +70,12 @@ test("password recovery is admin-only and does not convert external identities o
 });
 
 test("password policy, malformed attributes, and confirmation are checked before modifying access", async () => {
-  expect((await request(memberId, adminToken, { password: "short", "password-confirmation": "short" })).status).toBe(422);
-  expect((await request(memberId, adminToken, { password: newPassword, "password-confirmation": "different" })).status).toBe(422);
+  expect((await request(memberId, adminToken, { password: "short", "password-confirmation": "short" })).status).toBe(
+    422,
+  );
+  expect(
+    (await request(memberId, adminToken, { password: newPassword, "password-confirmation": "different" })).status,
+  ).toBe(422);
   expect((await request(memberId, adminToken, null)).status).toBe(422);
   const unchanged = await db.query.users.findFirst({ where: eq(users.id, memberId) });
   expect(await passwordMatches(oldPassword, unchanged?.passwordHash)).toBe(true);
@@ -79,7 +93,9 @@ test("reset requires a new password, revokes sessions and API tokens, invalidate
   expect(await passwordMatches(newPassword, updated?.passwordHash)).toBe(true);
   expect(await passwordMatches(oldPassword, updated?.passwordHash)).toBe(false);
   expect(await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, memberId) })).toHaveLength(0);
-  expect((await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.userId, memberId) }))?.revokedAt).not.toBeNull();
+  expect(
+    (await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.userId, memberId) }))?.revokedAt,
+  ).not.toBeNull();
   expect((await db.query.user2FA.findFirst({ where: eq(user2FA.userId, memberId) }))?.enabled).toBe(true);
   expect(await consumeMfaChallenge(challenge)).toBeNull();
   expect((await request(adminId, memberToken)).status).toBe(404);

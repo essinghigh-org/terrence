@@ -19,7 +19,9 @@ if (rootElement !== null) {
   const bootstrap = Promise.race([
     bootstrapAuth(),
     new Promise<null>((resolve): void => {
-      setTimeout((): void => { resolve(null); }, 4000);
+      setTimeout((): void => {
+        resolve(null);
+      }, 4000);
     }),
   ]);
   void bootstrap.finally((): void => {

@@ -38,26 +38,32 @@ describe("provider lifecycle contract", () => {
     };
     expect(normalizedStatesEqual(first, second)).toBe(true);
     expect(normalizedStateDigest(first)).toBe(normalizedStateDigest(second));
-    expect(normalizeProviderState(first)).toEqual({ values: { name: "workspace", tags: [{ key: "environment", value: "test" }], token: "[redacted]" } });
+    expect(normalizeProviderState(first)).toEqual({
+      values: { name: "workspace", tags: [{ key: "environment", value: "test" }], token: "[redacted]" },
+    });
   });
 
   test("requires every named fixture and behavior before evidence can be published", () => {
     const evidence: LifecycleEvidence = { contract_version: lifecycleContract.version, fixtures: [] };
     const gaps = lifecycleEvidenceGaps(lifecycleContract, evidence);
     expect(gaps).toContain("workspace-lifecycle: missing fixture evidence");
-    expect(() => { assertLifecycleEvidence(lifecycleContract, evidence); }).toThrow("Incomplete provider lifecycle evidence");
+    expect(() => {
+      assertLifecycleEvidence(lifecycleContract, evidence);
+    }).toThrow("Incomplete provider lifecycle evidence");
   });
 
   test("rejects a fixture that reports a passing status without its required behaviors", () => {
     const fixture = lifecycleContract.fixtures[0]!;
     const evidence: LifecycleEvidence = {
       contract_version: lifecycleContract.version,
-      fixtures: [{
-        id: fixture.id,
-        status: "passed",
-        resources: fixture.resources,
-        behaviors: ["create"],
-      }],
+      fixtures: [
+        {
+          id: fixture.id,
+          status: "passed",
+          resources: fixture.resources,
+          behaviors: ["create"],
+        },
+      ],
     };
     const gaps = lifecycleEvidenceGaps(lifecycleContract, evidence);
     expect(gaps.some((gap): boolean => gap.startsWith(`${fixture.id}: missing behavior`))).toBe(true);
@@ -67,28 +73,36 @@ describe("provider lifecycle contract", () => {
     const fixture = lifecycleContract.fixtures.find((item): boolean => item.id === "workspace-lifecycle")!;
     const evidence: LifecycleEvidence = {
       contract_version: lifecycleContract.version,
-      fixtures: [{
-        id: fixture.id,
-        status: "passed",
-        resources: fixture.resources,
-        behaviors: [...fixture.required_behaviors],
-      }],
+      fixtures: [
+        {
+          id: fixture.id,
+          status: "passed",
+          resources: fixture.resources,
+          behaviors: [...fixture.required_behaviors],
+        },
+      ],
     };
-    expect(lifecycleEvidenceGaps(lifecycleContract, evidence)).toContain("workspace-lifecycle: normalized state did not converge");
+    expect(lifecycleEvidenceGaps(lifecycleContract, evidence)).toContain(
+      "workspace-lifecycle: normalized state did not converge",
+    );
   });
 
   test("does not accept a false normalized-state equality claim", () => {
     const fixture = lifecycleContract.fixtures.find((item): boolean => item.id === "workspace-lifecycle")!;
     const evidence: LifecycleEvidence = {
       contract_version: lifecycleContract.version,
-      fixtures: [{
-        id: fixture.id,
-        status: "passed",
-        resources: fixture.resources,
-        behaviors: [...fixture.required_behaviors],
-        normalized_state: { baseline_sha256: "a".repeat(64), restored_sha256: "b".repeat(64), equivalent: true },
-      }],
+      fixtures: [
+        {
+          id: fixture.id,
+          status: "passed",
+          resources: fixture.resources,
+          behaviors: [...fixture.required_behaviors],
+          normalized_state: { baseline_sha256: "a".repeat(64), restored_sha256: "b".repeat(64), equivalent: true },
+        },
+      ],
     };
-    expect(lifecycleEvidenceGaps(lifecycleContract, evidence)).toContain("workspace-lifecycle: normalized state did not converge");
+    expect(lifecycleEvidenceGaps(lifecycleContract, evidence)).toContain(
+      "workspace-lifecycle: normalized state did not converge",
+    );
   });
 });

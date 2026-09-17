@@ -31,7 +31,9 @@ export async function putOAuthHandshakeState(
   if (typeof storedPayload["requestTokenSecret"] === "string") {
     storedPayload["requestTokenSecret"] = await encryptSecret(storedPayload["requestTokenSecret"], { force: true });
   }
-  await db.insert(oauthHandshakeStates).values({ id, expiresAt, payload: storedPayload })
+  await db
+    .insert(oauthHandshakeStates)
+    .values({ id, expiresAt, payload: storedPayload })
     .onConflictDoUpdate({ target: oauthHandshakeStates.id, set: { expiresAt, payload: storedPayload } });
 }
 
@@ -44,11 +46,9 @@ export async function takeOAuthHandshakeState<T extends OAuthHandshakePayload>(
   id: string,
   now = Date.now(),
 ): Promise<T | undefined> {
-  const [row] = await db.delete(oauthHandshakeStates)
-    .where(and(
-      eq(oauthHandshakeStates.id, id),
-      gt(oauthHandshakeStates.expiresAt, now),
-    ))
+  const [row] = await db
+    .delete(oauthHandshakeStates)
+    .where(and(eq(oauthHandshakeStates.id, id), gt(oauthHandshakeStates.expiresAt, now)))
     .returning({ payload: oauthHandshakeStates.payload });
   // Single atomic statement: the row is deleted only if it exists AND is
   // unexpired, so two concurrent callbacks (or two replicas) can never both
@@ -66,7 +66,8 @@ export async function peekOAuthHandshakeState(
   id: string,
   now = Date.now(),
 ): Promise<{ payload: OAuthHandshakePayload; expiresAt: number } | undefined> {
-  const [row] = await db.select({ payload: oauthHandshakeStates.payload, expiresAt: oauthHandshakeStates.expiresAt })
+  const [row] = await db
+    .select({ payload: oauthHandshakeStates.payload, expiresAt: oauthHandshakeStates.expiresAt })
     .from(oauthHandshakeStates)
     .where(and(eq(oauthHandshakeStates.id, id), gt(oauthHandshakeStates.expiresAt, now)))
     .limit(1);
@@ -75,7 +76,8 @@ export async function peekOAuthHandshakeState(
 
 /** Drop handshakes whose TTL has elapsed. Safe to call periodically. */
 export async function pruneExpiredOAuthHandshakeStates(now = Date.now()): Promise<number> {
-  const deleted = await db.delete(oauthHandshakeStates)
+  const deleted = await db
+    .delete(oauthHandshakeStates)
     .where(lt(oauthHandshakeStates.expiresAt, now))
     .returning({ id: oauthHandshakeStates.id });
   return deleted.length;
@@ -84,7 +86,8 @@ export async function pruneExpiredOAuthHandshakeStates(now = Date.now()): Promis
 /** Advisory count of live handshakes (diagnostics only). */
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export async function countOAuthHandshakeStates(now = Date.now()): Promise<number> {
-  const rows = await db.select({ count: sql<number>`count(*)` })
+  const rows = await db
+    .select({ count: sql<number>`count(*)` })
     .from(oauthHandshakeStates)
     .where(gt(oauthHandshakeStates.expiresAt, now));
   return rows[0]?.count ?? 0;

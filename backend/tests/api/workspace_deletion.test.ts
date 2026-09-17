@@ -25,10 +25,7 @@ describe("workspace and organization deletion", () => {
     `delete-organization-workspace-a-${suffix}`,
     `delete-organization-workspace-b-${suffix}`,
   ] as const;
-  const organizationRunIds = [
-    `delete-organization-run-a-${suffix}`,
-    `delete-organization-run-b-${suffix}`,
-  ] as const;
+  const organizationRunIds = [`delete-organization-run-a-${suffix}`, `delete-organization-run-b-${suffix}`] as const;
   const organizationStackId = `delete-organization-stack-${suffix}`;
   const organizationLockId = `delete-organization-lock-${suffix}`;
   const organizationTokenId = `delete-organization-token-${suffix}`;
@@ -77,19 +74,27 @@ describe("workspace and organization deletion", () => {
 
     expect(await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })).toBeUndefined();
     expect(await db.query.runs.findFirst({ where: eq(runs.id, workspaceRunId) })).toBeUndefined();
-    expect(await db.query.workloadIdentityTokens.findFirst({ where: eq(workloadIdentityTokens.jti, workspaceTokenId) })).toBeUndefined();
-    expect(await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.id, workspaceLockId) })).toBeUndefined();
+    expect(
+      await db.query.workloadIdentityTokens.findFirst({ where: eq(workloadIdentityTokens.jti, workspaceTokenId) }),
+    ).toBeUndefined();
+    expect(
+      await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.id, workspaceLockId) }),
+    ).toBeUndefined();
   });
 
   it("deletes every workspace's run-linked records during organization deletion", async () => {
     await db.insert(organizations).values({ id: organizationOrgId, name: organizationOrgId });
-    await db.insert(workspaces).values(organizationWorkspaceIds.map((id) => ({ id, name: id, orgId: organizationOrgId })));
-    await db.insert(runs).values(organizationRunIds.map((id, index) => ({
-      id,
-      workspaceId: organizationWorkspaceIds[index]!,
-      status: "applied",
-      createdAt: Date.now() + index,
-    })));
+    await db
+      .insert(workspaces)
+      .values(organizationWorkspaceIds.map((id) => ({ id, name: id, orgId: organizationOrgId })));
+    await db.insert(runs).values(
+      organizationRunIds.map((id, index) => ({
+        id,
+        workspaceId: organizationWorkspaceIds[index]!,
+        status: "applied",
+        createdAt: Date.now() + index,
+      })),
+    );
     await db.insert(stacks).values({ id: organizationStackId, orgId: organizationOrgId, name: organizationStackId });
     await db.insert(stackStateLocks).values({
       id: organizationLockId,
@@ -116,7 +121,11 @@ describe("workspace and organization deletion", () => {
     for (const runId of organizationRunIds) {
       expect(await db.query.runs.findFirst({ where: eq(runs.id, runId) })).toBeUndefined();
     }
-    expect(await db.query.workloadIdentityTokens.findFirst({ where: eq(workloadIdentityTokens.jti, organizationTokenId) })).toBeUndefined();
-    expect(await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.id, organizationLockId) })).toBeUndefined();
+    expect(
+      await db.query.workloadIdentityTokens.findFirst({ where: eq(workloadIdentityTokens.jti, organizationTokenId) }),
+    ).toBeUndefined();
+    expect(
+      await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.id, organizationLockId) }),
+    ).toBeUndefined();
   });
 });

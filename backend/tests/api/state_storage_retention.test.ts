@@ -66,7 +66,9 @@ describe("State storage and retention", () => {
     await db.delete(stateVersions).where(eq(stateVersions.workspaceId, workspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
     await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
-    await db.delete(organizationDataRetentionPolicies).where(eq(organizationDataRetentionPolicies.organizationId, orgId));
+    await db
+      .delete(organizationDataRetentionPolicies)
+      .where(eq(organizationDataRetentionPolicies.organizationId, orgId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.id, membershipId));
     await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
@@ -76,27 +78,38 @@ describe("State storage and retention", () => {
   });
 
   test("promotes the latest intermediate snapshot when the workspace unlocks", async () => {
-    expect((await app.handle(new Request(
-      `http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`,
-      { method: "POST", headers: authHeaders },
-    ))).status).toBe(200);
-    const createState = (serial: number, intermediate = false) => app.handle(
-      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          data: {
-            type: "state-versions",
-            attributes: {
-              serial,
-              intermediate,
-              state: Buffer.from(JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [] })).toString("base64"),
-              md5: createHash("md5").update(JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [] })).digest("base64"),
+    expect(
+      (
+        await app.handle(
+          new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+            method: "POST",
+            headers: authHeaders,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const createState = (serial: number, intermediate = false) =>
+      app.handle(
+        new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            data: {
+              type: "state-versions",
+              attributes: {
+                serial,
+                intermediate,
+                state: Buffer.from(
+                  JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [] }),
+                ).toString("base64"),
+                md5: createHash("md5")
+                  .update(JSON.stringify({ version: 4, serial, lineage: "test-lineage", resources: [] }))
+                  .digest("base64"),
+              },
             },
-          },
+          }),
         }),
-      }),
-    );
+      );
 
     expect((await createState(1)).status).toBe(201);
     // Non-intermediate uploads are allowed while locked (the reference format semantics);
@@ -105,21 +118,25 @@ describe("State storage and retention", () => {
     expect(snapshotResponse.status).toBe(201);
     expect((await snapshotResponse.json()).data.attributes.intermediate).toBe(true);
 
-    const currentBeforeUnlock = await app.handle(new Request(
-      `http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`,
-      { headers: authHeaders },
-    ));
+    const currentBeforeUnlock = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, { headers: authHeaders }),
+    );
     expect((await currentBeforeUnlock.json()).data.attributes.serial).toBe(1);
 
-    expect((await app.handle(new Request(
-      `http://localhost/api/v2/workspaces/${workspaceId}/actions/unlock`,
-      { method: "POST", headers: authHeaders },
-    ))).status).toBe(200);
+    expect(
+      (
+        await app.handle(
+          new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/unlock`, {
+            method: "POST",
+            headers: authHeaders,
+          }),
+        )
+      ).status,
+    ).toBe(200);
 
-    const currentAfterUnlock = await app.handle(new Request(
-      `http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`,
-      { headers: authHeaders },
-    ));
+    const currentAfterUnlock = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/current-state-version`, { headers: authHeaders }),
+    );
     const current = (await currentAfterUnlock.json()).data;
     expect(current.attributes.serial).toBe(2);
     expect(current.attributes.intermediate).toBe(false);
@@ -131,13 +148,13 @@ describe("State storage and retention", () => {
       orderBy: [stateVersions.serial],
     });
     expect(oldState).toBeDefined();
-    await db.update(stateVersions)
+    await db
+      .update(stateVersions)
       .set({ createdAt: now - 2 * 86_400_000 })
       .where(eq(stateVersions.id, oldState!.id));
 
-    const createPolicyResponse = await app.handle(new Request(
-      `http://localhost/api/v2/organizations/${orgId}/relationships/data-retention-policy`,
-      {
+    const createPolicyResponse = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgId}/relationships/data-retention-policy`, {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({
@@ -146,32 +163,50 @@ describe("State storage and retention", () => {
             attributes: { "delete-older-than-n-days": 1 },
           },
         }),
-      },
-    ));
+      }),
+    );
     expect(createPolicyResponse.status).toBe(201);
     const createdPolicy = (await createPolicyResponse.json()).data;
-    const organizationResponse = await app.handle(new Request(`http://localhost/api/v2/organizations/${orgId}`, { headers: authHeaders }));
-    expect((await organizationResponse.json()).data.relationships["data-retention-policy"].data).toEqual({ id: createdPolicy.id, type: "data-retention-policy-delete-olders" });
+    const organizationResponse = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgId}`, { headers: authHeaders }),
+    );
+    expect((await organizationResponse.json()).data.relationships["data-retention-policy"].data).toEqual({
+      id: createdPolicy.id,
+      type: "data-retention-policy-delete-olders",
+    });
     expect(createdPolicy.meta.gc[workspaceId]).toMatchObject({
       softDeleted: 1,
       policySource: "organization",
     });
 
-    const getPolicyResponse = await app.handle(new Request(
-      `http://localhost/api/v2/organizations/${orgId}/relationships/data-retention-policy`,
-      { headers: authHeaders },
-    ));
+    const getPolicyResponse = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgId}/relationships/data-retention-policy`, {
+        headers: authHeaders,
+      }),
+    );
     expect(getPolicyResponse.status).toBe(200);
     expect((await getPolicyResponse.json()).data.attributes["delete-older-than-n-days"]).toBe(1);
 
-    expect((await app.handle(new Request(
-      `http://localhost/api/v2/state-versions/${oldState!.id}/actions/restore_backing_data`,
-      { method: "POST", headers: authHeaders },
-    ))).status).toBe(200);
-    expect((await app.handle(new Request(
-      `http://localhost/api/v2/organizations/${orgId}/relationships/data-retention-policy`,
-      { method: "DELETE", headers: authHeaders },
-    ))).status).toBe(204);
+    expect(
+      (
+        await app.handle(
+          new Request(`http://localhost/api/v2/state-versions/${oldState!.id}/actions/restore_backing_data`, {
+            method: "POST",
+            headers: authHeaders,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.handle(
+          new Request(`http://localhost/api/v2/organizations/${orgId}/relationships/data-retention-policy`, {
+            method: "DELETE",
+            headers: authHeaders,
+          }),
+        )
+      ).status,
+    ).toBe(204);
   });
 
   test("ages configuration archives and completed-run logs through GC", async () => {
@@ -232,30 +267,37 @@ describe("State storage and retention", () => {
     expect((await db.query.runs.findFirst({ where: eq(runs.id, oldRunId) }))?.softDeletedAt).toBe(now);
     expect(await db.query.logs.findFirst({ where: eq(logs.runId, oldRunId) })).toBeUndefined();
     expect(await db.query.logs.findFirst({ where: eq(logs.runId, activeRunId) })).toBeDefined();
-    const archivedLogResponse = await app.handle(new Request(
-      `http://localhost/api/v2/runs/${oldRunId}/apply/log`,
-      { headers: authHeaders },
-    ));
+    const archivedLogResponse = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${oldRunId}/apply/log`, { headers: authHeaders }),
+    );
     expect((await db.query.runs.findFirst({ where: eq(runs.id, oldRunId) }))?.logToken).toBeNull();
     expect(archivedLogResponse.status).toBe(200);
     expect(await archivedLogResponse.text()).toBe("old");
 
-    const restoreResponse = await app.handle(new Request(
-      `http://localhost/api/v2/configuration-versions/${oldConfigurationVersionId}/actions/restore_backing_data`,
-      { method: "POST", headers: authHeaders },
-    ));
+    const restoreResponse = await app.handle(
+      new Request(
+        `http://localhost/api/v2/configuration-versions/${oldConfigurationVersionId}/actions/restore_backing_data`,
+        { method: "POST", headers: authHeaders },
+      ),
+    );
     expect(restoreResponse.status).toBe(200);
-    expect((await db.query.configurationVersions.findFirst({
-      where: eq(configurationVersions.id, oldConfigurationVersionId),
-    }))?.status).toBe("uploaded");
+    expect(
+      (
+        await db.query.configurationVersions.findFirst({
+          where: eq(configurationVersions.id, oldConfigurationVersionId),
+        })
+      )?.status,
+    ).toBe("uploaded");
     expect(await applyDataRetentionGarbageCollection(workspaceId, { now })).toMatchObject({
       configurationVersions: { softDeleted: 1 },
     });
 
-    await db.update(configurationVersions)
+    await db
+      .update(configurationVersions)
       .set({ softDeletedAt: now - 8 * 86_400_000 })
       .where(eq(configurationVersions.id, oldConfigurationVersionId));
-    await db.update(runs)
+    await db
+      .update(runs)
       .set({ softDeletedAt: now - 8 * 86_400_000 })
       .where(eq(runs.id, oldRunId));
     const secondPass = await applyDataRetentionGarbageCollection(workspaceId, { now });
@@ -264,9 +306,13 @@ describe("State storage and retention", () => {
       runs: { permanentlyDeleted: 1, archivesDeleted: 1 },
     });
     expect(await Bun.file(oldArchivePath).exists()).toBe(false);
-    expect((await db.query.configurationVersions.findFirst({
-      where: eq(configurationVersions.id, oldConfigurationVersionId),
-    }))?.status).toBe("backing_data_permanently_deleted");
+    expect(
+      (
+        await db.query.configurationVersions.findFirst({
+          where: eq(configurationVersions.id, oldConfigurationVersionId),
+        })
+      )?.status,
+    ).toBe("backing_data_permanently_deleted");
     expect(await Bun.file(currentArchivePath).exists()).toBe(true);
     expect(await Bun.file(runLogArchivePath(oldRunId)).exists()).toBe(false);
     expect(await db.query.runs.findFirst({ where: eq(runs.id, oldRunId) })).toBeUndefined();
@@ -297,14 +343,18 @@ describe("State storage and retention", () => {
       archivePath: deletedArchivePath,
     });
 
-    const response = await app.handle(new Request(
-      `http://localhost/api/v2/organizations/${deletedOrganizationName}`,
-      { method: "DELETE", headers: authHeaders },
-    ));
+    const response = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${deletedOrganizationName}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      }),
+    );
     expect(response.status).toBe(204);
     expect(await Bun.file(deletedArchivePath).exists()).toBe(false);
-    expect(await db.query.organizations.findFirst({
-      where: eq(organizations.id, deletedOrganizationId),
-    })).toBeUndefined();
+    expect(
+      await db.query.organizations.findFirst({
+        where: eq(organizations.id, deletedOrganizationId),
+      }),
+    ).toBeUndefined();
   });
 });

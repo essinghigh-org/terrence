@@ -49,11 +49,7 @@ describe("cached-lookups (10.13)", () => {
 
   test("concurrent same-request lookups share one in-flight promise", async () => {
     setRequestTokenScopes(null);
-    const [a, b, c] = await Promise.all([
-      cachedOrgByName(orgName),
-      cachedOrgByName(orgName),
-      cachedOrgByName(orgName),
-    ]);
+    const [a, b, c] = await Promise.all([cachedOrgByName(orgName), cachedOrgByName(orgName), cachedOrgByName(orgName)]);
     expect(a).toBe(b);
     expect(b).toBe(c);
     expect(a?.id).toBe(orgId);

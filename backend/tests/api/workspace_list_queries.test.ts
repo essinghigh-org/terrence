@@ -11,7 +11,9 @@ test("workspace pages filter before slicing and aggregate only authorized organi
   const id = (name: string): string => `${name}-${seed.suffix}`;
   const headers = jsonHeaders(seed.token);
   const list = async (query: string, credential = headers) => {
-    const response = await request(`/api/v2/organizations/${seed.orgName}/workspaces?${query}`, { headers: credential });
+    const response = await request(`/api/v2/organizations/${seed.orgName}/workspaces?${query}`, {
+      headers: credential,
+    });
     expect(response.status).toBe(200);
     return response.json();
   };
@@ -47,16 +49,27 @@ test("workspace pages filter before slicing and aggregate only authorized organi
     expect(filtered.meta["workspace-summary"]).toEqual(expectedSummary);
     expect((await list("filter[locked]=true&filter[project][id]=" + id("project"))).data[0].id).toBe(id("alpha"));
     expect((await list("search[query]=PROD_%25")).data[0].id).toBe(id("gamma"));
-    expect((await list("search[query]=a&filter[locked]=false")).data.map((row: { id: string }) => row.id)).toEqual([id("beta"), id("gamma")]);
-    expect((await list("search[query]=absent&include=workspace_summary")).meta["workspace-summary"]).toEqual(expectedSummary);
+    expect((await list("search[query]=a&filter[locked]=false")).data.map((row: { id: string }) => row.id)).toEqual([
+      id("beta"),
+      id("gamma"),
+    ]);
+    expect((await list("search[query]=absent&include=workspace_summary")).meta["workspace-summary"]).toEqual(
+      expectedSummary,
+    );
     for (const invalid of ["sort=unsupported", "filter[locked]=perhaps"]) {
-      expect((await request(`/api/v2/organizations/${seed.orgName}/workspaces?${invalid}`, { headers })).status).toBe(400);
+      expect((await request(`/api/v2/organizations/${seed.orgName}/workspaces?${invalid}`, { headers })).status).toBe(
+        400,
+      );
     }
     // A team credential sees the same permission boundary in rows AND totals.
     const teamToken = `team-token-${seed.suffix}`;
     await db.insert(teams).values({ id: id("team"), orgId: seed.orgId, name: "Readers" });
-    await db.insert(teamWorkspaces).values({ id: id("grant"), teamId: id("team"), workspaceId: id("beta"), access: "read" });
-    await db.insert(apiTokens).values({ id: id("token"), token: hashAuthenticationToken(teamToken), teamId: id("team"), orgId: seed.orgId });
+    await db
+      .insert(teamWorkspaces)
+      .values({ id: id("grant"), teamId: id("team"), workspaceId: id("beta"), access: "read" });
+    await db
+      .insert(apiTokens)
+      .values({ id: id("token"), token: hashAuthenticationToken(teamToken), teamId: id("team"), orgId: seed.orgId });
     const restricted = await list("include=current_run,workspace_summary", jsonHeaders(teamToken));
     expect(restricted.data.map((row: { id: string }) => row.id)).toEqual([id("beta")]);
     expect(restricted.meta["workspace-summary"]).toEqual({ total: 1, locked: 0, "run-statuses": { errored: 1 } });

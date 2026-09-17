@@ -3,13 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  samlSettings,
-  users,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, samlSettings, users } from "../../src/db/schema";
 import { IDP_ENTITY_ID } from "./saml_helpers";
 
 describe("SAML settings", () => {
@@ -24,14 +18,16 @@ describe("SAML settings", () => {
   const secondCertificate = "-----BEGIN CERTIFICATE-----\nSECOND\n-----END CERTIFICATE-----";
 
   const request = (method: string, path: string, token: string, body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -134,11 +130,7 @@ describe("SAML settings", () => {
       "idp-cert": secondCertificate,
     });
 
-    const revoked = await request(
-      "POST",
-      "/api/v2/admin/saml-settings/actions/revoke-old-certificate",
-      adminToken,
-    );
+    const revoked = await request("POST", "/api/v2/admin/saml-settings/actions/revoke-old-certificate", adminToken);
     expect(revoked.status).toBe(200);
     expect((await revoked.json()).data.attributes["old-idp-cert"]).toBeNull();
   });
@@ -153,11 +145,15 @@ describe("SAML settings", () => {
     expect(updated.status).toBe(200);
     expect((await updated.json()).data.attributes["owners-team-saml-role-id"]).toBe("tfe-owners");
 
-    expect((await request("PATCH", `/api/v2/organizations/${orgName}`, ownerToken, {
-      data: {
-        type: "organizations",
-        attributes: { "owners-team-saml-role-id": 42 },
-      },
-    })).status).toBe(422);
+    expect(
+      (
+        await request("PATCH", `/api/v2/organizations/${orgName}`, ownerToken, {
+          data: {
+            type: "organizations",
+            attributes: { "owners-team-saml-role-id": 42 },
+          },
+        })
+      ).status,
+    ).toBe(422);
   });
 });

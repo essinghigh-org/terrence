@@ -29,14 +29,16 @@ const attrBoolean = (attrs: JsonObject, key: string, fallback: boolean): boolean
   const value = attrs[key];
   return isBoolean(value) ? value : fallback;
 };
-async function saveAuthSettings(options: Readonly<{
-  setSaving: (saving: boolean) => void;
-  setError: (error: string | null) => void;
-  save: () => Promise<void>;
-  reload: () => void;
-  successTitle: string;
-  fallbackError: string;
-}>): Promise<void> {
+async function saveAuthSettings(
+  options: Readonly<{
+    setSaving: (saving: boolean) => void;
+    setError: (error: string | null) => void;
+    save: () => Promise<void>;
+    reload: () => void;
+    successTitle: string;
+    fallbackError: string;
+  }>,
+): Promise<void> {
   options.setSaving(true);
   options.setError(null);
   try {
@@ -91,15 +93,20 @@ function parseSecuritySection(
   // SAFETY: the fixture matches the JSON:API envelope the component consumes.
   const ping = pingResponse as { "signup-enabled"?: boolean };
   // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-  const sandbox = (metaResponse as {
-    data?: { attributes?: { "run-sandbox"?: SandboxSettings } };
-  }).data?.attributes?.["run-sandbox"];
+  const sandbox = (
+    metaResponse as {
+      data?: { attributes?: { "run-sandbox"?: SandboxSettings } };
+    }
+  ).data?.attributes?.["run-sandbox"];
   // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const samlEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+  const samlEnabled =
+    (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
   // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const oidcEnabled = (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+  const oidcEnabled =
+    (oidcResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
   // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const ldapEnabled = (ldapResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
+  const ldapEnabled =
+    (ldapResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;
   return {
     summary: buildSecuritySummary(ping["signup-enabled"] === true, sandbox),
     samlEnabled,
@@ -168,20 +175,54 @@ function WorkloadIdentityKeys({
     <div className="space-y-4 rounded-md border border-border p-5">
       <div>
         <h2 className="text-base font-semibold">Workload identity signing keys</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Dynamic provider credentials use the public JWKS at <code>/.well-known/jwks</code>. Retired keys remain available until trimmed.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Dynamic provider credentials use the public JWKS at <code>/.well-known/jwks</code>. Retired keys remain
+          available until trimmed.
+        </p>
       </div>
-      {error !== null && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {error !== null && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
       <div className="space-y-2 text-sm">
-        {keys.length === 0 ? <p className="text-muted-foreground">No signing keys have been generated yet.</p> : keys.map((key): React.JSX.Element => (
-          <div key={key.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/70 px-3 py-2">
-            <code className="text-xs">{attrString(key.attributes, "key-id", key.id)}</code>
-            <span className="text-muted-foreground">{attrString(key.attributes, "status", "unknown")}</span>
-          </div>
-        ))}
+        {keys.length === 0 ? (
+          <p className="text-muted-foreground">No signing keys have been generated yet.</p>
+        ) : (
+          keys.map(
+            (key): React.JSX.Element => (
+              <div
+                key={key.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/70 px-3 py-2"
+              >
+                <code className="text-xs">{attrString(key.attributes, "key-id", key.id)}</code>
+                <span className="text-muted-foreground">{attrString(key.attributes, "status", "unknown")}</span>
+              </div>
+            ),
+          )
+        )}
       </div>
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={(): void => { onAction("rotate"); }} disabled={action !== null}>Rotate key</Button>
-        <Button variant="outline" size="sm" onClick={(): void => { onAction("trim"); }} disabled={action !== null}>Trim retired keys</Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={(): void => {
+            onAction("rotate");
+          }}
+          disabled={action !== null}
+        >
+          Rotate key
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={(): void => {
+            onAction("trim");
+          }}
+          disabled={action !== null}
+        >
+          Trim retired keys
+        </Button>
       </div>
     </div>
   );
@@ -213,33 +254,19 @@ function AdminSectionContent({
   return (
     <>
       {/* SECURITY OVERVIEW TAB */}
-      {section === "security" && (
-        <SecurityOverview {...security} />
-      )}
+      {section === "security" && <SecurityOverview {...security} />}
       {/* USERS TAB */}
-      {section === "users" && (
-        <UsersAdmin {...users} />
-      )}
+      {section === "users" && <UsersAdmin {...users} />}
       {/* ORGANIZATIONS TAB */}
-      {section === "orgs" && (
-        <OrgsAdmin {...orgs} />
-      )}
+      {section === "orgs" && <OrgsAdmin {...orgs} />}
       {/* WORKSPACES TAB */}
-      {section === "workspaces" && (
-        <WorkspacesAdmin {...workspaces} />
-      )}
+      {section === "workspaces" && <WorkspacesAdmin {...workspaces} />}
       {/* RUNS TAB */}
-      {section === "runs" && (
-        <RunsAdmin {...runs} />
-      )}
+      {section === "runs" && <RunsAdmin {...runs} />}
       {/* TOOL VERSIONS TAB */}
-      {section === "versions" && (
-        <VersionsAdmin {...versions} />
-      )}
+      {section === "versions" && <VersionsAdmin {...versions} />}
       {/* AUDIT LOGS TAB */}
-      {section === "audit" && (
-        <AuditAdmin {...audit} />
-      )}
+      {section === "audit" && <AuditAdmin {...audit} />}
       {/* AUTHENTICATION TAB */}
       {section === "auth" && (
         <>
@@ -402,15 +429,16 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [newUrl, setNewUrl] = useState("");
   const [newSha, setNewSha] = useState("");
   const loadSecuritySection = async (): Promise<void> => {
-    const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse, ldapResponse] = await Promise.all([
-      fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
-      fetchApi("/api/v2/admin/audit-logs"),
-      fetchApi("/api/v2/ping"),
-      fetchApi("/api/v2/meta"),
-      fetchApi("/api/v2/admin/saml-settings"),
-      fetchApi("/api/v2/admin/oidc-settings"),
-      fetchApi("/api/v2/admin/ldap-settings"),
-    ]);
+    const [usersResponse, auditResponse, pingResponse, metaResponse, samlResponse, oidcResponse, ldapResponse] =
+      await Promise.all([
+        fetchAllApiPages<DataItem>("/admin/users?page[size]=100"),
+        fetchApi("/api/v2/admin/audit-logs"),
+        fetchApi("/api/v2/ping"),
+        fetchApi("/api/v2/meta"),
+        fetchApi("/api/v2/admin/saml-settings"),
+        fetchApi("/api/v2/admin/oidc-settings"),
+        fetchApi("/api/v2/admin/ldap-settings"),
+      ]);
     setUsers(usersResponse);
     // SAFETY: the fixture matches the JSON:API envelope the component consumes.
     setAuditLogs((auditResponse as { data?: DataItem[] }).data ?? []);
@@ -438,29 +466,32 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       } else if (section === "security") {
         await loadSecuritySection();
       } else if (section === "users") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/users") as { data: DataItem[] };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const res = (await fetchApi("/api/v2/admin/users")) as { data: DataItem[] };
         setUsers(res.data);
       } else if (section === "orgs") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/organizations") as { data: DataItem[] };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const res = (await fetchApi("/api/v2/admin/organizations")) as { data: DataItem[] };
         setOrgs(res.data);
       } else if (section === "workspaces") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/workspaces") as { data: DataItem[] };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const res = (await fetchApi("/api/v2/admin/workspaces")) as { data: DataItem[] };
         setWorkspaces(res.data);
       } else if (section === "runs") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/runs") as { data: DataItem[]; meta?: { "queue-inspector"?: Record<string, unknown> } };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const res = (await fetchApi("/api/v2/admin/runs")) as {
+          data: DataItem[];
+          meta?: { "queue-inspector"?: Record<string, unknown> };
+        };
         setRuns(res.data);
         setRunQueueMeta(res.meta?.["queue-inspector"] ?? null);
       } else if (section === "versions") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/terraform-versions") as { data: DataItem[] };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const res = (await fetchApi("/api/v2/admin/terraform-versions")) as { data: DataItem[] };
         setTfVersions(res.data);
       } else {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/audit-logs") as { data: DataItem[] };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        const res = (await fetchApi("/api/v2/admin/audit-logs")) as { data: DataItem[] };
         setAuditLogs(res.data);
       }
     } catch (err: unknown) {
@@ -532,8 +563,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setSamlLoading(true);
     setSamlError(null);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi("/api/v2/admin/saml-settings") as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi("/api/v2/admin/saml-settings")) as {
         data: { attributes: JsonObject };
       };
       const attrs = res.data.attributes;
@@ -550,7 +581,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       setSamlAttrGroups(attrString(attrs, "attr-groups", "MemberOf"));
       setSamlAttrSiteAdmin(attrString(attrs, "attr-site-admin", "SiteAdmin"));
       setSamlSiteAdminRole(attrString(attrs, "site-admin-role", "site-admins"));
-      setSamlTimeout(isNumber(attrs["sso-api-token-session-timeout"]) ? attrs["sso-api-token-session-timeout"] : 1209600);
+      setSamlTimeout(
+        isNumber(attrs["sso-api-token-session-timeout"]) ? attrs["sso-api-token-session-timeout"] : 1209600,
+      );
       setSamlAcsUrl(attrString(attrs, "acs-consumer-url", ""));
       setSamlMetadataUrl(attrString(attrs, "metadata-url", ""));
     } catch (err: unknown) {
@@ -566,8 +599,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setGeneralLoading(true);
     setGeneralError(null);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi("/api/v2/admin/general-settings") as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi("/api/v2/admin/general-settings")) as {
         data: { attributes: JsonObject };
       };
       setLocalAuthEnabled(res.data.attributes["local-auth-enabled"] !== false);
@@ -585,8 +618,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setLdapLoading(true);
     setLdapError(null);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi("/api/v2/admin/ldap-settings") as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi("/api/v2/admin/ldap-settings")) as {
         data: { attributes: JsonObject };
       };
       const attrs = res.data.attributes;
@@ -613,7 +646,12 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   };
   const handleSaveGeneral = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (!localAuthEnabled && persistedSamlEnabled === false && persistedOidcEnabled === false && persistedLdapEnabled === false) {
+    if (
+      !localAuthEnabled &&
+      persistedSamlEnabled === false &&
+      persistedOidcEnabled === false &&
+      persistedLdapEnabled === false
+    ) {
       setGeneralError("At least one authentication method must remain enabled.");
       return;
     }
@@ -638,7 +676,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           }),
         });
       },
-      reload: (): void => { void loadGeneralSettings(); },
+      reload: (): void => {
+        void loadGeneralSettings();
+      },
       successTitle: "Sign-in settings saved",
       fallbackError: "Failed to save sign-in settings",
     });
@@ -646,9 +686,17 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const handleSaveLdap = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
     const validationError = validateLdapForm(
-      ldapEnabled, ldapHost, ldapBaseDn, ldapPort, ldapUserFilter,
-      ldapBindDn, ldapBindPassword, ldapBindPasswordSet,
-      localAuthEnabled, persistedSamlEnabled, persistedOidcEnabled,
+      ldapEnabled,
+      ldapHost,
+      ldapBaseDn,
+      ldapPort,
+      ldapUserFilter,
+      ldapBindDn,
+      ldapBindPassword,
+      ldapBindPasswordSet,
+      localAuthEnabled,
+      persistedSamlEnabled,
+      persistedOidcEnabled,
     );
     if (validationError !== null) {
       setLdapError(validationError);
@@ -690,7 +738,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         });
         setPersistedLdapEnabled(ldapEnabled);
       },
-      reload: (): void => { void loadLdapSettings(); },
+      reload: (): void => {
+        void loadLdapSettings();
+      },
       successTitle: "LDAP settings saved",
       fallbackError: "Failed to save LDAP settings",
     });
@@ -699,8 +749,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     setOidcLoading(true);
     setOidcError(null);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi("/api/v2/admin/oidc-settings") as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi("/api/v2/admin/oidc-settings")) as {
         data: { attributes: JsonObject };
       };
       const attrs = res.data.attributes;
@@ -724,7 +774,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const loadWorkloadIdentityKeys = async (): Promise<void> => {
     setWorkloadIdentityError(null);
     try {
-      const response = await fetchApi("/api/v2/admin/oidc-settings/workload-identity-keys") as { data?: DataItem[] };
+      const response = (await fetchApi("/api/v2/admin/oidc-settings/workload-identity-keys")) as { data?: DataItem[] };
       setWorkloadIdentityKeys(response.data ?? []);
     } catch (err: unknown) {
       setWorkloadIdentityError(err instanceof Error ? err.message : "Failed to load workload identity keys");
@@ -736,7 +786,10 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     try {
       await fetchApi(`/api/v2/admin/oidc-settings/actions/${action}-key`, { method: "POST" });
       await loadWorkloadIdentityKeys();
-      toast.add({ title: action === "rotate" ? "Workload identity key rotated" : "Retired workload identity keys trimmed", type: "success" });
+      toast.add({
+        title: action === "rotate" ? "Workload identity key rotated" : "Retired workload identity keys trimmed",
+        type: "success",
+      });
     } catch (err: unknown) {
       setWorkloadIdentityError(err instanceof Error ? err.message : "Failed to update workload identity keys");
     } finally {
@@ -781,7 +834,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         });
         setPersistedSamlEnabled(samlEnabled);
       },
-      reload: (): void => { void loadSamlSettings(); },
+      reload: (): void => {
+        void loadSamlSettings();
+      },
       successTitle: "SAML settings saved",
       fallbackError: "Failed to save SAML settings",
     });
@@ -824,33 +879,50 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         });
         setPersistedOidcEnabled(oidcEnabled);
       },
-      reload: (): void => { void loadOidcSettings(); },
+      reload: (): void => {
+        void loadOidcSettings();
+      },
       successTitle: "OIDC settings saved",
       fallbackError: "Failed to save OIDC settings",
     });
   };
-  if (!accountLoaded) return <p role="status" className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
+  if (!accountLoaded)
+    return (
+      <p role="status" className="p-8 text-sm text-muted-foreground">
+        Checking site administration access…
+      </p>
+    );
   if (!siteAdmin) return <Navigate to="/app" replace />;
   return (
     <PageShell variant="wide">
       <PageHeader
         eyebrow="Administration"
-        title={(
+        title={
           <span className="flex items-center gap-2">
             <Shield className="size-7 text-primary" aria-hidden="true" />
             Site administration
           </span>
-        )}
+        }
         description="Instance-wide governance, security, and version management."
-        action={(
-          <Button variant="outline" size="sm" onClick={(): void => { void loadAdminData(); }} className="gap-2">
+        action={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={(): void => {
+              void loadAdminData();
+            }}
+            className="gap-2"
+          >
             <RefreshCw className="size-4" aria-hidden="true" />
             Refresh
           </Button>
-        )}
+        }
       />
       {error != null && error !== "" && (
-        <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
+        >
           <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
           <span>{error}</span>
         </div>
@@ -865,7 +937,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           <AdminSectionContent
             section={section}
             security={{
-              navigate: (path: string): void => { void navigate(path); },
+              navigate: (path: string): void => {
+                void navigate(path);
+              },
               samlEnabled,
               oidcEnabled,
               ldapEnabled,
@@ -1003,14 +1077,18 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
               error: workloadIdentityError,
               keys: workloadIdentityKeys,
               action: workloadIdentityAction,
-              onAction: (action: "rotate" | "trim"): void => { void runWorkloadIdentityAction(action); },
+              onAction: (action: "rotate" | "trim"): void => {
+                void runWorkloadIdentityAction(action);
+              },
             }}
           />
         </>
       )}
       <ConfirmDialog
         open={versionToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setVersionToDelete(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setVersionToDelete(null);
+        }}
         title="Delete Terraform Version"
         description={`Permanently delete version "${versionToDelete?.label ?? ""}" from the registered binaries? This cannot be undone; runs pinned to it will fail until a replacement version is registered.`}
         confirmText="Delete Version"
@@ -1023,17 +1101,32 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         }}
       />
       {/* Create User Dialog */}
-      <Dialog open={createDialogOpen} onOpenChange={(open: boolean): void => { if (!open) { setCreateDialogOpen(false); resetCreateForm(); } }}>
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open: boolean): void => {
+          if (!open) {
+            setCreateDialogOpen(false);
+            resetCreateForm();
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create New User</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleCreateUser} className="flex flex-col gap-4">
             {createUserError !== null && (
-              <div role="alert" className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm">{createUserError}</div>
+              <div
+                role="alert"
+                className="p-3 bg-destructive/10 border border-destructive/30 rounded-md text-destructive text-sm"
+              >
+                {createUserError}
+              </div>
             )}
             <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-username">Username *</label>
+              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-username">
+                Username *
+              </label>
               <Input
                 id="admin-new-username"
                 name="username"
@@ -1041,12 +1134,16 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 spellCheck={false}
                 placeholder="jdoe"
                 value={newUsername}
-                onChange={(e): void => { setNewUsername(e.target.value); }}
+                onChange={(e): void => {
+                  setNewUsername(e.target.value);
+                }}
                 required
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-email">Email (optional)</label>
+              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-email">
+                Email (optional)
+              </label>
               <Input
                 id="admin-new-email"
                 name="email"
@@ -1054,11 +1151,15 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 autoComplete="email"
                 placeholder="jdoe@example.com"
                 value={newEmail}
-                onChange={(e): void => { setNewEmail(e.target.value); }}
+                onChange={(e): void => {
+                  setNewEmail(e.target.value);
+                }}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-password">Password *</label>
+              <label className="text-xs font-medium text-foreground/85" htmlFor="admin-new-password">
+                Password *
+              </label>
               <Input
                 id="admin-new-password"
                 name="password"
@@ -1066,7 +1167,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 autoComplete="new-password"
                 placeholder="At least 10 characters"
                 value={newPassword}
-                onChange={(e): void => { setNewPassword(e.target.value); }}
+                onChange={(e): void => {
+                  setNewPassword(e.target.value);
+                }}
                 required
                 minLength={10}
               />
@@ -1077,14 +1180,24 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
                 name="site-admin"
                 type="checkbox"
                 checked={newIsAdmin}
-                onChange={(e): void => { setNewIsAdmin(e.target.checked); }}
+                onChange={(e): void => {
+                  setNewIsAdmin(e.target.checked);
+                }}
                 className="size-4 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Grant site admin privileges"
               />
               Grant site admin privileges
             </label>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={(): void => { setCreateDialogOpen(false); resetCreateForm(); }} disabled={creatingUser}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={(): void => {
+                  setCreateDialogOpen(false);
+                  resetCreateForm();
+                }}
+                disabled={creatingUser}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={creatingUser}>
@@ -1097,7 +1210,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       {/* Delete User Confirmation */}
       <ConfirmDialog
         open={deleteUserId !== null}
-        onOpenChange={(open): void => { if (!open) setDeleteUserId(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setDeleteUserId(null);
+        }}
         title="Delete User"
         description={`Permanently delete user "${deleteUserId?.label ?? ""}"? This action cannot be undone. All associated data will be removed.`}
         confirmText="Delete User"

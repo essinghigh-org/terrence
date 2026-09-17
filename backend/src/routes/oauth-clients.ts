@@ -2,13 +2,34 @@ import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { createHmac, createSign } from "node:crypto";
 import { db, isPostgres } from "../db";
-import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizations, projects, type users } from "../db/schema";
+import {
+  agentPools,
+  oauthClientProjects,
+  oauthClients,
+  oauthTokens,
+  organizations,
+  projects,
+  type users,
+} from "../db/schema";
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { organizationName } from "../lib/response";
-import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, pageRequest, pagination, serviceProviderDisplayName, validateExternalUrl } from "../lib/utils";
+import {
+  apiURL,
+  checkOrganizationPermission,
+  checkOrganizationVcsReadPermission,
+  pageRequest,
+  pagination,
+  serviceProviderDisplayName,
+  validateExternalUrl,
+} from "../lib/utils";
 import { authPlugin } from "../auth";
-import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
+import {
+  findVcsIntegrationUsage,
+  isVcsIntegrationReferenceConflict,
+  vcsIntegrationUsageDetail,
+  type VcsIntegrationUsage,
+} from "../lib/vcs-integration-usage";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { forwardFetch } from "../lib/agent-forwarding";
 import { envFlag } from "../lib/env";
@@ -54,7 +75,13 @@ async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<
   const normalized = normalizeOAuthRequestBody(init?.body);
   if ("error" in normalized) return new Response(normalized.error, { status: 422 });
   const body = normalized.body;
-  const requestInit: { method: string; headers: Record<string, string>; timeoutMs: number; maxResponseBytes: number; body?: string } = {
+  const requestInit: {
+    method: string;
+    headers: Record<string, string>;
+    timeoutMs: number;
+    maxResponseBytes: number;
+    body?: string;
+  } = {
     method: init?.method ?? "GET",
     headers,
     timeoutMs: 15_000,
@@ -108,12 +135,11 @@ type OAuthHandshakeStateBase = Readonly<{
   userId: string | null;
 }>;
 
-type OAuthHandshakeState = OAuthHandshakeStateBase & (
-  | Readonly<{ flow: "oauth2" }>
-  | Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>
-);
+type OAuthHandshakeState = OAuthHandshakeStateBase &
+  (Readonly<{ flow: "oauth2" }> | Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>);
 
-type OAuth1HandshakeState = OAuthHandshakeStateBase & Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>;
+type OAuth1HandshakeState = OAuthHandshakeStateBase &
+  Readonly<{ flow: "oauth1"; requestToken: string; requestTokenSecret: string }>;
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 // ponytail (resolved): handshake state is now persisted in the database
@@ -151,8 +177,10 @@ function endpoint(base: string, suffix: string): URL | null {
 }
 
 function insecureOAuthUrlsAllowed(): boolean {
-  return process.env.NODE_ENV === "test"
-    || (process.env.NODE_ENV === "development" && envFlag("TERRENCE_ALLOW_INSECURE_OAUTH_URLS"));
+  return (
+    process.env.NODE_ENV === "test" ||
+    (process.env.NODE_ENV === "development" && envFlag("TERRENCE_ALLOW_INSECURE_OAUTH_URLS"))
+  );
 }
 
 function oauthUrlProtocolAllowed(value: string | URL): boolean {
@@ -207,7 +235,8 @@ function validatedOAuth2Endpoints(
   extra: Readonly<{ scope: string }> | Readonly<{ basicTokenAuth: boolean }>,
 ): OAuth2Endpoints | null {
   if (authorization === null || token === null || user === null) return null;
-  if (!oauthUrlProtocolAllowed(authorization) || !oauthUrlProtocolAllowed(token) || !oauthUrlProtocolAllowed(user)) return null;
+  if (!oauthUrlProtocolAllowed(authorization) || !oauthUrlProtocolAllowed(token) || !oauthUrlProtocolAllowed(user))
+    return null;
   return { authorization, token, user, ...extra };
 }
 
@@ -251,36 +280,48 @@ function oauth1Endpoints(oc: OcItem): OAuth1Endpoints | null {
   const authorization = endpoint(oc.httpUrl, "/plugins/servlet/oauth/authorize");
   const accessToken = endpoint(oc.httpUrl, "/plugins/servlet/oauth/access-token");
   const user = endpoint(oc.httpUrl, "/plugins/servlet/applinks/whoami");
-  return requestToken !== null && authorization !== null && accessToken !== null && user !== null
-    && oauthUrlProtocolAllowed(requestToken)
-    && oauthUrlProtocolAllowed(authorization)
-    && oauthUrlProtocolAllowed(accessToken)
-    && oauthUrlProtocolAllowed(user)
+  return requestToken !== null &&
+    authorization !== null &&
+    accessToken !== null &&
+    user !== null &&
+    oauthUrlProtocolAllowed(requestToken) &&
+    oauthUrlProtocolAllowed(authorization) &&
+    oauthUrlProtocolAllowed(accessToken) &&
+    oauthUrlProtocolAllowed(user)
     ? { requestToken, authorization, accessToken, user }
     : null;
 }
 
 function oauthPercentEncode(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character: string): string =>
-    `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (character: string): string => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }
 
-function oauthSignatureBase(method: string, rawUrl: string, parameters: readonly (readonly [string, string])[]): string {
+function oauthSignatureBase(
+  method: string,
+  rawUrl: string,
+  parameters: readonly (readonly [string, string])[],
+): string {
   const url = new URL(rawUrl);
   const normalizedParameters = [...url.searchParams.entries(), ...parameters]
     .map(([key, value]): readonly [string, string] => [oauthPercentEncode(key), oauthPercentEncode(value)])
     .sort(([leftKey, leftValue], [rightKey, rightValue]): number =>
       leftKey === rightKey
-        ? leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
-        : leftKey < rightKey ? -1 : 1)
+        ? leftValue < rightValue
+          ? -1
+          : leftValue > rightValue
+            ? 1
+            : 0
+        : leftKey < rightKey
+          ? -1
+          : 1,
+    )
     .map(([key, value]): string => `${key}=${value}`)
     .join("&");
   const baseUrl = `${url.protocol}//${url.host}${url.pathname === "" ? "/" : url.pathname}`;
-  return [
-    method.toUpperCase(),
-    oauthPercentEncode(baseUrl),
-    oauthPercentEncode(normalizedParameters),
-  ].join("&");
+  return [method.toUpperCase(), oauthPercentEncode(baseUrl), oauthPercentEncode(normalizedParameters)].join("&");
 }
 
 function oauth1Authorization(
@@ -311,15 +352,14 @@ function oauth1Authorization(
     signer.end();
     signature = signer.sign(consumerSecret, "base64");
   } else {
-    signature = createHmac(
-      "sha1",
-      `${oauthPercentEncode(consumerSecret)}&${oauthPercentEncode(tokenSecret)}`,
-    ).update(signatureBase).digest("base64");
+    signature = createHmac("sha1", `${oauthPercentEncode(consumerSecret)}&${oauthPercentEncode(tokenSecret)}`)
+      .update(signatureBase)
+      .digest("base64");
   }
   oauthParameters.push(["oauth_signature", signature]);
 
   return `OAuth ${oauthParameters
-    .sort(([left], [right]): number => left < right ? -1 : left > right ? 1 : 0)
+    .sort(([left], [right]): number => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, value]): string => `${oauthPercentEncode(key)}="${oauthPercentEncode(value)}"`)
     .join(", ")}`;
 }
@@ -337,36 +377,23 @@ async function oauth1TokenRequest(
     method: "POST",
     headers: {
       Accept: "application/x-www-form-urlencoded",
-      Authorization: oauth1Authorization(
-        "POST",
-        url,
-        oc.key,
-        secret,
-        token,
-        tokenSecret,
-        extraParameters,
-      ),
+      Authorization: oauth1Authorization("POST", url, oc.key, secret, token, tokenSecret, extraParameters),
     },
   });
   if (!response.ok) return null;
   const payload = providerPayload(await response.text());
-  return typeof payload["oauth_token"] === "string"
-    && payload["oauth_token"] !== ""
-    && typeof payload["oauth_token_secret"] === "string"
+  return typeof payload["oauth_token"] === "string" &&
+    payload["oauth_token"] !== "" &&
+    typeof payload["oauth_token_secret"] === "string"
     ? {
-      token: payload["oauth_token"],
-      tokenSecret: payload["oauth_token_secret"],
-      callbackConfirmed: payload["oauth_callback_confirmed"] === "true",
-    }
+        token: payload["oauth_token"],
+        tokenSecret: payload["oauth_token_secret"],
+        callbackConfirmed: payload["oauth_callback_confirmed"] === "true",
+      }
     : null;
 }
 
-async function oauth1ProviderUser(
-  oc: OcItem,
-  url: string,
-  token: string,
-  tokenSecret: string,
-): Promise<string | null> {
+async function oauth1ProviderUser(oc: OcItem, url: string, token: string, tokenSecret: string): Promise<string | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
   const secret = await storedClientSecret(oc.secret);
   const response = await oauthFetch(oc, url, {
@@ -378,8 +405,9 @@ async function oauth1ProviderUser(
   if (!response.ok) return null;
   const text = (await response.text()).trim();
   const payload = providerPayload(text);
-  const username = [payload["name"], payload["username"], payload["slug"], payload["displayName"]]
-    .find((value: unknown): value is string => typeof value === "string" && value !== "");
+  const username = [payload["name"], payload["username"], payload["slug"], payload["displayName"]].find(
+    (value: unknown): value is string => typeof value === "string" && value !== "",
+  );
   return username ?? (text !== "" && !text.startsWith("{") ? text : null);
 }
 
@@ -396,14 +424,16 @@ async function validHandshakeProjectScope(oc: OcItem, projectId: string | null):
   const project = await db.query.projects.findFirst({
     where: and(eq(projects.id, projectId), eq(projects.orgId, oc.orgId)),
   });
-  return project !== undefined
-    && (scopedProjects.length === 0 || scopedProjects.some((scope): boolean => scope.projectId === projectId));
+  return (
+    project !== undefined &&
+    (scopedProjects.length === 0 || scopedProjects.some((scope): boolean => scope.projectId === projectId))
+  );
 }
 
 function providerPayload(text: string): Record<string, unknown> {
   try {
     const value = JSON.parse(text) as unknown;
-    return value !== null && typeof value === "object" ? value as Record<string, unknown> : {};
+    return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
   } catch {
     return Object.fromEntries(new URLSearchParams(text));
   }
@@ -448,8 +478,12 @@ async function exchangeAuthorizationCode(
     },
   });
   const userPayload = userResponse.ok ? providerPayload(await userResponse.text()) : {};
-  const username = [userPayload["login"], userPayload["username"], userPayload["nickname"], userPayload["display_name"]]
-    .find((value: unknown): value is string => typeof value === "string" && value !== "");
+  const username = [
+    userPayload["login"],
+    userPayload["username"],
+    userPayload["nickname"],
+    userPayload["display_name"],
+  ].find((value: unknown): value is string => typeof value === "string" && value !== "");
   return { accessToken, serviceProviderUser: username ?? null };
 }
 
@@ -459,7 +493,8 @@ function parseProjectIdentifiers(value: unknown): string[] | null {
   for (const item of value) {
     if (item === null || typeof item !== "object") return null;
     const identifier = item as Record<string, unknown>;
-    if (identifier["type"] !== "projects" || typeof identifier["id"] !== "string" || identifier["id"] === "") return null;
+    if (identifier["type"] !== "projects" || typeof identifier["id"] !== "string" || identifier["id"] === "")
+      return null;
     ids.add(identifier["id"]);
   }
   return [...ids];
@@ -502,9 +537,11 @@ async function validProjectScope(projectIds: readonly string[], orgId: string): 
 }
 
 async function validAgentPool(agentPoolId: string, orgId: string): Promise<boolean> {
-  return await db.query.agentPools.findFirst({
-    where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, orgId)),
-  }) !== undefined;
+  return (
+    (await db.query.agentPools.findFirst({
+      where: and(eq(agentPools.id, agentPoolId), eq(agentPools.orgId, orgId)),
+    })) !== undefined
+  );
 }
 
 async function replaceProjectScope(oauthClientId: string, projectIds: readonly string[]): Promise<void> {
@@ -512,11 +549,13 @@ async function replaceProjectScope(oauthClientId: string, projectIds: readonly s
     const t = tx as typeof db;
     await t.delete(oauthClientProjects).where(eq(oauthClientProjects.oauthClientId, oauthClientId));
     if (projectIds.length > 0) {
-      await t.insert(oauthClientProjects).values(projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
-        id: newResourceId("ocp"),
-        oauthClientId,
-        projectId,
-      })));
+      await t.insert(oauthClientProjects).values(
+        projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
+          id: newResourceId("ocp"),
+          oauthClientId,
+          projectId,
+        })),
+      );
     }
   });
 }
@@ -550,7 +589,9 @@ async function oauthClientResource(
       // go-tfe unmarshals OAuthClient.Organization from this relationship;
       // without it the provider's tfe_oauth_client read dereferences nil.
       organization: { data: { id: orgName ?? oc.orgId, type: "organizations" } },
-      projects: { data: projectLinks.map((link): Record<string, string> => ({ id: link.projectId, type: "projects" })) },
+      projects: {
+        data: projectLinks.map((link): Record<string, string> => ({ id: link.projectId, type: "projects" })),
+      },
       "oauth-tokens": { links: { related: `/api/v2/oauth-clients/${oc.id}/oauth-tokens` } },
       "agent-pool": {
         data: oc.agentPoolId === null ? null : { id: oc.agentPoolId, type: "agent-pools" },
@@ -565,7 +606,12 @@ function unprocessable(set: SetObj, detail: string): { errors: { status: string;
   return { errors: [{ status: "422", title: "Unprocessable Entity", detail }] };
 }
 
-function oauthFlowError(set: SetObj, status: number, title: string, detail: string): { errors: { status: string; title: string; detail: string }[] } {
+function oauthFlowError(
+  set: SetObj,
+  status: number,
+  title: string,
+  detail: string,
+): { errors: { status: string; title: string; detail: string }[] } {
   (set as { status: number }).status = status;
   return { errors: [{ status: String(status), title, detail }] };
 }
@@ -586,26 +632,27 @@ function authorizationResponse(
   state: string,
   location: string,
 ): Response {
-  const acceptsJson = (request.headers.get("accept") ?? "")
-    .split(",")
-    .some((value: string): boolean => {
-      const mediaType = value.split(";", 1)[0]?.trim().toLowerCase();
-      return mediaType === "application/json" || mediaType === "application/vnd.api+json";
-    });
-  if (!acceptsJson) return redirect(location, 302);
-  return Response.json({
-    data: {
-      id: state,
-      type: "vcs-authorization-requests",
-      attributes: { "authorization-url": location },
-    },
-  }, {
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "application/vnd.api+json",
-      "Referrer-Policy": "no-referrer",
-    },
+  const acceptsJson = (request.headers.get("accept") ?? "").split(",").some((value: string): boolean => {
+    const mediaType = value.split(";", 1)[0]?.trim().toLowerCase();
+    return mediaType === "application/json" || mediaType === "application/vnd.api+json";
   });
+  if (!acceptsJson) return redirect(location, 302);
+  return Response.json(
+    {
+      data: {
+        id: state,
+        type: "vcs-authorization-requests",
+        attributes: { "authorization-url": location },
+      },
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/vnd.api+json",
+        "Referrer-Policy": "no-referrer",
+      },
+    },
+  );
 }
 
 async function completeOAuthHandshake(
@@ -623,18 +670,21 @@ async function completeOAuthHandshake(
     createdAt: Date.now(),
   });
   const org = await db.query.organizations.findFirst({ where: eq(organizations.id, oc.orgId) });
-  const destination = new URL(
-    `/app/${encodeURIComponent(org?.name ?? oc.orgId)}/settings/vcs`,
-    request.url,
-  );
+  const destination = new URL(`/app/${encodeURIComponent(org?.name ?? oc.orgId)}/settings/vcs`, request.url);
   destination.searchParams.set("oauth_token_id", tokenId);
   return redirect(destination.toString(), 303);
 }
 
-function oauthClientPatchDocument(body: unknown): { data: Record<string, unknown> | undefined; attributes: Record<string, unknown> } {
+function oauthClientPatchDocument(body: unknown): {
+  data: Record<string, unknown> | undefined;
+  attributes: Record<string, unknown>;
+} {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
-  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+  const attributes =
+    typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? (data["attributes"] as Record<string, unknown>)
+      : {};
   return { data, attributes };
 }
 
@@ -644,12 +694,14 @@ function applyOAuthClientFieldUpdates(
   set: SetObj,
 ): unknown {
   if (attributes["organization-scoped"] !== undefined) {
-    if (typeof attributes["organization-scoped"] !== "boolean") return unprocessable(set, "organization-scoped must be a boolean");
+    if (typeof attributes["organization-scoped"] !== "boolean")
+      return unprocessable(set, "organization-scoped must be a boolean");
     updates.organizationScoped = attributes["organization-scoped"];
   }
   if (typeof attributes["name"] === "string") updates.name = attributes["name"];
   if (attributes["service-provider"] !== undefined) {
-    if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");
+    if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"]))
+      return unprocessable(set, "Unsupported service provider");
     updates.serviceProvider = attributes["service-provider"];
   }
   return null;
@@ -660,7 +712,7 @@ type OAuthConnectContext = {
   tokenOrgId: string | null;
   tokenTeamId: string | null;
   userId: string | null;
-}
+};
 
 async function resolveOAuthClientScope(
   data: Record<string, unknown> | undefined,
@@ -670,9 +722,11 @@ async function resolveOAuthClientScope(
 ): Promise<{ projectIds: string[] | undefined } | { error: unknown }> {
   const projectIds = relationshipProjectIds(data);
   if (projectIds === null) return { error: unprocessable(set, "Projects must be valid project resource identifiers") };
-  if (projectIds !== undefined && !(await validProjectScope(projectIds, orgId))) return { error: unprocessable(set, "One or more projects do not belong to the organization") };
+  if (projectIds !== undefined && !(await validProjectScope(projectIds, orgId)))
+    return { error: unprocessable(set, "One or more projects do not belong to the organization") };
   const agentPoolId = relationshipAgentPoolId(data);
-  if (agentPoolId === false) return { error: unprocessable(set, "Agent pool must be a valid agent-pools resource identifier") };
+  if (agentPoolId === false)
+    return { error: unprocessable(set, "Agent pool must be a valid agent-pools resource identifier") };
   if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, orgId))) {
     return { error: unprocessable(set, "Agent pool does not belong to the organization") };
   }
@@ -695,8 +749,10 @@ async function applyOAuthClientCredentialUpdates(
   updates: Partial<typeof oauthClients.$inferInsert>,
   set: SetObj,
 ): Promise<{ credentialsInvalidated: boolean } | { error: unknown }> {
-  const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
-  const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
+  const requestedApiUrl =
+    attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
+  const requestedHttpUrl =
+    attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
   const urlError = configuredVcsUrlError(
     attributes["api-url"] !== undefined ? requestedApiUrl : null,
     attributes["http-url"] !== undefined ? requestedHttpUrl : null,
@@ -705,11 +761,13 @@ async function applyOAuthClientCredentialUpdates(
   setNullableString(updates, "apiUrl", attributes["api-url"] !== undefined, requestedApiUrl);
   setNullableString(updates, "httpUrl", attributes["http-url"] !== undefined, requestedHttpUrl);
   setNullableString(updates, "key", attributes["key"] !== undefined, attributes["key"]);
-  if (attributes["secret"] !== undefined) updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
+  if (attributes["secret"] !== undefined)
+    updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
   setNullableString(updates, "rsaPublicKey", attributes["rsa-public-key"] !== undefined, attributes["rsa-public-key"]);
-  const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
-  const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
-    || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
+  const serviceProviderChanged =
+    updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
+  const endpointOriginChanged =
+    configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl) || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
   const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
   if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
   return { credentialsInvalidated };
@@ -722,10 +780,14 @@ function validateOAuthClientCreate(
   const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
   if (name === "") return { error: unprocessable(set, "Name is required") };
   const rawServiceProvider = attributes["service-provider"];
-  if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string") return { error: unprocessable(set, "Unsupported service provider") };
+  if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string")
+    return { error: unprocessable(set, "Unsupported service provider") };
   const serviceProvider = rawServiceProvider ?? "github";
   if (!SERVICE_PROVIDERS.has(serviceProvider)) return { error: unprocessable(set, "Unsupported service provider") };
-  const urlError = configuredVcsUrlError(normalizedConfiguredUrl(attributes["api-url"]) ?? null, normalizedConfiguredUrl(attributes["http-url"]) ?? null);
+  const urlError = configuredVcsUrlError(
+    normalizedConfiguredUrl(attributes["api-url"]) ?? null,
+    normalizedConfiguredUrl(attributes["http-url"]) ?? null,
+  );
   if (urlError !== undefined) return { error: unprocessable(set, urlError) };
   if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") {
     return { error: unprocessable(set, "organization-scoped must be a boolean") };
@@ -734,7 +796,12 @@ function validateOAuthClientCreate(
 }
 
 function resolveOAuthClientSecretFields(attributes: Record<string, unknown>): {
-  apiUrl: string | null; httpUrl: string | null; key: string | null; secret: string | null; rsaPublicKey: string | null; organizationScoped: boolean;
+  apiUrl: string | null;
+  httpUrl: string | null;
+  key: string | null;
+  secret: string | null;
+  rsaPublicKey: string | null;
+  organizationScoped: boolean;
 } {
   const apiUrlValue = normalizedConfiguredUrl(attributes["api-url"]);
   const httpUrlValue = normalizedConfiguredUrl(attributes["http-url"]);
@@ -778,7 +845,12 @@ async function connectOAuth1Flow(
     requestToken = null;
   }
   if (requestToken?.callbackConfirmed !== true) {
-    return oauthFlowError(set, 502, "VCS Provider Error", "Bitbucket Data Center did not return a usable request token");
+    return oauthFlowError(
+      set,
+      502,
+      "VCS Provider Error",
+      "Bitbucket Data Center did not return a usable request token",
+    );
   }
   await putOAuthHandshakeState(state, Date.now() + OAUTH_STATE_TTL_MS, {
     clientId: oc.id,
@@ -830,7 +902,10 @@ async function resolveConnectClient(
 ): Promise<{ oc: typeof oauthClients.$inferSelect } | { error: unknown }> {
   const ocId = params["oc_id"] ?? "";
   const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-  if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
+  if (
+    oc === undefined ||
+    !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+  ) {
     (set as { status: number }).status = 404;
     return { error: { errors: [{ status: "404", title: "Not Found" }] } };
   }
@@ -862,7 +937,14 @@ async function resolveCallbackHandshake(
     return { error: oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid") };
   }
   if (stringQuery(query, "error") !== "") {
-    return { error: oauthFlowError(set, 400, "OAuth Authorization Failed", "The VCS provider did not authorize the connection") };
+    return {
+      error: oauthFlowError(
+        set,
+        400,
+        "OAuth Authorization Failed",
+        "The VCS provider did not authorize the connection",
+      ),
+    };
   }
   const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, state.clientId) });
   const stillAuthorized = await checkOrganizationPermission(
@@ -872,11 +954,7 @@ async function resolveCallbackHandshake(
     state.tokenTeamId,
     "manage-vcs-settings",
   );
-  if (
-    oc === undefined
-    || !stillAuthorized
-    || !(await validHandshakeProjectScope(oc, state.projectId))
-  ) {
+  if (oc === undefined || !stillAuthorized || !(await validHandshakeProjectScope(oc, state.projectId))) {
     return { error: oauthFlowError(set, 403, "Forbidden", "OAuth client authorization is no longer valid") };
   }
   return { state, oc };
@@ -944,7 +1022,8 @@ async function completeOAuth2Callback(
   const code = stringQuery(query, "code");
   if (code === "") return oauthFlowError(set, 400, "Invalid OAuth Callback", "Authorization code is required");
   const endpoints = oauth2Endpoints(oc);
-  if (endpoints === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
+  if (endpoints === null)
+    return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
 
   let exchanged: { accessToken: string; serviceProviderUser: string | null } | null;
   try {
@@ -971,7 +1050,9 @@ function parseOAuthTokenSshKey(
 ): { sshKey: string | undefined } | { error: unknown } {
   if (attributes["ssh-key"] !== undefined && typeof attributes["ssh-key"] !== "string") {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] } };
+    return {
+      error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] },
+    };
   }
   const sshKey = typeof attributes["ssh-key"] === "string" ? attributes["ssh-key"].trim() : undefined;
   return { sshKey };
@@ -983,191 +1064,315 @@ async function applyOAuthTokenSshKey(
   otId: string,
 ): Promise<typeof oauthTokens.$inferSelect | undefined> {
   if (sshKey === undefined) return ot;
-  return (await db.update(oauthTokens).set({
-    sshKey: sshKey === "" ? null : await encryptSecret(sshKey),
-    hasSshKey: sshKey !== "",
-  }).where(eq(oauthTokens.id, otId)).returning())[0];
+  return (
+    await db
+      .update(oauthTokens)
+      .set({
+        sshKey: sshKey === "" ? null : await encryptSecret(sshKey),
+        hasSshKey: sshKey !== "",
+      })
+      .where(eq(oauthTokens.id, otId))
+      .returning()
+  )[0];
 }
 
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
-  .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
-    return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request, org.name))) };
-  })
-  .post("/api/v2/organizations/:org_name/oauth-clients", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { data, attributes } = oauthClientPatchDocument(body);
-    const validated = validateOAuthClientCreate(attributes, set);
-    if ("error" in validated) return validated.error;
-    const { name, serviceProvider } = validated;
-    const id = newResourceId("oc");
-    const scopeUpdates: Partial<typeof oauthClients.$inferInsert> = {};
-    const scope = await resolveOAuthClientScope(data, org.id, scopeUpdates, set);
-    if ("error" in scope) return scope.error;
-    const { projectIds } = scope;
-    const agentPoolId = scopeUpdates.agentPoolId ?? null;
-    const { apiUrl, httpUrl, key, secret, rsaPublicKey, organizationScoped } = resolveOAuthClientSecretFields(attributes);
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      await t.insert(oauthClients).values({
-        id,
-        orgId: org.id,
-        agentPoolId,
-        name,
-        serviceProvider,
-        organizationScoped,
-        apiUrl,
-        httpUrl,
-        key,
-        secret: secret === null ? null : await encryptSecret(secret),
-        rsaPublicKey,
-        createdAt: Date.now(),
-      });
-      if (projectIds !== undefined && projectIds.length > 0) {
-        await t.insert(oauthClientProjects).values(projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
-          id: newResourceId("ocp"),
-          oauthClientId: id,
-          projectId,
-        })));
+  .get(
+    "/api/v2/organizations/:org_name/oauth-clients",
+    async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-    });
-    const created = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, id) });
-    if (created === undefined) throw new Error("OAuth client was not created");
-    (set as { status: number }).status = 201;
-    return { data: await oauthClientResource(created, request) };
-  })
-  .get("/api/v2/oauth-clients/:oc_id", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationVcsReadPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: await oauthClientResource(oc, request) };
-  })
-  .patch("/api/v2/oauth-clients/:oc_id", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { data, attributes } = oauthClientPatchDocument(body);
-    const updates: Partial<typeof oauthClients.$inferInsert> = {};
-    const fieldError = applyOAuthClientFieldUpdates(attributes, updates, set);
-    if (fieldError !== null) return fieldError;
-    const scope = await resolveOAuthClientScope(data, oc.orgId, updates, set);
-    if ("error" in scope) return scope.error;
-    const credentials = await applyOAuthClientCredentialUpdates(attributes, oc, updates, set);
-    if ("error" in credentials) return credentials.error;
-    const { projectIds } = scope;
-    const { credentialsInvalidated } = credentials;
-    if (credentialsInvalidated || Object.keys(updates).length > 0) {
-      await db.transaction(async (tx): Promise<void> => {
-        if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
-        if (Object.keys(updates).length > 0) await tx.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
-      });
-    }
-    if (projectIds !== undefined) await replaceProjectScope(ocId, projectIds);
-    const updated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: await oauthClientResource(updated, request) };
-  })
-  .post("/api/v2/oauth-clients/:oc_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const projectIds = parseProjectIdentifiers(payload["data"]);
-    if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
-    if (!(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
-    if (projectIds.length > 0) {
-      await db.insert(oauthClientProjects).values(projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
-        id: newResourceId("ocp"),
-        oauthClientId: ocId,
-        projectId,
-      }))).onConflictDoNothing();
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/oauth-clients/:oc_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const projectIds = parseProjectIdentifiers(payload["data"]);
-    if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
-    if (!(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
-    if (projectIds.length > 0) {
-      await db.delete(oauthClientProjects).where(and(
-        eq(oauthClientProjects.oauthClientId, ocId),
-        inArray(oauthClientProjects.projectId, projectIds),
-      ));
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/oauth-clients/:oc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // Serialize against workspace API writes, which take matching shared row
-    // locks while validating their JSON-backed VCS references.
-    const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
-      if (isPostgres) {
-        // The sqlite transaction type has no execute(); the pg
-        // runtime instance does (the db interface is sqlite-typed by design).
-        await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
-          .execute(sql`SELECT id FROM oauth_clients WHERE id = ${ocId} FOR UPDATE`);
+      const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
+      return {
+        data: await Promise.all(
+          clientList.map(
+            async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request, org.name),
+          ),
+        ),
+      };
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/oauth-clients",
+    async ({
+      params,
+      body,
+      request,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
-      if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
-      try {
-        await tx.transaction(async (savepoint): Promise<void> => {
-          await savepoint.delete(oauthClients).where(eq(oauthClients.id, ocId));
+      const { data, attributes } = oauthClientPatchDocument(body);
+      const validated = validateOAuthClientCreate(attributes, set);
+      if ("error" in validated) return validated.error;
+      const { name, serviceProvider } = validated;
+      const id = newResourceId("oc");
+      const scopeUpdates: Partial<typeof oauthClients.$inferInsert> = {};
+      const scope = await resolveOAuthClientScope(data, org.id, scopeUpdates, set);
+      if ("error" in scope) return scope.error;
+      const { projectIds } = scope;
+      const agentPoolId = scopeUpdates.agentPoolId ?? null;
+      const { apiUrl, httpUrl, key, secret, rsaPublicKey, organizationScoped } =
+        resolveOAuthClientSecretFields(attributes);
+      await db.transaction(async (tx: unknown): Promise<void> => {
+        const t = tx as typeof db;
+        await t.insert(oauthClients).values({
+          id,
+          orgId: org.id,
+          agentPoolId,
+          name,
+          serviceProvider,
+          organizationScoped,
+          apiUrl,
+          httpUrl,
+          key,
+          secret: secret === null ? null : await encryptSecret(secret),
+          rsaPublicKey,
+          createdAt: Date.now(),
         });
-      } catch (error: unknown) {
-        if (!isVcsIntegrationReferenceConflict(error)) throw error;
-        return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
+        if (projectIds !== undefined && projectIds.length > 0) {
+          await t.insert(oauthClientProjects).values(
+            projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
+              id: newResourceId("ocp"),
+              oauthClientId: id,
+              projectId,
+            })),
+          );
+        }
+      });
+      const created = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, id) });
+      if (created === undefined) throw new Error("OAuth client was not created");
+      (set as { status: number }).status = 201;
+      return { data: await oauthClientResource(created, request) };
+    },
+  )
+  .get(
+    "/api/v2/oauth-clients/:oc_id",
+    async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const ocId = params["oc_id"] ?? "";
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationVcsReadPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      return null;
-    });
-    if (conflict !== null) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .get("/api/v2/oauth-clients/:oc_id/connect", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const resolved = await resolveConnectClient(params, user, tokenOrgId, tokenTeamId, set);
-    if ("error" in resolved) return resolved.error;
-    const { oc } = resolved;
-    const scoped = await resolveHandshakeProject(oc, query, set);
-    if ("error" in scoped) return scoped.error;
-    const ctx: OAuthConnectContext = {
-      projectId: scoped.projectId,
-      tokenOrgId: tokenOrgId ?? null,
-      tokenTeamId: tokenTeamId ?? null,
-      userId: user?.id ?? null,
-    };
-    const oauth2 = oauth2Endpoints(oc);
-    const oauth1 = oauth1Endpoints(oc);
-    if (oauth2 === null && oauth1 === null) return unprocessable(set, "This VCS provider does not support an OAuth handshake");
-    const credentialsError = oauthClientCredentialsError(oc, set);
-    if (credentialsError !== null) return credentialsError;
+      return { data: await oauthClientResource(oc, request) };
+    },
+  )
+  .patch(
+    "/api/v2/oauth-clients/:oc_id",
+    async ({
+      params,
+      body,
+      request,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<unknown> => {
+      const ocId = params["oc_id"] ?? "";
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { data, attributes } = oauthClientPatchDocument(body);
+      const updates: Partial<typeof oauthClients.$inferInsert> = {};
+      const fieldError = applyOAuthClientFieldUpdates(attributes, updates, set);
+      if (fieldError !== null) return fieldError;
+      const scope = await resolveOAuthClientScope(data, oc.orgId, updates, set);
+      if ("error" in scope) return scope.error;
+      const credentials = await applyOAuthClientCredentialUpdates(attributes, oc, updates, set);
+      if ("error" in credentials) return credentials.error;
+      const { projectIds } = scope;
+      const { credentialsInvalidated } = credentials;
+      if (credentialsInvalidated || Object.keys(updates).length > 0) {
+        await db.transaction(async (tx): Promise<void> => {
+          if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
+          if (Object.keys(updates).length > 0)
+            await tx.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
+        });
+      }
+      if (projectIds !== undefined) await replaceProjectScope(ocId, projectIds);
+      const updated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (updated === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: await oauthClientResource(updated, request) };
+    },
+  )
+  .post(
+    "/api/v2/oauth-clients/:oc_id/relationships/projects",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const ocId = params["oc_id"] ?? "";
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const projectIds = parseProjectIdentifiers(payload["data"]);
+      if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
+      if (!(await validProjectScope(projectIds, oc.orgId)))
+        return unprocessable(set, "One or more projects do not belong to the organization");
+      if (projectIds.length > 0) {
+        await db
+          .insert(oauthClientProjects)
+          .values(
+            projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
+              id: newResourceId("ocp"),
+              oauthClientId: ocId,
+              projectId,
+            })),
+          )
+          .onConflictDoNothing();
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/oauth-clients/:oc_id/relationships/projects",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const ocId = params["oc_id"] ?? "";
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const projectIds = parseProjectIdentifiers(payload["data"]);
+      if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
+      if (!(await validProjectScope(projectIds, oc.orgId)))
+        return unprocessable(set, "One or more projects do not belong to the organization");
+      if (projectIds.length > 0) {
+        await db
+          .delete(oauthClientProjects)
+          .where(and(eq(oauthClientProjects.oauthClientId, ocId), inArray(oauthClientProjects.projectId, projectIds)));
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .delete(
+    "/api/v2/oauth-clients/:oc_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+      const ocId = params["oc_id"] ?? "";
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // Serialize against workspace API writes, which take matching shared row
+      // locks while validating their JSON-backed VCS references.
+      const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
+        if (isPostgres) {
+          // The sqlite transaction type has no execute(); the pg
+          // runtime instance does (the db interface is sqlite-typed by design).
+          await (tx as unknown as { execute: (query: unknown) => Promise<unknown> }).execute(
+            sql`SELECT id FROM oauth_clients WHERE id = ${ocId} FOR UPDATE`,
+          );
+        }
+        const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
+        if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
+        try {
+          await tx.transaction(async (savepoint): Promise<void> => {
+            await savepoint.delete(oauthClients).where(eq(oauthClients.id, ocId));
+          });
+        } catch (error: unknown) {
+          if (!isVcsIntegrationReferenceConflict(error)) throw error;
+          return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
+        }
+        return null;
+      });
+      if (conflict !== null) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  )
+  .get(
+    "/api/v2/oauth-clients/:oc_id/connect",
+    async ({
+      params,
+      query,
+      request,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<unknown> => {
+      const resolved = await resolveConnectClient(params, user, tokenOrgId, tokenTeamId, set);
+      if ("error" in resolved) return resolved.error;
+      const { oc } = resolved;
+      const scoped = await resolveHandshakeProject(oc, query, set);
+      if ("error" in scoped) return scoped.error;
+      const ctx: OAuthConnectContext = {
+        projectId: scoped.projectId,
+        tokenOrgId: tokenOrgId ?? null,
+        tokenTeamId: tokenTeamId ?? null,
+        userId: user?.id ?? null,
+      };
+      const oauth2 = oauth2Endpoints(oc);
+      const oauth1 = oauth1Endpoints(oc);
+      if (oauth2 === null && oauth1 === null)
+        return unprocessable(set, "This VCS provider does not support an OAuth handshake");
+      const credentialsError = oauthClientCredentialsError(oc, set);
+      if (credentialsError !== null) return credentialsError;
 
-    await pruneOAuthStates();
-    const state = crypto.randomUUID();
-    const redirectUri = apiURL(request, `/api/v2/oauth-clients/${oc.id}/callback`);
-    if (oauth1 !== null) {
-      return connectOAuth1Flow(oc, oauth1, redirectUri, state, ctx, request, set);
-    }
-    if (oauth2 === null) return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
+      await pruneOAuthStates();
+      const state = crypto.randomUUID();
+      const redirectUri = apiURL(request, `/api/v2/oauth-clients/${oc.id}/callback`);
+      if (oauth1 !== null) {
+        return connectOAuth1Flow(oc, oauth1, redirectUri, state, ctx, request, set);
+      }
+      if (oauth2 === null)
+        return unprocessable(set, "This VCS provider does not support the OAuth2 authorization-code flow");
 
-    return connectOAuth2Flow(oc.id, oc.key ?? "", oauth2, redirectUri, state, ctx, request);
-  })
+      return connectOAuth2Flow(oc.id, oc.key ?? "", oauth2, redirectUri, state, ctx, request);
+    },
+  )
   .get("/api/v2/oauth-clients/:oc_id/callback", async ({ params, query, request, set }: ParamCtx): Promise<unknown> => {
     const resolved = await resolveCallbackHandshake(params, query, set);
     if ("error" in resolved) return resolved.error;
@@ -1178,72 +1383,138 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
 
     return completeOAuth2Callback(oc, state, query, request, set);
   })
-  .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params["oc_id"] ?? "";
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
-    if (oc === undefined || !(await checkOrganizationVcsReadPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const url = new URL(request.url);
-    if (!url.searchParams.has("page[number]") && !url.searchParams.has("page[size]")) {
-      const tokenList = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, ocId), orderBy: [asc(oauthTokens.createdAt)] });
-      return { data: tokenList.map(oauthTokenResource) };
-    }
-    const { number, size } = pageRequest(request);
-    const where = eq(oauthTokens.oauthClientId, ocId);
-    const [tokenList, countRows] = await Promise.all([
-      db.query.oauthTokens.findMany({ where, orderBy: [asc(oauthTokens.createdAt)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(oauthTokens).where(where),
-    ]);
-    return { data: tokenList.map(oauthTokenResource), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
-  })
-  .get("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const otId = params["ot_id"] ?? "";
-    const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
-    if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: oauthTokenResource(ot) };
-  })
-  .patch("/api/v2/oauth-tokens/:ot_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const otId = params["ot_id"] ?? "";
-    const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
-    if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const { attributes } = oauthClientPatchDocument(body);
-    const parsed = parseOAuthTokenSshKey(attributes, set);
-    if ("error" in parsed) return parsed.error;
-    const updated = await applyOAuthTokenSshKey(ot, parsed.sshKey, otId);
-    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: oauthTokenResource(updated) };
-  })
-  .delete("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const otId = params["ot_id"] ?? "";
-    const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
-    if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
-    if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // Same serialization as the oauth-client delete.
-    const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
-      if (isPostgres) {
-        await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
-          .execute(sql`SELECT id FROM oauth_tokens WHERE id = ${otId} FOR UPDATE`);
+  .get(
+    "/api/v2/oauth-clients/:oc_id/oauth-tokens",
+    async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const ocId = params["oc_id"] ?? "";
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationVcsReadPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
-      if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
-      try {
-        await tx.transaction(async (savepoint): Promise<void> => {
-          await savepoint.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+      const url = new URL(request.url);
+      if (!url.searchParams.has("page[number]") && !url.searchParams.has("page[size]")) {
+        const tokenList = await db.query.oauthTokens.findMany({
+          where: eq(oauthTokens.oauthClientId, ocId),
+          orderBy: [asc(oauthTokens.createdAt)],
         });
-      } catch (error: unknown) {
-        if (!isVcsIntegrationReferenceConflict(error)) throw error;
-        return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
+        return { data: tokenList.map(oauthTokenResource) };
       }
-      return null;
-    });
-    if (conflict !== null) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
-    }
-    (set as { status: number }).status = 204;
-    return {};
-  });
+      const { number, size } = pageRequest(request);
+      const where = eq(oauthTokens.oauthClientId, ocId);
+      const [tokenList, countRows] = await Promise.all([
+        db.query.oauthTokens.findMany({
+          where,
+          orderBy: [asc(oauthTokens.createdAt)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(oauthTokens).where(where),
+      ]);
+      return {
+        data: tokenList.map(oauthTokenResource),
+        ...pagination(request, number, size, countRows[0]?.total ?? 0),
+      };
+    },
+  )
+  .get(
+    "/api/v2/oauth-tokens/:ot_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const otId = params["ot_id"] ?? "";
+      const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
+      if (ot === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: oauthTokenResource(ot) };
+    },
+  )
+  .patch(
+    "/api/v2/oauth-tokens/:ot_id",
+    async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const otId = params["ot_id"] ?? "";
+      const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
+      if (ot === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { attributes } = oauthClientPatchDocument(body);
+      const parsed = parseOAuthTokenSshKey(attributes, set);
+      if ("error" in parsed) return parsed.error;
+      const updated = await applyOAuthTokenSshKey(ot, parsed.sshKey, otId);
+      if (updated === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      return { data: oauthTokenResource(updated) };
+    },
+  )
+  .delete(
+    "/api/v2/oauth-tokens/:ot_id",
+    async ({
+      params,
+      user,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+      const otId = params["ot_id"] ?? "";
+      const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
+      if (ot === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
+      if (
+        oc === undefined ||
+        !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      // Same serialization as the oauth-client delete.
+      const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
+        if (isPostgres) {
+          await (tx as unknown as { execute: (query: unknown) => Promise<unknown> }).execute(
+            sql`SELECT id FROM oauth_tokens WHERE id = ${otId} FOR UPDATE`,
+          );
+        }
+        const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
+        if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
+        try {
+          await tx.transaction(async (savepoint): Promise<void> => {
+            await savepoint.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+          });
+        } catch (error: unknown) {
+          if (!isVcsIntegrationReferenceConflict(error)) throw error;
+          return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
+        }
+        return null;
+      });
+      if (conflict !== null) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
+      }
+      (set as { status: number }).status = 204;
+      return {};
+    },
+  );

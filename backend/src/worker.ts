@@ -48,11 +48,7 @@ import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { resolveManagedOpaBinary } from "./lib/opa-bin";
 import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
-import {
-  captureProcessOutput,
-  processOutputPreview,
-  type CapturedProcessOutput,
-} from "./lib/process-output";
+import { captureProcessOutput, processOutputPreview, type CapturedProcessOutput } from "./lib/process-output";
 import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/storage-health";
 import { workspaceExecutionDirectory } from "./workspace";
 import {
@@ -63,7 +59,13 @@ import {
 } from "./lib/recovery-files";
 import { enqueueRunNotificationOutboxTx, queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
-import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, apiURL, signedApiURL, decodeStatePayload } from "./lib/utils";
+import {
+  FINAL_RUN_STATUSES,
+  WORKSPACE_BLOCKING_RUN_STATUSES,
+  apiURL,
+  signedApiURL,
+  decodeStatePayload,
+} from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
 import {
   emptyCostEstimate,
@@ -85,7 +87,13 @@ import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-toke
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
-import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
+import {
+  probeLandlockAbi,
+  RunSandbox,
+  removeSandboxWorkDir,
+  runNetDenyEnabled,
+  runSandboxRequired,
+} from "./lib/sandbox";
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { variableValueForRead } from "./lib/variable-crypto";
@@ -98,9 +106,7 @@ import {
 import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
-import {
-  extractSafeTarArchive,
-} from "./lib/archive";
+import { extractSafeTarArchive } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
 import { handleOutboxDeliveryJob, repairOutboxJobs } from "./lib/outbox";
@@ -118,7 +124,6 @@ import { insertStateVersionWithSerialRetry } from "./lib/state-serial";
 import { jitteredPollDelay } from "./lib/poll-jitter";
 import { LocalExecutionLifecycle } from "./worker/local-execution";
 
-
 // --- Run sandbox (Landlock isolation for tofu/terraform) ---
 // Terraform/OpenTofu runs are executed through landlock-runner, which applies
 // a filesystem allow-list (workdir + binary dir + system libraries) to itself
@@ -135,10 +140,10 @@ const localExecutionLifecycle = new LocalExecutionLifecycle({
 const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
-    "Run sandbox is required (the default) but Landlock is unavailable. "
-    + "Runs will FAIL until Landlock is enabled on the host kernel or the sandbox is disabled. "
-    + "Set TERRENCE_RUN_SANDBOX=false, or use `docker compose -f docker-compose.yml -f docker-compose.unsandboxed.yml up -d`. "
-    + "See https://docs.kernel.org/userspace-api/landlock.html",
+    "Run sandbox is required (the default) but Landlock is unavailable. " +
+      "Runs will FAIL until Landlock is enabled on the host kernel or the sandbox is disabled. " +
+      "Set TERRENCE_RUN_SANDBOX=false, or use `docker compose -f docker-compose.yml -f docker-compose.unsandboxed.yml up -d`. " +
+      "See https://docs.kernel.org/userspace-api/landlock.html",
   );
 }
 // Prominent warning whenever unsandboxed execution is explicitly enabled
@@ -146,11 +151,11 @@ if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
 // to miss in the logs.
 if (!RUN_SANDBOX_REQUIRED) {
   log.warn(
-    "!!! RUN SANDBOX DISABLED (TERRENCE_RUN_SANDBOX=false) — IaC runs execute "
-    + "WITHOUT filesystem isolation. Provider plugins and local-exec provisioners "
-    + "run with this process's service identity and can read STORAGE_DIR, the "
-    + "database, and encryption keys. This mode is only intended for hosts whose "
-    + "kernel cannot provide Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK).",
+    "!!! RUN SANDBOX DISABLED (TERRENCE_RUN_SANDBOX=false) — IaC runs execute " +
+      "WITHOUT filesystem isolation. Provider plugins and local-exec provisioners " +
+      "run with this process's service identity and can read STORAGE_DIR, the " +
+      "database, and encryption keys. This mode is only intended for hosts whose " +
+      "kernel cannot provide Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK).",
   );
 }
 
@@ -163,15 +168,15 @@ function assertRunSandboxAvailable(): void {
   if (!RUN_SANDBOX_REQUIRED) return;
   if (runNetDenyEnabled() && probeLandlockAbi() < 4) {
     throw new Error(
-      "Run network isolation requires Landlock ABI >= 4 (TERRENCE_RUN_NET_POLICY=deny). "
-        + `Host ABI is ${probeLandlockAbi()}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`,
+      "Run network isolation requires Landlock ABI >= 4 (TERRENCE_RUN_NET_POLICY=deny). " +
+        `Host ABI is ${probeLandlockAbi()}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`,
     );
   }
   if (runSandbox === null) {
     throw new Error(
-      "Run sandbox unavailable: Landlock is not enabled on this host kernel. "
-      + "Enable Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK) or set TERRENCE_RUN_SANDBOX=false "
-      + "to run without isolation. See https://docs.kernel.org/userspace-api/landlock.html",
+      "Run sandbox unavailable: Landlock is not enabled on this host kernel. " +
+        "Enable Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK) or set TERRENCE_RUN_SANDBOX=false " +
+        "to run without isolation. See https://docs.kernel.org/userspace-api/landlock.html",
     );
   }
 }
@@ -208,18 +213,11 @@ function isExpectedProcessTerminationError(error: unknown): boolean {
   return /(?:already exited|no such process|not running)/i.test(errorMessage(error));
 }
 
-function logBestEffortFailure(
-  message: string,
-  context: Readonly<Record<string, unknown>>,
-  error: unknown,
-): void {
+function logBestEffortFailure(message: string, context: Readonly<Record<string, unknown>>, error: unknown): void {
   log.warn(message, { ...context, error: errorMessage(error) });
 }
 
-function logProcessTerminationFailure(
-  error: unknown,
-  context: Readonly<Record<string, unknown>>,
-): void {
+function logProcessTerminationFailure(error: unknown, context: Readonly<Record<string, unknown>>): void {
   if (!isExpectedProcessTerminationError(error)) {
     logBestEffortFailure("Failed to terminate run process", context, error);
   }
@@ -232,16 +230,21 @@ export function executorPolicyAllowsLocal(
   organization: Readonly<{ requireHardIsolation?: boolean | null }> | null,
 ): string | null {
   // Per-workspace: untrusted workspaces must not run locally.
-  if (workspace.trustedExecution === false) return "Workspace is marked untrusted: local execution is refused. Use an isolated executor (agent/container).";
+  if (workspace.trustedExecution === false)
+    return "Workspace is marked untrusted: local execution is refused. Use an isolated executor (agent/container).";
   // Per-project: if allowedExecutionModes is set, local "remote" must be listed.
   if (project?.allowedExecutionModes !== null && project?.allowedExecutionModes !== undefined) {
-    const allowed = project.allowedExecutionModes.split(",").map((s) => s.trim()).filter(Boolean);
+    const allowed = project.allowedExecutionModes
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (!allowed.includes("remote") && !allowed.includes("local")) {
       return `Project restricts execution to [${allowed.join(", ")}]; local execution is not allowed.`;
     }
   }
   // Per-organization: require hard isolation means no local Landlock.
-  if (organization?.requireHardIsolation === true) return "Organization requires hard isolation: local execution is disabled.";
+  if (organization?.requireHardIsolation === true)
+    return "Organization requires hard isolation: local execution is disabled.";
   return null;
 }
 
@@ -352,7 +355,7 @@ async function persistSavedPlan(
   const directory = savedPlanDirectory(runId);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPlan = join(directory, `.tfplan-${crypto.randomUUID()}`);
-  const bytes = await (await exists(source)
+  const bytes = await ((await exists(source))
     ? readFile(source)
     : simulated
       ? Promise.resolve(Buffer.from("terrence-simulated-plan\n"))
@@ -397,10 +400,10 @@ async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata |
   const stateId = value["stateId"];
   const configurationVersionId = value["configurationVersionId"];
   if (
-    !Object.hasOwn(value, "stateId")
-    || !Object.hasOwn(value, "configurationVersionId")
-    || (stateId !== null && typeof stateId !== "string")
-    || (configurationVersionId !== null && typeof configurationVersionId !== "string")
+    !Object.hasOwn(value, "stateId") ||
+    !Object.hasOwn(value, "configurationVersionId") ||
+    (stateId !== null && typeof stateId !== "string") ||
+    (configurationVersionId !== null && typeof configurationVersionId !== "string")
   ) {
     throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
   }
@@ -417,9 +420,7 @@ async function restoreSavedPlan(runId: string, executionDir: string): Promise<Sa
   if (metadata === undefined || !(await exists(savedPlanFile(runId)))) return undefined;
   const stored = await readFile(savedPlanFile(runId));
   const storedText = stored.toString("utf8");
-  const bytes = isEncryptedSecret(storedText)
-    ? Buffer.from(await decryptSecret(storedText), "base64")
-    : stored;
+  const bytes = isEncryptedSecret(storedText) ? Buffer.from(await decryptSecret(storedText), "base64") : stored;
   const checksum = createHash("sha256").update(bytes).digest("hex");
   if (checksum !== metadata.sha256) throw new SavedPlanIntegrityError();
   await mkdir(executionDir, { recursive: true, mode: 0o700 });
@@ -432,16 +433,24 @@ async function recordPlanInput(
   state: Readonly<{ id: string | null; serial: number }>,
   savedPlan: SavedPlanMetadata | undefined,
 ): Promise<void> {
-  const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true, statusTimestamps: true, statusMetadataSchemaVersion: true } });
+  const current = await db.query.runs.findFirst({
+    where: eq(runs.id, runId),
+    columns: { status: true, statusTimestamps: true, statusMetadataSchemaVersion: true },
+  });
   if (current === undefined) throw new Error(`Run ${runId} disappeared while recording its plan input.`);
-  const currentTimestamps = parsePersistedStatusMetadata(current.statusTimestamps, current.statusMetadataSchemaVersion, runId) ?? {};
+  const currentTimestamps =
+    parsePersistedStatusMetadata(current.statusTimestamps, current.statusMetadataSchemaVersion, runId) ?? {};
   const timestamps = {
     ...currentTimestamps,
     ...(state.id === null ? {} : { "input-state-version-id": state.id }),
     "input-state-serial": String(state.serial),
     ...(savedPlan === undefined ? {} : { "saved-plan-sha256": savedPlan.sha256 }),
   };
-  const updated = await db.update(runs).set({ statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 }).where(and(eq(runs.id, runId), eq(runs.status, current.status))).returning({ id: runs.id });
+  const updated = await db
+    .update(runs)
+    .set({ statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 })
+    .where(and(eq(runs.id, runId), eq(runs.status, current.status)))
+    .returning({ id: runs.id });
   if (updated.length === 0) throw new Error(`Run ${runId} changed while recording its plan input.`);
 }
 
@@ -599,7 +608,7 @@ function spawnRunProcess(
   }
   const spawnOpts: Record<string, unknown> = {
     cwd: options.cwd,
-    env: options.env ?? (process.env),
+    env: options.env ?? process.env,
     stdout: options.stdout ?? "pipe",
     stderr: options.stderr ?? "pipe",
     detached: true,
@@ -629,13 +638,16 @@ function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
   const processes = activeRunProcesses.get(runId) ?? new Set<TrackedRunProcess>();
   processes.add(tracked);
   activeRunProcesses.set(runId, processes);
-  void tracked.exited.then((): void => {
-    processes.delete(tracked);
-    if (processes.size === 0) activeRunProcesses.delete(runId);
-  }, (): void => {
-    processes.delete(tracked);
-    if (processes.size === 0) activeRunProcesses.delete(runId);
-  });
+  void tracked.exited.then(
+    (): void => {
+      processes.delete(tracked);
+      if (processes.size === 0) activeRunProcesses.delete(runId);
+    },
+    (): void => {
+      processes.delete(tracked);
+      if (processes.size === 0) activeRunProcesses.delete(runId);
+    },
+  );
   return tracked;
 }
 
@@ -666,8 +678,12 @@ function terminateProcessGroup(pid: number | null, signal: "SIGINT" | "SIGKILL")
 
 /** Deletion must wait for local process exit, including cancellation escalation. */
 export function hasActiveRunExecution(runId: string): boolean {
-  return localExecutionLifecycle.hasRunExecution(runId)
-    || activeRunProcesses.has(runId) || activeRunCgroups.has(runId) || cancellationEscalationTimers.has(runId);
+  return (
+    localExecutionLifecycle.hasRunExecution(runId) ||
+    activeRunProcesses.has(runId) ||
+    activeRunCgroups.has(runId) ||
+    cancellationEscalationTimers.has(runId)
+  );
 }
 
 /** Stop the actual Terraform process before a canceled run can report success. */
@@ -704,7 +720,11 @@ export function cancelRunExecution(runId: string, force = false): void {
 }
 
 export function terminateActiveRunExecutions(): void {
-  const runIds = new Set([...activeRunProcesses.keys(), ...activeRunCgroups.keys(), ...cancellationEscalationTimers.keys()]);
+  const runIds = new Set([
+    ...activeRunProcesses.keys(),
+    ...activeRunCgroups.keys(),
+    ...cancellationEscalationTimers.keys(),
+  ]);
   for (const runId of runIds) {
     clearCancellationEscalationTimers(runId);
     for (const child of activeRunProcesses.get(runId) ?? []) {
@@ -787,33 +807,37 @@ async function writeRunDiagnostic(
   await writeLog(runId, phase, `[terrence diagnostic] ${safeJsonStringify(record)}`);
 }
 
-
-type RunStatusExtra = Readonly<Partial<Pick<
-  typeof runs.$inferInsert,
-  | "planResourceAdditions"
-  | "planResourceChanges"
-  | "planResourceDestructions"
-  | "planResourceImports"
-  | "applyResourceAdditions"
-  | "applyResourceChanges"
-  | "applyResourceDestructions"
-  | "applyResourceImports"
->>>;
+type RunStatusExtra = Readonly<
+  Partial<
+    Pick<
+      typeof runs.$inferInsert,
+      | "planResourceAdditions"
+      | "planResourceChanges"
+      | "planResourceDestructions"
+      | "planResourceImports"
+      | "applyResourceAdditions"
+      | "applyResourceChanges"
+      | "applyResourceDestructions"
+      | "applyResourceImports"
+    >
+  >
+>;
 
 async function updateRunStatus(runId: string, status: string, extra?: RunStatusExtra): Promise<void> {
   const now = new Date().toISOString();
   const statusKey = status.replace(/_/g, "-") + "-at";
-  const trigger = status === "planning"
-    ? "run:planning"
-    : status === "applying"
-      ? "run:applying"
-      : status === "applied" || status === "planned_and_finished"
-        ? "run:completed"
-        : status === "errored"
-          ? "run:errored"
-          : status === "policy_soft_failed" || status === "planned_and_saved"
-            ? "run:needs_attention"
-            : undefined;
+  const trigger =
+    status === "planning"
+      ? "run:planning"
+      : status === "applying"
+        ? "run:applying"
+        : status === "applied" || status === "planned_and_finished"
+          ? "run:completed"
+          : status === "errored"
+            ? "run:errored"
+            : status === "policy_soft_failed" || status === "planned_and_saved"
+              ? "run:needs_attention"
+              : undefined;
   let workspaceId: string | null = null;
   try {
     const committed = await db.transaction(async (transaction): Promise<boolean> => {
@@ -824,11 +848,8 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
       });
       if (existing === undefined) return false;
       workspaceId = existing.workspaceId;
-      const existingTimestamps = parsePersistedStatusMetadata(
-        existing.statusTimestamps,
-        existing.statusMetadataSchemaVersion,
-        runId,
-      ) ?? {};
+      const existingTimestamps =
+        parsePersistedStatusMetadata(existing.statusTimestamps, existing.statusMetadataSchemaVersion, runId) ?? {};
       // State machine guard: illegal writes are rejected, not merely logged.
       // Otherwise a canceled worker can overwrite the terminal cancellation with
       // "applied" after the operator action has already returned.
@@ -837,7 +858,8 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
         throw new Error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status}`);
       }
       const timestamps = { ...existingTimestamps, [statusKey]: now };
-      const updated = await tx.update(runs)
+      const updated = await tx
+        .update(runs)
         .set({ status, statusTimestamps: timestamps, statusMetadataSchemaVersion: 1, ...(extra ?? {}) })
         .where(and(eq(runs.id, runId), eq(runs.status, currentStatus)))
         .returning({ id: runs.id });
@@ -858,7 +880,9 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
       return;
     }
   } catch (err: unknown) {
-    log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
+    log.error(`Failed to update run ${runId} status to ${status}`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
   void reportRunVcsStatus(runId, status);
@@ -893,8 +917,7 @@ function parseResourceCounts(output: string): PlanResourceCounts {
   const plan = /(?:^|\n)Plan:\s*([^\n]+)/.exec(output)?.[1];
   const apply = /Apply complete!\s+Resources:\s*([^\n]+)/.exec(output)?.[1];
   const summary = plan ?? apply ?? "";
-  const count = (pattern: RegExp): number =>
-    Number.parseInt(pattern.exec(summary)?.[1] ?? "0", 10);
+  const count = (pattern: RegExp): number => Number.parseInt(pattern.exec(summary)?.[1] ?? "0", 10);
   return {
     additions: count(plan === undefined ? /(\d+)\s+added\b/ : /(\d+)\s+to add\b/),
     changes: count(plan === undefined ? /(\d+)\s+changed\b/ : /(\d+)\s+to change\b/),
@@ -931,9 +954,7 @@ type StoredCheckSummary = Readonly<{
 }>;
 
 function asObject(value: unknown): JsonObject | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonObject
-    : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : undefined;
 }
 
 function checkStatus(value: unknown): "passed" | "failed" | "errored" | "unknown" {
@@ -956,8 +977,9 @@ function checkAddress(check: JsonObject, index: number): { address: string; kind
   const address = asObject(check["address"]);
   const kind = typeof address?.["kind"] === "string" ? address["kind"] : "check";
   if (typeof address?.["to_display"] === "string") return { address: address["to_display"], kind };
-  const parts = [address?.["type"], address?.["name"]].filter((part: unknown): part is string =>
-    typeof part === "string" && part !== "");
+  const parts = [address?.["type"], address?.["name"]].filter(
+    (part: unknown): part is string => typeof part === "string" && part !== "",
+  );
   return { address: parts.length > 0 ? `${kind}.${parts.join(".")}` : `check.${String(index + 1)}`, kind };
 }
 
@@ -984,7 +1006,8 @@ async function storePlanCheckResults(
   if (association.runId !== undefined) {
     await db.delete(assessmentCheckResults).where(eq(assessmentCheckResults.runId, association.runId));
   } else if (association.assessmentResultId !== undefined) {
-    await db.delete(assessmentCheckResults)
+    await db
+      .delete(assessmentCheckResults)
       .where(eq(assessmentCheckResults.assessmentResultId, association.assessmentResultId));
   }
 
@@ -1044,10 +1067,13 @@ async function readPlanJson(
 ): Promise<PlanJsonCapture | undefined> {
   const tfplanPath = join(executionDir, "tfplan");
   if (!(await exists(tfplanPath))) return undefined;
-  const binaries = [...new Set(
-    [planBinaryPath, "tofu", "terraform"]
-      .filter((binary: string | undefined): binary is string => typeof binary === "string" && binary !== ""),
-  )];
+  const binaries = [
+    ...new Set(
+      [planBinaryPath, "tofu", "terraform"].filter(
+        (binary: string | undefined): binary is string => typeof binary === "string" && binary !== "",
+      ),
+    ),
+  ];
   for (const binary of binaries) {
     let captured: CapturedProcessOutput | undefined;
     let keepStdout = false;
@@ -1147,9 +1173,10 @@ async function loadCostEstimateScope(runId: string): Promise<{
     "finished-at": null,
   };
 
-  const workspace = run === undefined
-    ? undefined
-    : await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId), columns: { orgId: true } });
+  const workspace =
+    run === undefined
+      ? undefined
+      : await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId), columns: { orgId: true } });
   if (workspace === undefined || !(await costEstimationEnabledForOrganization(workspace.orgId))) {
     return { timestamps, enabled: false };
   }
@@ -1178,11 +1205,22 @@ async function resolveCostEstimateBinary(
   // page instead of an errored estimate.
   const managed = await resolveInfracostBinary();
   if (managed === null) {
-    await writeCostEstimateArtifact(runId, emptyCostEstimate("unavailable", {
-      ...timestamps,
-      "finished-at": new Date().toISOString(),
-    }, "Cost estimation is not installed in this image (no Infracost binary override and managed install failed)."));
-    await writeLog(runId, "plan", "[terrence] Cost estimation unavailable: Infracost binary is not installed in this image. Skipping.");
+    await writeCostEstimateArtifact(
+      runId,
+      emptyCostEstimate(
+        "unavailable",
+        {
+          ...timestamps,
+          "finished-at": new Date().toISOString(),
+        },
+        "Cost estimation is not installed in this image (no Infracost binary override and managed install failed).",
+      ),
+    );
+    await writeLog(
+      runId,
+      "plan",
+      "[terrence] Cost estimation unavailable: Infracost binary is not installed in this image. Skipping.",
+    );
     return null;
   }
   return managed;
@@ -1227,10 +1265,13 @@ async function runInfracostBreakdown(
     throw new Error(`Infracost exited with code ${exitCode}${detail === "" ? "" : `: ${detail}`}`);
   }
 
-  const estimate = parseInfracostOutput(JSON.parse(await readCapturedJson(capturedOutput, "Infracost output")) as unknown, {
-    ...timestamps,
-    "finished-at": new Date().toISOString(),
-  });
+  const estimate = parseInfracostOutput(
+    JSON.parse(await readCapturedJson(capturedOutput, "Infracost output")) as unknown,
+    {
+      ...timestamps,
+      "finished-at": new Date().toISOString(),
+    },
+  );
   await writeCostEstimateArtifact(runId, estimate);
   await writeLog(
     runId,
@@ -1239,13 +1280,24 @@ async function runInfracostBreakdown(
   );
 }
 
-async function reportCostEstimateFailure(runId: string, timestamps: CostEstimateTimestamps, error: unknown): Promise<void> {
+async function reportCostEstimateFailure(
+  runId: string,
+  timestamps: CostEstimateTimestamps,
+  error: unknown,
+): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   try {
-    await writeCostEstimateArtifact(runId, emptyCostEstimate("errored", {
-      ...timestamps,
-      "finished-at": new Date().toISOString(),
-    }, message));
+    await writeCostEstimateArtifact(
+      runId,
+      emptyCostEstimate(
+        "errored",
+        {
+          ...timestamps,
+          "finished-at": new Date().toISOString(),
+        },
+        message,
+      ),
+    );
   } catch (artifactError: unknown) {
     const artifactMessage = artifactError instanceof Error ? artifactError.message : String(artifactError);
     await writeLog(runId, "plan", `[terrence] Could not persist errored cost estimate: ${artifactMessage}`);
@@ -1263,7 +1315,11 @@ async function cleanupCostEstimateTempFiles(runId: string, inputPath: string, se
     if (result.status === "rejected") {
       const target = cleanupTargets[index];
       if (target !== undefined) {
-        logBestEffortFailure("Could not clean up cost-estimate temporary files", { runId, artifact: target.label }, result.reason);
+        logBestEffortFailure(
+          "Could not clean up cost-estimate temporary files",
+          { runId, artifact: target.label },
+          result.reason,
+        );
       }
     }
   }
@@ -1293,7 +1349,15 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
 
     const managed = await resolveCostEstimateBinary(runId, scope.timestamps);
     if (managed === null) return;
-    await runInfracostBreakdown(runId, executionDir, inputPath, gcpCredentialsPath, secretsDir, managed, scope.timestamps);
+    await runInfracostBreakdown(
+      runId,
+      executionDir,
+      inputPath,
+      gcpCredentialsPath,
+      secretsDir,
+      managed,
+      scope.timestamps,
+    );
   } catch (error: unknown) {
     await reportCostEstimateFailure(runId, scope.timestamps, error);
   } finally {
@@ -1330,10 +1394,7 @@ export type CancellationPollDecision = "none" | "cancel" | "force-cancel";
  * deleted record resolves to the cooperative path (SIGINT, never SIGKILL):
  * the engine stops at a state boundary and still captures recovery state,
  * while an uncoordinated hard kill would lose it. */
-export function classifyCancellationPoll(
-  status: string | undefined,
-  missingStreak: number,
-): CancellationPollDecision {
+export function classifyCancellationPoll(status: string | undefined, missingStreak: number): CancellationPollDecision {
   if (status === "force_canceled") return "force-cancel";
   if (status === "canceled") return "cancel";
   if (status === undefined && missingStreak >= MISSING_RUN_POLLS_BEFORE_CANCEL) return "cancel";
@@ -1370,22 +1431,25 @@ async function waitForTrackedProcess<T>(
     }
   };
   const cancellationPoller = setInterval((): void => {
-    void db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } }).then((run): void => {
-      if (run === undefined) missingRunPolls += 1;
-      else missingRunPolls = 0;
-      const decision = classifyCancellationPoll(run?.status, missingRunPolls);
-      if (decision === "force-cancel") requestCancellation(true);
-      else if (decision === "cancel") {
-        if (run === undefined && missingRunPolls === MISSING_RUN_POLLS_BEFORE_CANCEL) {
-          log.warn("Run record deleted during execution; requesting cooperative cancellation", { runId, phase });
+    void db.query.runs
+      .findFirst({ where: eq(runs.id, runId), columns: { status: true } })
+      .then((run): void => {
+        if (run === undefined) missingRunPolls += 1;
+        else missingRunPolls = 0;
+        const decision = classifyCancellationPoll(run?.status, missingRunPolls);
+        if (decision === "force-cancel") requestCancellation(true);
+        else if (decision === "cancel") {
+          if (run === undefined && missingRunPolls === MISSING_RUN_POLLS_BEFORE_CANCEL) {
+            log.warn("Run record deleted during execution; requesting cooperative cancellation", { runId, phase });
+          }
+          requestCancellation(false);
         }
-        requestCancellation(false);
-      }
-    }).catch((error: unknown): void => {
-      if (cancellationPollFailureLogged) return;
-      cancellationPollFailureLogged = true;
-      logBestEffortFailure("Cancellation status polling failed", { runId, phase }, error);
-    });
+      })
+      .catch((error: unknown): void => {
+        if (cancellationPollFailureLogged) return;
+        cancellationPollFailureLogged = true;
+        logBestEffortFailure("Cancellation status polling failed", { runId, phase }, error);
+      });
   }, 250);
   cancellationPoller.unref?.();
   const completed = Promise.all([child.exited, output]);
@@ -1421,18 +1485,20 @@ async function waitForTrackedProcess<T>(
 // Name the governing knob so an admin knows where to raise the limit.
 function phaseTimeoutDetail(phase: string, timeoutMs: number): string {
   const totalSeconds = Math.max(1, Math.round(timeoutMs / 1000));
-  const human = totalSeconds >= 3600
-    ? `${String(Math.floor(totalSeconds / 3600))}h ${String(Math.floor((totalSeconds % 3600) / 60))}m`
-    : totalSeconds >= 60
-      ? `${String(Math.floor(totalSeconds / 60))}m ${String(totalSeconds % 60)}s`
-      : `${String(totalSeconds)}s`;
-  const knob = phase === "apply"
-    ? "applyTimeout"
-    : phase === "policy"
-      ? "POLICY_EVALUATION_TIMEOUT_MS"
-      : phase === "run-task"
-        ? "RUN_TASK_TIMEOUT_MS"
-        : "planTimeout";
+  const human =
+    totalSeconds >= 3600
+      ? `${String(Math.floor(totalSeconds / 3600))}h ${String(Math.floor((totalSeconds % 3600) / 60))}m`
+      : totalSeconds >= 60
+        ? `${String(Math.floor(totalSeconds / 60))}m ${String(totalSeconds % 60)}s`
+        : `${String(totalSeconds)}s`;
+  const knob =
+    phase === "apply"
+      ? "applyTimeout"
+      : phase === "policy"
+        ? "POLICY_EVALUATION_TIMEOUT_MS"
+        : phase === "run-task"
+          ? "RUN_TASK_TIMEOUT_MS"
+          : "planTimeout";
   const source = phase === "policy" ? "built-in cap" : phase === "run-task" ? "environment" : "admin General setting";
   return `${human} (${source} ${knob}; ${String(timeoutMs)} ms)`;
 }
@@ -1476,11 +1542,23 @@ async function streamLog(
 }
 
 export function buildSanitizedEnv(
-  workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string; readonly sensitive?: boolean }[],
+  workspaceVars: readonly {
+    readonly key: string;
+    readonly value: string;
+    readonly category: string;
+    readonly sensitive?: boolean;
+  }[],
   extraEnv?: Readonly<Record<string, string>>,
 ): Record<string, string> {
   const allowedKeys = ["PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL"];
-  const protectedKeys = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV", "TF_CLI_CONFIG_FILE", "DYLD_INSERT_LIBRARIES"];
+  const protectedKeys = [
+    "PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "BASH_ENV",
+    "TF_CLI_CONFIG_FILE",
+    "DYLD_INSERT_LIBRARIES",
+  ];
 
   const env: Record<string, string> = {};
   for (const key of allowedKeys) {
@@ -1513,20 +1591,36 @@ export function buildSanitizedEnv(
  * inputs, priority inputs, then phase-specific identity. Run Terraform inputs
  * travel only through private tfvars files, regardless of sensitivity. */
 export function buildRunPhaseEnv(
-  workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string; readonly sensitive?: boolean; readonly priority?: boolean }[],
+  workspaceVars: readonly {
+    readonly key: string;
+    readonly value: string;
+    readonly category: string;
+    readonly sensitive?: boolean;
+    readonly priority?: boolean;
+  }[],
   runVariables: unknown,
   phaseEnv: Readonly<Record<string, string>>,
 ): Record<string, string> {
-  return buildSanitizedEnv([
-    ...workspaceVars,
-    ...normalizeRunVariables(runVariables).filter((variable) => variable.category === "env"),
-    ...workspaceVars.filter((variable) => variable.priority === true),
-  ], phaseEnv);
+  return buildSanitizedEnv(
+    [
+      ...workspaceVars,
+      ...normalizeRunVariables(runVariables).filter((variable) => variable.category === "env"),
+      ...workspaceVars.filter((variable) => variable.priority === true),
+    ],
+    phaseEnv,
+  );
 }
 
 /** Sensitivity controls disclosure, never precedence; all run values use a private file. */
-export function runTerraformVariableLines(runVariables: unknown, workspaceVars: readonly { readonly key: string; readonly category: string; readonly priority?: boolean }[]): string[] {
-  const priorityKeys = new Set(workspaceVars.filter((variable) => variable.category === "terraform" && variable.priority === true).map((variable) => variable.key));
+export function runTerraformVariableLines(
+  runVariables: unknown,
+  workspaceVars: readonly { readonly key: string; readonly category: string; readonly priority?: boolean }[],
+): string[] {
+  const priorityKeys = new Set(
+    workspaceVars
+      .filter((variable) => variable.category === "terraform" && variable.priority === true)
+      .map((variable) => variable.key),
+  );
   return normalizeRunVariables(runVariables)
     .filter((variable) => variable.category === "terraform" && !priorityKeys.has(variable.key))
     .map((variable) => terraformVariableLine(variable.key, variable.value, false));
@@ -1545,7 +1639,9 @@ export async function executionVariables(
   workspaceId: string,
   orgId: string,
   projectId: string | null,
-  workspaceVariableOverrides?: readonly Readonly<Pick<ExecutionVariable, "key" | "value" | "category" | "hcl" | "sensitive">>[],
+  workspaceVariableOverrides?: readonly Readonly<
+    Pick<ExecutionVariable, "key" | "value" | "category" | "hcl" | "sensitive">
+  >[],
 ): Promise<ExecutionVariable[]> {
   const [workspaceVars, workspaceLinks, projectLinks, orgVariableSets] = await Promise.all([
     workspaceVariableOverrides === undefined
@@ -1572,50 +1668,84 @@ export async function executionVariables(
       .map((set): string => set.id),
   );
   const activeSets = orgVariableSets
-    .filter((vs: { readonly global: boolean | null; readonly id: string }): boolean => vs.global === true || attached.has(vs.id) || ownedProjectSetIds.has(vs.id))
+    .filter(
+      (vs: { readonly global: boolean | null; readonly id: string }): boolean =>
+        vs.global === true || attached.has(vs.id) || ownedProjectSetIds.has(vs.id),
+    )
     .sort((left, right): number => compareVariableSets(left, right, workspaceSetIds, projectSetIds));
   const activeSetIds = activeSets.map((vs: { readonly id: string }): string => vs.id);
 
   // Build priority lookup
-  const prioritySetIds = new Set(activeSets.filter((vs: { readonly priority: boolean | null; readonly id: string }): boolean => vs.priority === true).map((vs: { readonly id: string }): string => vs.id));
+  const prioritySetIds = new Set(
+    activeSets
+      .filter((vs: { readonly priority: boolean | null; readonly id: string }): boolean => vs.priority === true)
+      .map((vs: { readonly id: string }): string => vs.id),
+  );
 
-  const setVars = activeSetIds.length === 0
-    ? []
-    : await db.query.variableSetVariables.findMany({
-        where: inArray(variableSetVariables.variableSetId, activeSetIds),
-        orderBy: [asc(variableSetVariables.id)],
-      });
+  const setVars =
+    activeSetIds.length === 0
+      ? []
+      : await db.query.variableSetVariables.findMany({
+          where: inArray(variableSetVariables.variableSetId, activeSetIds),
+          orderBy: [asc(variableSetVariables.id)],
+        });
   const setOrder = new Map(activeSets.map((set, index): [string, number] => [set.id, index]));
-  const orderedSetVars = [...setVars].sort((left, right): number =>
-    (setOrder.get(left.variableSetId) ?? Number.MAX_SAFE_INTEGER) - (setOrder.get(right.variableSetId) ?? Number.MAX_SAFE_INTEGER)
-    || compareCodePoints(left.id, right.id));
+  const orderedSetVars = [...setVars].sort(
+    (left, right): number =>
+      (setOrder.get(left.variableSetId) ?? Number.MAX_SAFE_INTEGER) -
+        (setOrder.get(right.variableSetId) ?? Number.MAX_SAFE_INTEGER) || compareCodePoints(left.id, right.id),
+  );
 
   const effective = new Map<string, ExecutionVariable>();
 
   // Decrypt sensitive variable values for execution (todo 167/168): rows
   // store sensitive values encrypted at rest; runs need the plaintext.
   // Overrides carry plaintext already (no encrypted column).
-  const decryptIfNeeded = async (variable: { readonly value: string; readonly valueEncrypted?: string | null }): Promise<string> =>
-    "valueEncrypted" in variable && variable.valueEncrypted !== null && variable.valueEncrypted !== undefined && variable.valueEncrypted !== ""
+  const decryptIfNeeded = async (variable: {
+    readonly value: string;
+    readonly valueEncrypted?: string | null;
+  }): Promise<string> =>
+    "valueEncrypted" in variable &&
+    variable.valueEncrypted !== null &&
+    variable.valueEncrypted !== undefined &&
+    variable.valueEncrypted !== ""
       ? decryptSecret(variable.valueEncrypted)
       : variable.value;
 
   // 1. Non-priority variable set variables first
   for (const variable of orderedSetVars) {
     if (!prioritySetIds.has(variable.variableSetId)) {
-        effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: false, sensitive: variable.sensitive === true });
+      effective.set(`${variable.category}:${variable.key}`, {
+        ...variable,
+        value: await decryptIfNeeded(variable),
+        hcl: variable.hcl === true,
+        priority: false,
+        sensitive: variable.sensitive === true,
+      });
     }
   }
 
   // 2. Workspace variables override non-priority sets
   for (const variable of workspaceVars) {
-    effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: false, sensitive: variable.sensitive === true });
+    effective.set(`${variable.category}:${variable.key}`, {
+      ...variable,
+      value: await decryptIfNeeded(variable),
+      hcl: variable.hcl === true,
+      priority: false,
+      sensitive: variable.sensitive === true,
+    });
   }
 
   // 3. Priority variable set variables override everything
   for (const variable of orderedSetVars) {
     if (prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: true, sensitive: variable.sensitive === true });
+      effective.set(`${variable.category}:${variable.key}`, {
+        ...variable,
+        value: await decryptIfNeeded(variable),
+        hcl: variable.hcl === true,
+        priority: true,
+        sensitive: variable.sensitive === true,
+      });
     }
   }
 
@@ -1669,10 +1799,7 @@ async function extractTarArchive(
   }
 }
 
-async function unnestArchiveDirectory(
-  destDir: string,
-  workingDirectory?: string | null,
-): Promise<void> {
+async function unnestArchiveDirectory(destDir: string, workingDirectory?: string | null): Promise<void> {
   if (typeof workingDirectory === "string" && workingDirectory !== "" && workingDirectory !== ".") {
     return;
   }
@@ -1715,9 +1842,7 @@ type RunTaskExecution = Readonly<{
 function runTaskTransportError(taskUrl: string, stage: RunTaskStage, isGlobal: boolean): string | undefined {
   if ((stage !== "pre_apply" && !isGlobal) || envFlag("TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS")) return undefined;
   try {
-    return new URL(taskUrl).protocol === "https:"
-      ? undefined
-      : "Pre-apply run task URLs must use HTTPS";
+    return new URL(taskUrl).protocol === "https:" ? undefined : "Pre-apply run task URLs must use HTTPS";
   } catch {
     return undefined;
   }
@@ -1740,15 +1865,28 @@ async function collectRunTaskExecutions(
       orderBy: [asc(runTasks.id)],
     }),
   ]);
-  const tasksById = new Map(globalTasks.map((task: Readonly<typeof runTasks.$inferSelect>): readonly [string, Readonly<typeof runTasks.$inferSelect>] => [task.id, task]));
+  const tasksById = new Map(
+    globalTasks.map(
+      (task: Readonly<typeof runTasks.$inferSelect>): readonly [string, Readonly<typeof runTasks.$inferSelect>] => [
+        task.id,
+        task,
+      ],
+    ),
+  );
   const executions = new Map<string, RunTaskExecution>();
   for (const binding of bindings) {
     const task = tasksById.get(binding.runTaskId);
-    if (task !== undefined) executions.set(task.id, { task, enforcementLevel: binding.enforcementLevel, isGlobal: false });
+    if (task !== undefined)
+      executions.set(task.id, { task, enforcementLevel: binding.enforcementLevel, isGlobal: false });
   }
   for (const task of globalTasks) {
     const globalConfiguration = task.globalConfiguration;
-    if (globalConfiguration?.enabled !== true || !Array.isArray(globalConfiguration.stages) || !globalConfiguration.stages.includes(stage)) continue;
+    if (
+      globalConfiguration?.enabled !== true ||
+      !Array.isArray(globalConfiguration.stages) ||
+      !globalConfiguration.stages.includes(stage)
+    )
+      continue;
     if (executions.has(task.id)) continue;
     const enforcementLevel = ["mandatory", "must_pass"].includes(globalConfiguration.enforcementLevel)
       ? globalConfiguration.enforcementLevel
@@ -1764,7 +1902,14 @@ async function insertPendingRunTaskResults(
 ): Promise<PendingRunTaskEntry[]> {
   // Batch-insert all pending run-task results in one statement instead of
   // issuing one INSERT per binding inside the loop below.
-  const entryList: PendingRunTaskEntry[] = [...executions.values()].map(({ task, enforcementLevel, isGlobal }): PendingRunTaskEntry => ({ enforcementLevel, isGlobal, task, resultId: newResourceId("taskrs") }));
+  const entryList: PendingRunTaskEntry[] = [...executions.values()].map(
+    ({ task, enforcementLevel, isGlobal }): PendingRunTaskEntry => ({
+      enforcementLevel,
+      isGlobal,
+      task,
+      resultId: newResourceId("taskrs"),
+    }),
+  );
   if (entryList.length > 0) {
     await db.insert(runTaskResults).values(
       entryList.map((entry): typeof runTaskResults.$inferInsert => ({
@@ -1793,12 +1938,7 @@ async function buildRunTaskPayload(
   const port = process.env["PORT"] ?? "3000";
   const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
   const callbackPath = `/api/v2/task-results/${resultId}/callback`;
-  const callbackUrl = signedApiURL(
-    { url: callbackBase },
-    callbackPath,
-    "PATCH",
-    Math.ceil(timeoutMs / 1000) + 60,
-  );
+  const callbackUrl = signedApiURL({ url: callbackBase }, callbackPath, "PATCH", Math.ceil(timeoutMs / 1000) + 60);
   const planJsonApiUrl = apiURL({ url: callbackBase }, `/api/v2/plans/plan-${runId}/json-output`);
   const payload = JSON.stringify({
     payload_version: 1,
@@ -1857,7 +1997,9 @@ function extractRunTaskResultFields(
   const data = asRecordOrSelf(parsed["data"], parsed);
   const attributes = asRecordOrSelf(data["attributes"], data);
   return {
-    status: ["running", "passed", "failed"].includes(String(attributes["status"])) ? String(attributes["status"]) : null,
+    status: ["running", "passed", "failed"].includes(String(attributes["status"]))
+      ? String(attributes["status"])
+      : null,
     message: typeof attributes["message"] === "string" ? attributes["message"] : null,
     resultUrl: typeof attributes["url"] === "string" ? attributes["url"] : null,
   };
@@ -1910,12 +2052,14 @@ async function deliverRunTaskRequest(
   headers: Record<string, string>,
 ): Promise<RunTaskDelivery> {
   const transportError = runTaskTransportError(taskUrl, stage, isGlobal);
-  const destination = transportError === undefined
-    ? await resolveExternalUrl(taskUrl, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"))
-    : { error: transportError };
+  const destination =
+    transportError === undefined
+      ? await resolveExternalUrl(taskUrl, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"))
+      : { error: transportError };
   if ("error" in destination) return { status: "failed", message: destination.error, resultUrl: null };
   const resolvedTransportError = runTaskTransportError(destination.target.url, stage, isGlobal);
-  if (resolvedTransportError !== undefined) return { status: "failed", message: resolvedTransportError, resultUrl: null };
+  if (resolvedTransportError !== undefined)
+    return { status: "failed", message: resolvedTransportError, resultUrl: null };
   return postRunTaskRequest(runId, resultId, taskId, destination.target, payload, headers);
 }
 
@@ -1936,14 +2080,20 @@ async function settleRunTaskResult(
   const latest = await waitForTaskSettlement(resultId, timeoutMs, runId);
   if (latest === "canceled") {
     const canceledMessage = "Run task canceled with its run.";
-    await db.update(runTaskResults).set({ status: "canceled", message: canceledMessage }).where(eq(runTaskResults.id, resultId));
+    await db
+      .update(runTaskResults)
+      .set({ status: "canceled", message: canceledMessage })
+      .where(eq(runTaskResults.id, resultId));
     return { status: "canceled", message: canceledMessage, resultUrl };
   }
   if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
     return { status: latest.status, message: latest.message, resultUrl: latest.url };
   }
   const timeoutMessage = `Run task callback timed out after ${phaseTimeoutDetail("run-task", timeoutMs)}`;
-  await db.update(runTaskResults).set({ status: "failed", message: timeoutMessage }).where(eq(runTaskResults.id, resultId));
+  await db
+    .update(runTaskResults)
+    .set({ status: "failed", message: timeoutMessage })
+    .where(eq(runTaskResults.id, resultId));
   return { status: "failed", message: timeoutMessage, resultUrl };
 }
 
@@ -1966,19 +2116,46 @@ async function executeSingleRunTask(
   // treats a false return as blocking, and the phase catch turns it into a
   // clean "Run canceled." log line for an already-canceled run.
   if (await runWasCanceled(runId)) {
-    await db.update(runTaskResults).set({ status: "canceled", message: "Run task canceled with its run." }).where(
-      inArray(runTaskResults.id, entryList.slice(index).map((remaining): string => remaining.resultId)),
-    );
+    await db
+      .update(runTaskResults)
+      .set({ status: "canceled", message: "Run task canceled with its run." })
+      .where(
+        inArray(
+          runTaskResults.id,
+          entryList.slice(index).map((remaining): string => remaining.resultId),
+        ),
+      );
     return { canceled: true, blockingFailed: false };
   }
-  const { payload, headers } = await buildRunTaskPayload(runId, workspace, orgName, stage, run, taskAccessToken, enforcementLevel, resultId, timeoutMs);
+  const { payload, headers } = await buildRunTaskPayload(
+    runId,
+    workspace,
+    orgName,
+    stage,
+    run,
+    taskAccessToken,
+    enforcementLevel,
+    resultId,
+    timeoutMs,
+  );
   await signRunTaskPayload(task, payload, headers);
   const delivery = await deliverRunTaskRequest(runId, resultId, task.id, task.url, stage, isGlobal, payload, headers);
-  const settled = await settleRunTaskResult(runId, resultId, delivery.status, delivery.message, delivery.resultUrl, timeoutMs);
+  const settled = await settleRunTaskResult(
+    runId,
+    resultId,
+    delivery.status,
+    delivery.message,
+    delivery.resultUrl,
+    timeoutMs,
+  );
   const taskLogPhase = stage === "pre_apply" || stage === "post_apply" ? "apply" : "plan";
   await writeLog(runId, taskLogPhase, `[terrence] ${stage} run task "${task.name}" ${settled.status}.`);
   if (settled.status === "canceled") return { canceled: true, blockingFailed: false };
-  return { canceled: false, blockingFailed: settled.status === "failed" && (enforcementLevel === "mandatory" || enforcementLevel === "must_pass") };
+  return {
+    canceled: false,
+    blockingFailed:
+      settled.status === "failed" && (enforcementLevel === "mandatory" || enforcementLevel === "must_pass"),
+  };
 }
 
 async function executeRunTasks(
@@ -1998,7 +2175,18 @@ async function executeRunTasks(
   const entryList = await insertPendingRunTaskResults(runId, executions);
 
   for (const [index, entry] of entryList.entries()) {
-    const outcome = await executeSingleRunTask(runId, workspace, orgName, stage, run, taskAccessToken, timeoutMs, entry, entryList, index);
+    const outcome = await executeSingleRunTask(
+      runId,
+      workspace,
+      orgName,
+      stage,
+      run,
+      taskAccessToken,
+      timeoutMs,
+      entry,
+      entryList,
+      index,
+    );
     if (outcome.canceled) return false;
     if (outcome.blockingFailed) proceed = false;
   }
@@ -2041,7 +2229,7 @@ async function waitForTaskSettlement(
 }
 
 const VCS_CONFIGURATION_SOURCES = ["github", "gitlab", "bitbucket"] as const;
-type VcsConfigurationSource = typeof VCS_CONFIGURATION_SOURCES[number];
+type VcsConfigurationSource = (typeof VCS_CONFIGURATION_SOURCES)[number];
 
 /** Bound for waiting on a push-webhook configuration download to settle. */
 const VCS_CONFIGURATION_WAIT_MS = 60_000;
@@ -2097,9 +2285,9 @@ async function waitForVcsConfigurationDownload(
   // Any other settled status must come with a readable archive, or the run
   // would plan against an empty workdir.
   if (
-    current.status !== "archived"
-    && current.status !== "backing_data_soft_deleted"
-    && !(await archiveReady(current))
+    current.status !== "archived" &&
+    current.status !== "backing_data_soft_deleted" &&
+    !(await archiveReady(current))
   ) {
     throw new Error(
       `VCS configuration download for ${current.id} completed without a readable archive (status ${current.status}).`,
@@ -2111,35 +2299,54 @@ async function waitForVcsConfigurationDownload(
 /** Tracked wrapper: shutdown drain waits for in-flight run executions. */
 export async function executeRun(runId: string): Promise<void> {
   prepareRunCgroup(runId);
-  return trackLocalRunExecution(runId, async () => trackLocalExecution(
-    executeRunImpl(runId)
-      .catch(async (error: unknown): Promise<void> => {
-        if (!(await runWasCanceled(runId))) {
-          try {
-            const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true, statusMetadataSchemaVersion: true } });
-            const timestamps = parsePersistedStatusMetadata(current?.statusTimestamps, current?.statusMetadataSchemaVersion, runId) ?? {};
-            await db.update(runs).set({
-              status: "errored",
-              statusTimestamps: { ...timestamps, "errored-at": new Date().toISOString() },
-              statusMetadataSchemaVersion: 1,
-            }).where(and(
-              eq(runs.id, runId),
-              notInArray(runs.status, [
-                "canceled", "force_canceled", "applied", "errored", "discarded",
-                "planned", "planned_and_saved", "planned_and_finished", "policy_soft_failed",
-              ]),
-            ));
-          } catch (statusError: unknown) {
-            log.error("Failed to fence a run after an execution error", { runId, error: statusError });
+  return trackLocalRunExecution(runId, async () =>
+    trackLocalExecution(
+      executeRunImpl(runId)
+        .catch(async (error: unknown): Promise<void> => {
+          if (!(await runWasCanceled(runId))) {
+            try {
+              const current = await db.query.runs.findFirst({
+                where: eq(runs.id, runId),
+                columns: { statusTimestamps: true, statusMetadataSchemaVersion: true },
+              });
+              const timestamps =
+                parsePersistedStatusMetadata(current?.statusTimestamps, current?.statusMetadataSchemaVersion, runId) ??
+                {};
+              await db
+                .update(runs)
+                .set({
+                  status: "errored",
+                  statusTimestamps: { ...timestamps, "errored-at": new Date().toISOString() },
+                  statusMetadataSchemaVersion: 1,
+                })
+                .where(
+                  and(
+                    eq(runs.id, runId),
+                    notInArray(runs.status, [
+                      "canceled",
+                      "force_canceled",
+                      "applied",
+                      "errored",
+                      "discarded",
+                      "planned",
+                      "planned_and_saved",
+                      "planned_and_finished",
+                      "policy_soft_failed",
+                    ]),
+                  ),
+                );
+            } catch (statusError: unknown) {
+              log.error("Failed to fence a run after an execution error", { runId, error: statusError });
+            }
           }
-        }
-        throw error;
-      })
-      .finally((): void => {
-        // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
-        cleanupRunCgroup(runId);
-      }),
-  ));
+          throw error;
+        })
+        .finally((): void => {
+          // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
+          cleanupRunCgroup(runId);
+        }),
+    ),
+  );
 }
 
 async function loadPlanExecutionScope(runId: string): Promise<{
@@ -2167,13 +2374,21 @@ async function loadPlanExecutionScope(runId: string): Promise<{
     where: eq(organizations.id, workspace.orgId),
   });
 
-  const runInputs = parsePersistedRunInputs({
-    targetAddrs: rawRun.targetAddrs,
-    replaceAddrs: rawRun.replaceAddrs,
-    invokeActionAddrs: rawRun.invokeActionAddrs,
-    variables: rawRun.variables,
-  }, rawRun.inputSchemaVersion, rawRun.id);
-  const runStatusTimestamps = parsePersistedStatusMetadata(rawRun.statusTimestamps, rawRun.statusMetadataSchemaVersion, rawRun.id);
+  const runInputs = parsePersistedRunInputs(
+    {
+      targetAddrs: rawRun.targetAddrs,
+      replaceAddrs: rawRun.replaceAddrs,
+      invokeActionAddrs: rawRun.invokeActionAddrs,
+      variables: rawRun.variables,
+    },
+    rawRun.inputSchemaVersion,
+    rawRun.id,
+  );
+  const runStatusTimestamps = parsePersistedStatusMetadata(
+    rawRun.statusTimestamps,
+    rawRun.statusMetadataSchemaVersion,
+    rawRun.id,
+  );
   // Re-check executor policy at plan/apply entry (36-39): handles
   // admin enabling requireHardIsolation between claim and execution.
   if (!(await enforcePlanExecutorPolicy(workspace, org, rawRun.status, runStatusTimestamps, runId))) return null;
@@ -2226,7 +2441,8 @@ async function preparePlanExecutionFiles(
 ): Promise<PlanExecutionContext> {
   const planFiles = await buildPlanExecutionFiles(runId, workspace, executionDir, runVariables, debuggingMode);
   const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
-  const requestedVersion = runTerraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
+  const requestedVersion =
+    runTerraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
 
   const currentDirFiles = await readdir(executionDir);
   const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
@@ -2269,10 +2485,18 @@ async function runPlanBinaryOrSimulated(
     // retried with backoff): an unpublished version fails here even on a
     // fast link, while timeouts and rate-limited enumeration are
     // operator-fixable.
-    await writeLog(runId, "plan", `[terrence] Failed to resolve ${requestedTool} v${requestedVersion}: no cached binary and the download failed. Verify the version was published for this OS/arch; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS; set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
-    throw new Error(`Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}): no cached binary and the download failed after retries. Verify the version exists; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS, and set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
+    await writeLog(
+      runId,
+      "plan",
+      `[terrence] Failed to resolve ${requestedTool} v${requestedVersion}: no cached binary and the download failed. Verify the version was published for this OS/arch; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS; set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`,
+    );
+    throw new Error(
+      `Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}): no cached binary and the download failed after retries. Verify the version exists; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS, and set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`,
+    );
   }
-  throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
+  throw new Error(
+    `No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`,
+  );
 }
 
 async function runPlanFinalizeStages(
@@ -2289,9 +2513,29 @@ async function runPlanFinalizeStages(
   resolvedBinaryPath: string | undefined,
   isSimulatedAllowed: boolean,
 ): Promise<void> {
-  const finalized = await finalizePlanOutput(runId, workspace, executionDir, workDir, plannedState, configurationVersionId, planTimeoutMs, resolvedBinaryPath, isSimulatedAllowed);
+  const finalized = await finalizePlanOutput(
+    runId,
+    workspace,
+    executionDir,
+    workDir,
+    plannedState,
+    configurationVersionId,
+    planTimeoutMs,
+    resolvedBinaryPath,
+    isSimulatedAllowed,
+  );
   if (!(await runCostEstimateStage(runId, executionDir))) return;
-  if (!(await runPolicyGateStage(runId, workspace, executionDir, resolvedBinaryPath, finalized.planJson, finalized.persistPlanForLater))) return;
+  if (
+    !(await runPolicyGateStage(
+      runId,
+      workspace,
+      executionDir,
+      resolvedBinaryPath,
+      finalized.planJson,
+      finalized.persistPlanForLater,
+    ))
+  )
+    return;
   await runPostPlanDispatch(runId, workspace, org, run, planHasChanges, finalized.persistPlanForLater);
 }
 
@@ -2305,14 +2549,10 @@ async function reportPlanFailure(runStatus: string, runId: string, error: unknow
   }
   const errMsg = error instanceof Error ? error.message : String(error);
   log.error(`Run ${runId} planning failed`, { error });
-  await writeRunDiagnostic(
-    runId,
-    "plan",
-    "error",
-    "run.plan.failed",
-    "Planning failed.",
-    { failureReason: "plan_failed", error },
-  );
+  await writeRunDiagnostic(runId, "plan", "error", "run.plan.failed", "Planning failed.", {
+    failureReason: "plan_failed",
+    error,
+  });
   await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
   try {
     if (!isTerminalRunStatus(runStatus)) await updateRunStatus(runId, "errored");
@@ -2364,11 +2604,44 @@ async function executeRunImpl(runId: string): Promise<void> {
     const prepared = await seedPlanExecutionState(runId, workspace, workDir);
     plannedAgainstState = prepared.plannedState;
 
-    const planFiles = await preparePlanExecutionFiles(runId, workspace, org, prepared.executionDir, run.variables, run.debuggingMode, run.terraformVersion);
+    const planFiles = await preparePlanExecutionFiles(
+      runId,
+      workspace,
+      org,
+      prepared.executionDir,
+      run.variables,
+      run.debuggingMode,
+      run.terraformVersion,
+    );
     const planTimeoutMs = await executionTimeoutMs("plan");
-    const plan = await runPlanBinaryOrSimulated(runId, run, prepared.executionDir, planFiles.envVars, planFiles.tfVarsLines, planFiles.runTfVarsLines, planFiles.requestedTool, planFiles.requestedVersion, planFiles.hasTfFiles, planFiles.isSimulatedAllowed, planTimeoutMs);
+    const plan = await runPlanBinaryOrSimulated(
+      runId,
+      run,
+      prepared.executionDir,
+      planFiles.envVars,
+      planFiles.tfVarsLines,
+      planFiles.runTfVarsLines,
+      planFiles.requestedTool,
+      planFiles.requestedVersion,
+      planFiles.hasTfFiles,
+      planFiles.isSimulatedAllowed,
+      planTimeoutMs,
+    );
     if (!plan.proceed) return;
-    await runPlanFinalizeStages(runId, workspace, org, run, plan.planHasChanges, prepared.executionDir, workDir, plannedAgainstState, run.configurationVersionId, planTimeoutMs, plan.resolvedBinaryPath, planFiles.isSimulatedAllowed);
+    await runPlanFinalizeStages(
+      runId,
+      workspace,
+      org,
+      run,
+      plan.planHasChanges,
+      prepared.executionDir,
+      workDir,
+      plannedAgainstState,
+      run.configurationVersionId,
+      planTimeoutMs,
+      plan.resolvedBinaryPath,
+      planFiles.isSimulatedAllowed,
+    );
   } catch (error: unknown) {
     await reportPlanFailure(run.status, runId, error);
   } finally {
@@ -2380,27 +2653,39 @@ async function executeRunImpl(runId: string): Promise<void> {
 export async function executeApply(runId: string): Promise<void> {
   const ownsCgroup = getRunCgroup(runId) === null;
   if (ownsCgroup) prepareRunCgroup(runId);
-  return trackLocalRunExecution(runId, async () => trackLocalExecution(
-    executeApplyImpl(runId).catch(async (error: unknown): Promise<void> => {
-      if (!(await runWasCanceled(runId))) {
-        try {
-          const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true } });
-          await db.update(runs).set({
-            status: "errored",
-            statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-          }).where(and(
-            eq(runs.id, runId),
-            notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
-          ));
-        } catch (statusError: unknown) {
-          log.error("Failed to fence a run after an apply error", { runId, error: statusError });
-        }
-      }
-      throw error;
-    }).finally((): void => {
-      if (ownsCgroup) cleanupRunCgroup(runId);
-    }),
-  ));
+  return trackLocalRunExecution(runId, async () =>
+    trackLocalExecution(
+      executeApplyImpl(runId)
+        .catch(async (error: unknown): Promise<void> => {
+          if (!(await runWasCanceled(runId))) {
+            try {
+              const current = await db.query.runs.findFirst({
+                where: eq(runs.id, runId),
+                columns: { statusTimestamps: true },
+              });
+              await db
+                .update(runs)
+                .set({
+                  status: "errored",
+                  statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+                })
+                .where(
+                  and(
+                    eq(runs.id, runId),
+                    notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
+                  ),
+                );
+            } catch (statusError: unknown) {
+              log.error("Failed to fence a run after an apply error", { runId, error: statusError });
+            }
+          }
+          throw error;
+        })
+        .finally((): void => {
+          if (ownsCgroup) cleanupRunCgroup(runId);
+        }),
+    ),
+  );
 }
 
 /** Claim the workspace lock for the apply itself, so a manual lock acquired
@@ -2408,27 +2693,36 @@ export async function executeApply(runId: string): Promise<void> {
  * lock acquisition: only an actually-unlocked workspace can be owned by a run.
  */
 async function acquireRunWorkspaceLock(workspaceId: string, runId: string): Promise<boolean> {
-  const locked = await db.update(workspaces).set({
-    locked: true,
-    lockedReason: `Run ${runId} is applying`,
-    lockOwnerType: "run",
-    lockOwnerId: runId,
-  }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+  const locked = await db
+    .update(workspaces)
+    .set({
+      locked: true,
+      lockedReason: `Run ${runId} is applying`,
+      lockOwnerType: "run",
+      lockOwnerId: runId,
+    })
+    .where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked))))
+    .returning({ id: workspaces.id });
   return locked.length > 0;
 }
 
 async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Promise<void> {
-  await db.update(workspaces).set({
-    locked: false,
-    lockedReason: null,
-    lockOwnerType: null,
-    lockOwnerId: null,
-  }).where(and(
-    eq(workspaces.id, workspaceId),
-    eq(workspaces.locked, true),
-    eq(workspaces.lockOwnerType, "run"),
-    eq(workspaces.lockOwnerId, runId),
-  ));
+  await db
+    .update(workspaces)
+    .set({
+      locked: false,
+      lockedReason: null,
+      lockOwnerType: null,
+      lockOwnerId: null,
+    })
+    .where(
+      and(
+        eq(workspaces.id, workspaceId),
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "run"),
+        eq(workspaces.lockOwnerId, runId),
+      ),
+    );
 }
 
 async function cleanupApplyArtifacts(runId: string): Promise<void> {
@@ -2459,8 +2753,19 @@ async function enforceApplyExecutorPolicy(
     : undefined;
   const policyErr = executorPolicyAllowsLocal(
     workspace,
-    pForApply !== undefined ? { allowedExecutionModes: (pForApply as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
-    org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
+    pForApply !== undefined
+      ? {
+          allowedExecutionModes:
+            (pForApply as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ??
+            null,
+        }
+      : null,
+    org !== undefined
+      ? {
+          requireHardIsolation:
+            (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null,
+        }
+      : null,
   );
   if (policyErr === null) return true;
   if (run.status !== "canceled" && run.status !== "force_canceled") {
@@ -2478,7 +2783,13 @@ async function enforceApplyExecutorPolicy(
       },
     );
     await writeLog(runId, "apply", `[terrence ERROR] ${policyErr}`);
-    publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
+    publish("run.status", {
+      "run-id": runId,
+      "workspace-id": workspace.id,
+      "org-id": workspace.orgId,
+      status: "errored",
+      at: new Date().toISOString(),
+    });
     queueRunNotification(runId, "run:errored", "errored");
     void reportRunVcsStatus(runId, "errored");
   }
@@ -2496,16 +2807,21 @@ async function deferApplyForWorkspaceLock(
     await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
     // The status row is unchanged by a deferral, so without this the UI
     // would show no signal beyond the log line (issue #645).
-    publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "confirmed", at: new Date().toISOString() });
+    publish("run.status", {
+      "run-id": runId,
+      "workspace-id": workspace.id,
+      "org-id": workspace.orgId,
+      status: "confirmed",
+      at: new Date().toISOString(),
+    });
   }
-  await db.update(runs).set({
-    status: "confirmed",
-    scheduledAt: run.scheduledAt ?? Date.now() + 1000,
-  }).where(and(
-    eq(runs.id, runId),
-    eq(runs.status, run.status),
-    notInArray(runs.status, FINAL_RUN_STATUSES),
-  ));
+  await db
+    .update(runs)
+    .set({
+      status: "confirmed",
+      scheduledAt: run.scheduledAt ?? Date.now() + 1000,
+    })
+    .where(and(eq(runs.id, runId), eq(runs.status, run.status), notInArray(runs.status, FINAL_RUN_STATUSES)));
 }
 
 async function runPreApplyPhase(
@@ -2528,7 +2844,11 @@ async function runPreApplyPhase(
       return false;
     }
   } catch (error: unknown) {
-    await writeLog(runId, "apply", `[terrence] Pre-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+    await writeLog(
+      runId,
+      "apply",
+      `[terrence] Pre-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`,
+    );
     await cleanupApplyArtifacts(runId);
     throw error;
   }
@@ -2577,17 +2897,18 @@ async function restoreApplyConfigurationArchive(
     // working-directory-relative paths, so extracting into executionDir
     // would nest them one level too deep.
     await mkdir(workDir, { recursive: true, mode: 0o700 });
-    const configuration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
-    configurationArchivePath = typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
-      ? configuration.archivePath
-      : null;
-    if (configurationArchivePath !== null && await exists(configurationArchivePath)) {
-      archiveRestored = await extractTarArchive(
-        configurationArchivePath,
-        workDir,
-        workspace.workingDirectory,
-        { runId, phase: "apply" },
-      );
+    const configuration = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, run.configurationVersionId),
+    });
+    configurationArchivePath =
+      typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
+        ? configuration.archivePath
+        : null;
+    if (configurationArchivePath !== null && (await exists(configurationArchivePath))) {
+      archiveRestored = await extractTarArchive(configurationArchivePath, workDir, workspace.workingDirectory, {
+        runId,
+        phase: "apply",
+      });
       if (!archiveRestored) {
         await writeRunDiagnostic(
           runId,
@@ -2676,7 +2997,11 @@ async function loadApplyStateForSavedPlan(
     throw new Error("Saved plan configuration version no longer matches the run.");
   }
   const currentState = await db.query.stateVersions.findFirst({
-    where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+    where: and(
+      eq(stateVersions.workspaceId, workspace.id),
+      eq(stateVersions.status, "finalized"),
+      eq(stateVersions.intermediate, false),
+    ),
     orderBy: [desc(stateVersions.serial)],
     columns: { id: true, serial: true, statePayload: true },
   });
@@ -2718,7 +3043,7 @@ async function seedApplyExecutionDir(
   savedPlanRequired: boolean,
   applyStatePayload: string | null,
 ): Promise<void> {
-  if (savedPlanRequired && !(await exists(join(executionDir, "tfplan")) && await exists(executionDir))) {
+  if (savedPlanRequired && !((await exists(join(executionDir, "tfplan"))) && (await exists(executionDir)))) {
     await writeRunDiagnostic(
       runId,
       "apply",
@@ -2755,17 +3080,38 @@ async function enforcePlanExecutorPolicy(
     : undefined;
   const policyError = executorPolicyAllowsLocal(
     workspace,
-    pForExec !== undefined ? { allowedExecutionModes: (pForExec as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
-    org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
+    pForExec !== undefined
+      ? {
+          allowedExecutionModes:
+            (pForExec as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ??
+            null,
+        }
+      : null,
+    org !== undefined
+      ? {
+          requireHardIsolation:
+            (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null,
+        }
+      : null,
   );
   if (policyError === null) return true;
-  const policyRejected = await db.update(runs).set({ status: "errored", statusTimestamps: { ...(statusTimestamps ?? {}), "errored-at": new Date().toISOString() } }).where(and(
-    eq(runs.id, runId),
-    eq(runs.status, runStatus),
-  )).returning({ id: runs.id });
+  const policyRejected = await db
+    .update(runs)
+    .set({
+      status: "errored",
+      statusTimestamps: { ...(statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+    })
+    .where(and(eq(runs.id, runId), eq(runs.status, runStatus)))
+    .returning({ id: runs.id });
   if (policyRejected.length === 0) return false;
   await writeLog(runId, "plan", `[terrence ERROR] ${policyError}`);
-  publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
+  publish("run.status", {
+    "run-id": runId,
+    "workspace-id": workspace.id,
+    "org-id": workspace.orgId,
+    status: "errored",
+    at: new Date().toISOString(),
+  });
   queueRunNotification(runId, "run:errored", "errored");
   void reportRunVcsStatus(runId, "errored");
   return false;
@@ -2787,14 +3133,10 @@ async function waitForPlanConfigurationArchive(
   }
 
   if (
-    cv !== undefined
-    && ["github", "gitlab", "bitbucket"].includes(cv.source ?? "")
-    && ["archived", "backing_data_soft_deleted"].includes(cv.status)
-    && (
-      typeof cv.archivePath !== "string"
-      || cv.archivePath === ""
-      || !(await exists(cv.archivePath))
-    )
+    cv !== undefined &&
+    ["github", "gitlab", "bitbucket"].includes(cv.source ?? "") &&
+    ["archived", "backing_data_soft_deleted"].includes(cv.status) &&
+    (typeof cv.archivePath !== "string" || cv.archivePath === "" || !(await exists(cv.archivePath)))
   ) {
     await writeLog(runId, "plan", `[terrence] Re-fetching archived VCS configuration ${cv.id}.`);
     if (!(await refetchConfigurationVersion(cv.id))) {
@@ -2813,14 +3155,14 @@ async function extractPlanConfigurationArchive(
   runId: string,
   workDir: string,
 ): Promise<void> {
-  if (cv !== undefined && typeof cv.archivePath === "string" && cv.archivePath !== "" && (await exists(cv.archivePath))) {
+  if (
+    cv !== undefined &&
+    typeof cv.archivePath === "string" &&
+    cv.archivePath !== "" &&
+    (await exists(cv.archivePath))
+  ) {
     await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
-    const ok = await extractTarArchive(
-      cv.archivePath,
-      workDir,
-      workspace.workingDirectory,
-      { runId, phase: "plan" },
-    );
+    const ok = await extractTarArchive(cv.archivePath, workDir, workspace.workingDirectory, { runId, phase: "plan" });
     if (!ok) {
       await writeRunDiagnostic(
         runId,
@@ -2849,7 +3191,12 @@ async function preparePlanLocalSource(
   if (wsName.includes("..") || wsName.startsWith("/") || wsName.includes("\\")) {
     throw new Error(`Invalid workspace name: contains path traversal characters`);
   }
-  const localPath = join("/app/backend/storage/local", org?.name ?? workspace.orgId, workspace.projectId ?? "default", wsName);
+  const localPath = join(
+    "/app/backend/storage/local",
+    org?.name ?? workspace.orgId,
+    workspace.projectId ?? "default",
+    wsName,
+  );
 
   await writeLog(runId, "plan", `[terrence] Using local source directory: ${localPath}`);
   if (!(await exists(localPath))) {
@@ -2878,7 +3225,11 @@ async function runPrePlanGate(
   }
   await updateRunStatus(runId, "pre_plan_completed");
   if (operation === "action_only") {
-    await writeLog(runId, "plan", "[terrence] Action-only run will refresh state and invoke the requested Terraform action.");
+    await writeLog(
+      runId,
+      "plan",
+      "[terrence] Action-only run will refresh state and invoke the requested Terraform action.",
+    );
   }
   await updateRunStatus(runId, "queuing");
   await updateRunStatus(runId, "plan_queued");
@@ -2911,7 +3262,9 @@ async function seedPlanExecutionState(
   });
   const plannedState = { id: latestState?.id ?? null, serial: latestState?.serial ?? 0 };
   if (latestState !== undefined && typeof latestState.statePayload === "string" && latestState.statePayload !== "") {
-    await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
+    await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), {
+      mode: 0o600,
+    });
     await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
   }
   return { executionDir, plannedState };
@@ -2924,17 +3277,15 @@ async function buildPlanExecutionFiles(
   runVariables: unknown,
   debuggingMode: boolean,
 ): Promise<{ envVars: Record<string, string>; tfVarsLines: string[]; runTfVarsLines: string[] }> {
-  const vars = await executionVariables(
-    workspace.id,
-    workspace.orgId,
-    workspace.projectId,
-  );
+  const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId);
 
   const envVars = buildRunPhaseEnv(vars, runVariables, await runTerraformEnv(runId, workspace, "plan", vars));
   if (debuggingMode) envVars["TF_LOG"] = "TRACE";
   const tfVarsLines = vars
     .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
-    .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => terraformVariableLine(variable.key, variable.value, variable.hcl));
+    .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string =>
+      terraformVariableLine(variable.key, variable.value, variable.hcl),
+    );
 
   if (tfVarsLines.length > 0) {
     await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
@@ -3062,13 +3413,7 @@ function createPlanPersister(
   let durablePlan: SavedPlanMetadata | undefined;
   return async (): Promise<void> => {
     if (durablePlan !== undefined) return;
-    durablePlan = await persistSavedPlan(
-      runId,
-      executionDir,
-      plannedState,
-      configurationVersionId,
-      isSimulatedAllowed,
-    );
+    durablePlan = await persistSavedPlan(runId, executionDir, plannedState, configurationVersionId, isSimulatedAllowed);
     await recordPlanInput(runId, plannedState, durablePlan);
   };
 }
@@ -3118,8 +3463,7 @@ async function finalizePlanOutput(
   // them; only the log summary line is ever needed otherwise (issue #618),
   // so match just those rows in SQL instead of loading the whole plan log.
   const jsonCounts = planJson === undefined ? undefined : planJsonResourceCounts(planJson);
-  const resourceCounts = jsonCounts
-    ?? parseResourceCounts((await findSummaryLogRows(runId, "plan")).join("\n"));
+  const resourceCounts = jsonCounts ?? parseResourceCounts((await findSummaryLogRows(runId, "plan")).join("\n"));
 
   await updateRunStatus(runId, "planned", {
     planResourceAdditions: resourceCounts.additions,
@@ -3128,7 +3472,13 @@ async function finalizePlanOutput(
     planResourceImports: resourceCounts.imports,
   });
   await recordPlanInput(runId, plannedState, undefined);
-  const persistPlanForLater = createPlanPersister(runId, executionDir, plannedState, configurationVersionId, isSimulatedAllowed);
+  const persistPlanForLater = createPlanPersister(
+    runId,
+    executionDir,
+    plannedState,
+    configurationVersionId,
+    isSimulatedAllowed,
+  );
   return { planJson, persistPlanForLater };
 }
 
@@ -3187,8 +3537,8 @@ async function runActionOnlyApply(runId: string, persistPlanForLater: () => Prom
   // the run through a path that requires apply permission (enforced
   // at create time, but the gate is defense-in-depth here too).
   if (await returnIfRunCanceled(runId)) return;
-  const actionOnlyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
-    mod.applyGateBlockReason(new Date()),
+  const actionOnlyBlockReason = await import("./lib/operations").then(
+    async (mod): Promise<string | null> => mod.applyGateBlockReason(new Date()),
   );
   if (actionOnlyBlockReason !== null) {
     await writeLog(runId, "plan", `[terrence] Action-only apply blocked: ${actionOnlyBlockReason}`);
@@ -3209,8 +3559,8 @@ async function runAutoApplyGate(
   // Auto-apply must not bypass the site-wide apply gates: when an
   // approval workflow or a maintenance window blocks applies, fall
   // back to the needs-attention state instead of applying.
-  const autoApplyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
-    mod.applyGateBlockReason(new Date()),
+  const autoApplyBlockReason = await import("./lib/operations").then(
+    async (mod): Promise<string | null> => mod.applyGateBlockReason(new Date()),
   );
   if (autoApplyBlockReason !== null) {
     await writeLog(runId, "plan", `[terrence] Auto-apply blocked: ${autoApplyBlockReason}`);
@@ -3315,34 +3665,29 @@ async function writeApplyPreflightDiagnostic(
   archiveRestored: boolean,
 ): Promise<{ executionDirectoryExists: boolean; configurationFiles: string[] }> {
   const executionDirectoryExists = await exists(executionDir);
-  const configurationFiles = dirFiles.filter((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"));
-  await writeRunDiagnostic(
-    runId,
-    "apply",
-    "info",
-    "run.apply.preflight",
-    "Apply preflight evaluated.",
-    {
-      requestedTool,
-      requestedVersion,
-      resolvedTool: resolved?.tool ?? null,
-      resolvedVersion: resolved?.version ?? null,
-      binaryPath: resolved?.binaryPath ?? null,
-      binaryResolved: resolved !== null,
-      simulated: isSimulatedAllowed,
-      savedPlanRequired,
-      savedPlanRestored,
-      savedPlanFilePresent: await exists(join(executionDir, "tfplan")),
-      archivePath: configurationArchivePath,
-      archiveRestored,
-      executionDirectory: executionDir,
-      executionDirectoryExists,
-      rootEntryCount: dirFiles.length,
-      rootEntryNames: dirFiles.slice(0, 64),
-      configurationFileCount: configurationFiles.length,
-      configurationFiles,
-    },
+  const configurationFiles = dirFiles.filter(
+    (file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"),
   );
+  await writeRunDiagnostic(runId, "apply", "info", "run.apply.preflight", "Apply preflight evaluated.", {
+    requestedTool,
+    requestedVersion,
+    resolvedTool: resolved?.tool ?? null,
+    resolvedVersion: resolved?.version ?? null,
+    binaryPath: resolved?.binaryPath ?? null,
+    binaryResolved: resolved !== null,
+    simulated: isSimulatedAllowed,
+    savedPlanRequired,
+    savedPlanRestored,
+    savedPlanFilePresent: await exists(join(executionDir, "tfplan")),
+    archivePath: configurationArchivePath,
+    archiveRestored,
+    executionDirectory: executionDir,
+    executionDirectoryExists,
+    rootEntryCount: dirFiles.length,
+    rootEntryNames: dirFiles.slice(0, 64),
+    configurationFileCount: configurationFiles.length,
+    configurationFiles,
+  });
   return { executionDirectoryExists, configurationFiles };
 }
 
@@ -3394,7 +3739,9 @@ async function runApplyInit(
   return true;
 }
 
-async function applyStateVcsMetadata(configurationVersionId: string | null): Promise<{ vcsCommitSha: string | null; vcsCommitUrl: string | null }> {
+async function applyStateVcsMetadata(
+  configurationVersionId: string | null,
+): Promise<{ vcsCommitSha: string | null; vcsCommitUrl: string | null }> {
   if (configurationVersionId === null) return { vcsCommitSha: null, vcsCommitUrl: null };
   const cfg = await db.query.configurationVersions.findFirst({
     where: eq(configurationVersions.id, configurationVersionId),
@@ -3412,7 +3759,7 @@ async function saveApplyStateVersion(
   runId: string,
   workspaceId: string,
   configurationVersionId: string | null,
-  createdBy: typeof runs.$inferSelect["createdBy"],
+  createdBy: (typeof runs.$inferSelect)["createdBy"],
   terraformVersion: string,
   stateFilePath: string,
 ): Promise<void> {
@@ -3428,12 +3775,15 @@ async function saveApplyStateVersion(
   let jsonStateOutputs: string | null = null;
   try {
     const parsed = JSON.parse(statePayload) as Record<string, unknown>;
-    jsonStateOutputs = parsed["outputs"] !== null && parsed["outputs"] !== undefined
-      ? JSON.stringify(parsed["outputs"])
-      : null;
+    jsonStateOutputs =
+      parsed["outputs"] !== null && parsed["outputs"] !== undefined ? JSON.stringify(parsed["outputs"]) : null;
   } catch (error: unknown) {
     jsonState = null;
-    logBestEffortFailure("Apply state file is not valid JSON; storing raw state without JSON resources", { runId }, error);
+    logBestEffortFailure(
+      "Apply state file is not valid JSON; storing raw state without JSON resources",
+      { runId },
+      error,
+    );
   }
 
   // Pull VCS commit metadata from the run's configuration version so the state
@@ -3471,11 +3821,13 @@ async function tryCaptureInterruptedApplyState(runId: string, failureLog: string
 
 async function handleCanceledApply(runId: string): Promise<{ captureFailed: boolean }> {
   let captureFailed = false;
-  const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): boolean => {
-    log.error("Could not capture state after canceled apply", { runId, error: captureError });
-    captureFailed = true;
-    return false;
-  });
+  const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch(
+    (captureError: unknown): boolean => {
+      log.error("Could not capture state after canceled apply", { runId, error: captureError });
+      captureFailed = true;
+      return false;
+    },
+  );
   await writeLog(
     runId,
     "apply",
@@ -3531,7 +3883,9 @@ async function throwApplyPreflightFailure(
     throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
   }
   if (failedChecks.length === 1 && failedChecks[0] === "configuration_files_missing") {
-    throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
+    throw new Error(
+      `No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`,
+    );
   }
   throw new Error(`Apply preflight failed: ${failedChecks.join(", ") || "unknown_failure"}.`);
 }
@@ -3543,11 +3897,18 @@ async function runPostApplyStage(
   savedPlanRequired: boolean,
 ): Promise<void> {
   try {
-    if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply")) && !(await runWasCanceled(runId))) {
+    if (
+      !(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply")) &&
+      !(await runWasCanceled(runId))
+    ) {
       await writeLog(runId, "apply", "[terrence] Post-apply run task failure recorded; the apply remains completed.");
     }
   } catch (error: unknown) {
-    await writeLog(runId, "apply", `[terrence] Post-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+    await writeLog(
+      runId,
+      "apply",
+      `[terrence] Post-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     await cleanupRunToken(runId);
   }
@@ -3646,10 +4007,20 @@ async function prepareApplyExecutionContext(
   const savedPlanRequired = await isApplySavedPlanRequired(run, runId);
 
   const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
-  const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
+  const requestedVersion =
+    run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
 
   const initialListing = await listApplyDirFiles(executionDir);
-  const restored = await restoreApplyConfigurationArchive(run, workspace, workDir, executionDir, runId, initialListing.dirFiles, initialListing.hasTfFiles, savedPlanRequired);
+  const restored = await restoreApplyConfigurationArchive(
+    run,
+    workspace,
+    workDir,
+    executionDir,
+    runId,
+    initialListing.dirFiles,
+    initialListing.hasTfFiles,
+    savedPlanRequired,
+  );
   if (savedPlanRequired) {
     savedPlan = await restoreSavedPlanForApply(runId, executionDir);
     const planState = await loadApplyStateForSavedPlan(run, workspace, runId, savedPlan);
@@ -3665,7 +4036,19 @@ async function prepareApplyExecutionContext(
   const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
   const resolved = await resolveApplyBinary(runId, requestedTool, requestedVersion, isSimulatedAllowed);
 
-  const preflight = await writeApplyPreflightDiagnostic(runId, executionDir, currentListing.dirFiles, requestedTool, requestedVersion, resolved, isSimulatedAllowed, savedPlanRequired, savedPlan !== undefined, restored.configurationArchivePath, restored.archiveRestored);
+  const preflight = await writeApplyPreflightDiagnostic(
+    runId,
+    executionDir,
+    currentListing.dirFiles,
+    requestedTool,
+    requestedVersion,
+    resolved,
+    isSimulatedAllowed,
+    savedPlanRequired,
+    savedPlan !== undefined,
+    restored.configurationArchivePath,
+    restored.archiveRestored,
+  );
   return {
     executionDir,
     savedPlanRequired,
@@ -3713,7 +4096,7 @@ async function spawnAndWaitApply(
   runId: string,
   workspaceId: string,
   configurationVersionId: string | null,
-  createdBy: typeof runs.$inferSelect["createdBy"],
+  createdBy: (typeof runs.$inferSelect)["createdBy"],
   resolved: NonNullable<Awaited<ReturnType<typeof ensureBinary>>>,
   executionDir: string,
   envVars: Record<string, string>,
@@ -3746,7 +4129,14 @@ async function spawnAndWaitApply(
 
   if (await runWasCanceled(runId)) {
     const recovery = await handleCanceledApply(runId);
-    return { kind: "canceled", captureFailed: recovery.captureFailed, started: true, exitCode: -1, tool: "", error: undefined };
+    return {
+      kind: "canceled",
+      captureFailed: recovery.captureFailed,
+      started: true,
+      exitCode: -1,
+      tool: "",
+      error: undefined,
+    };
   }
   if (applyExit !== 0) {
     // Failed applies still record partial state (anything that applied
@@ -3754,18 +4144,42 @@ async function spawnAndWaitApply(
     // resources.
     let captureFailed = false;
     try {
-      await saveApplyStateVersion(runId, workspaceId, configurationVersionId, createdBy, resolved.version, stateFilePath);
+      await saveApplyStateVersion(
+        runId,
+        workspaceId,
+        configurationVersionId,
+        createdBy,
+        resolved.version,
+        stateFilePath,
+      );
     } catch (saveError: unknown) {
-      await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
-      captureFailed = await tryCaptureInterruptedApplyState(runId, "Could not capture state after partial apply persistence failure");
+      await writeLog(
+        runId,
+        "apply",
+        `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`,
+      );
+      captureFailed = await tryCaptureInterruptedApplyState(
+        runId,
+        "Could not capture state after partial apply persistence failure",
+      );
     }
-    return { kind: "applyFailed", captureFailed, started: true, exitCode: applyExit, tool: resolved.tool, error: undefined };
+    return {
+      kind: "applyFailed",
+      captureFailed,
+      started: true,
+      exitCode: applyExit,
+      tool: resolved.tool,
+      error: undefined,
+    };
   }
 
   try {
     await saveApplyStateVersion(runId, workspaceId, configurationVersionId, createdBy, resolved.version, stateFilePath);
   } catch (saveError: unknown) {
-    const captureFailed = await tryCaptureInterruptedApplyState(runId, "Could not capture state after apply state persistence failure");
+    const captureFailed = await tryCaptureInterruptedApplyState(
+      runId,
+      "Could not capture state after apply state persistence failure",
+    );
     return { kind: "saveFailed", captureFailed, started: true, exitCode: -1, tool: "", error: saveError };
   }
   return { kind: "completed", captureFailed: false, started: true, exitCode: -1, tool: "", error: undefined };
@@ -3778,7 +4192,8 @@ async function executeApplyProcess(
   ctx: ApplyExecutionContext,
 ): Promise<ApplyProcessOutcome> {
   if (ctx.resolved !== null && ctx.executionDirectoryExists && ctx.hasTfFiles) {
-    if (await runWasCanceled(runId)) return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
+    if (await runWasCanceled(runId))
+      return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
     const binary = ctx.resolved.binaryPath;
     if (runSandbox !== null) await runSandbox.ensureTool(ctx.resolved.tool, ctx.resolved.version, binary);
     const envVars = await buildApplyEnvVars(runId, workspace, run.variables, run.debuggingMode);
@@ -3791,15 +4206,34 @@ async function executeApplyProcess(
     await writeLog(runId, "apply", `\n--- Executing ${ctx.resolved.tool} apply ---`);
     if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
     await assertApplyPlanFile(runId, ctx.executionDir, ctx.dirFiles);
-    if (await runWasCanceled(runId)) return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
-    return spawnAndWaitApply(runId, workspace.id, run.configurationVersionId, run.createdBy, ctx.resolved, ctx.executionDir, envVars, applyTimeoutMs);
+    if (await runWasCanceled(runId))
+      return { kind: "canceled", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
+    return spawnAndWaitApply(
+      runId,
+      workspace.id,
+      run.configurationVersionId,
+      run.createdBy,
+      ctx.resolved,
+      ctx.executionDir,
+      envVars,
+      applyTimeoutMs,
+    );
   }
   if (ctx.isSimulatedAllowed) {
     await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
     return { kind: "completed", captureFailed: false, started: false, exitCode: -1, tool: "", error: undefined };
   }
   const failedChecks = applyPreflightFailedChecks(ctx.resolved, ctx.executionDirectoryExists, ctx.hasTfFiles);
-  return throwApplyPreflightFailure(runId, ctx.executionDir, ctx.dirFiles, ctx.configurationFiles, ctx.requestedTool, ctx.requestedVersion, ctx.executionDirectoryExists, failedChecks);
+  return throwApplyPreflightFailure(
+    runId,
+    ctx.executionDir,
+    ctx.dirFiles,
+    ctx.configurationFiles,
+    ctx.requestedTool,
+    ctx.requestedVersion,
+    ctx.executionDirectoryExists,
+    failedChecks,
+  );
 }
 
 async function completeSuccessfulApply(
@@ -3863,21 +4297,18 @@ async function handleCanceledApplyFailure(
   recoveryCaptureFailed: boolean,
 ): Promise<{ canceled: boolean; captureFailed: boolean }> {
   if (!(await runWasCanceled(runId))) return { canceled: false, captureFailed: recoveryCaptureFailed };
-  const captureFailed = recoveryCaptureFailed || (applyStarted ? await captureCanceledApplyState(storageDir, runId) : false);
+  const captureFailed =
+    recoveryCaptureFailed || (applyStarted ? await captureCanceledApplyState(storageDir, runId) : false);
   return { canceled: true, captureFailed };
 }
 
 async function reportApplyFailure(runId: string, error: unknown): Promise<void> {
   const errMsg = error instanceof Error ? error.message : String(error);
   log.error("Run apply failed", { runId, error });
-  await writeRunDiagnostic(
-    runId,
-    "apply",
-    "error",
-    "run.apply.failed",
-    "Apply failed.",
-    { failureReason: "apply_failed", error },
-  );
+  await writeRunDiagnostic(runId, "apply", "error", "run.apply.failed", "Apply failed.", {
+    failureReason: "apply_failed",
+    error,
+  });
   await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
   await updateRunStatus(runId, "errored");
   await cleanupSavedPlan(runId);
@@ -3905,12 +4336,20 @@ async function cleanupFailedApplyWorkDir(
   recoveryPreservationLogged: boolean,
 ): Promise<boolean> {
   if (applyStarted && !applyCanceled) {
-    await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
+    await writeLog(
+      runId,
+      "apply",
+      `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`,
+    );
   }
   if (recoveryCaptureFailed) {
     preserveRunWorkDirForRecovery(runId);
     if (!recoveryPreservationLogged) {
-      await writeLog(runId, "apply", `[terrence] Recovery copy failed; the run work directory was preserved at ${workDir} for manual recovery.`);
+      await writeLog(
+        runId,
+        "apply",
+        `[terrence] Recovery copy failed; the run work directory was preserved at ${workDir} for manual recovery.`,
+      );
     }
     return true;
   }
@@ -3937,7 +4376,14 @@ async function finalizeApplyWorkDir(
     await cleanupSuccessfulApplyWorkDir(runId, workDir);
     return recoveryPreservationLogged;
   }
-  return cleanupFailedApplyWorkDir(runId, workDir, applyStarted, applyCanceled, recoveryCaptureFailed, recoveryPreservationLogged);
+  return cleanupFailedApplyWorkDir(
+    runId,
+    workDir,
+    applyStarted,
+    applyCanceled,
+    recoveryCaptureFailed,
+    recoveryPreservationLogged,
+  );
 }
 
 async function executeApplyImpl(runId: string): Promise<void> {
@@ -3981,16 +4427,24 @@ async function executeApplyImpl(runId: string): Promise<void> {
       }
       await reportApplyFailure(runId, error);
     } finally {
-      await finalizeApplyWorkDir(runId, workDir, applySuccess, applyStarted, applyCanceled, recoveryCaptureFailed, recoveryPreservationLogged);
+      await finalizeApplyWorkDir(
+        runId,
+        workDir,
+        applySuccess,
+        applyStarted,
+        applyCanceled,
+        recoveryCaptureFailed,
+        recoveryPreservationLogged,
+      );
     }
   } finally {
-  if (workspaceRunLock) {
-    workspaceRunLock = false;
-    await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
-      log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
-    });
+    if (workspaceRunLock) {
+      workspaceRunLock = false;
+      await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
+        log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
+      });
+    }
   }
-}
 }
 
 /**
@@ -4048,12 +4502,16 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
   }
 }
 
-function resolvePolicyEngineCandidates(kind: "opa" | "sentinel"): { candidates: Iterable<string>; overridePath: string | null } {
+function resolvePolicyEngineCandidates(kind: "opa" | "sentinel"): {
+  candidates: Iterable<string>;
+  overridePath: string | null;
+} {
   const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
   const overridePath = override !== undefined && override.trim() !== "" ? override.trim() : null;
-  const candidates = overridePath !== null && overridePath.includes("/")
-    ? [resolve(overridePath)]
-    : executableCandidates(overridePath ?? kind);
+  const candidates =
+    overridePath !== null && overridePath.includes("/")
+      ? [resolve(overridePath)]
+      : executableCandidates(overridePath ?? kind);
   return { candidates, overridePath };
 }
 
@@ -4077,9 +4535,10 @@ async function tryManagedOpaBinary(
 }
 
 function buildPolicyEngineMissingMessage(kind: "opa" | "sentinel", managedAttempted: boolean): string {
-  const install = kind === "opa"
-    ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
-    : "Install Sentinel and ensure the `sentinel` binary is on PATH, or set SENTINEL_BINARY_PATH to its location.";
+  const install =
+    kind === "opa"
+      ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
+      : "Install Sentinel and ensure the `sentinel` binary is on PATH, or set SENTINEL_BINARY_PATH to its location.";
   const managedNote = managedAttempted
     ? " The automatic on-demand download (version selected by OPA_VERSION) was attempted and failed; check network access to github.com or pin a working OPA_VERSION."
     : "";
@@ -4154,9 +4613,10 @@ export function redactSecrets(value: unknown, secrets: readonly string[]): unkno
  * values attempt a JSON parse (numbers, booleans, quoted strings, JSON
  * objects) and fall back to the raw string for non-JSON HCL.
  */
-export function splitSentinelParams(
-  parameters: readonly SentinelParamInput[],
-): { configParams: Record<string, { value: unknown }>; argvParams: string[] } {
+export function splitSentinelParams(parameters: readonly SentinelParamInput[]): {
+  configParams: Record<string, { value: unknown }>;
+  argvParams: string[];
+} {
   const configParams: Record<string, { value: unknown }> = {};
   const argvParams: string[] = [];
   for (const parameter of parameters) {
@@ -4187,10 +4647,7 @@ type PlanPolicySets = {
   allSetIds: string[];
 };
 
-async function resolvePlanPolicySets(
-  workspaceId: string,
-  orgId: string,
-): Promise<PlanPolicySets | null> {
+async function resolvePlanPolicySets(workspaceId: string, orgId: string): Promise<PlanPolicySets | null> {
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
     columns: { projectId: true },
@@ -4203,12 +4660,16 @@ async function resolvePlanPolicySets(
     db.query.policySets.findMany({ where: and(eq(policySets.orgId, orgId), eq(policySets.global, true)) }),
     db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.workspaceId, workspaceId) }),
   ]);
-  const excludedSetIds = new Set(exclusions.map((exclusion: Readonly<{ policySetId: string }>): string => exclusion.policySetId));
-  const allSetIds = [...new Set([
-    ...attached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
-    ...projectAttached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
-    ...orgPolicySets.map((policySet: Readonly<{ id: string }>): string => policySet.id),
-  ])].filter((policySetId: string): boolean => !excludedSetIds.has(policySetId));
+  const excludedSetIds = new Set(
+    exclusions.map((exclusion: Readonly<{ policySetId: string }>): string => exclusion.policySetId),
+  );
+  const allSetIds = [
+    ...new Set([
+      ...attached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
+      ...projectAttached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
+      ...orgPolicySets.map((policySet: Readonly<{ id: string }>): string => policySet.id),
+    ]),
+  ].filter((policySetId: string): boolean => !excludedSetIds.has(policySetId));
   if (allSetIds.length === 0) return null;
 
   const [allPolicies, effectivePolicySets, setParameters] = await Promise.all([
@@ -4217,7 +4678,14 @@ async function resolvePlanPolicySets(
     db.query.policySetParameters.findMany({ where: inArray(policySetParameters.policySetId, allSetIds) }),
   ]);
   if (allPolicies.length === 0) return null;
-  const policySetsById = new Map(effectivePolicySets.map((policySet: Readonly<{ id: string; kind: string }>): readonly [string, Readonly<{ kind: string }>] => [policySet.id, { kind: policySet.kind }]));
+  const policySetsById = new Map(
+    effectivePolicySets.map(
+      (policySet: Readonly<{ id: string; kind: string }>): readonly [string, Readonly<{ kind: string }>] => [
+        policySet.id,
+        { kind: policySet.kind },
+      ],
+    ),
+  );
   const parametersBySet = new Map<string, (typeof policySetParameters.$inferSelect)[]>();
   for (const parameter of setParameters) {
     const current = parametersBySet.get(parameter.policySetId) ?? [];
@@ -4235,7 +4703,11 @@ async function failClosedPolicyChecks(
   // CURRENT plan. Falling back to the latest state version would silently
   // approve changes the policy never inspected. Without plan JSON every
   // policy check errors and the run is blocked from applying.
-  await writeLog(runId, "plan", "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.");
+  await writeLog(
+    runId,
+    "plan",
+    "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.",
+  );
   const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
   let hardFailed = false;
   let softFailed = false;
@@ -4284,9 +4756,10 @@ async function evaluateOpaPolicy(
     const dataPath = join(workDir, "input.json");
     await writeFile(policyPath, policySource, { mode: 0o600 });
     await writeFile(dataPath, planJsonPayload, { mode: 0o600 });
-    const opaQuery = typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
-      ? policy.query
-      : "data";
+    const opaQuery =
+      typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
+        ? policy.query
+        : "data";
     // Validate OPA query to prevent argument injection — only allow safe query syntax
     const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
     const opaProc = spawnRunProcess(
@@ -4324,7 +4797,7 @@ async function resolveSentinelParamInputs(
   parametersBySet: PlanPolicySets["parametersBySet"],
 ): Promise<SentinelParamInput[]> {
   const paramInputs: SentinelParamInput[] = [];
-  for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
+  for (const parameter of policy.policySetId !== null ? (parametersBySet.get(policy.policySetId) ?? []) : []) {
     // Sensitive parameters are stored encrypted (issue #577):
     // resolve the plaintext for the engine invocation.
     paramInputs.push({
@@ -4345,9 +4818,10 @@ function parseSentinelResult(
   let sentinel: Record<string, unknown>;
   try {
     const parsed = JSON.parse(sentinelStdout) as unknown;
-    sentinel = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : { output: sentinelStdout };
+    sentinel =
+      parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { output: sentinelStdout };
   } catch {
     sentinel = { output: sentinelStdout };
   }
@@ -4363,7 +4837,10 @@ function parseSentinelResult(
   return sentinel;
 }
 
-function enforcementFailedCounts(passed: boolean, enforcementLevel: string): Readonly<{ hard: number; soft: number; advisory: number }> {
+function enforcementFailedCounts(
+  passed: boolean,
+  enforcementLevel: string,
+): Readonly<{ hard: number; soft: number; advisory: number }> {
   return {
     hard: !passed && enforcementLevel === "hard-mandatory" ? 1 : 0,
     soft: !passed && enforcementLevel === "soft-mandatory" ? 1 : 0,
@@ -4394,7 +4871,10 @@ function sentinelCheckOutcome(
       },
     };
   }
-  return { status: "errored", result: { error: `Sentinel evaluation exited with code ${String(sentinelExit)}`, sentinel } };
+  return {
+    status: "errored",
+    result: { error: `Sentinel evaluation exited with code ${String(sentinelExit)}`, sentinel },
+  };
 }
 
 async function evaluateSentinelPolicy(
@@ -4418,10 +4898,14 @@ async function evaluateSentinelPolicy(
     // decrypted values must never appear in process arguments.
     const paramInputs = await resolveSentinelParamInputs(policy, parametersBySet);
     const { configParams, argvParams } = splitSentinelParams(paramInputs);
-    await writeFile(configPath, JSON.stringify({
-      global: { tfplan: { value: generatedPlanJson ?? {} } },
-      ...(Object.keys(configParams).length > 0 ? { param: configParams } : {}),
-    }), { mode: 0o600 });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        global: { tfplan: { value: generatedPlanJson ?? {} } },
+        ...(Object.keys(configParams).length > 0 ? { param: configParams } : {}),
+      }),
+      { mode: 0o600 },
+    );
     const args = [
       await requirePolicyEngine("sentinel"),
       "apply",
@@ -4445,7 +4929,13 @@ async function evaluateSentinelPolicy(
       policySandbox,
     );
     const sentinelOutput = captureProcessOutput(sentinelProc.stdout, sentinelProc.stderr, workDir, "sentinel");
-    const [sentinelExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, policyTimeoutMs);
+    const [sentinelExit, capturedOutput] = await waitForTrackedProcess(
+      runId,
+      "policy",
+      sentinelProc,
+      sentinelOutput,
+      policyTimeoutMs,
+    );
     const sentinelStdout = await readCapturedJson(capturedOutput, "Sentinel output");
     const sentinelStderr = capturedOutput.stderr.truncated
       ? `${capturedOutput.stderr.preview}\n[terrence] Sentinel stderr truncated.`
@@ -4466,7 +4956,14 @@ function opaEvaluationArgs(
   policySource: unknown,
   planJsonPayload: string | null,
 ): { policySource: string; planJsonPayload: string } | null {
-  if (isOpa !== true || typeof policySource !== "string" || policySource === "" || planJsonPayload === null || planJsonPayload === "") return null;
+  if (
+    isOpa !== true ||
+    typeof policySource !== "string" ||
+    policySource === "" ||
+    planJsonPayload === null ||
+    planJsonPayload === ""
+  )
+    return null;
   return { policySource, planJsonPayload };
 }
 
@@ -4492,9 +4989,7 @@ async function evaluatePlanPolicy(
   policyTimeoutMs: number,
 ): Promise<{ status: string; result: Record<string, unknown> }> {
   const policySet = policy.policySetId !== null ? policySetsById.get(policy.policySetId) : undefined;
-  const policySource = typeof policy.source === "string" && policy.source !== ""
-    ? policy.source
-    : policy.query;
+  const policySource = typeof policy.source === "string" && policy.source !== "" ? policy.source : policy.query;
   const opaArgs = opaEvaluationArgs(policySet?.kind === "opa", policySource, planJsonPayload);
   if (opaArgs !== null) {
     return evaluateOpaPolicy(runId, policy, opaArgs.policySource, opaArgs.planJsonPayload, policyTimeoutMs);
@@ -4514,9 +5009,8 @@ async function recordPolicyCheckOutcome(
   checkResult: Record<string, unknown>,
   checkBatch: (typeof policyChecks.$inferInsert)[],
 ): Promise<{ hardFailed: boolean; softFailed: boolean }> {
-  const storedStatus = checkStatus === "failed" && policy.enforcementLevel === "soft-mandatory"
-    ? "soft_failed"
-    : checkStatus;
+  const storedStatus =
+    checkStatus === "failed" && policy.enforcementLevel === "soft-mandatory" ? "soft_failed" : checkStatus;
   checkBatch.push({
     id: checkId,
     runId,
@@ -4535,7 +5029,11 @@ async function recordPolicyCheckOutcome(
       await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" HARD-FAILED (hard-mandatory). Blocking apply.`);
     } else if (policy.enforcementLevel === "soft-mandatory") {
       softFailed = true;
-      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" SOFT-FAILED (soft-mandatory). Override required.`);
+      await writeLog(
+        runId,
+        "plan",
+        `[terrence] Policy "${policy.name}" SOFT-FAILED (soft-mandatory). Override required.`,
+      );
     } else {
       await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" FAILED (advisory — not blocking).`);
     }
@@ -4599,9 +5097,10 @@ async function loadPolicyEvaluationPlan(
   preloadedPlanJson: JsonObject | undefined,
   planTimeoutMs: number,
 ): Promise<{ planJsonPayload: string | null; generatedPlanJson: JsonObject | undefined }> {
-  const generatedPlanCapture = preloadedPlanJson !== undefined || executionDir === undefined || executionDir === ""
-    ? undefined
-    : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs, executionDir);
+  const generatedPlanCapture =
+    preloadedPlanJson !== undefined || executionDir === undefined || executionDir === ""
+      ? undefined
+      : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs, executionDir);
   const generatedPlanJson = preloadedPlanJson ?? generatedPlanCapture?.planJson;
   if (generatedPlanCapture !== undefined) await rm(generatedPlanCapture.rawPath, { force: true });
   const planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
@@ -4623,7 +5122,15 @@ async function evaluateSinglePolicy(
   let checkResult: Record<string, unknown> = {};
 
   try {
-    ({ status: checkStatus, result: checkResult } = await evaluatePlanPolicy(runId, policy, policySetsById, parametersBySet, planJsonPayload, generatedPlanJson, policyTimeoutMs));
+    ({ status: checkStatus, result: checkResult } = await evaluatePlanPolicy(
+      runId,
+      policy,
+      policySetsById,
+      parametersBySet,
+      planJsonPayload,
+      generatedPlanJson,
+      policyTimeoutMs,
+    ));
     return await recordPolicyCheckOutcome(runId, policy, checkId, checkStatus, checkResult, checkBatch);
   } catch (err: unknown) {
     return await recordPolicyCheckError(runId, policy, checkId, err, checkBatch);
@@ -4648,7 +5155,13 @@ export async function runPolicyChecks(
 
   const planTimeoutMs = await executionTimeoutMs("plan");
   const policyTimeoutMs = Math.min(planTimeoutMs, POLICY_EVALUATION_TIMEOUT_MS);
-  const { planJsonPayload, generatedPlanJson } = await loadPolicyEvaluationPlan(runId, executionDir, planBinaryPath, preloadedPlanJson, planTimeoutMs);
+  const { planJsonPayload, generatedPlanJson } = await loadPolicyEvaluationPlan(
+    runId,
+    executionDir,
+    planBinaryPath,
+    preloadedPlanJson,
+    planTimeoutMs,
+  );
 
   let hardFailed = false;
   let softFailed = false;
@@ -4658,10 +5171,23 @@ export async function runPolicyChecks(
     return failClosedPolicyChecks(runId, allPolicies);
   }
 
-  await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
+  await writeLog(
+    runId,
+    "plan",
+    `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`,
+  );
 
   for (const policy of allPolicies) {
-    const outcome = await evaluateSinglePolicy(runId, policy, policySetsById, parametersBySet, planJsonPayload, generatedPlanJson, policyTimeoutMs, checkBatch);
+    const outcome = await evaluateSinglePolicy(
+      runId,
+      policy,
+      policySetsById,
+      parametersBySet,
+      planJsonPayload,
+      generatedPlanJson,
+      policyTimeoutMs,
+      checkBatch,
+    );
     hardFailed = hardFailed || outcome.hardFailed;
     softFailed = softFailed || outcome.softFailed;
   }
@@ -4706,7 +5232,10 @@ type AutoDestroyDescendingCursor = Readonly<{ createdAt: number; id: string }>;
 type AutoDestroyRunCursor = Readonly<{ workspaceId: string; createdAt: number; id: string }>;
 type AutoDestroyStateRow = Pick<typeof stateVersions.$inferSelect, "id" | "workspaceId" | "createdAt">;
 type AutoDestroyConfigurationRow = Pick<typeof configurationVersions.$inferSelect, "id" | "workspaceId" | "createdAt">;
-type AutoDestroyRunRow = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "isDestroy" | "message" | "createdAt">;
+type AutoDestroyRunRow = Pick<
+  typeof runs.$inferSelect,
+  "id" | "workspaceId" | "status" | "isDestroy" | "message" | "createdAt"
+>;
 
 type AutoDestroyRunFacts = Readonly<{
   activeWorkspaceIds: ReadonlySet<string>;
@@ -4836,12 +5365,13 @@ async function fetchAutoDestroyWorkspacePage(
   workspaceCursor: AutoDestroyDescendingCursor | null,
 ): Promise<(typeof workspaces.$inferSelect)[]> {
   return await db.query.workspaces.findMany({
-    where: workspaceCursor === null
-      ? undefined
-      : or(
-          gt(workspaces.createdAt, workspaceCursor.createdAt),
-          and(eq(workspaces.createdAt, workspaceCursor.createdAt), gt(workspaces.id, workspaceCursor.id)),
-        ),
+    where:
+      workspaceCursor === null
+        ? undefined
+        : or(
+            gt(workspaces.createdAt, workspaceCursor.createdAt),
+            and(eq(workspaces.createdAt, workspaceCursor.createdAt), gt(workspaces.id, workspaceCursor.id)),
+          ),
     orderBy: [asc(workspaces.createdAt), asc(workspaces.id)],
     limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
   });
@@ -4937,7 +5467,6 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
   return created;
 }
 
-
 async function fetchAssessmentCandidates(): Promise<(typeof workspaces.$inferSelect)[]> {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
@@ -4947,10 +5476,11 @@ async function fetchAssessmentCandidates(): Promise<(typeof workspaces.$inferSel
     db.query.organizations.findMany(),
   ]);
   const organizationsById = new Map(
-    allOrganizations.map((organization: Readonly<typeof organizations.$inferSelect>): readonly [
-      string,
-      Readonly<typeof organizations.$inferSelect>,
-    ] => [organization.id, organization]),
+    allOrganizations.map(
+      (
+        organization: Readonly<typeof organizations.$inferSelect>,
+      ): readonly [string, Readonly<typeof organizations.$inferSelect>] => [organization.id, organization],
+    ),
   );
 
   // Filter candidate workspaces first
@@ -4999,11 +5529,11 @@ function findWorkspaceAssessmentSignals(
   wsAssessments: readonly (typeof assessmentResults.$inferSelect)[],
   wsRuns: readonly (typeof runs.$inferSelect)[],
 ): {
-  latestResult: (typeof assessmentResults.$inferSelect) | undefined;
-  activeResult: (typeof assessmentResults.$inferSelect) | undefined;
-  latestRun: (typeof runs.$inferSelect) | undefined;
-  latestAppliedRun: (typeof runs.$inferSelect) | undefined;
-  activeRun: (typeof runs.$inferSelect) | undefined;
+  latestResult: typeof assessmentResults.$inferSelect | undefined;
+  activeResult: typeof assessmentResults.$inferSelect | undefined;
+  latestRun: typeof runs.$inferSelect | undefined;
+  latestAppliedRun: typeof runs.$inferSelect | undefined;
+  activeRun: typeof runs.$inferSelect | undefined;
 } {
   // latestResult is the first assessment (sorted desc)
   const latestResult = wsAssessments.length > 0 ? wsAssessments[0] : undefined;
@@ -5078,8 +5608,14 @@ async function checkAssessmentEnabled(
   assessmentResultId: string,
 ): Promise<boolean> {
   if (workspace.assessmentsEnabled !== true && organization?.assessmentsEnforced !== true) {
-    await db.update(assessmentResults)
-      .set({ status: "canceled", succeeded: false, errorMessage: "Health assessments are disabled", completedAt: Date.now() })
+    await db
+      .update(assessmentResults)
+      .set({
+        status: "canceled",
+        succeeded: false,
+        errorMessage: "Health assessments are disabled",
+        completedAt: Date.now(),
+      })
       .where(eq(assessmentResults.id, assessmentResultId));
     scheduleExplorerInventory(workspace.id);
     return false;
@@ -5100,14 +5636,14 @@ type AssessmentBasis = Readonly<{
 
 async function loadAssessmentBasis(workspaceId: string): Promise<AssessmentBasis> {
   const appliedRun = await db.query.runs.findFirst({
-    where: and(
-      eq(runs.workspaceId, workspaceId),
-      eq(runs.status, "applied"),
-      isNotNull(runs.configurationVersionId),
-    ),
+    where: and(eq(runs.workspaceId, workspaceId), eq(runs.status, "applied"), isNotNull(runs.configurationVersionId)),
     orderBy: [desc(runs.createdAt)],
   });
-  if (appliedRun === undefined || appliedRun.configurationVersionId === null || appliedRun.configurationVersionId === undefined) {
+  if (
+    appliedRun === undefined ||
+    appliedRun.configurationVersionId === null ||
+    appliedRun.configurationVersionId === undefined
+  ) {
     throw new Error("No successfully applied configuration is available for assessment.");
   }
   return { appliedRun, configurationVersionId: appliedRun.configurationVersionId };
@@ -5122,19 +5658,15 @@ async function prepareAssessmentExecutionDir(
     where: eq(configurationVersions.id, configurationVersionId),
   });
   if (
-    configuration === undefined
-    || typeof configuration.archivePath !== "string"
-    || configuration.archivePath === ""
-    || !(await exists(configuration.archivePath))
-  ) throw new Error("Applied configuration archive is unavailable.");
+    configuration === undefined ||
+    typeof configuration.archivePath !== "string" ||
+    configuration.archivePath === "" ||
+    !(await exists(configuration.archivePath))
+  )
+    throw new Error("Applied configuration archive is unavailable.");
 
   await mkdir(workDir, { recursive: true, mode: 0o700 });
-  if (!(await extractTarArchive(
-    configuration.archivePath,
-    workDir,
-    undefined,
-    { phase: "assessment" },
-  ))) {
+  if (!(await extractTarArchive(configuration.archivePath, workDir, undefined, { phase: "assessment" }))) {
     throw new Error("Configuration archive extraction failed or contained invalid path components.");
   }
   const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
@@ -5142,18 +5674,13 @@ async function prepareAssessmentExecutionDir(
   if (!dirFiles.some((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"))) {
     throw new Error("No Terraform configuration files were found for assessment.");
   }
-  await writeFile(
-    join(executionDir, "terrence_backend_override.tf"),
-    'terraform {\n  backend "local" {}\n}\n',
-    { mode: 0o600 },
-  );
+  await writeFile(join(executionDir, "terrence_backend_override.tf"), 'terraform {\n  backend "local" {}\n}\n', {
+    mode: 0o600,
+  });
   return executionDir;
 }
 
-async function seedAssessmentState(
-  workspace: typeof workspaces.$inferSelect,
-  executionDir: string,
-): Promise<void> {
+async function seedAssessmentState(workspace: typeof workspaces.$inferSelect, executionDir: string): Promise<void> {
   const latestState = await db.query.stateVersions.findFirst({
     where: and(
       eq(stateVersions.workspaceId, workspace.id),
@@ -5165,7 +5692,9 @@ async function seedAssessmentState(
   if (typeof latestState?.statePayload !== "string" || latestState.statePayload === "") {
     throw new Error("No finalized workspace state is available for assessment.");
   }
-  await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
+  await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), {
+    mode: 0o600,
+  });
 }
 
 async function assessmentIdentityEnvironment(
@@ -5176,18 +5705,25 @@ async function assessmentIdentityEnvironment(
   variables: Awaited<ReturnType<typeof executionVariables>>,
   executionDir: string,
 ): Promise<Awaited<ReturnType<typeof workspaceIdentityEnvironment>>> {
-  const project = workspace.projectId === null ? undefined : await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) });
-  return workspaceIdentityEnvironment({
-    organizationId: organization?.id ?? workspace.orgId,
-    organizationName: organization?.name ?? workspace.orgId,
-    projectId: workspace.projectId ?? "default",
-    projectName: project?.name ?? "Default Project",
-    workspaceId: workspace.id,
-    workspaceName: workspace.name,
-    runId: assessmentResultId,
-    phase: "plan",
-    ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
-  }, variables, executionDir);
+  const project =
+    workspace.projectId === null
+      ? undefined
+      : await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) });
+  return workspaceIdentityEnvironment(
+    {
+      organizationId: organization?.id ?? workspace.orgId,
+      organizationName: organization?.name ?? workspace.orgId,
+      projectId: workspace.projectId ?? "default",
+      projectName: project?.name ?? "Default Project",
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      runId: assessmentResultId,
+      phase: "plan",
+      ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
+    },
+    variables,
+    executionDir,
+  );
 }
 
 async function prepareAssessmentTerraformEnv(
@@ -5206,13 +5742,18 @@ async function prepareAssessmentTerraformEnv(
   const variables = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
   const settings = await db.query.adminGeneralSettings.findFirst({ where: eq(adminGeneralSettings.id, "general") });
   const assessmentTimeoutMs = timeoutSeconds(settings?.planTimeout, 7_200) * 1_000;
-  const identity = await assessmentIdentityEnvironment(assessmentResultId, workspace, organization, settings, variables, executionDir);
+  const identity = await assessmentIdentityEnvironment(
+    assessmentResultId,
+    workspace,
+    organization,
+    settings,
+    variables,
+    executionDir,
+  );
   const environment = buildRunPhaseEnv(variables, appliedRun.variables, identity.environment);
   const requestedTool = workspace.iacBinary ?? organization?.defaultIacBinary ?? "terraform";
-  const requestedVersion = appliedRun.terraformVersion
-    ?? workspace.terraformVersion
-    ?? organization?.defaultTerraformVersion
-    ?? "latest";
+  const requestedVersion =
+    appliedRun.terraformVersion ?? workspace.terraformVersion ?? organization?.defaultTerraformVersion ?? "latest";
   return { variables, environment, assessmentTimeoutMs, requestedTool, requestedVersion };
 }
 
@@ -5224,21 +5765,14 @@ async function writeAssessmentTfVarsFiles(
   const terraformVariables = variables
     .filter((variable: Readonly<{ category: string }>): boolean => variable.category === "terraform")
     .map((variable: Readonly<{ key: string; hcl: boolean; value: string }>): string =>
-      terraformVariableLine(variable.key, variable.value, variable.hcl));
-  if (terraformVariables.length > 0) {
-    await writeFile(
-      join(executionDir, "terrence.workspace.tfvars"),
-      terraformVariables.join("\n"),
-      { mode: 0o600 },
+      terraformVariableLine(variable.key, variable.value, variable.hcl),
     );
+  if (terraformVariables.length > 0) {
+    await writeFile(join(executionDir, "terrence.workspace.tfvars"), terraformVariables.join("\n"), { mode: 0o600 });
   }
   const appliedRunTfVarsLines = runTerraformVariableLines(appliedRunVariables, variables);
   if (appliedRunTfVarsLines.length > 0) {
-    await writeFile(
-      join(executionDir, "terrence.run.tfvars"),
-      appliedRunTfVarsLines.join("\n"),
-      { mode: 0o600 },
-    );
+    await writeFile(join(executionDir, "terrence.run.tfvars"), appliedRunTfVarsLines.join("\n"), { mode: 0o600 });
   }
   return { terraformVariables, appliedRunTfVarsLines };
 }
@@ -5265,14 +5799,7 @@ async function runAssessmentPlanCapture(
   appendOutput(init.output);
   if (init.exitCode !== 0) throw new Error(`${resolved.tool} init failed with exit code ${String(init.exitCode)}`);
 
-  const planArgs = [
-    resolved.binaryPath,
-    "plan",
-    "-no-color",
-    "-input=false",
-    "-detailed-exitcode",
-    "-out=tfplan",
-  ];
+  const planArgs = [resolved.binaryPath, "plan", "-no-color", "-input=false", "-detailed-exitcode", "-out=tfplan"];
   if (terraformVariables.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
   if (appliedRunTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
   const plan = await captureProcess(
@@ -5288,7 +5815,13 @@ async function runAssessmentPlanCapture(
     throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
   }
 
-  const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath, assessmentTimeoutMs, workDir);
+  const generatedPlan = await readPlanJson(
+    assessmentResultId,
+    executionDir,
+    resolved.binaryPath,
+    assessmentTimeoutMs,
+    workDir,
+  );
   if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
   return generatedPlan.planJson;
 }
@@ -5310,7 +5843,8 @@ async function readAssessmentProviderSchema(
     assessmentTimeoutMs,
     workDir,
   );
-  if (schema.exitCode === 0) return parseJsonObject(await readCapturedJson(schema.capturedOutput, "Provider schema output"));
+  if (schema.exitCode === 0)
+    return parseJsonObject(await readCapturedJson(schema.capturedOutput, "Provider schema output"));
   appendOutput(`[terrence] Provider schema unavailable: ${schema.output}`);
   return {};
 }
@@ -5323,19 +5857,19 @@ async function completeAssessmentRun(
   output: readonly string[],
 ): Promise<void> {
   const activeRun = await db.query.runs.findFirst({
-    where: and(
-      eq(runs.workspaceId, workspaceId),
-      notInArray(runs.status, FINAL_RUN_STATUSES),
-    ),
+    where: and(eq(runs.workspaceId, workspaceId), notInArray(runs.status, FINAL_RUN_STATUSES)),
   });
   if (activeRun !== undefined) {
-    await db.update(assessmentResults).set({
-      status: "canceled",
-      succeeded: false,
-      errorMessage: "Canceled because an ordinary run started",
-      logOutput: output.join("\n"),
-      completedAt: Date.now(),
-    }).where(eq(assessmentResults.id, assessmentResultId));
+    await db
+      .update(assessmentResults)
+      .set({
+        status: "canceled",
+        succeeded: false,
+        errorMessage: "Canceled because an ordinary run started",
+        logOutput: output.join("\n"),
+        completedAt: Date.now(),
+      })
+      .where(eq(assessmentResults.id, assessmentResultId));
     scheduleExplorerInventory(workspaceId);
     return;
   }
@@ -5345,24 +5879,27 @@ async function completeAssessmentRun(
     storePlanCheckResults(workspaceId, planJson, { assessmentResultId }),
   ]);
   const allChecksSucceeded = checks.failed === 0 && checks.errored === 0 && checks.unknown === 0;
-  await db.update(assessmentResults).set({
-    status: "completed",
-    succeeded: true,
-    drifted: resources.drifted > 0,
-    errorMessage: null,
-    resourcesDrifted: resources.drifted,
-    resourcesUndrifted: resources.undrifted,
-    allChecksSucceeded,
-    checksPassed: checks.passed,
-    checksFailed: checks.failed,
-    checksErrored: checks.errored,
-    checksUnknown: checks.unknown,
-    jsonOutput: planJson,
-    jsonSchema: providerSchema,
-    artifactSchemaVersion: 1,
-    logOutput: output.join("\n"),
-    completedAt: Date.now(),
-  }).where(eq(assessmentResults.id, assessmentResultId));
+  await db
+    .update(assessmentResults)
+    .set({
+      status: "completed",
+      succeeded: true,
+      drifted: resources.drifted > 0,
+      errorMessage: null,
+      resourcesDrifted: resources.drifted,
+      resourcesUndrifted: resources.undrifted,
+      allChecksSucceeded,
+      checksPassed: checks.passed,
+      checksFailed: checks.failed,
+      checksErrored: checks.errored,
+      checksUnknown: checks.unknown,
+      jsonOutput: planJson,
+      jsonSchema: providerSchema,
+      artifactSchemaVersion: 1,
+      logOutput: output.join("\n"),
+      completedAt: Date.now(),
+    })
+    .where(eq(assessmentResults.id, assessmentResultId));
   scheduleExplorerInventory(workspaceId);
   if (resources.drifted > 0) queueAssessmentNotification(assessmentResultId, "assessment:drifted");
   if (!allChecksSucceeded) queueAssessmentNotification(assessmentResultId, "assessment:check_failure");
@@ -5377,14 +5914,17 @@ async function failAssessmentRun(
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   appendOutput(`[terrence ERROR] ${message}`);
-  await db.update(assessmentResults).set({
-    status: "errored",
-    succeeded: false,
-    drifted: null,
-    errorMessage: message,
-    logOutput: output.join("\n"),
-    completedAt: Date.now(),
-  }).where(eq(assessmentResults.id, assessmentResultId));
+  await db
+    .update(assessmentResults)
+    .set({
+      status: "errored",
+      succeeded: false,
+      drifted: null,
+      errorMessage: message,
+      logOutput: output.join("\n"),
+      completedAt: Date.now(),
+    })
+    .where(eq(assessmentResults.id, assessmentResultId));
   scheduleExplorerInventory(workspaceId);
   queueAssessmentNotification(assessmentResultId, "assessment:failed");
 }
@@ -5420,8 +5960,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   });
   if (!(await checkAssessmentEnabled(workspace, organization, assessmentResultId))) return;
 
-  await db.update(assessmentResults).set({ status: "running" })
-    .where(eq(assessmentResults.id, assessmentResultId));
+  await db.update(assessmentResults).set({ status: "running" }).where(eq(assessmentResults.id, assessmentResultId));
   const workDir = assessmentWorkDir(assessmentResultId);
   const output: string[] = [];
   const appendOutput = (text: string): void => {
@@ -5447,16 +5986,41 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
     } else {
       const executionDir = await prepareAssessmentExecutionDir(basis.configurationVersionId, workDir, workspace);
       await seedAssessmentState(workspace, executionDir);
-      const terraformEnv = await prepareAssessmentTerraformEnv(assessmentResultId, appliedRun, workspace, organization, executionDir);
+      const terraformEnv = await prepareAssessmentTerraformEnv(
+        assessmentResultId,
+        appliedRun,
+        workspace,
+        organization,
+        executionDir,
+      );
       const tfVarsFiles = await writeAssessmentTfVarsFiles(executionDir, terraformEnv.variables, appliedRun.variables);
       const resolved = await ensureBinary(terraformEnv.requestedTool, terraformEnv.requestedVersion);
-      if (resolved === null) throw new Error(`Unable to resolve CLI binary '${terraformEnv.requestedTool}' for assessment.`);
+      if (resolved === null)
+        throw new Error(`Unable to resolve CLI binary '${terraformEnv.requestedTool}' for assessment.`);
       if (runSandbox !== null) {
         await runSandbox.ensureTool(resolved.tool, resolved.version, resolved.binaryPath);
         await runSandbox.prepareWorkDir(`assessment-${assessmentResultId}`);
       }
-      planJson = await runAssessmentPlanCapture(assessmentResultId, resolved, executionDir, terraformEnv.environment, terraformEnv.assessmentTimeoutMs, workDir, tfVarsFiles.terraformVariables, tfVarsFiles.appliedRunTfVarsLines, appendOutput);
-      providerSchema = await readAssessmentProviderSchema(assessmentResultId, resolved, executionDir, terraformEnv.environment, terraformEnv.assessmentTimeoutMs, workDir, appendOutput);
+      planJson = await runAssessmentPlanCapture(
+        assessmentResultId,
+        resolved,
+        executionDir,
+        terraformEnv.environment,
+        terraformEnv.assessmentTimeoutMs,
+        workDir,
+        tfVarsFiles.terraformVariables,
+        tfVarsFiles.appliedRunTfVarsLines,
+        appendOutput,
+      );
+      providerSchema = await readAssessmentProviderSchema(
+        assessmentResultId,
+        resolved,
+        executionDir,
+        terraformEnv.environment,
+        terraformEnv.assessmentTimeoutMs,
+        workDir,
+        appendOutput,
+      );
     }
 
     await completeAssessmentRun(assessmentResultId, workspace.id, planJson, providerSchema, output);
@@ -5497,36 +6061,34 @@ async function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise
 
 export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
-  if (isMaintenanceActive()) return [];
-  if (workerQueueDraining()) return [];
-  const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
-  const running = await db.query.assessmentResults.findMany({
-    where: eq(assessmentResults.status, "running"),
-    columns: { id: true },
-  });
-  const available = Math.max(0, maximum - running.length);
-  if (available === 0) return [];
-  const pending = await db.query.assessmentResults.findMany({
-    where: eq(assessmentResults.status, "pending"),
-    orderBy: [asc(assessmentResults.createdAt)],
-    limit: available,
-  });
-  const claimed: string[] = [];
-  for (const assessment of pending) {
-    const updated = await db.update(assessmentResults)
-      .set({ status: "running" })
-      .where(and(
-        eq(assessmentResults.id, assessment.id),
-        eq(assessmentResults.status, "pending"),
-      ))
-      .returning({ id: assessmentResults.id });
-    if (updated.length === 0) continue;
-    claimed.push(assessment.id);
-    executeAssessment(assessment.id).catch((error: unknown): void => {
-      log.error("Assessment failed", { assessmentId: assessment.id, error });
+    if (isMaintenanceActive()) return [];
+    if (workerQueueDraining()) return [];
+    const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
+    const running = await db.query.assessmentResults.findMany({
+      where: eq(assessmentResults.status, "running"),
+      columns: { id: true },
     });
-  }
-  return claimed;
+    const available = Math.max(0, maximum - running.length);
+    if (available === 0) return [];
+    const pending = await db.query.assessmentResults.findMany({
+      where: eq(assessmentResults.status, "pending"),
+      orderBy: [asc(assessmentResults.createdAt)],
+      limit: available,
+    });
+    const claimed: string[] = [];
+    for (const assessment of pending) {
+      const updated = await db
+        .update(assessmentResults)
+        .set({ status: "running" })
+        .where(and(eq(assessmentResults.id, assessment.id), eq(assessmentResults.status, "pending")))
+        .returning({ id: assessmentResults.id });
+      if (updated.length === 0) continue;
+      claimed.push(assessment.id);
+      executeAssessment(assessment.id).catch((error: unknown): void => {
+        log.error("Assessment failed", { assessmentId: assessment.id, error });
+      });
+    }
+    return claimed;
   });
 }
 
@@ -5546,34 +6108,66 @@ type QueuePageContext = Readonly<{
 async function prefetchQueuePageContext(pendingRuns: readonly (typeof runs.$inferSelect)[]): Promise<QueuePageContext> {
   // Pre-fetch workspaces to avoid N+1 inside the loop
   const workspaceIds = [...new Set(pendingRuns.map((run): string => run.workspaceId))];
-  const workspacesById = workspaceIds.length === 0
-    ? new Map<string, typeof workspaces.$inferSelect>()
-    : new Map(
-        (await db.query.workspaces.findMany({
-          where: inArray(workspaces.id, workspaceIds),
-        })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
-      );
+  const workspacesById =
+    workspaceIds.length === 0
+      ? new Map<string, typeof workspaces.$inferSelect>()
+      : new Map(
+          (
+            await db.query.workspaces.findMany({
+              where: inArray(workspaces.id, workspaceIds),
+            })
+          ).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
+        );
 
   // Resolve queue eligibility inputs once per page instead of querying the
   // same pool, project, organization, and scope rows for every candidate.
-  const agentPoolIds = [...new Set([...workspacesById.values()]
-    .filter((workspace): boolean => workspace.executionMode === "agent" && workspace.agentPoolId !== null)
-    .map((workspace): string | null => workspace.agentPoolId)
-    .filter((id): id is string => id !== null))];
-  const projectIds = [...new Set([...workspacesById.values()]
-    .map((workspace): string | null => workspace.projectId)
-    .filter((id): id is string => id !== null))];
+  const agentPoolIds = [
+    ...new Set(
+      [...workspacesById.values()]
+        .filter((workspace): boolean => workspace.executionMode === "agent" && workspace.agentPoolId !== null)
+        .map((workspace): string | null => workspace.agentPoolId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
+  const projectIds = [
+    ...new Set(
+      [...workspacesById.values()]
+        .map((workspace): string | null => workspace.projectId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
   const organizationIds = [...new Set([...workspacesById.values()].map((workspace): string => workspace.orgId))];
   const [poolRows, projectRows, organizationRows, allowedWorkspaceRows, allowedProjectRows] = await Promise.all([
-    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPools.findMany({ where: inArray(agentPools.id, agentPoolIds) }),
-    projectIds.length === 0 ? Promise.resolve([]) : db.query.projects.findMany({ where: inArray(projects.id, projectIds) }),
-    organizationIds.length === 0 ? Promise.resolve([]) : db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds) }),
-    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedWorkspaces.findMany({ where: inArray(agentPoolAllowedWorkspaces.agentPoolId, agentPoolIds) }),
-    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedProjects.findMany({ where: inArray(agentPoolAllowedProjects.agentPoolId, agentPoolIds) }),
+    agentPoolIds.length === 0
+      ? Promise.resolve([])
+      : db.query.agentPools.findMany({ where: inArray(agentPools.id, agentPoolIds) }),
+    projectIds.length === 0
+      ? Promise.resolve([])
+      : db.query.projects.findMany({ where: inArray(projects.id, projectIds) }),
+    organizationIds.length === 0
+      ? Promise.resolve([])
+      : db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds) }),
+    agentPoolIds.length === 0
+      ? Promise.resolve([])
+      : db.query.agentPoolAllowedWorkspaces.findMany({
+          where: inArray(agentPoolAllowedWorkspaces.agentPoolId, agentPoolIds),
+        }),
+    agentPoolIds.length === 0
+      ? Promise.resolve([])
+      : db.query.agentPoolAllowedProjects.findMany({
+          where: inArray(agentPoolAllowedProjects.agentPoolId, agentPoolIds),
+        }),
   ]);
   const poolsById = new Map(poolRows.map((pool): [string, typeof agentPools.$inferSelect] => [pool.id, pool]));
-  const projectsById = new Map(projectRows.map((project): [string, typeof projects.$inferSelect] => [project.id, project]));
-  const organizationsById = new Map(organizationRows.map((organization): [string, typeof organizations.$inferSelect] => [organization.id, organization]));
+  const projectsById = new Map(
+    projectRows.map((project): [string, typeof projects.$inferSelect] => [project.id, project]),
+  );
+  const organizationsById = new Map(
+    organizationRows.map((organization): [string, typeof organizations.$inferSelect] => [
+      organization.id,
+      organization,
+    ]),
+  );
   const allowedWorkspacesByPool = new Map<string, Set<string>>();
   for (const row of allowedWorkspaceRows) {
     const values = allowedWorkspacesByPool.get(row.agentPoolId) ?? new Set<string>();
@@ -5586,17 +6180,30 @@ async function prefetchQueuePageContext(pendingRuns: readonly (typeof runs.$infe
     values.add(row.projectId);
     allowedProjectsByPool.set(row.agentPoolId, values);
   }
-  return { workspacesById, poolsById, projectsById, organizationsById, allowedWorkspacesByPool, allowedProjectsByPool, noAllowedIds: new Set<string>() };
+  return {
+    workspacesById,
+    poolsById,
+    projectsById,
+    organizationsById,
+    allowedWorkspacesByPool,
+    allowedProjectsByPool,
+    noAllowedIds: new Set<string>(),
+  };
 }
 
 async function noteLockedQueueRun(runId: string, workspace: typeof workspaces.$inferSelect): Promise<void> {
   // A lock acquired after run creation parks the run silently (issue
   // #575). Log the block throttled instead of parking with no signal.
   if (notePlanLockLogged(runId)) {
-    const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
-      ? ` Reason: ${workspace.lockedReason}`
-      : "";
-    await writeLog(runId, "plan", `[terrence] Run is waiting: the workspace is locked.${reason} Unlock the workspace or cancel this run.`);
+    const reason =
+      typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
+        ? ` Reason: ${workspace.lockedReason}`
+        : "";
+    await writeLog(
+      runId,
+      "plan",
+      `[terrence] Run is waiting: the workspace is locked.${reason} Unlock the workspace or cancel this run.`,
+    );
   }
 }
 
@@ -5604,11 +6211,7 @@ function buildRunClaimWhere(run: typeof runs.$inferSelect): SQL | undefined {
   // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
   // and the run is still pending.
   // Speculative/plan-only runs do NOT block the queue — they can run alongside other runs.
-  const blockerStatuses = run.planOnly || run.savePlan
-    ? []
-    : [
-        ...WORKSPACE_BLOCKING_RUN_STATUSES,
-      ];
+  const blockerStatuses = run.planOnly || run.savePlan ? [] : [...WORKSPACE_BLOCKING_RUN_STATUSES];
 
   return and(
     eq(runs.id, run.id),
@@ -5616,14 +6219,17 @@ function buildRunClaimWhere(run: typeof runs.$inferSelect): SQL | undefined {
     blockerStatuses.length > 0
       ? notInArray(
           runs.workspaceId,
-          db.select({ workspaceId: runs.workspaceId }).from(runs).where(
-            and(
-              eq(runs.workspaceId, run.workspaceId),
-              inArray(runs.status, blockerStatuses),
-              eq(runs.planOnly, false),
-              eq(runs.savePlan, false),
+          db
+            .select({ workspaceId: runs.workspaceId })
+            .from(runs)
+            .where(
+              and(
+                eq(runs.workspaceId, run.workspaceId),
+                inArray(runs.status, blockerStatuses),
+                eq(runs.planOnly, false),
+                eq(runs.savePlan, false),
+              ),
             ),
-          ),
         )
       : sql`1=1`,
   );
@@ -5639,8 +6245,8 @@ async function claimAgentPoolRun(
 ): Promise<void> {
   const pool = workspace.agentPoolId === null ? undefined : ctx.poolsById.get(workspace.agentPoolId);
   if (
-    pool?.orgId !== workspace.orgId
-    || !(await agentPoolAllowsWorkspace(
+    pool?.orgId !== workspace.orgId ||
+    !(await agentPoolAllowsWorkspace(
       pool,
       workspace.id,
       workspace.projectId,
@@ -5648,17 +6254,25 @@ async function claimAgentPoolRun(
       ctx.allowedProjectsByPool.get(pool.id) ?? ctx.noAllowedIds,
     ))
   ) {
-    const unreachable = await db.update(runs).set({
-      status: "unreachable",
-      statusTimestamps: {
-        ...(run.statusTimestamps ?? {}),
-        "unreachable-at": new Date().toISOString(),
-      },
-    }).where(claimWhere).returning({ id: runs.id });
+    const unreachable = await db
+      .update(runs)
+      .set({
+        status: "unreachable",
+        statusTimestamps: {
+          ...(run.statusTimestamps ?? {}),
+          "unreachable-at": new Date().toISOString(),
+        },
+      })
+      .where(claimWhere)
+      .returning({ id: runs.id });
     if (unreachable.length > 0) {
       claimedRunIds.push(run.id);
       claimedWorkspaceIds.add(run.workspaceId);
-      await writeLog(run.id, "plan", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+      await writeLog(
+        run.id,
+        "plan",
+        "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.",
+      );
       queueRunNotification(run.id, "run:errored", "unreachable");
       void reportRunVcsStatus(run.id, "unreachable");
     }
@@ -5668,22 +6282,32 @@ async function claimAgentPoolRun(
   const queued = await db.transaction(async (transaction): Promise<boolean> => {
     const tx = transaction as unknown as typeof db;
     const inputState = await tx.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+      where: and(
+        eq(stateVersions.workspaceId, workspace.id),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
       orderBy: [desc(stateVersions.serial)],
       columns: { id: true, serial: true },
     });
-    const claimed = await tx.update(runs).set({
-      agentPoolId: pool.id,
-      status: "plan_queued",
-      statusTimestamps: {
-        ...(run.statusTimestamps ?? {}),
-        "plan-queued-at": new Date().toISOString(),
-        ...(inputState === undefined ? {} : {
-          "input-state-version-id": inputState.id,
-          "input-state-serial": String(inputState.serial),
-        }),
-      },
-    }).where(claimWhere).returning({ id: runs.id });
+    const claimed = await tx
+      .update(runs)
+      .set({
+        agentPoolId: pool.id,
+        status: "plan_queued",
+        statusTimestamps: {
+          ...(run.statusTimestamps ?? {}),
+          "plan-queued-at": new Date().toISOString(),
+          ...(inputState === undefined
+            ? {}
+            : {
+                "input-state-version-id": inputState.id,
+                "input-state-serial": String(inputState.serial),
+              }),
+        },
+      })
+      .where(claimWhere)
+      .returning({ id: runs.id });
     if (claimed.length === 0) return false;
     await tx.insert(agentJobs).values({
       id: newResourceId("ajob"),
@@ -5729,16 +6353,16 @@ async function enforceQueueExecutorPolicy(
     log.error("executor policy lookup failed, deferring run", { runId: run.id, error: String(error) });
     return false;
   }
-  const policyError = executorPolicyAllowsLocal(
-    workspace,
-    projectForPolicy,
-    orgForPolicy,
-  );
+  const policyError = executorPolicyAllowsLocal(workspace, projectForPolicy, orgForPolicy);
   if (policyError !== null) {
-    const blocked = await db.update(runs).set({
-      status: "errored",
-      statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-    }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
+    const blocked = await db
+      .update(runs)
+      .set({
+        status: "errored",
+        statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+      })
+      .where(and(claimWhere, eq(runs.status, "pending")))
+      .returning({ id: runs.id });
     if (blocked.length > 0) {
       await writeLog(run.id, "plan", `[terrence ERROR] ${policyError}`);
       queueRunNotification(run.id, "run:errored", "errored");
@@ -5765,12 +6389,20 @@ async function rejectLocalExecutionRun(
   // remote runs are rejected at creation, so any pending row here
   // predates the gate. Error it with an explanation instead of
   // executing it or leaving it stuck forever.
-  const blocked = await db.update(runs).set({
-    status: "errored",
-    statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-  }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
+  const blocked = await db
+    .update(runs)
+    .set({
+      status: "errored",
+      statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+    })
+    .where(and(claimWhere, eq(runs.status, "pending")))
+    .returning({ id: runs.id });
   if (blocked.length > 0) {
-    await writeLog(run.id, "plan", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. Plan and apply locally with the CLI; this run predates local-execution enforcement.");
+    await writeLog(
+      run.id,
+      "plan",
+      "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. Plan and apply locally with the CLI; this run predates local-execution enforcement.",
+    );
     queueRunNotification(run.id, "run:errored", "errored");
     void reportRunVcsStatus(run.id, "errored");
     publish("run.status", {
@@ -5795,17 +6427,16 @@ async function claimLocalRun(
 
   // Claim local and remote runs atomically by moving them into the first execution stage.
   try {
-    const claimed = await db.update(runs)
-      .set({ status: "fetching" })
-      .where(claimWhere)
-      .returning({ id: runs.id });
+    const claimed = await db.update(runs).set({ status: "fetching" }).where(claimWhere).returning({ id: runs.id });
 
     if (claimed.length > 0) {
       claimedRunIds.push(run.id);
       claimedWorkspaceIds.add(run.workspaceId);
       planLockLoggedAt.delete(run.id);
       // Advance through plan_queued then dispatch to planning
-      executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
+      executeRun(run.id).catch((err: unknown): void => {
+        log.error("Worker error on run", { runId: run.id, error: err });
+      });
       localReservationHeld = false;
     } else if (localReservationHeld) {
       releaseLocalRunReservation(run.id);
@@ -5855,65 +6486,62 @@ async function dispatchQueuedRun(
 
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
-  if (isMaintenanceActive()) return [];
-  if (workerQueueDraining()) return [];
-  if (isStorageDegraded()) return [];
-  await recoverStaleAgentJobs();
-  // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
-  // Keyset-paged scan over (createdAt, id): a page full of ineligible runs can
-  // no longer hide newer eligible ones (kanban 1.5). The cursor is stable even
-  // while earlier runs are claimed and leave the pending set.
-  const MAX_CLAIMS = 5;
-  const SCAN_PAGE_SIZE = 50;
-  // Hard bound on pages per poll: a queue dominated by permanently ineligible
-  // runs (locked workspaces, agent-pool outages) must not turn one poll cycle
-  // into a full-table scan. Eligible runs beyond the budget wait for the next
-  // poll, which resumes from the same cursor position.
-  const MAX_SCAN_PAGES = 10;
-  const claimedRunIds: string[] = [];
-  const claimedWorkspaceIds = new Set<string>();
-  let cursorCreatedAt = workerQueueCursor.createdAt;
-  let cursorId = workerQueueCursor.id;
-  let morePages = true;
-  let scannedPages = 0;
-  while (claimedRunIds.length < MAX_CLAIMS && morePages && scannedPages < MAX_SCAN_PAGES) {
-    scannedPages += 1;
-    const pendingRuns = await db.query.runs.findMany({
-      where: and(
-        eq(runs.status, "pending"),
-        cursorId === ""
-          ? undefined
-          : or(
-              gt(runs.createdAt, cursorCreatedAt),
-              and(eq(runs.createdAt, cursorCreatedAt), gt(runs.id, cursorId)),
-            ),
-      ),
-      orderBy: [asc(runs.createdAt), asc(runs.id)],
-      limit: SCAN_PAGE_SIZE,
-    });
-    if (pendingRuns.length === 0) {
-      // A complete pass reached the end of the pending set. Wrap so newly
-      // queued runs and previously blocked prefixes are eligible next poll.
-      workerQueueCursor = { createdAt: 0, id: "" };
-      break;
+    if (isMaintenanceActive()) return [];
+    if (workerQueueDraining()) return [];
+    if (isStorageDegraded()) return [];
+    await recoverStaleAgentJobs();
+    // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
+    // Keyset-paged scan over (createdAt, id): a page full of ineligible runs can
+    // no longer hide newer eligible ones (kanban 1.5). The cursor is stable even
+    // while earlier runs are claimed and leave the pending set.
+    const MAX_CLAIMS = 5;
+    const SCAN_PAGE_SIZE = 50;
+    // Hard bound on pages per poll: a queue dominated by permanently ineligible
+    // runs (locked workspaces, agent-pool outages) must not turn one poll cycle
+    // into a full-table scan. Eligible runs beyond the budget wait for the next
+    // poll, which resumes from the same cursor position.
+    const MAX_SCAN_PAGES = 10;
+    const claimedRunIds: string[] = [];
+    const claimedWorkspaceIds = new Set<string>();
+    let cursorCreatedAt = workerQueueCursor.createdAt;
+    let cursorId = workerQueueCursor.id;
+    let morePages = true;
+    let scannedPages = 0;
+    while (claimedRunIds.length < MAX_CLAIMS && morePages && scannedPages < MAX_SCAN_PAGES) {
+      scannedPages += 1;
+      const pendingRuns = await db.query.runs.findMany({
+        where: and(
+          eq(runs.status, "pending"),
+          cursorId === ""
+            ? undefined
+            : or(gt(runs.createdAt, cursorCreatedAt), and(eq(runs.createdAt, cursorCreatedAt), gt(runs.id, cursorId))),
+        ),
+        orderBy: [asc(runs.createdAt), asc(runs.id)],
+        limit: SCAN_PAGE_SIZE,
+      });
+      if (pendingRuns.length === 0) {
+        // A complete pass reached the end of the pending set. Wrap so newly
+        // queued runs and previously blocked prefixes are eligible next poll.
+        workerQueueCursor = { createdAt: 0, id: "" };
+        break;
+      }
+      morePages = pendingRuns.length === SCAN_PAGE_SIZE;
+
+      const ctx = await prefetchQueuePageContext(pendingRuns);
+
+      for (const run of pendingRuns) {
+        if (claimedRunIds.length === MAX_CLAIMS) break;
+        cursorCreatedAt = run.createdAt;
+        cursorId = run.id;
+        workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
+
+        const workspace = ctx.workspacesById.get(run.workspaceId);
+        const claimWhere = buildRunClaimWhere(run);
+        await dispatchQueuedRun(run, workspace, ctx, claimWhere, claimedRunIds, claimedWorkspaceIds);
+      }
     }
-    morePages = pendingRuns.length === SCAN_PAGE_SIZE;
 
-  const ctx = await prefetchQueuePageContext(pendingRuns);
-
-  for (const run of pendingRuns) {
-    if (claimedRunIds.length === MAX_CLAIMS) break;
-    cursorCreatedAt = run.createdAt;
-    cursorId = run.id;
-    workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
-
-    const workspace = ctx.workspacesById.get(run.workspaceId);
-    const claimWhere = buildRunClaimWhere(run);
-    await dispatchQueuedRun(run, workspace, ctx, claimWhere, claimedRunIds, claimedWorkspaceIds);
-  }
-  }
-
-  return claimedRunIds;
+    return claimedRunIds;
   });
 }
 
@@ -5928,8 +6556,14 @@ export async function pollWorkerQueue(): Promise<string[]> {
  * batch. Gate semantics mirror the auto-apply path: a blocked apply stays
  * confirmed and is retried on the next poll.
  */
-type DueScheduledRun = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "planOnly" | "savePlan" | "statusTimestamps">;
-type ScheduledWorkspaceRow = Pick<typeof workspaces.$inferSelect, "id" | "orgId" | "locked" | "lockedReason" | "executionMode" | "agentPoolId" | "projectId">;
+type DueScheduledRun = Pick<
+  typeof runs.$inferSelect,
+  "id" | "workspaceId" | "planOnly" | "savePlan" | "statusTimestamps"
+>;
+type ScheduledWorkspaceRow = Pick<
+  typeof workspaces.$inferSelect,
+  "id" | "orgId" | "locked" | "lockedReason" | "executionMode" | "agentPoolId" | "projectId"
+>;
 
 async function fetchDueScheduledRuns(now: number): Promise<DueScheduledRun[]> {
   return await db.query.runs.findMany({
@@ -5946,28 +6580,42 @@ async function fetchDueScheduledRuns(now: number): Promise<DueScheduledRun[]> {
 
 function pruneScheduledBlockReasons(dueIds: ReadonlySet<string>): void {
   for (const key of scheduledBlockReasons.keys()) {
-    const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:") || key.startsWith("workspace-lock:")
-      ? key.slice(key.indexOf(":") + 1)
-      : "";
+    const runId =
+      key.startsWith("scheduled:") || key.startsWith("agent-pool:") || key.startsWith("workspace-lock:")
+        ? key.slice(key.indexOf(":") + 1)
+        : "";
     if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
   }
 }
 
 async function fetchScheduledWorkspaces(workspaceIds: string[]): Promise<ScheduledWorkspaceRow[]> {
   return await db.query.workspaces.findMany({
-    columns: { id: true, orgId: true, locked: true, lockedReason: true, executionMode: true, agentPoolId: true, projectId: true },
+    columns: {
+      id: true,
+      orgId: true,
+      locked: true,
+      lockedReason: true,
+      executionMode: true,
+      agentPoolId: true,
+      projectId: true,
+    },
     where: inArray(workspaces.id, workspaceIds),
   });
 }
 
-async function handleLockedScheduledWorkspace(runId: string, lockedReason: ScheduledWorkspaceRow["lockedReason"]): Promise<void> {
-  const reason = typeof lockedReason === "string" && lockedReason !== ""
-    ? lockedReason
-    : "locked";
+async function handleLockedScheduledWorkspace(
+  runId: string,
+  lockedReason: ScheduledWorkspaceRow["lockedReason"],
+): Promise<void> {
+  const reason = typeof lockedReason === "string" && lockedReason !== "" ? lockedReason : "locked";
   const key = `scheduled:${runId}`;
   if (scheduledBlockReasons.get(key) !== `workspace-locked:${reason}`) {
     scheduledBlockReasons.set(key, `workspace-locked:${reason}`);
-    await writeLog(runId, "apply", `[terrence] Apply is waiting: the workspace is locked (${reason}). Unlock the workspace or cancel this run.`);
+    await writeLog(
+      runId,
+      "apply",
+      `[terrence] Apply is waiting: the workspace is locked (${reason}). Unlock the workspace or cancel this run.`,
+    );
   }
 }
 
@@ -5976,12 +6624,20 @@ async function errorLocalModeScheduledRun(run: DueScheduledRun): Promise<void> {
   // a confirmed row here predates the creation gate. Error it with
   // an explanation instead of dispatching or leaving it confirmed
   // forever.
-  const blocked = await db.update(runs).set({
-    status: "errored",
-    statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-  }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+  const blocked = await db
+    .update(runs)
+    .set({
+      status: "errored",
+      statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+    })
+    .where(and(eq(runs.id, run.id), eq(runs.status, "confirmed")))
+    .returning({ id: runs.id });
   if (blocked.length > 0) {
-    await writeLog(run.id, "apply", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. This apply predates local-execution enforcement.");
+    await writeLog(
+      run.id,
+      "apply",
+      "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. This apply predates local-execution enforcement.",
+    );
     queueRunNotification(run.id, "run:errored", "errored");
     void reportRunVcsStatus(run.id, "errored");
   }
@@ -6004,20 +6660,22 @@ async function checkScheduledApplyGate(runId: string): Promise<boolean> {
 }
 
 async function dispatchAgentScheduledRun(run: DueScheduledRun, workspace: ScheduledWorkspaceRow): Promise<boolean> {
-  const pool = workspace.agentPoolId === null
-    ? undefined
-    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
-  if (
-    pool?.orgId !== workspace.orgId
-    || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
-  ) {
+  const pool =
+    workspace.agentPoolId === null
+      ? undefined
+      : await db.query.agentPools.findFirst({ where: eq(agentPools.id, workspace.agentPoolId) });
+  if (pool?.orgId !== workspace.orgId || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))) {
     // Persistent pool failures must not spam the run log on every
     // poll; log once per reason like the gate-block path. The run
     // stays confirmed and is retried once the pool is reachable.
     const key = `agent-pool:${run.id}`;
     if (scheduledBlockReasons.get(key) !== "pool-unreachable") {
       scheduledBlockReasons.set(key, "pool-unreachable");
-      await writeLog(run.id, "apply", "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.");
+      await writeLog(
+        run.id,
+        "apply",
+        "[terrence ERROR] The configured agent pool is missing or is not allowed to execute this workspace.",
+      );
     }
     return false;
   }
@@ -6040,13 +6698,17 @@ async function dispatchLocalScheduledRun(run: DueScheduledRun): Promise<boolean>
   // may dispatch; concurrent polls see zero rows and skip.
   const localReservation = reserveLocalRunExecution(run.id);
   if (!localReservation) return false;
-  const claimed = await db.update(runs).set({
-    status: "apply_queued",
-    statusTimestamps: {
-      ...(run.statusTimestamps ?? {}),
-      "apply-queued-at": new Date().toISOString(),
-    },
-  }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+  const claimed = await db
+    .update(runs)
+    .set({
+      status: "apply_queued",
+      statusTimestamps: {
+        ...(run.statusTimestamps ?? {}),
+        "apply-queued-at": new Date().toISOString(),
+      },
+    })
+    .where(and(eq(runs.id, run.id), eq(runs.status, "confirmed")))
+    .returning({ id: runs.id });
   if (claimed.length === 0) {
     releaseLocalRunReservation(run.id);
     return false;
@@ -6065,7 +6727,10 @@ async function restoreFailedScheduledRun(runId: string, error: unknown): Promise
   log.error("Scheduled apply failed", { runId, error });
   // Keep the run confirmed so a transient failure retries next poll.
   try {
-    await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, runId), eq(runs.status, "apply_queued")));
+    await db
+      .update(runs)
+      .set({ status: "confirmed" })
+      .where(and(eq(runs.id, runId), eq(runs.status, "apply_queued")));
   } catch (restoreError: unknown) {
     logBestEffortFailure("Failed to restore scheduled run after apply dispatch failure", { runId }, restoreError);
   }
@@ -6110,10 +6775,13 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
   // Prune block-reason bookkeeping for runs that left the due set (applied,
   // canceled, or rescheduled).
   pruneScheduledBlockReasons(new Set(dueRuns.map((run): string => run.id)));
-  const scheduledWorkspaceRows = dueRuns.length === 0
-    ? []
-    : await fetchScheduledWorkspaces([...new Set(dueRuns.map((run): string => run.workspaceId))]);
-  const workspacesById = new Map(scheduledWorkspaceRows.map((workspace): readonly [string, typeof workspace] => [workspace.id, workspace]));
+  const scheduledWorkspaceRows =
+    dueRuns.length === 0
+      ? []
+      : await fetchScheduledWorkspaces([...new Set(dueRuns.map((run): string => run.workspaceId))]);
+  const workspacesById = new Map(
+    scheduledWorkspaceRows.map((workspace): readonly [string, typeof workspace] => [workspace.id, workspace]),
+  );
   const applied: string[] = [];
   for (const run of dueRuns) {
     if (await processDueScheduledRun(run, workspacesById)) applied.push(run.id);
@@ -6305,12 +6973,15 @@ function registryHostname(): string {
 
 function timeoutSeconds(value: unknown, fallback: number): number {
   // Settings accept unitless seconds; clamp valid values to one minute and 24 hours.
-  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? Math.min(86_400, Math.max(60, Math.floor(value))) : fallback;
+  if (typeof value === "number")
+    return Number.isFinite(value) && value > 0 ? Math.min(86_400, Math.max(60, Math.floor(value))) : fallback;
   const match = typeof value === "string" ? /^(\d+(?:\.\d+)?)(s|m|h|d)?$/.exec(value.trim().toLowerCase()) : null;
   if (match === null) return fallback;
   const amount = Number(match[1]);
   const multiplier = match[2] === "d" ? 86_400 : match[2] === "h" ? 3_600 : match[2] === "m" ? 60 : 1;
-  return Number.isFinite(amount) && amount > 0 ? Math.min(86_400, Math.max(60, Math.floor(amount * multiplier))) : fallback;
+  return Number.isFinite(amount) && amount > 0
+    ? Math.min(86_400, Math.max(60, Math.floor(amount * multiplier)))
+    : fallback;
 }
 
 async function executionTimeoutMs(phase: "plan" | "apply"): Promise<number> {
@@ -6332,30 +7003,45 @@ async function runTerraformEnv(
   const base = await runTokenStateFor(runId, workspace);
   const existingIdentity = base.oidc[phase];
   if (existingIdentity !== undefined) return { TF_CLI_CONFIG_FILE: base.tfrcPath, ...existingIdentity };
-  const oidcConfigured = variables.some((variable) => variable.category === "env" && (
-    (/^TFC_(AWS|GCP|AZURE|VAULT|the cloud platform|KUBERNETES)_PROVIDER_AUTH(?:_|$)/.test(variable.key) && variable.value.trim().toLowerCase() === "true")
-    || (/^TFC_WORKLOAD_IDENTITY_AUDIENCE(?:_|$)/.test(variable.key) && variable.value.trim() !== "")
-  ));
+  const oidcConfigured = variables.some(
+    (variable) =>
+      variable.category === "env" &&
+      ((/^TFC_(AWS|GCP|AZURE|VAULT|the cloud platform|KUBERNETES)_PROVIDER_AUTH(?:_|$)/.test(variable.key) &&
+        variable.value.trim().toLowerCase() === "true") ||
+        (/^TFC_WORKLOAD_IDENTITY_AUDIENCE(?:_|$)/.test(variable.key) && variable.value.trim() !== "")),
+  );
   if (!oidcConfigured) {
     base.oidc[phase] = {};
     return { TF_CLI_CONFIG_FILE: base.tfrcPath };
   }
   const [organization, project, settings] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
-    workspace.projectId === null ? Promise.resolve(undefined) : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
+    workspace.projectId === null
+      ? Promise.resolve(undefined)
+      : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
     db.query.adminGeneralSettings.findFirst({ where: eq(adminGeneralSettings.id, "general") }),
   ]);
-  const identity = organization === undefined ? { environment: {}, tokens: [] } : await workspaceIdentityEnvironment({
-    organizationId: organization.id,
-    organizationName: organization.name,
-    projectId: workspace.projectId ?? "default",
-    projectName: project?.name ?? "Default Project",
-    workspaceId: workspace.id,
-    workspaceName: workspace.name,
-    runId,
-    phase,
-    ttlSeconds: timeoutSeconds(phase === "plan" ? settings?.planTimeout : settings?.applyTimeout, phase === "plan" ? 7_200 : 86_400),
-  }, variables, runWorkDir(runId));
+  const identity =
+    organization === undefined
+      ? { environment: {}, tokens: [] }
+      : await workspaceIdentityEnvironment(
+          {
+            organizationId: organization.id,
+            organizationName: organization.name,
+            projectId: workspace.projectId ?? "default",
+            projectName: project?.name ?? "Default Project",
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
+            runId,
+            phase,
+            ttlSeconds: timeoutSeconds(
+              phase === "plan" ? settings?.planTimeout : settings?.applyTimeout,
+              phase === "plan" ? 7_200 : 86_400,
+            ),
+          },
+          variables,
+          runWorkDir(runId),
+        );
   base.oidc[phase] = identity.environment;
   return { TF_CLI_CONFIG_FILE: base.tfrcPath, ...identity.environment };
 }
@@ -6422,19 +7108,21 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
     const root = join(storageDir, "saved-plans");
     const entries = await readCleanupEntries(root, "Could not scan saved-plan cleanup directory");
     if (entries === null) return;
-    await Promise.all(entries
-      .filter((entry): boolean => entry.isDirectory())
-      .map(async (entry): Promise<void> => {
-        const path = join(root, entry.name);
-        try {
-          if ((await stat(path)).mtimeMs >= cutoff) return;
-          const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
-          if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
-          await rm(path, { recursive: true, force: true });
-        } catch (error: unknown) {
-          if (!isMissingFileError(error)) logBestEffortFailure("Could not prune saved plan", { path }, error);
-        }
-      }));
+    await Promise.all(
+      entries
+        .filter((entry): boolean => entry.isDirectory())
+        .map(async (entry): Promise<void> => {
+          const path = join(root, entry.name);
+          try {
+            if ((await stat(path)).mtimeMs >= cutoff) return;
+            const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
+            if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
+            await rm(path, { recursive: true, force: true });
+          } catch (error: unknown) {
+            if (!isMissingFileError(error)) logBestEffortFailure("Could not prune saved plan", { path }, error);
+          }
+        }),
+    );
   };
   // Issue #761: keep every unpromoted capture until an operator can inspect
   // it. A successful promotion retains the bytes and manifest as audit
@@ -6444,23 +7132,26 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   const recoveryRoot = join(storageDir, "recovery");
   const recoveryEntries = await readCleanupEntries(recoveryRoot, "Could not scan recovery cleanup directory");
   if (recoveryEntries !== null) {
-    await Promise.all(recoveryEntries
-      .filter((entry): boolean => entry.isDirectory())
-      .map(async (entry): Promise<void> => {
-        const path = join(recoveryRoot, entry.name);
-        const promoted = join(path, RECOVERY_PROMOTED_FILENAME);
-        const promoting = join(path, RECOVERY_PROMOTION_LOCK_FILENAME);
-        try {
-          const [promotedStat, promotingStat] = await Promise.all([
-            stat(promoted).catch((): null => null),
-            stat(promoting).catch((): null => null),
-          ]);
-          if (promotedStat === null || promotingStat !== null || promotedStat.mtimeMs >= cutoff) return;
-          await rm(path, { recursive: true, force: true });
-        } catch (error: unknown) {
-          if (!isMissingFileError(error)) logBestEffortFailure("Could not prune promoted recovery evidence", { path }, error);
-        }
-      }));
+    await Promise.all(
+      recoveryEntries
+        .filter((entry): boolean => entry.isDirectory())
+        .map(async (entry): Promise<void> => {
+          const path = join(recoveryRoot, entry.name);
+          const promoted = join(path, RECOVERY_PROMOTED_FILENAME);
+          const promoting = join(path, RECOVERY_PROMOTION_LOCK_FILENAME);
+          try {
+            const [promotedStat, promotingStat] = await Promise.all([
+              stat(promoted).catch((): null => null),
+              stat(promoting).catch((): null => null),
+            ]);
+            if (promotedStat === null || promotingStat !== null || promotedStat.mtimeMs >= cutoff) return;
+            await rm(path, { recursive: true, force: true });
+          } catch (error: unknown) {
+            if (!isMissingFileError(error))
+              logBestEffortFailure("Could not prune promoted recovery evidence", { path }, error);
+          }
+        }),
+    );
   }
   await pruneSavedPlans();
 }
@@ -6479,34 +7170,49 @@ async function fetchInterruptedRunCandidates(): Promise<{
   await sweepIncompleteRecoveryCopies(storageDir);
   const pendingAt = new Date().toISOString();
   const candidates = await db.query.runs.findMany({
-    where: or(
-      inArray(runs.status, [...REQUEUE_AFTER_RESTART]),
-      inArray(runs.status, [...ERROR_AFTER_RESTART]),
-    ),
+    where: or(inArray(runs.status, [...REQUEUE_AFTER_RESTART]), inArray(runs.status, [...ERROR_AFTER_RESTART])),
     columns: { id: true, workspaceId: true, status: true, statusTimestamps: true },
   });
 
   const workspaceIds = [...new Set(candidates.map((run): string => run.workspaceId))];
-  const agentWorkspaceIds = workspaceIds.length === 0
-    ? new Set<string>()
-    : new Set((await db.query.workspaces.findMany({
-        where: inArray(workspaces.id, workspaceIds),
-        columns: { id: true, executionMode: true },
-      })).filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id));
+  const agentWorkspaceIds =
+    workspaceIds.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await db.query.workspaces.findMany({
+              where: inArray(workspaces.id, workspaceIds),
+              columns: { id: true, executionMode: true },
+            })
+          )
+            .filter((ws): boolean => ws.executionMode === "agent")
+            .map((ws): string => ws.id),
+        );
   return { candidates, agentWorkspaceIds, pendingAt };
 }
 
 async function requeueInterruptedRun(run: InterruptedRunCandidate, pendingAt: string): Promise<boolean> {
-  const updated = await db.update(runs).set({
-    status: "pending",
-    statusTimestamps: { ...(run.statusTimestamps ?? {}), "pending-at": pendingAt },
-  }).where(and(eq(runs.id, run.id), eq(runs.status, run.status))).returning({ id: runs.id });
+  const updated = await db
+    .update(runs)
+    .set({
+      status: "pending",
+      statusTimestamps: { ...(run.statusTimestamps ?? {}), "pending-at": pendingAt },
+    })
+    .where(and(eq(runs.id, run.id), eq(runs.status, run.status)))
+    .returning({ id: runs.id });
   if (updated.length === 0) return false;
-  await writeLog(run.id, "plan", "[terrence] Run requeued: the Terrence process restarted before this run's plan began.");
+  await writeLog(
+    run.id,
+    "plan",
+    "[terrence] Run requeued: the Terrence process restarted before this run's plan began.",
+  );
   return true;
 }
 
-function interruptedRunErrorMessage(status: string, capturedPartialState: boolean): { message: string; applySide: boolean } {
+function interruptedRunErrorMessage(
+  status: string,
+  capturedPartialState: boolean,
+): { message: string; applySide: boolean } {
   const applySide = status === "apply_queued" || status === "applying";
   const message = applySide
     ? status === "applying"
@@ -6597,16 +7303,24 @@ async function reconcileInterruptedRun(
   }
 }
 
-async function rearmOrphanedApply(runId: string, workspaceId: string, orphanAgentWorkspaceIds: ReadonlySet<string>): Promise<boolean> {
+async function rearmOrphanedApply(
+  runId: string,
+  workspaceId: string,
+  orphanAgentWorkspaceIds: ReadonlySet<string>,
+): Promise<boolean> {
   if (orphanAgentWorkspaceIds.has(workspaceId)) return false;
   try {
-    const rearmedRows = await db.update(runs).set({ scheduledAt: Date.now() }).where(and(
-      eq(runs.id, runId),
-      eq(runs.status, "confirmed"),
-      isNull(runs.scheduledAt),
-    )).returning({ id: runs.id });
+    const rearmedRows = await db
+      .update(runs)
+      .set({ scheduledAt: Date.now() })
+      .where(and(eq(runs.id, runId), eq(runs.status, "confirmed"), isNull(runs.scheduledAt)))
+      .returning({ id: runs.id });
     if (rearmedRows.length === 0) return false;
-    await writeLog(runId, "apply", "[terrence] Run re-armed: the Terrence process restarted after apply was confirmed but before dispatch. The scheduled-apply poller will dispatch it.");
+    await writeLog(
+      runId,
+      "apply",
+      "[terrence] Run re-armed: the Terrence process restarted after apply was confirmed but before dispatch. The scheduled-apply poller will dispatch it.",
+    );
     return true;
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -6627,11 +7341,7 @@ async function rearmOrphanedApplies(): Promise<number> {
   // recoverStaleAgentJobs.
   let rearmed = 0;
   const orphanedApplies = await db.query.runs.findMany({
-    where: and(
-      eq(runs.status, "confirmed"),
-      isNull(runs.scheduledAt),
-      eq(runs.planOnly, false),
-    ),
+    where: and(eq(runs.status, "confirmed"), isNull(runs.scheduledAt), eq(runs.planOnly, false)),
     columns: { id: true, workspaceId: true },
   });
   if (orphanedApplies.length === 0) return rearmed;
@@ -6650,14 +7360,15 @@ async function rearmOrphanedApplies(): Promise<number> {
 }
 
 async function errorInterruptedAssessment(assessmentId: string): Promise<boolean> {
-  const updated = await db.update(assessmentResults).set({
-    status: "errored",
-    errorMessage: "Terrence restarted during this health assessment",
-    completedAt: Date.now(),
-  }).where(and(
-    eq(assessmentResults.id, assessmentId),
-    eq(assessmentResults.status, "running"),
-  )).returning({ id: assessmentResults.id });
+  const updated = await db
+    .update(assessmentResults)
+    .set({
+      status: "errored",
+      errorMessage: "Terrence restarted during this health assessment",
+      completedAt: Date.now(),
+    })
+    .where(and(eq(assessmentResults.id, assessmentId), eq(assessmentResults.status, "running")))
+    .returning({ id: assessmentResults.id });
   if (updated.length === 0) return false;
   try {
     if (runSandbox !== null) {
@@ -6737,7 +7448,9 @@ export function startWorkerQueue(): void {
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {
     if (workerQueueDraining()) return;
-    const timer = setTimeout((): void => { void cycle(); }, jitteredPollDelay(interval));
+    const timer = setTimeout((): void => {
+      void cycle();
+    }, jitteredPollDelay(interval));
     timer.unref?.();
   };
 
@@ -6753,18 +7466,20 @@ export function startWorkerQueue(): void {
         ["pollWorkerQueue", pollWorkerQueue()],
         ["applyDueScheduledRuns", applyDueScheduledRuns()],
       ];
-      await Promise.all(pollers.map(async ([name, poller]): Promise<unknown> => {
-        const started = Date.now();
-        return poller
-          .then((result: unknown): unknown => {
-            workerPollerFinished(name, true, started);
-            return result;
-          })
-          .catch((error: unknown): void => {
-            workerPollerFinished(name, false, started);
-            log.error("Queue poller failed", { error });
-          });
-      }));
+      await Promise.all(
+        pollers.map(async ([name, poller]): Promise<unknown> => {
+          const started = Date.now();
+          return poller
+            .then((result: unknown): unknown => {
+              workerPollerFinished(name, true, started);
+              return result;
+            })
+            .catch((error: unknown): void => {
+              workerPollerFinished(name, false, started);
+              log.error("Queue poller failed", { error });
+            });
+        }),
+      );
       workerPollFinished(true, pollCycleStarted);
     } catch (err: unknown) {
       log.error("Queue error", { error: err });

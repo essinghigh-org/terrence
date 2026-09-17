@@ -34,9 +34,7 @@ export function phaseLogResponse(body: string, url: string): Response {
  */
 export function anyPhaseLog(url: string): Response | null {
   const path = new URL(url, "http://terrence.local").pathname;
-  return /\/api\/v2\/runs\/[^/]+\/(plan|apply)\/log$/.test(path)
-    ? phaseLogResponse("", url)
-    : null;
+  return /\/api\/v2\/runs\/[^/]+\/(plan|apply)\/log$/.test(path) ? phaseLogResponse("", url) : null;
 }
 
 /**

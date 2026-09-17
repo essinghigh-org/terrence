@@ -3,15 +3,8 @@ import { dirname, join } from "node:path";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db";
 import { moduleTestRuns } from "../db/schema";
-import {
-  moduleTestIdentityEnvironment,
-  type CredentialProvider,
-} from "./workload-identity";
-import {
-  runModuleTest,
-  writeModuleTestResultFile,
-  type ModuleTestConfiguration,
-} from "./module-tests";
+import { moduleTestIdentityEnvironment, type CredentialProvider } from "./workload-identity";
+import { runModuleTest, writeModuleTestResultFile, type ModuleTestConfiguration } from "./module-tests";
 
 type SupervisorInput = Readonly<{
   runId: string;
@@ -35,16 +28,29 @@ function inputPath(): string {
 
 const input = JSON.parse(await readFile(inputPath(), "utf8")) as SupervisorInput;
 const stat = await readFile(`/proc/${process.pid}/stat`, "utf8").catch((): string => "");
-const startTime = stat === "" ? null : stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[19] ?? null;
-await writeFile(join(dirname(inputPath()), "supervisor.pid"), JSON.stringify({ pid: process.pid, startTime }), { mode: 0o600 });
-await db.update(moduleTestRuns).set({
-  executionPid: process.pid,
-  executionStartedAt: Date.now(),
-  executionStage: "subprocess",
-  executionDirectory: inputPath().slice(0, inputPath().lastIndexOf("/")),
-  executionResultPath: input.resultPath,
-  updatedAt: Date.now(),
-}).where(and(eq(moduleTestRuns.id, input.runId), eq(moduleTestRuns.status, "running"), isNull(moduleTestRuns.executionPid)));
+const startTime =
+  stat === ""
+    ? null
+    : (stat
+        .slice(stat.lastIndexOf(")") + 1)
+        .trim()
+        .split(/\s+/)[19] ?? null);
+await writeFile(join(dirname(inputPath()), "supervisor.pid"), JSON.stringify({ pid: process.pid, startTime }), {
+  mode: 0o600,
+});
+await db
+  .update(moduleTestRuns)
+  .set({
+    executionPid: process.pid,
+    executionStartedAt: Date.now(),
+    executionStage: "subprocess",
+    executionDirectory: inputPath().slice(0, inputPath().lastIndexOf("/")),
+    executionResultPath: input.resultPath,
+    updatedAt: Date.now(),
+  })
+  .where(
+    and(eq(moduleTestRuns.id, input.runId), eq(moduleTestRuns.status, "running"), isNull(moduleTestRuns.executionPid)),
+  );
 const issuedTokenIds: string[] = [];
 const result = await runModuleTest(
   input.versionId,
@@ -53,20 +59,27 @@ const result = await runModuleTest(
   undefined,
   async (stagingDirectory): Promise<Readonly<Record<string, string>>> => {
     if (input.oidcProvider === null) return {};
-    const identity = await moduleTestIdentityEnvironment({
-      organizationId: input.organizationId,
-      organizationName: input.organizationName,
-      moduleName: input.moduleName,
-      runId: input.runId,
-      ttlSeconds: input.ttlSeconds,
-    }, { provider: input.oidcProvider, values: input.oidcValues }, stagingDirectory);
+    const identity = await moduleTestIdentityEnvironment(
+      {
+        organizationId: input.organizationId,
+        organizationName: input.organizationName,
+        moduleName: input.moduleName,
+        runId: input.runId,
+        ttlSeconds: input.ttlSeconds,
+      },
+      { provider: input.oidcProvider, values: input.oidcValues },
+      stagingDirectory,
+    );
     issuedTokenIds.push(identity.token.jti);
-    await db.update(moduleTestRuns).set({
-      oidcTokenGeneratedAt: identity.token.generatedAt,
-      oidcTokenExpiresAt: identity.token.expiresAt,
-      executionTokenIds: [...issuedTokenIds],
-      updatedAt: Date.now(),
-    }).where(and(eq(moduleTestRuns.id, input.runId), eq(moduleTestRuns.status, "running")));
+    await db
+      .update(moduleTestRuns)
+      .set({
+        oidcTokenGeneratedAt: identity.token.generatedAt,
+        oidcTokenExpiresAt: identity.token.expiresAt,
+        executionTokenIds: [...issuedTokenIds],
+        updatedAt: Date.now(),
+      })
+      .where(and(eq(moduleTestRuns.id, input.runId), eq(moduleTestRuns.status, "running")));
     return identity.environment;
   },
 );

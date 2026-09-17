@@ -4,12 +4,7 @@ import { db } from "../../src/db";
 import { apiTokens, configurationVersions, runs, workspaces } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
-import {
-  cleanupSeed,
-  persistSeed,
-  request,
-  seedOrg,
-} from "./compat_contract_helpers";
+import { cleanupSeed, persistSeed, request, seedOrg } from "./compat_contract_helpers";
 
 /**
  * MCP run/plan surface: get_run includes, create_run save-plan passthrough,
@@ -34,7 +29,10 @@ describe("mcp run plan surface", () => {
 
   const mcpResult = async (res: Response): Promise<unknown> => {
     expect(res.status).toBe(200);
-    const body = await res.json() as { result?: { content?: { text?: string }[] }; error?: { code: number; message: string } };
+    const body = (await res.json()) as {
+      result?: { content?: { text?: string }[] };
+      error?: { code: number; message: string };
+    };
     if (body.error !== undefined) throw new Error(`MCP error ${body.error.code}: ${body.error.message}`);
     return JSON.parse(body.result?.content?.[0]?.text ?? "null");
   };
@@ -46,7 +44,7 @@ describe("mcp run plan surface", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { result: { tools: { name: string }[] } };
+    const body = (await res.json()) as { result: { tools: { name: string }[] } };
     return body.result.tools.map((t): string => t.name);
   };
 
@@ -54,7 +52,13 @@ describe("mcp run plan surface", () => {
     await persistSeed(seed);
     await db.insert(workspaces).values([
       { id: workspaceId, name: "mcp-run-ws", orgId: seed.orgId, autoApply: false, terraformVersion: "latest" },
-      { id: otherWorkspaceId, name: "mcp-run-ws-other", orgId: seed.orgId, autoApply: false, terraformVersion: "latest" },
+      {
+        id: otherWorkspaceId,
+        name: "mcp-run-ws-other",
+        orgId: seed.orgId,
+        autoApply: false,
+        terraformVersion: "latest",
+      },
     ]);
     // Issue #574 rejects CV-less run creation; create_run targets workspaceId.
     await db.insert(configurationVersions).values({
@@ -108,14 +112,19 @@ describe("mcp run plan surface", () => {
   });
 
   it("returns plan and workspace includes for a single run", async () => {
-    const body = await mcpResult(await mcpCall(scopedSecret, "get_run", {
-      workspace_id: workspaceId,
-      run_id: runId,
-      include: "plan,workspace",
-    })) as {
+    const body = (await mcpResult(
+      await mcpCall(scopedSecret, "get_run", {
+        workspace_id: workspaceId,
+        run_id: runId,
+        include: "plan,workspace",
+      }),
+    )) as {
       id?: string;
       status?: string;
-      included?: { plan?: { id?: string; status?: string }; workspace?: { id?: string; name?: string; locked?: boolean } };
+      included?: {
+        plan?: { id?: string; status?: string };
+        workspace?: { id?: string; name?: string; locked?: boolean };
+      };
     };
     expect(body.id).toBe(runId);
     expect(body.status).toBe("planned");
@@ -124,16 +133,18 @@ describe("mcp run plan surface", () => {
   });
 
   it("omits includes when not requested", async () => {
-    const body = await mcpResult(await mcpCall(scopedSecret, "get_run", {
-      workspace_id: workspaceId,
-      run_id: runId,
-    })) as { id?: string; included?: unknown };
+    const body = (await mcpResult(
+      await mcpCall(scopedSecret, "get_run", {
+        workspace_id: workspaceId,
+        run_id: runId,
+      }),
+    )) as { id?: string; included?: unknown };
     expect(body.id).toBe(runId);
     expect(body.included).toBeUndefined();
   });
 
   it("returns the sanitized plan JSON with secrets redacted", async () => {
-    const body = await mcpResult(await mcpCall(scopedSecret, "get_plan_json", { run_id: runId })) as {
+    const body = (await mcpResult(await mcpCall(scopedSecret, "get_plan_json", { run_id: runId }))) as {
       run_id?: string;
       plan?: { values?: { secret?: unknown }; terraform_version?: string };
     };
@@ -154,7 +165,9 @@ describe("mcp run plan surface", () => {
     try {
       const denied = await mcpCall(scopedSecret, "get_plan_json", { run_id: foreignRunId });
       expect(denied.status).toBe(200);
-      const deniedBody = await denied.json() as { result?: { isError?: boolean; structuredContent?: { error?: { category?: string } } } };
+      const deniedBody = (await denied.json()) as {
+        result?: { isError?: boolean; structuredContent?: { error?: { category?: string } } };
+      };
       expect(deniedBody.result?.isError).toBe(true);
       expect(deniedBody.result?.structuredContent?.error?.category).toBe("forbidden");
     } finally {
@@ -174,7 +187,13 @@ describe("mcp run plan surface", () => {
     try {
       const res = await mcpCall(seed.token, "get_plan_json", { run_id: emptyRunId });
       expect(res.status).toBe(200);
-      const body = await res.json() as { result?: { isError?: boolean; content?: { text?: string }[]; structuredContent?: { error?: { category?: string } } } };
+      const body = (await res.json()) as {
+        result?: {
+          isError?: boolean;
+          content?: { text?: string }[];
+          structuredContent?: { error?: { category?: string } };
+        };
+      };
       expect(body.result?.isError).toBe(true);
       expect(body.result?.structuredContent?.error?.category).toBe("invalid_request");
       expect(body.result?.content?.[0]?.text).toBe("Plan JSON output is unavailable for this run");
@@ -184,11 +203,13 @@ describe("mcp run plan surface", () => {
   });
 
   it("passes save-plan through on run creation", async () => {
-    const body = await mcpResult(await mcpCall(seed.token, "create_run", {
-      workspace_id: workspaceId,
-      message: "mcp save-plan",
-      "save-plan": true,
-    })) as { id?: string };
+    const body = (await mcpResult(
+      await mcpCall(seed.token, "create_run", {
+        workspace_id: workspaceId,
+        message: "mcp save-plan",
+        "save-plan": true,
+      }),
+    )) as { id?: string };
     const createdId = body.id;
     expect(createdId).toBeTypeOf("string");
     try {

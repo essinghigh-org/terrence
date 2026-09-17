@@ -8,19 +8,23 @@ import { apiTokens, organizations, organizationMemberships, users, workspaces } 
 const suffix = crypto.randomUUID();
 
 describe("146: nested resources — parent/child ID mismatch", () => {
-  let orgA = "", orgB = "";
-  let userId = "", token = "";
+  let orgA = "",
+    orgB = "";
+  let userId = "",
+    token = "";
   let wsA = "";
 
   const req = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
 
   beforeAll(async () => {
     userId = `nest-user-${suffix}`;
@@ -29,13 +33,18 @@ describe("146: nested resources — parent/child ID mismatch", () => {
     wsA = `ws-nest-a-${suffix}`;
     token = `tok-nest-${suffix}`;
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "h" }]);
-    await db.insert(organizations).values([{ id: orgA, name: orgA }, { id: orgB, name: orgB }]);
+    await db.insert(organizations).values([
+      { id: orgA, name: orgA },
+      { id: orgB, name: orgB },
+    ]);
     await db.insert(organizationMemberships).values([
       { id: `om-nest-a-${suffix}`, userId, orgId: orgA, role: "owner" },
       { id: `om-nest-b-${suffix}`, userId, orgId: orgB, role: "owner" },
     ]);
     await db.insert(workspaces).values([{ id: wsA, orgId: orgA, name: `ws-nest-${suffix}` }]);
-    await db.insert(apiTokens).values([{ id: `api-nest-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId }]);
+    await db
+      .insert(apiTokens)
+      .values([{ id: `api-nest-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId }]);
   });
 
   afterAll(async () => {

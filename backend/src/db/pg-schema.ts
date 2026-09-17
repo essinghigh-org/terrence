@@ -17,8 +17,7 @@ import { buildPgSchema } from "./pg-convert";
 
 const pg = buildPgSchema(sqliteSchema);
 
-const dbNameOf = (table: object): string =>
-  String((table as Record<PropertyKey, unknown>)[Symbol.for("drizzle:Name")]);
+const dbNameOf = (table: object): string => String((table as Record<PropertyKey, unknown>)[Symbol.for("drizzle:Name")]);
 
 export const actionInvocations = pg[dbNameOf(sqliteSchema.actionInvocations)];
 export const actions = pg[dbNameOf(sqliteSchema.actions)];
@@ -67,7 +66,8 @@ export const moduleTestRuns = pg[dbNameOf(sqliteSchema.moduleTestRuns)];
 export const noCodeModules = pg[dbNameOf(sqliteSchema.noCodeModules)];
 export const noCodeVariableOptions = pg[dbNameOf(sqliteSchema.noCodeVariableOptions)];
 export const noCodeWorkspaceConfigurations = pg[dbNameOf(sqliteSchema.noCodeWorkspaceConfigurations)];
-export const notificationConfigurationWorkspaceExclusions = pg[dbNameOf(sqliteSchema.notificationConfigurationWorkspaceExclusions)];
+export const notificationConfigurationWorkspaceExclusions =
+  pg[dbNameOf(sqliteSchema.notificationConfigurationWorkspaceExclusions)];
 export const notificationConfigurations = pg[dbNameOf(sqliteSchema.notificationConfigurations)];
 export const notificationDeliveryState = pg[dbNameOf(sqliteSchema.notificationDeliveryState)];
 export const notificationWorkspaceCounters = pg[dbNameOf(sqliteSchema.notificationWorkspaceCounters)];

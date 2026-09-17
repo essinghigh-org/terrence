@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { app } from "../../src/app";
-import { availableVersions, closestKnownVersion, installedBinaryVersions, knownAvailableVersions } from "../../src/binaryManager";
+import {
+  availableVersions,
+  closestKnownVersion,
+  installedBinaryVersions,
+  knownAvailableVersions,
+} from "../../src/binaryManager";
 import { validTarGzip } from "./test-archives";
 
 // Issue #602: run creation preflights an exact pinned version against the
@@ -72,14 +77,20 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: "Bearer " + token, "Content-Type": "application/vnd.api+json" };
 }
 
-async function setupWorkspace(headers: Record<string, string>, terraformVersion?: string): Promise<{ workspaceId: string; cvId: string }> {
+async function setupWorkspace(
+  headers: Record<string, string>,
+  terraformVersion?: string,
+): Promise<{ workspaceId: string; cvId: string }> {
   const suffix = crypto.randomUUID();
   const orgRes = await app.handle(
     new Request("http://localhost/api/v2/organizations", {
       method: "POST",
       headers,
       body: JSON.stringify({
-        data: { type: "organizations", attributes: { name: `preflight-org-${suffix}`, email: "admin@example.internal" } },
+        data: {
+          type: "organizations",
+          attributes: { name: `preflight-org-${suffix}`, email: "admin@example.internal" },
+        },
       }),
     }),
   );

@@ -6,7 +6,10 @@ import { probeLandlockAbi } from "../../src/lib/sandbox";
 
 const TEST_RUN_SANDBOX = probeLandlockAbi() >= 1 ? "true" : "false";
 
-async function runWorkerScript(script: string, env: Readonly<Record<string, string>> = {}): Promise<Record<string, unknown>> {
+async function runWorkerScript(
+  script: string,
+  env: Readonly<Record<string, string>> = {},
+): Promise<Record<string, unknown>> {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-cost-estimate-"));
   await mkdir(join(testDir, "record"), { recursive: true });
   try {
@@ -84,7 +87,8 @@ async function runWorkerScriptWithFakeSandbox(
 }
 
 test("invokes Infracost with the persisted Terraform plan and stores its resource-level estimate", async () => {
-  const result = await runWorkerScriptWithFakeSandbox(`
+  const result = await runWorkerScriptWithFakeSandbox(
+    `
     const { chmod, mkdir, readFile: readFileText, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const testDir = process.env.TEST_DIR;
@@ -216,7 +220,9 @@ test("invokes Infracost with the persisted Terraform plan and stores its resourc
       capturedPlan,
       estimate,
     }));
-  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+  `,
+    { NODE_ENV: "production", SIMULATED_RUNS: "false" },
+  );
 
   expect(result["status"]).toBe("planned_and_finished");
   expect(result["capturedPlan"]).toEqual(result["persistedPlan"]);
@@ -237,7 +243,8 @@ test("invokes Infracost with the persisted Terraform plan and stores its resourc
 });
 
 test("records missing and failed Infracost tooling as errored estimates while runs continue", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     const { chmod, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const testDir = process.env.TEST_DIR;
@@ -285,7 +292,9 @@ test("records missing and failed Infracost tooling as errored estimates while ru
       missingEstimate,
       failedEstimate,
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result["missingStatus"]).toBe("planned_and_finished");
   expect(result["failedStatus"]).toBe("planned_and_finished");
@@ -298,7 +307,8 @@ test("records missing and failed Infracost tooling as errored estimates while ru
 });
 
 test("records an unresolvable Infracost binary as unavailable while the run continues (issue #605)", async () => {
-  const result = await runWorkerScript(`
+  const result = await runWorkerScript(
+    `
     process.env.SIMULATED_PLAN_JSON = JSON.stringify({
       format_version: "1.2",
       planned_values: { root_module: { resources: [] } },
@@ -326,7 +336,9 @@ test("records an unresolvable Infracost binary as unavailable while the run cont
       readCostEstimateArtifact("unavailable"),
     ]);
     console.log(JSON.stringify({ status: completedRun?.status, estimate }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   expect(result["status"]).toBe("planned_and_finished");
   const estimate = result["estimate"] as Record<string, unknown>;
@@ -335,7 +347,8 @@ test("records an unresolvable Infracost binary as unavailable while the run cont
 });
 
 test("exposes GCP credentials to the sandbox read-only, outside the workdir (issue #605)", async () => {
-  const result = await runWorkerScriptWithFakeSandbox(`
+  const result = await runWorkerScriptWithFakeSandbox(
+    `
     const { chmod, mkdir, readFile: readFileText, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const testDir = process.env.TEST_DIR;
@@ -380,7 +393,9 @@ test("exposes GCP credentials to the sandbox read-only, outside the workdir (iss
       runnerArgs: await readFileText(runnerRecordPath, "utf8"),
       credsSeen: await readFileText(join(recordDir, "infracost-creds"), "utf8"),
     }));
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+  `,
+    { NODE_ENV: "test", SIMULATED_RUNS: "true" },
+  );
 
   const estimate = result["estimate"] as Record<string, unknown>;
   expect(estimate["status"]).toBe("finished");

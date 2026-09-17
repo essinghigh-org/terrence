@@ -20,9 +20,7 @@ export function isVersionCacheFresh(
   ttlMs: number,
   now: number = Date.now(),
 ): boolean {
-  return entry !== undefined
-    && Number.isFinite(entry.fetchedAt)
-    && now - entry.fetchedAt < ttlMs;
+  return entry !== undefined && Number.isFinite(entry.fetchedAt) && now - entry.fetchedAt < ttlMs;
 }
 
 /**
@@ -42,10 +40,12 @@ export function loadVersionCacheFile(filePath: string): VersionCacheFile {
   for (const tool of ["tofu", "terraform", "tfe-provider"] as const) {
     const entry = parsed[tool];
     if (entry === undefined) continue;
-    if (!Array.isArray(entry.versions)
-      || !entry.versions.every((v: unknown): boolean => typeof v === "string")
-      || typeof entry.fetchedAt !== "number"
-      || !Number.isFinite(entry.fetchedAt)) {
+    if (
+      !Array.isArray(entry.versions) ||
+      !entry.versions.every((v: unknown): boolean => typeof v === "string") ||
+      typeof entry.fetchedAt !== "number" ||
+      !Number.isFinite(entry.fetchedAt)
+    ) {
       Reflect.deleteProperty(parsed, tool);
     }
   }

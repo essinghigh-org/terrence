@@ -19,11 +19,13 @@ describe("admin provider surface (kanban 11.18)", () => {
   const cacheFile = join(tmpdir(), `surface-cache-${suffix}.json`);
 
   const request = (token: string, method = "GET"): Promise<Response> =>
-    app.handle(new Request("http://terrence.test/api/v2/admin/provider-surface", {
-      method,
-      headers: { Authorization: `Bearer ${token}` },
-      body: null,
-    }));
+    app.handle(
+      new Request("http://terrence.test/api/v2/admin/provider-surface", {
+        method,
+        headers: { Authorization: `Bearer ${token}` },
+        body: null,
+      }),
+    );
 
   beforeAll(async () => {
     // The freshness lookup is cached on disk; point it at a temp file and
@@ -37,7 +39,11 @@ describe("admin provider surface (kanban 11.18)", () => {
     ]);
     await db.insert(apiTokens).values([
       { id: crypto.randomUUID(), token: createHash("sha256").update(adminToken).digest("hex"), userId: adminId },
-      { id: crypto.randomUUID(), token: createHash("sha256").update(`surface-user-token-${suffix}`).digest("hex"), userId },
+      {
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(`surface-user-token-${suffix}`).digest("hex"),
+        userId,
+      },
     ]);
   });
 
@@ -52,7 +58,15 @@ describe("admin provider surface (kanban 11.18)", () => {
   it("serves the provider surface catalog to site admins", async () => {
     const res = await request(adminToken);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: { provider?: string; resources?: unknown[]; resources_covered?: number; "latest-available"?: string | null; lifecycle_contract?: { version?: number; fixtures?: unknown[] } } };
+    const body = (await res.json()) as {
+      data: {
+        provider?: string;
+        resources?: unknown[];
+        resources_covered?: number;
+        "latest-available"?: string | null;
+        lifecycle_contract?: { version?: number; fixtures?: unknown[] };
+      };
+    };
     expect(typeof body.data.provider).toBe("string");
     expect(Array.isArray(body.data.resources)).toBe(true);
     expect(body.data.resources_covered).toBeGreaterThan(0);

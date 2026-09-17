@@ -4,8 +4,12 @@ import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, githubAppInstallations, organizationMemberships,
-  organizations, users, workspaces,
+  apiTokens,
+  githubAppInstallations,
+  organizationMemberships,
+  organizations,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 
 /**
@@ -28,14 +32,16 @@ describe("Workspace VCS repo normalization (VCS-001/002/003)", () => {
   const token = `token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const ghInstallationId = `ghain-${suffix}`;
 
@@ -43,11 +49,18 @@ describe("Workspace VCS repo normalization (VCS-001/002/003)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(githubAppInstallations).values({
-      id: ghInstallationId, orgId, name: "Test App", installationId: 1,
+      id: ghInstallationId,
+      orgId,
+      name: "Test App",
+      installationId: 1,
     });
   });
 
@@ -86,7 +99,10 @@ describe("Workspace VCS repo normalization (VCS-001/002/003)", () => {
     const res = await request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
       data: {
         type: "workspaces",
-        attributes: { name: "unknown-install-ws", "vcs-repo": { identifier: "hashicorp/terraform", "github-app-installation-id": "ghain-nope" } },
+        attributes: {
+          name: "unknown-install-ws",
+          "vcs-repo": { identifier: "hashicorp/terraform", "github-app-installation-id": "ghain-nope" },
+        },
       },
     });
     expect(res.status).toBe(422);

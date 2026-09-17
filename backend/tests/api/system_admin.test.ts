@@ -27,16 +27,18 @@ describe("System administration API contract", () => {
     // Use a fresh system token per request unless the caller pins one: the
     // System API rate-limits each token to one request/second (matching the reference format),
     // so back-to-back calls need distinct tokens.
-    const bearer = options.token === null ? null : options.token ?? (await tokenFor(path));
-    return systemApiApp.handle(new Request(`http://terrence.test${path}`, {
-      method: options.method ?? "GET",
-      headers: {
-        ...(bearer === null ? {} : { Authorization: `Bearer ${bearer}` }),
-        ...(options.accept === undefined ? {} : { Accept: options.accept }),
-        ...(options.body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: options.body === undefined ? null : JSON.stringify(options.body),
-    }));
+    const bearer = options.token === null ? null : (options.token ?? (await tokenFor(path)));
+    return systemApiApp.handle(
+      new Request(`http://terrence.test${path}`, {
+        method: options.method ?? "GET",
+        headers: {
+          ...(bearer === null ? {} : { Authorization: `Bearer ${bearer}` }),
+          ...(options.accept === undefined ? {} : { Accept: options.accept }),
+          ...(options.body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: options.body === undefined ? null : JSON.stringify(options.body),
+      }),
+    );
   };
 
   const systemTokenIds: string[] = [];
@@ -100,11 +102,7 @@ describe("System administration API contract", () => {
 
   it("requires a valid system token", async () => {
     expect((await request("/api/v1/diagnostics", { token: null, accept: "application/json" })).status).toBe(401);
-    for (const path of [
-      "/api/v1/diagnostics",
-      "/api/v1/usage/bundle",
-      "/api/v1/support/bundle-requests",
-    ]) {
+    for (const path of ["/api/v1/diagnostics", "/api/v1/usage/bundle", "/api/v1/support/bundle-requests"]) {
       // Application (user) tokens carry a credential, so the System API hides
       // the resource (404) rather than leaking it with a 403.
       const response = await request(path, { token: memberToken, accept: "application/json" });
@@ -121,11 +119,13 @@ describe("System administration API contract", () => {
     const results = await response.json();
     expect(results).toHaveLength(1);
     expect(results[0].status).toBe("OK");
-    expect(results[0].checks).toEqual([{
-      group: "database",
-      status: "OK",
-      checks: [{ name: "connection", status: "OK" }],
-    }]);
+    expect(results[0].checks).toEqual([
+      {
+        group: "database",
+        status: "OK",
+        checks: [{ name: "connection", status: "OK" }],
+      },
+    ]);
 
     await Bun.sleep(SYSTEM_API_RATE_LIMIT_MS);
     const invalidTimeout = await request("/api/v1/diagnostics?timeout=0", { accept: "application/json" });
@@ -183,61 +183,67 @@ describe("System administration API contract", () => {
     const originalAdminPassword = process.env["ADMIN_PASSWORD"];
     process.env["ADMIN_PASSWORD"] = "support-bundle-canary-secret";
     try {
-    const createResponse = await request("/api/v1/support/bundle-requests", {
-      method: "POST",
-      body: {},
-    });
-    expect(createResponse.status).toBe(202);
-    const created = await createResponse.json();
-    bundleId = created.data.id;
-    expect(bundleId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(created.data.attributes.manifest["schema-version"]).toBe(1);
-    expect(created.data.attributes.manifest["projection-version"]).toBe("support-bundle-v1");
-    expect(created.data.attributes.manifest["max-bytes"]).toBeGreaterThan(0);
-    expect(created.data.attributes.manifest.entries.some((entry: Readonly<{ path: string }>): boolean => entry.path === "_effective-configuration.json")).toBeTrue();
-    expect(created.data.attributes.manifest.excluded).toContain("database dumps and state files");
+      const createResponse = await request("/api/v1/support/bundle-requests", {
+        method: "POST",
+        body: {},
+      });
+      expect(createResponse.status).toBe(202);
+      const created = await createResponse.json();
+      bundleId = created.data.id;
+      expect(bundleId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(created.data.attributes.manifest["schema-version"]).toBe(1);
+      expect(created.data.attributes.manifest["projection-version"]).toBe("support-bundle-v1");
+      expect(created.data.attributes.manifest["max-bytes"]).toBeGreaterThan(0);
+      expect(
+        created.data.attributes.manifest.entries.some(
+          (entry: Readonly<{ path: string }>): boolean => entry.path === "_effective-configuration.json",
+        ),
+      ).toBeTrue();
+      expect(created.data.attributes.manifest.excluded).toContain("database dumps and state files");
 
-    let status = "generating";
-    for (let attempt = 0; attempt < 100 && status === "generating"; attempt += 1) {
-      await Bun.sleep(10);
+      let status = "generating";
+      for (let attempt = 0; attempt < 100 && status === "generating"; attempt += 1) {
+        await Bun.sleep(10);
+        const detailResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`);
+        expect(detailResponse.status).toBe(200);
+        status = (await detailResponse.json()).data.attributes.status;
+      }
+      expect(status).toBe("finished");
+
       const detailResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`);
-      expect(detailResponse.status).toBe(200);
-      status = (await detailResponse.json()).data.attributes.status;
-    }
-    expect(status).toBe("finished");
+      const detail = await detailResponse.json();
+      expect(detail.data.attributes.manifest["archive-size-bytes"]).toBeGreaterThan(0);
+      expect(detail.data.attributes.expires_at).toBeString();
 
-    const detailResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`);
-    const detail = await detailResponse.json();
-    expect(detail.data.attributes.manifest["archive-size-bytes"]).toBeGreaterThan(0);
-    expect(detail.data.attributes.expires_at).toBeString();
+      const listResponse = await request("/api/v1/support/bundle-requests?filter[status]=finished");
+      expect(listResponse.status).toBe(200);
+      const list = await listResponse.json();
+      expect(list.data.some((bundle: Readonly<{ id: string }>): boolean => bundle.id === bundleId)).toBeTrue();
+      expect((await request("/api/v1/support-bundle-requests")).status).toBe(200);
 
-    const listResponse = await request("/api/v1/support/bundle-requests?filter[status]=finished");
-    expect(listResponse.status).toBe(200);
-    const list = await listResponse.json();
-    expect(list.data.some((bundle: Readonly<{ id: string }>): boolean => bundle.id === bundleId)).toBeTrue();
-    expect((await request("/api/v1/support-bundle-requests")).status).toBe(200);
+      const downloadResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}/download`);
+      expect(downloadResponse.status).toBe(200);
+      expect(downloadResponse.headers.get("content-type")).toBe("application/gzip");
+      expect(downloadResponse.headers.get("content-disposition")).toContain(
+        `support-bundle-${String(bundleId)}.tar.gz`,
+      );
+      const files = await new Bun.Archive(await downloadResponse.arrayBuffer()).files();
+      const names = [...files.keys()];
+      expect(names).toContain("_manifest.json");
+      expect(names).toContain("_effective-configuration.json");
+      expect(names.some((name): boolean => name.endsWith("/diagnostics.json"))).toBeTrue();
+      expect(names.some((name): boolean => name.endsWith("/usage.json"))).toBeTrue();
+      expect(names.some((name): boolean => name.endsWith("/instance.json"))).toBeTrue();
+      const contents = (await Promise.all([...files.values()].map((file): Promise<string> => file.text()))).join("\n");
+      expect(contents).not.toContain(adminToken);
+      expect(contents).not.toContain(memberToken);
+      expect(contents).not.toContain("support-bundle-canary-secret");
+      expect((await request(`/api/v1/support-bundle-requests/${String(bundleId)}`)).status).toBe(200);
 
-    const downloadResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}/download`);
-    expect(downloadResponse.status).toBe(200);
-    expect(downloadResponse.headers.get("content-type")).toBe("application/gzip");
-    expect(downloadResponse.headers.get("content-disposition")).toContain(`support-bundle-${String(bundleId)}.tar.gz`);
-    const files = await new Bun.Archive(await downloadResponse.arrayBuffer()).files();
-    const names = [...files.keys()];
-    expect(names).toContain("_manifest.json");
-    expect(names).toContain("_effective-configuration.json");
-    expect(names.some((name): boolean => name.endsWith("/diagnostics.json"))).toBeTrue();
-    expect(names.some((name): boolean => name.endsWith("/usage.json"))).toBeTrue();
-    expect(names.some((name): boolean => name.endsWith("/instance.json"))).toBeTrue();
-    const contents = (await Promise.all([...files.values()].map((file): Promise<string> => file.text()))).join("\n");
-    expect(contents).not.toContain(adminToken);
-    expect(contents).not.toContain(memberToken);
-    expect(contents).not.toContain("support-bundle-canary-secret");
-    expect((await request(`/api/v1/support-bundle-requests/${String(bundleId)}`)).status).toBe(200);
-
-    const deleteResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`, { method: "DELETE" });
-    expect(deleteResponse.status).toBe(204);
-    const goneResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`);
-    expect(goneResponse.status).toBe(410);
+      const deleteResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`, { method: "DELETE" });
+      expect(deleteResponse.status).toBe(204);
+      const goneResponse = await request(`/api/v1/support/bundle-requests/${String(bundleId)}`);
+      expect(goneResponse.status).toBe(410);
     } finally {
       if (originalAdminPassword === undefined) Reflect.deleteProperty(process.env, "ADMIN_PASSWORD");
       else process.env["ADMIN_PASSWORD"] = originalAdminPassword;
@@ -258,7 +264,7 @@ describe("System administration API contract", () => {
         await Bun.sleep(10);
         const response = await request(`/api/v1/support/bundle-requests/${String(oversizedId)}`);
         expect(response.status).toBe(200);
-        const parsed = await response.json() as { data: { attributes: { status: string; error?: string } } };
+        const parsed = (await response.json()) as { data: { attributes: { status: string; error?: string } } };
         detailBody = parsed;
         status = parsed.data.attributes.status;
       }

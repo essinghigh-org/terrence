@@ -3,9 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens, organizationMemberships, organizations, projects, users, workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, projects, users, workspaces } from "../../src/db/schema";
 
 /**
  * RBAC-008: Default project create/move/delete behavior.
@@ -26,14 +24,16 @@ describe("Default Project assignment (RBAC-008)", () => {
   const token = `token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   let explicitProjectId: string;
 
@@ -44,15 +44,22 @@ describe("Default Project assignment (RBAC-008)", () => {
       data: { type: "organizations", attributes: { name: orgName } },
     });
     expect(created.status).toBe(201);
-    const createdBody = await created.json() as { data: { attributes: { "external-id": string } } };
+    const createdBody = (await created.json()) as { data: { attributes: { "external-id": string } } };
     orgId = createdBody.data.attributes["external-id"];
     await db.insert(organizations).values({ id: readOnlyOrgId, name: readOnlyOrgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-read-only-${suffix}`, userId, orgId: readOnlyOrgId, role: "owner", status: "active",
+      id: `mem-read-only-${suffix}`,
+      userId,
+      orgId: readOnlyOrgId,
+      role: "owner",
+      status: "active",
     });
     explicitProjectId = `prj-${crypto.randomUUID()}`;
     await db.insert(projects).values({
-      id: explicitProjectId, orgId, name: "explicit-project", isDefault: false,
+      id: explicitProjectId,
+      orgId,
+      name: "explicit-project",
+      isDefault: false,
       defaultExecutionMode: "remote",
     });
   });
@@ -96,7 +103,8 @@ describe("Default Project assignment (RBAC-008)", () => {
       data: { type: "workspaces", attributes: { name: "no-project-ws" } },
     });
     expect(res.status).toBe(201);
-    const body: { data: { relationships?: { project?: { data: { id: string; type: string } | null } } } } = await res.json();
+    const body: { data: { relationships?: { project?: { data: { id: string; type: string } | null } } } } =
+      await res.json();
     const rel = body.data.relationships?.project?.data;
     expect(rel).toBeDefined();
     expect(rel?.type).toBe("projects");

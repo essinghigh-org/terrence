@@ -14,8 +14,11 @@ export function stateOutputIndexRows(
   statePayload: string | null,
 ): (typeof stateOutputIndex.$inferInsert)[] {
   const parsed = parseStatePayload(statePayload ?? jsonState);
-  const isBareOutputs = parsed !== null
-    && !["version", "terraform_version", "serial", "lineage", "resources", "check_results", "outputs"].some((key): boolean => key in parsed);
+  const isBareOutputs =
+    parsed !== null &&
+    !["version", "terraform_version", "serial", "lineage", "resources", "check_results", "outputs"].some(
+      (key): boolean => key in parsed,
+    );
   const outputs = parsed?.["outputs"] ?? (statePayload === null && isBareOutputs ? parsed : undefined);
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
   return Object.keys(outputs).map((name): typeof stateOutputIndex.$inferInsert => ({
@@ -35,14 +38,18 @@ export async function insertStateOutputIndex(
   statePayload: string | null,
 ): Promise<void> {
   const summary = statePayload === null ? null : buildStateSummary(statePayload);
-  await (tx as typeof db).update(stateVersions).set({
-    stateSummary: summary === null ? null : JSON.stringify(summary),
-    ...(summary === null ? {} : { uploadSha256: summary.digest }),
-  }).where(eq(stateVersions.id, stateVersionId));
+  await (tx as typeof db)
+    .update(stateVersions)
+    .set({
+      stateSummary: summary === null ? null : JSON.stringify(summary),
+      ...(summary === null ? {} : { uploadSha256: summary.digest }),
+    })
+    .where(eq(stateVersions.id, stateVersionId));
   const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
   if (rows.length === 0) return;
   for (let offset = 0; offset < rows.length; offset += STATE_OUTPUT_INDEX_BATCH_SIZE) {
-    await (tx as typeof db).insert(stateOutputIndex)
+    await (tx as typeof db)
+      .insert(stateOutputIndex)
       .values(rows.slice(offset, offset + STATE_OUTPUT_INDEX_BATCH_SIZE))
       .onConflictDoNothing();
   }

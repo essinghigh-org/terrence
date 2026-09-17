@@ -48,22 +48,20 @@ export function MetaList({
       {...(ariaLabel === undefined ? {} : { "aria-label": ariaLabel })}
       className={cn("grid gap-4 text-sm", COLUMN_CLASSES[columns], className)}
     >
-      {items.map((item: MetaItem): React.JSX.Element => (
-        <div key={item.label} className="min-w-0">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {item.label}
-          </dt>
-          <dd
-            className="mt-1 font-medium text-foreground"
-            {...(item.title === undefined ? {} : { title: item.title })}
-          >
-            {item.value}
-          </dd>
-          {item.note !== undefined && (
-            <div className="mt-1 text-xs text-muted-foreground">{item.note}</div>
-          )}
-        </div>
-      ))}
+      {items.map(
+        (item: MetaItem): React.JSX.Element => (
+          <div key={item.label} className="min-w-0">
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{item.label}</dt>
+            <dd
+              className="mt-1 font-medium text-foreground"
+              {...(item.title === undefined ? {} : { title: item.title })}
+            >
+              {item.value}
+            </dd>
+            {item.note !== undefined && <div className="mt-1 text-xs text-muted-foreground">{item.note}</div>}
+          </div>
+        ),
+      )}
     </dl>
   );
 }
@@ -84,28 +82,23 @@ export function MetaStrip({
         className,
       )}
     >
-      {items.map((item: MetaItem, index: number): React.JSX.Element => (
-        <div
-          key={item.label}
-          className={cn(
-            "px-5 py-4",
-            index < items.length - 1 && "border-b border-border sm:border-b-0 sm:border-r",
-          )}
-        >
-          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {item.label}
-          </dt>
-          <dd
-            className="mt-1 text-sm font-semibold text-foreground"
-            {...(item.title === undefined ? {} : { title: item.title })}
+      {items.map(
+        (item: MetaItem, index: number): React.JSX.Element => (
+          <div
+            key={item.label}
+            className={cn("px-5 py-4", index < items.length - 1 && "border-b border-border sm:border-b-0 sm:border-r")}
           >
-            {item.value}
-          </dd>
-          {item.note !== undefined && (
-            <div className="mt-1 text-xs">{item.note}</div>
-          )}
-        </div>
-      ))}
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{item.label}</dt>
+            <dd
+              className="mt-1 text-sm font-semibold text-foreground"
+              {...(item.title === undefined ? {} : { title: item.title })}
+            >
+              {item.value}
+            </dd>
+            {item.note !== undefined && <div className="mt-1 text-xs">{item.note}</div>}
+          </div>
+        ),
+      )}
     </dl>
   );
 }

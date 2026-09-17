@@ -11,18 +11,24 @@ describe("release build manifest", () => {
       for (const directory of ["sqlite", "postgres", "evidence"]) await mkdir(join(root, directory));
       await writeFile(join(root, "sqlite", "001.sql"), "create table users;");
       await writeFile(join(root, "postgres", "001.sql"), "create table users_pg;");
-      await writeFile(join(root, "matrix.json"), "{\"terraform\":{}}\n");
-      await writeFile(join(root, "evidence", "terraform-floor.json"), "{\"binarySha256\":\"redacted-by-fixture\"}\n");
-      await writeFile(join(root, "dependency-manifest.json"), "{\"packages\":[]}\n");
-      await writeFile(join(root, "dependency-sbom.json"), "{\"spdxVersion\":\"SPDX-2.3\"}\n");
+      await writeFile(join(root, "matrix.json"), '{"terraform":{}}\n');
+      await writeFile(join(root, "evidence", "terraform-floor.json"), '{"binarySha256":"redacted-by-fixture"}\n');
+      await writeFile(join(root, "dependency-manifest.json"), '{"packages":[]}\n');
+      await writeFile(join(root, "dependency-sbom.json"), '{"spdxVersion":"SPDX-2.3"}\n');
       await writeFile(join(root, "dependency-summary.md"), "# Dependency changes\n");
-      await writeFile(join(root, "dependency-exceptions.json"), "{\"exceptions\":[]}\n");
+      await writeFile(join(root, "dependency-exceptions.json"), '{"exceptions":[]}\n');
       const manifest = await buildManifest({
-        version: "1.2.3", commit: "a".repeat(40), imageReference: "ghcr.io/example/terrence:v1.2.3",
-        imageDigest: `sha256:${"b".repeat(64)}`, sqliteMigrations: join(root, "sqlite"),
-        postgresMigrations: join(root, "postgres"), compatibilityMatrix: join(root, "matrix.json"),
-        dependencyManifest: join(root, "dependency-manifest.json"), dependencySbom: join(root, "dependency-sbom.json"),
-        dependencyChangeSummary: join(root, "dependency-summary.md"), dependencyExceptions: join(root, "dependency-exceptions.json"),
+        version: "1.2.3",
+        commit: "a".repeat(40),
+        imageReference: "ghcr.io/example/terrence:v1.2.3",
+        imageDigest: `sha256:${"b".repeat(64)}`,
+        sqliteMigrations: join(root, "sqlite"),
+        postgresMigrations: join(root, "postgres"),
+        compatibilityMatrix: join(root, "matrix.json"),
+        dependencyManifest: join(root, "dependency-manifest.json"),
+        dependencySbom: join(root, "dependency-sbom.json"),
+        dependencyChangeSummary: join(root, "dependency-summary.md"),
+        dependencyExceptions: join(root, "dependency-exceptions.json"),
         evidenceDirectory: join(root, "evidence"),
       });
       expect(manifest.schema).toBe(2);
@@ -42,10 +48,17 @@ describe("release build manifest", () => {
       await mkdir(join(root, "migrations"));
       await writeFile(join(root, "matrix.json"), "{}");
       const result = await buildManifest({
-        version: "latest", commit: "a".repeat(40), imageReference: "image:latest", imageDigest: "sha256:" + "b".repeat(64),
-        sqliteMigrations: join(root, "migrations"), postgresMigrations: join(root, "migrations"), compatibilityMatrix: join(root, "matrix.json"),
-        dependencyManifest: join(root, "matrix.json"), dependencySbom: join(root, "matrix.json"),
-        dependencyChangeSummary: join(root, "matrix.json"), dependencyExceptions: join(root, "matrix.json"),
+        version: "latest",
+        commit: "a".repeat(40),
+        imageReference: "image:latest",
+        imageDigest: "sha256:" + "b".repeat(64),
+        sqliteMigrations: join(root, "migrations"),
+        postgresMigrations: join(root, "migrations"),
+        compatibilityMatrix: join(root, "matrix.json"),
+        dependencyManifest: join(root, "matrix.json"),
+        dependencySbom: join(root, "matrix.json"),
+        dependencyChangeSummary: join(root, "matrix.json"),
+        dependencyExceptions: join(root, "matrix.json"),
       }).catch((error: unknown): unknown => error);
       expect(result).toBeInstanceOf(Error);
       expect((result as Error).message).toContain("release version");

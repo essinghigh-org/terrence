@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 
 import { formatDateTime } from "../src/lib/utils";
-import {
-  getDisplayTimezone,
-  resolveDisplayTimeZone,
-  setDisplayTimezone,
-} from "../src/lib/display-timezone";
+import { getDisplayTimezone, resolveDisplayTimeZone, setDisplayTimezone } from "../src/lib/display-timezone";
 
 const timestamp = "2026-08-07T12:00:00Z";
 
@@ -33,7 +29,9 @@ describe("display timezone preference", () => {
   });
 
   it("uses UTC for shared date formatting when selected", () => {
-    const result = runWithTimezone("America/Los_Angeles", `
+    const result = runWithTimezone(
+      "America/Los_Angeles",
+      `
       const { formatDateTime } = await import("./src/lib/utils.ts");
       const { setDisplayTimezone } = await import("./src/lib/display-timezone.ts");
       setDisplayTimezone("utc");
@@ -42,7 +40,8 @@ describe("display timezone preference", () => {
         actual: formatDateTime(${JSON.stringify(timestamp)}),
         expected: date.toLocaleString(undefined, { timeZone: "UTC", hour12: false }),
       }));
-    `);
+    `,
+    );
     expect(result["actual"]).toBe(result["expected"]);
   });
 
@@ -50,12 +49,15 @@ describe("display timezone preference", () => {
     // Tokyo is +9h: local midnight of 2026-08-07 is 2026-08-06T15:00Z, which
     // would render the previous day in UTC. A bare date has no instant, so it
     // must stay a calendar date in the pinned zone.
-    const result = runWithTimezone("Asia/Tokyo", `
+    const result = runWithTimezone(
+      "Asia/Tokyo",
+      `
       const { formatDate } = await import("./src/lib/utils.ts");
       const { setDisplayTimezone } = await import("./src/lib/display-timezone.ts");
       setDisplayTimezone("utc");
       console.log(JSON.stringify({ actual: formatDate("2026-08-07") }));
-    `);
+    `,
+    );
     expect(result["actual"]).toBe(new Date("2026-08-07T00:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC" }));
   });
 
@@ -67,7 +69,9 @@ describe("display timezone preference", () => {
   it("restores the stored timezone on a fresh module load", () => {
     // Shim storage BEFORE the dynamic import: the module reads its initial
     // value at import time (module-scope currentTimezone).
-    const result = runWithTimezone("UTC", `
+    const result = runWithTimezone(
+      "UTC",
+      `
       globalThis.window = {
         localStorage: {
           getItem: (key) => (key === "terrence-display-timezone" ? "utc" : null),
@@ -79,7 +83,8 @@ describe("display timezone preference", () => {
         loaded: getDisplayTimezone(),
         resolved: resolveDisplayTimeZone(),
       }));
-    `);
+    `,
+    );
     expect(result["loaded"]).toBe("utc");
     expect(result["resolved"]).toBe("UTC");
   });

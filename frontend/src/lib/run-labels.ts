@@ -71,8 +71,10 @@ export function formatRunStatusForUi(status: string): string {
 }
 
 export function isVcsRunSource(source: string | undefined, triggerReason?: string): boolean {
-  return (source !== undefined && VCS_SOURCES.has(source))
-    || (source === "tfe-configuration-version" && VCS_TRIGGER_REASONS.has(triggerReason ?? ""));
+  return (
+    (source !== undefined && VCS_SOURCES.has(source)) ||
+    (source === "tfe-configuration-version" && VCS_TRIGGER_REASONS.has(triggerReason ?? ""))
+  );
 }
 
 export function formatRunSource(source: string | undefined, triggerReason?: string): string {

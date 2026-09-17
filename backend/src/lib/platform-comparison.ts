@@ -15,20 +15,31 @@ function stringValue(value: unknown): string | null {
 }
 
 function pathString(parts: readonly (string | number)[]): string {
-  return parts.reduce<string>((path, part): string => typeof part === "number" ? `${path}[${part}]` : path === "" ? part : `${path}.${part}`, "");
+  return parts.reduce<string>(
+    (path, part): string => (typeof part === "number" ? `${path}[${part}]` : path === "" ? part : `${path}.${part}`),
+    "",
+  );
 }
 
-const SENSITIVE_KEY = /(secret|password|token|credential|private[_-]?key|access[_-]?key|client[_-]?secret|api[_-]?key)/i;
+const SENSITIVE_KEY =
+  /(secret|password|token|credential|private[_-]?key|access[_-]?key|client[_-]?secret|api[_-]?key)/i;
 const UNKNOWN_VALUE = { unknown: true } as const;
 const SENSITIVE_VALUE = { sensitive: true } as const;
 
 function sensitivePathPart(part: unknown): string | number | null {
   if (typeof part === "string" || typeof part === "number") return part;
   if (!record(part)) return null;
-  if ((part["type"] === "get_attr" || part["type"] === "index")
-    && (typeof part["value"] === "string" || typeof part["value"] === "number")) return part["value"];
-  if (part["type"] === "index" && record(part["value"])
-    && (typeof part["value"]["value"] === "string" || typeof part["value"]["value"] === "number")) return part["value"]["value"];
+  if (
+    (part["type"] === "get_attr" || part["type"] === "index") &&
+    (typeof part["value"] === "string" || typeof part["value"] === "number")
+  )
+    return part["value"];
+  if (
+    part["type"] === "index" &&
+    record(part["value"]) &&
+    (typeof part["value"]["value"] === "string" || typeof part["value"]["value"] === "number")
+  )
+    return part["value"]["value"];
   return null;
 }
 
@@ -73,14 +84,21 @@ function safeValue(
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") return value.length > 256 ? UNKNOWN_VALUE : value;
   if (depth > 4) return UNKNOWN_VALUE;
-  if (Array.isArray(value)) return value.slice(0, 100).map((entry, index): unknown => safeValue(entry, `${path}[${index}]`, sensitive, depth + 1));
+  if (Array.isArray(value))
+    return value
+      .slice(0, 100)
+      .map((entry, index): unknown => safeValue(entry, `${path}[${index}]`, sensitive, depth + 1));
   if (!record(value)) return UNKNOWN_VALUE;
-  return Object.fromEntries(Object.entries(value).slice(0, 100).map(([key, entry]): [string, unknown] => [
-    key,
-    SENSITIVE_KEY.test(key)
-      ? SENSITIVE_VALUE
-      : safeValue(entry, path === "" ? key : `${path}.${key}`, sensitive, depth + 1),
-  ]));
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, 100)
+      .map(([key, entry]): [string, unknown] => [
+        key,
+        SENSITIVE_KEY.test(key)
+          ? SENSITIVE_VALUE
+          : safeValue(entry, path === "" ? key : `${path}.${key}`, sensitive, depth + 1),
+      ]),
+  );
 }
 
 function isSensitiveMarker(value: unknown): boolean {
@@ -110,7 +128,9 @@ function recordAttributeChanges(before: unknown, after: unknown, path: string): 
   const left = record(before) ? before : {};
   const right = record(after) ? after : {};
   const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
-  return keys.flatMap((key): AttributeChange[] => attributeChanges(left[key], right[key], path === "" ? key : `${path}.${key}`));
+  return keys.flatMap((key): AttributeChange[] =>
+    attributeChanges(left[key], right[key], path === "" ? key : `${path}.${key}`),
+  );
 }
 
 function arrayAttributeChanges(before: unknown, after: unknown, path: string): AttributeChange[] | null {
@@ -118,16 +138,21 @@ function arrayAttributeChanges(before: unknown, after: unknown, path: string): A
   const left = Array.isArray(before) ? before : [];
   const right = Array.isArray(after) ? after : [];
   const count = Math.max(left.length, right.length);
-  return Array.from({ length: count }, (_, index): AttributeChange[] => attributeChanges(left[index], right[index], `${path}[${index}]`)).flat();
+  return Array.from({ length: count }, (_, index): AttributeChange[] =>
+    attributeChanges(left[index], right[index], `${path}[${index}]`),
+  ).flat();
 }
 
 function attributeChanges(before: unknown, after: unknown, path = ""): AttributeChange[] {
   const sensitive = sensitiveAttributeChange(before, after, path);
   if (sensitive !== null) return sensitive;
   if (equalSafe(before, after)) return [];
-  return recordAttributeChanges(before, after, path)
-    ?? arrayAttributeChanges(before, after, path)
-    ?? [{ path: path || "<root>", before: before ?? null, after: after ?? null, changed: true }];
+  return (
+    recordAttributeChanges(before, after, path) ??
+    arrayAttributeChanges(before, after, path) ?? [
+      { path: path || "<root>", before: before ?? null, after: after ?? null, changed: true },
+    ]
+  );
 }
 
 type ParsedStateResource = Readonly<{
@@ -144,9 +169,14 @@ type ParsedStateResource = Readonly<{
 function resourceAddress(resource: JsonRecord, instance: JsonRecord, index: number): string {
   const module = stringValue(resource["module"]);
   const base = `${resource["type"]}.${resource["name"]}`;
-  const indexed = instance["index_key"] === undefined
-    ? (Array.isArray(resource["instances"]) && resource["instances"].length > 1 ? `[${index}]` : "")
-    : typeof instance["index_key"] === "number" ? `[${instance["index_key"]}]` : `[${JSON.stringify(instance["index_key"])}]`;
+  const indexed =
+    instance["index_key"] === undefined
+      ? Array.isArray(resource["instances"]) && resource["instances"].length > 1
+        ? `[${index}]`
+        : ""
+      : typeof instance["index_key"] === "number"
+        ? `[${instance["index_key"]}]`
+        : `[${JSON.stringify(instance["index_key"])}]`;
   return `${module === null ? "" : `${module}.`}${base}${indexed}`;
 }
 
@@ -163,16 +193,21 @@ function parsedStateResources(state: JsonRecord): ParsedStateResource[] {
       const attributes = record(rawInstance["attributes"]) ? rawInstance["attributes"] : {};
       const sensitivePaths = sensitivePathSet(rawInstance["sensitive_attributes"]);
       const id = isSensitivePath("id", sensitivePaths) ? null : stringValue(attributes["id"]);
-      return [{
-        address: resourceAddress(raw, rawInstance, index),
-        mode,
-        type,
-        provider,
-        identity: id === null ? `${provider}|${type}|${resourceAddress(raw, rawInstance, index)}` : `${provider}|${type}|${id}`,
-        attributes,
-        sensitivePaths,
-        identitySource: id === null ? "address" : "provider-id",
-      }];
+      return [
+        {
+          address: resourceAddress(raw, rawInstance, index),
+          mode,
+          type,
+          provider,
+          identity:
+            id === null
+              ? `${provider}|${type}|${resourceAddress(raw, rawInstance, index)}`
+              : `${provider}|${type}|${id}`,
+          attributes,
+          sensitivePaths,
+          identitySource: id === null ? "address" : "provider-id",
+        },
+      ];
     });
   });
 }
@@ -200,22 +235,35 @@ function summaryDigest(version: StateVersionComparisonInput): string | null {
 }
 
 function stateVersionMetadata(version: StateVersionComparisonInput, state: JsonRecord | null): Record<string, unknown> {
-  const summary = version.stateSummary === null ? null : (() => {
-    try { return JSON.parse(version.stateSummary) as unknown; } catch { return null; }
-  })();
+  const summary =
+    version.stateSummary === null
+      ? null
+      : (() => {
+          try {
+            return JSON.parse(version.stateSummary) as unknown;
+          } catch {
+            return null;
+          }
+        })();
   return {
     id: version.id,
     serial: version.serial,
     digest: summaryDigest(version),
     runId: version.runId,
     createdAt: new Date(version.createdAt).toISOString(),
-    representation: isClientEncryptedState(version.statePayload) ? "opaque" : state === null ? "unavailable" : "terraform-v4",
-    summary: record(summary) ? {
-      resourceCount: summary["resourceCount"] ?? null,
-      outputCount: summary["outputCount"] ?? null,
-      moduleCount: summary["moduleCount"] ?? null,
-      providerCount: summary["providerCount"] ?? null,
-    } : null,
+    representation: isClientEncryptedState(version.statePayload)
+      ? "opaque"
+      : state === null
+        ? "unavailable"
+        : "terraform-v4",
+    summary: record(summary)
+      ? {
+          resourceCount: summary["resourceCount"] ?? null,
+          outputCount: summary["outputCount"] ?? null,
+          moduleCount: summary["moduleCount"] ?? null,
+          providerCount: summary["providerCount"] ?? null,
+        }
+      : null,
   };
 }
 
@@ -223,12 +271,24 @@ export type StateComparison = Readonly<{
   mode: "detailed" | "limited";
   before: Record<string, unknown>;
   after: Record<string, unknown>;
-  resources: Readonly<{ added: readonly Record<string, unknown>[]; removed: readonly Record<string, unknown>[]; changed: readonly Record<string, unknown>[]; moved: readonly Record<string, unknown>[] }>;
-  outputs: Readonly<{ added: readonly Record<string, unknown>[]; removed: readonly Record<string, unknown>[]; changed: readonly Record<string, unknown>[] }>;
+  resources: Readonly<{
+    added: readonly Record<string, unknown>[];
+    removed: readonly Record<string, unknown>[];
+    changed: readonly Record<string, unknown>[];
+    moved: readonly Record<string, unknown>[];
+  }>;
+  outputs: Readonly<{
+    added: readonly Record<string, unknown>[];
+    removed: readonly Record<string, unknown>[];
+    changed: readonly Record<string, unknown>[];
+  }>;
   provenance: Readonly<{ beforeDigest: string | null; afterDigest: string | null; liveCloudChangeProven: false }>;
 }>;
 
-export function compareStateVersions(before: StateVersionComparisonInput, after: StateVersionComparisonInput): StateComparison {
+export function compareStateVersions(
+  before: StateVersionComparisonInput,
+  after: StateVersionComparisonInput,
+): StateComparison {
   const beforeState = parseTerraformStatePayload(before.statePayload);
   const afterState = parseTerraformStatePayload(after.statePayload);
   if (beforeState === null || afterState === null) {
@@ -238,13 +298,21 @@ export function compareStateVersions(before: StateVersionComparisonInput, after:
       after: stateVersionMetadata(after, afterState),
       resources: { added: [], removed: [], changed: [], moved: [] },
       outputs: { added: [], removed: [], changed: [] },
-      provenance: { beforeDigest: summaryDigest(before), afterDigest: summaryDigest(after), liveCloudChangeProven: false },
+      provenance: {
+        beforeDigest: summaryDigest(before),
+        afterDigest: summaryDigest(after),
+        liveCloudChangeProven: false,
+      },
     };
   }
   const beforeResources = parsedStateResources(beforeState);
   const afterResources = parsedStateResources(afterState);
-  const beforeByAddress = new Map(beforeResources.map((resource): [string, ParsedStateResource] => [resource.address, resource]));
-  const beforeByIdentity = new Map(beforeResources.map((resource): [string, ParsedStateResource] => [resource.identity, resource]));
+  const beforeByAddress = new Map(
+    beforeResources.map((resource): [string, ParsedStateResource] => [resource.address, resource]),
+  );
+  const beforeByIdentity = new Map(
+    beforeResources.map((resource): [string, ParsedStateResource] => [resource.identity, resource]),
+  );
   const afterAddresses = new Set(afterResources.map((resource): string => resource.address));
   const matchedBefore = new Set<string>();
   const added: Record<string, unknown>[] = [];
@@ -263,7 +331,12 @@ export function compareStateVersions(before: StateVersionComparisonInput, after:
       safeValue(resource.attributes, "", sensitivePaths, 0),
     );
     if (previous.address !== resource.address) {
-      moved.push({ from: previous.address, to: resource.address, identity: resource.identity, identitySource: resource.identitySource });
+      moved.push({
+        from: previous.address,
+        to: resource.address,
+        identity: resource.identity,
+        identitySource: resource.identitySource,
+      });
     }
     if (differences.length > 0) {
       changed.push({ address: resource.address, actions: ["update"], "changed-attributes": differences });
@@ -271,7 +344,14 @@ export function compareStateVersions(before: StateVersionComparisonInput, after:
   }
   const removed = beforeResources
     .filter((resource): boolean => !matchedBefore.has(resource.address) && !afterAddresses.has(resource.address))
-    .map((resource): Record<string, unknown> => ({ address: resource.address, mode: resource.mode, type: resource.type, provider: resource.provider }));
+    .map(
+      (resource): Record<string, unknown> => ({
+        address: resource.address,
+        mode: resource.mode,
+        type: resource.type,
+        provider: resource.provider,
+      }),
+    );
   const outputComparison = compareStateOutputs(beforeState["outputs"], afterState["outputs"]);
   return {
     mode: "detailed",
@@ -279,7 +359,11 @@ export function compareStateVersions(before: StateVersionComparisonInput, after:
     after: stateVersionMetadata(after, afterState),
     resources: { added, removed, changed, moved },
     outputs: outputComparison,
-    provenance: { beforeDigest: summaryDigest(before), afterDigest: summaryDigest(after), liveCloudChangeProven: false },
+    provenance: {
+      beforeDigest: summaryDigest(before),
+      afterDigest: summaryDigest(after),
+      liveCloudChangeProven: false,
+    },
   };
 }
 
@@ -292,8 +376,16 @@ function compareSingleOutput(name: string, previous: JsonRecord, output: JsonRec
   const beforeValue = sensitive ? SENSITIVE_VALUE : safeValue(previous["value"], "", new Set(), 0);
   const afterValue = sensitive ? SENSITIVE_VALUE : safeValue(output["value"], "", new Set(), 0);
   const difference = sensitive ? null : !equalSafe(beforeValue, afterValue);
-  if (difference === false && previous["type"] === output["type"] && previous["sensitive"] === output["sensitive"]) return null;
-  return { name, sensitive, type: output["type"] ?? previous["type"] ?? null, before: beforeValue, after: afterValue, changed: difference };
+  if (difference === false && previous["type"] === output["type"] && previous["sensitive"] === output["sensitive"])
+    return null;
+  return {
+    name,
+    sensitive,
+    type: output["type"] ?? previous["type"] ?? null,
+    before: beforeValue,
+    after: afterValue,
+    changed: difference,
+  };
 }
 
 function compareStateOutputs(beforeRaw: unknown, afterRaw: unknown): StateComparison["outputs"] {
@@ -322,18 +414,25 @@ function compareStateOutputs(beforeRaw: unknown, afterRaw: unknown): StateCompar
 
 function planResourceMap(plan: PlanJson): Map<string, JsonRecord> {
   const values = Array.isArray(plan["resource_changes"]) ? plan["resource_changes"] : [];
-  return new Map(values.flatMap((raw): [string, JsonRecord][] => {
-    if (!record(raw) || typeof raw["address"] !== "string") return [];
-    return [[raw["address"], raw]];
-  }));
+  return new Map(
+    values.flatMap((raw): [string, JsonRecord][] => {
+      if (!record(raw) || typeof raw["address"] !== "string") return [];
+      return [[raw["address"], raw]];
+    }),
+  );
 }
 
 function planActions(raw: JsonRecord): readonly string[] {
   const change = record(raw["change"]) ? raw["change"] : {};
-  return Array.isArray(change["actions"]) ? change["actions"].filter((action): action is string => typeof action === "string") : [];
+  return Array.isArray(change["actions"])
+    ? change["actions"].filter((action): action is string => typeof action === "string")
+    : [];
 }
 
-function classifyNewPlanResource(current: JsonRecord, beforeMap: Readonly<Pick<ReadonlyMap<string, JsonRecord>, "has">>): { kind: "moved"; from: string } | { kind: "added" } {
+function classifyNewPlanResource(
+  current: JsonRecord,
+  beforeMap: Readonly<Pick<ReadonlyMap<string, JsonRecord>, "has">>,
+): { kind: "moved"; from: string } | { kind: "added" } {
   const previousAddress = typeof current["previous_address"] === "string" ? current["previous_address"] : null;
   return previousAddress !== null && beforeMap.has(previousAddress)
     ? { kind: "moved", from: previousAddress }
@@ -342,17 +441,31 @@ function classifyNewPlanResource(current: JsonRecord, beforeMap: Readonly<Pick<R
 
 function replacePathStrings(afterChange: JsonRecord): string[] {
   if (!Array.isArray(afterChange["replace_paths"])) return [];
-  return afterChange["replace_paths"].flatMap((path): string[] => Array.isArray(path) ? [path.map((part): string => String(part)).join(".")] : []);
+  return afterChange["replace_paths"].flatMap((path): string[] =>
+    Array.isArray(path) ? [path.map((part): string => String(part)).join(".")] : [],
+  );
 }
 
-function changedPlanEntry(address: string, previous: JsonRecord, current: JsonRecord, before: PlanJson, after: PlanJson): Record<string, unknown> | null {
+function changedPlanEntry(
+  address: string,
+  previous: JsonRecord,
+  current: JsonRecord,
+  before: PlanJson,
+  after: PlanJson,
+): Record<string, unknown> | null {
   const beforeActions = planActions(previous);
   const afterActions = planActions(current);
   const beforeChange = record(previous["change"]) ? previous["change"] : {};
   const afterChange = record(current["change"]) ? current["change"] : {};
   const paths = replacePathStrings(afterChange);
   const differences = attributeChanges(beforeChange["after"], afterChange["after"]);
-  if (equalSafe(beforeActions, afterActions) && differences.length === 0 && paths.length === 0 && before["action_reason"] === after["action_reason"]) return null;
+  if (
+    equalSafe(beforeActions, afterActions) &&
+    differences.length === 0 &&
+    paths.length === 0 &&
+    before["action_reason"] === after["action_reason"]
+  )
+    return null;
   return {
     address,
     beforeActions,
@@ -376,7 +489,8 @@ export function comparePlanJson(beforeRaw: PlanJson, afterRaw: PlanJson): Record
     const previous = beforeMap.get(address);
     if (previous === undefined) {
       const classification = classifyNewPlanResource(current, beforeMap);
-      if (classification.kind === "moved") moved.push({ from: classification.from, to: address, actions: planActions(current) });
+      if (classification.kind === "moved")
+        moved.push({ from: classification.from, to: address, actions: planActions(current) });
       else added.push({ address, actions: planActions(current), destructive: planActions(current).includes("delete") });
       continue;
     }
@@ -428,36 +542,56 @@ export type InventoryObservation = Readonly<{
 export function stateInventoryObservations(version: StateVersionComparisonInput): readonly InventoryObservation[] {
   const state = parseTerraformStatePayload(version.statePayload);
   if (state === null) return [];
-  return parsedStateResources(state).map((resource): InventoryObservation => ({
-    identity: resource.identity,
-    identitySource: resource.identitySource,
-    address: resource.address,
-    mode: resource.mode,
-    type: resource.type,
-    provider: resource.provider,
-    stateVersionId: version.id,
-    serial: version.serial,
-    runId: version.runId,
-    observedAt: new Date(version.createdAt).toISOString(),
-  }));
+  return parsedStateResources(state).map(
+    (resource): InventoryObservation => ({
+      identity: resource.identity,
+      identitySource: resource.identitySource,
+      address: resource.address,
+      mode: resource.mode,
+      type: resource.type,
+      provider: resource.provider,
+      stateVersionId: version.id,
+      serial: version.serial,
+      runId: version.runId,
+      observedAt: new Date(version.createdAt).toISOString(),
+    }),
+  );
 }
 
-export function driftFingerprint(input: DeepReadonly<{ workspaceId: string; assessmentId?: string; drifted: boolean | null; checks: readonly Record<string, unknown>[]; }>): string {
-  const checks = input.checks.map((check): Record<string, unknown> => ({
-    address: check["address"] ?? null,
-    status: check["status"] ?? null,
-    kind: check["kind"] ?? null,
-  })).sort((left, right): number => canonicalJson(left).localeCompare(canonicalJson(right)));
+export function driftFingerprint(
+  input: DeepReadonly<{
+    workspaceId: string;
+    assessmentId?: string;
+    drifted: boolean | null;
+    checks: readonly Record<string, unknown>[];
+  }>,
+): string {
+  const checks = input.checks
+    .map(
+      (check): Record<string, unknown> => ({
+        address: check["address"] ?? null,
+        status: check["status"] ?? null,
+        kind: check["kind"] ?? null,
+      }),
+    )
+    .sort((left, right): number => canonicalJson(left).localeCompare(canonicalJson(right)));
   // The assessment ID identifies one observation. It is deliberately omitted
   // so equivalent observations coalesce into one incident across runs.
   return sha256Hex(canonicalJson({ workspaceId: input.workspaceId, drifted: input.drifted, checks }));
 }
 
-export function dependencyImpact(input: Readonly<{
-  rootWorkspaceId: string;
-  edges: readonly Readonly<{ from: string; to: string; source: "explicit" | "observed-output" | "inferred"; sourceRunId?: string | null }>[];
-  maxFanout?: number;
-}>): Readonly<{ edges: readonly Record<string, unknown>[]; cycles: readonly string[][]; truncated: boolean }> {
+export function dependencyImpact(
+  input: Readonly<{
+    rootWorkspaceId: string;
+    edges: readonly Readonly<{
+      from: string;
+      to: string;
+      source: "explicit" | "observed-output" | "inferred";
+      sourceRunId?: string | null;
+    }>[];
+    maxFanout?: number;
+  }>,
+): Readonly<{ edges: readonly Record<string, unknown>[]; cycles: readonly string[][]; truncated: boolean }> {
   const maxFanout = Math.min(Math.max(input.maxFanout ?? 100, 1), 100);
   const accepted = input.edges.filter((edge): boolean => edge.from !== edge.to && edge.from !== "" && edge.to !== "");
   const counts = new Map<string, number>();
@@ -489,7 +623,14 @@ export function dependencyImpact(input: Readonly<{
   };
   visit(input.rootWorkspaceId);
   return {
-    edges: kept.map((edge): Record<string, unknown> => ({ from: edge.from, to: edge.to, source: edge.source, "source-run-id": edge.sourceRunId ?? null })),
+    edges: kept.map(
+      (edge): Record<string, unknown> => ({
+        from: edge.from,
+        to: edge.to,
+        source: edge.source,
+        "source-run-id": edge.sourceRunId ?? null,
+      }),
+    ),
     cycles,
     truncated: kept.length < accepted.length,
   };
@@ -499,14 +640,20 @@ export type ImportMapping = Readonly<{ address: string; providerId: string; prov
 
 const IMPORT_ADDRESS_PATTERN = /^(?:module\.[A-Za-z0-9_\-.]+)?[A-Za-z0-9_]+\.[A-Za-z0-9_]+(?:\[[^\]]+\])?$/;
 
-function validateImportMapping(value: unknown, index: number, ids: Readonly<Pick<Set<string>, "has" | "add">>): { mapping: ImportMapping | null; errors: string[] } {
+function validateImportMapping(
+  value: unknown,
+  index: number,
+  ids: Readonly<Pick<Set<string>, "has" | "add">>,
+): { mapping: ImportMapping | null; errors: string[] } {
   const errors: string[] = [];
   if (!record(value)) return { mapping: null, errors: [`mappings[${index}] must be an object`] };
   const address = stringValue(value["address"]);
   const providerId = stringValue(value["provider-id"] ?? value["providerId"] ?? value["id"]);
   if (address === null || !IMPORT_ADDRESS_PATTERN.test(address)) errors.push(`mappings[${index}].address is invalid`);
-  if (providerId === null || providerId.length > 512) errors.push(`mappings[${index}].provider-id is required and bounded`);
-  if (providerId !== null && ids.has(providerId)) errors.push(`mappings[${index}].provider-id duplicates another mapping`);
+  if (providerId === null || providerId.length > 512)
+    errors.push(`mappings[${index}].provider-id is required and bounded`);
+  if (providerId !== null && ids.has(providerId))
+    errors.push(`mappings[${index}].provider-id duplicates another mapping`);
   if (providerId !== null) ids.add(providerId);
   if (address === null || providerId === null) return { mapping: null, errors };
   return {
@@ -520,7 +667,9 @@ function validateImportMapping(value: unknown, index: number, ids: Readonly<Pick
   };
 }
 
-export function validateImportMappings(raw: unknown): Readonly<{ mappings: readonly ImportMapping[]; errors: readonly string[] }> {
+export function validateImportMappings(
+  raw: unknown,
+): Readonly<{ mappings: readonly ImportMapping[]; errors: readonly string[] }> {
   if (!Array.isArray(raw)) return { mappings: [], errors: ["mappings must be an array"] };
   const mappings: ImportMapping[] = [];
   const errors: string[] = [];
@@ -541,13 +690,17 @@ export function inputDigest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
-export function upgradeRehearsalResult(input: Readonly<{ engine: string; version: string; baselineFresh: boolean; candidateLockDigest: string | null }>): Record<string, unknown> {
+export function upgradeRehearsalResult(
+  input: Readonly<{ engine: string; version: string; baselineFresh: boolean; candidateLockDigest: string | null }>,
+): Record<string, unknown> {
   const engine = input.engine === "terraform" || input.engine === "tofu" ? input.engine : null;
   const version = /^\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(input.version) ? input.version : null;
   const failures = [
     ...(engine === null ? ["engine must be terraform or tofu"] : []),
     ...(version === null ? ["candidate engine version must use a bounded semantic version"] : []),
-    ...(input.candidateLockDigest !== null && !/^[a-f0-9]{64}$/.test(input.candidateLockDigest) ? ["candidate lock digest must be sha256"] : []),
+    ...(input.candidateLockDigest !== null && !/^[a-f0-9]{64}$/.test(input.candidateLockDigest)
+      ? ["candidate lock digest must be sha256"]
+      : []),
   ];
   return {
     status: failures.length === 0 ? "ready-for-speculative-plan" : "invalid",
@@ -560,13 +713,16 @@ export function upgradeRehearsalResult(input: Readonly<{ engine: string; version
   };
 }
 
-export function policyPlaygroundResult(input: Readonly<{ kind: "opa" | "sentinel"; source: string; plan: unknown }>): Record<string, unknown> {
+export function policyPlaygroundResult(
+  input: Readonly<{ kind: "opa" | "sentinel"; source: string; plan: unknown }>,
+): Record<string, unknown> {
   const source = input.source.trim();
   const planDigest = inputDigest(input.plan);
   const diagnostics: string[] = [];
   if (source === "") diagnostics.push("policy source is required");
   if (source.length > 256 * 1024) diagnostics.push("policy source exceeds the 256 KiB limit");
-  if (input.kind === "opa" && !/package\s+[A-Za-z0-9_.-]+/.test(source)) diagnostics.push("OPA source must declare a package");
+  if (input.kind === "opa" && !/package\s+[A-Za-z0-9_.-]+/.test(source))
+    diagnostics.push("OPA source must declare a package");
   if (input.kind === "sentinel" && !/\bmain\s*=/.test(source)) diagnostics.push("Sentinel source must declare main");
   return {
     status: diagnostics.length === 0 ? "review-only" : "invalid",

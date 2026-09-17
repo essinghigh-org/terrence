@@ -2,14 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, LockKeyhole, Plus, Unplug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -33,14 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 
 type VariableCategory = "terraform" | "env";
@@ -112,8 +98,7 @@ type EffectiveVariable = {
 // sets must not both appear to win. Null ID means the workspace value won.
 type WinnerInfo = Readonly<{ id: string | null; name: string }>;
 
-const messageFrom = (error: unknown, fallback: string): string =>
-  error instanceof Error ? error.message : fallback;
+const messageFrom = (error: unknown, fallback: string): string => (error instanceof Error ? error.message : fallback);
 
 type SourceResolution = Readonly<{
   label: string;
@@ -155,20 +140,17 @@ async function persistWorkspaceVariable(
   attributes: Readonly<Record<string, unknown>>,
 ): Promise<WorkspaceVariable> {
   // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-  const response = await fetchApi(
-    `/workspaces/${workspaceId}/vars${editing == null ? "" : `/${editing.id}`}`,
-    {
-      method: editing == null ? "POST" : "PATCH",
-      body: JSON.stringify({ data: { type: "vars", attributes } }),
-    },
-  ) as { data: WorkspaceVariable };
+  const response = (await fetchApi(`/workspaces/${workspaceId}/vars${editing == null ? "" : `/${editing.id}`}`, {
+    method: editing == null ? "POST" : "PATCH",
+    body: JSON.stringify({ data: { type: "vars", attributes } }),
+  })) as { data: WorkspaceVariable };
   return response.data;
 }
 
 function candidateValue(candidate: VariableCandidate): string {
   return candidate.variable.attributes.sensitive
     ? "Hidden (sensitive)"
-    : candidate.variable.attributes.value ?? "null";
+    : (candidate.variable.attributes.value ?? "null");
 }
 
 function VariableSourceCell({
@@ -226,10 +208,15 @@ function PrecedenceDetailsRow({
         <div className="space-y-3 text-xs">
           <div>
             <p className="font-semibold text-foreground">Why is this value being used?</p>
-            <p className="mt-1 text-muted-foreground">Candidates are ordered from lower to higher precedence: non-priority sets, workspace values, then priority sets. Sensitivity only controls visibility; it never changes the winner.</p>
+            <p className="mt-1 text-muted-foreground">
+              Candidates are ordered from lower to higher precedence: non-priority sets, workspace values, then priority
+              sets. Sensitivity only controls visibility; it never changes the winner.
+            </p>
           </div>
           {candidates.length === 0 ? (
-            <p className="text-muted-foreground">No accessible candidates were returned. The effective source is unknown.</p>
+            <p className="text-muted-foreground">
+              No accessible candidates were returned. The effective source is unknown.
+            </p>
           ) : (
             <ol className="space-y-1.5">
               {candidates.map((candidate, index): React.JSX.Element => {
@@ -238,10 +225,16 @@ function PrecedenceDetailsRow({
                   ? winner.id === candidate.sourceId
                   : !isDuplicated && candidate.id === rowId;
                 return (
-                  <li key={candidate.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/70 bg-background px-2.5 py-2">
+                  <li
+                    key={candidate.id}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/70 bg-background px-2.5 py-2"
+                  >
                     <span className="w-5 text-muted-foreground">{index + 1}.</span>
                     <span className="font-medium text-foreground">{candidate.sourceName}</span>
-                    <span className="text-muted-foreground">{candidate.scope}{candidate.priority ? " · priority" : ""}</span>
+                    <span className="text-muted-foreground">
+                      {candidate.scope}
+                      {candidate.priority ? " · priority" : ""}
+                    </span>
                     {candidateEffective && <Badge variant="success">Effective</Badge>}
                     {!knownWinner && isDuplicated && <Badge variant="outline">Unable to verify</Badge>}
                     <span className="ml-auto font-mono text-muted-foreground">{candidateValue(candidate)}</span>
@@ -250,7 +243,10 @@ function PrecedenceDetailsRow({
               })}
             </ol>
           )}
-          <p className="text-muted-foreground">The server resolver supplies the effective input used by the next run. Attachment or priority changes recalculate this table after the save completes.</p>
+          <p className="text-muted-foreground">
+            The server resolver supplies the effective input used by the next run. Attachment or priority changes
+            recalculate this table after the save completes.
+          </p>
         </div>
       </TableCell>
     </TableRow>
@@ -303,9 +299,7 @@ function VariableEditorDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{editing == null ? "Add variable" : "Edit variable"}</DialogTitle>
-          <DialogDescription>
-            Configure a Terraform input or environment variable for this workspace.
-          </DialogDescription>
+          <DialogDescription>Configure a Terraform input or environment variable for this workspace.</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} noValidate>
           <FieldGroup>
@@ -317,8 +311,12 @@ function VariableEditorDialog({
                 autoComplete="off"
                 spellCheck={false}
                 value={variableKey}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onKeyChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onKeyChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onKeyChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onKeyChange(event.currentTarget.value);
+                }}
                 aria-invalid={editorError !== "" && variableKey.trim() === ""}
                 autoFocus
               />
@@ -332,8 +330,12 @@ function VariableEditorDialog({
                 spellCheck={false}
                 type={sensitive ? "password" : "text"}
                 value={variableValue}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onValueChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onValueChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onValueChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onValueChange(event.currentTarget.value);
+                }}
               />
               {editing?.attributes.sensitive === true && (
                 <FieldDescription>Leave blank to keep the current sensitive value.</FieldDescription>
@@ -345,13 +347,11 @@ function VariableEditorDialog({
                 id="workspace-variable-category"
                 name="variable-category"
                 value={category}
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                // SAFETY: the select options are generated from the same union; the change event carries one of them.
                 onValueChange={(next: string): void => {
-
                   // SAFETY: the change event carries one of the union values the UI renders from the same options.
 
                   onCategoryChange(next as VariableCategory);
-
                 }}
               >
                 <SelectItem value="terraform">Terraform</SelectItem>
@@ -366,8 +366,12 @@ function VariableEditorDialog({
                 autoComplete="off"
                 spellCheck={false}
                 value={description}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDescriptionChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onDescriptionChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onDescriptionChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onDescriptionChange(event.currentTarget.value);
+                }}
               />
             </Field>
             <FieldSet>
@@ -377,7 +381,9 @@ function VariableEditorDialog({
                   <Checkbox
                     id="workspace-variable-sensitive"
                     checked={sensitive}
-                    onCheckedChange={(checked: boolean): void => { onSensitiveChange(checked); }}
+                    onCheckedChange={(checked: boolean): void => {
+                      onSensitiveChange(checked);
+                    }}
                   />
                   <FieldContent>
                     <FieldLabel htmlFor="workspace-variable-sensitive">Sensitive</FieldLabel>
@@ -388,7 +394,9 @@ function VariableEditorDialog({
                   <Checkbox
                     id="workspace-variable-hcl"
                     checked={hcl}
-                    onCheckedChange={(checked: boolean): void => { onHclChange(checked); }}
+                    onCheckedChange={(checked: boolean): void => {
+                      onHclChange(checked);
+                    }}
                   />
                   <FieldContent>
                     <FieldLabel htmlFor="workspace-variable-hcl">Parse as HCL</FieldLabel>
@@ -448,48 +456,54 @@ function AttachSetDialog({
         </DialogHeader>
         <div className="flex flex-col gap-2">
           {attachError !== "" && (
-            <p role="alert" className="text-sm text-destructive">{attachError}</p>
-          )}
-          {attachSetsLoading && (
-            <p className="text-sm text-muted-foreground">Loading organization variable sets…</p>
-          )}
-          {!attachSetsLoading && unattachedSets.length === 0 && attachError === "" && (
-            <p className="text-sm text-muted-foreground">
-              No variable sets exist in this organization.
+            <p role="alert" className="text-sm text-destructive">
+              {attachError}
             </p>
+          )}
+          {attachSetsLoading && <p className="text-sm text-muted-foreground">Loading organization variable sets…</p>}
+          {!attachSetsLoading && unattachedSets.length === 0 && attachError === "" && (
+            <p className="text-sm text-muted-foreground">No variable sets exist in this organization.</p>
           )}
           {allSetsCount > 0 && unattachedSets.length === 0 && (
             <p className="text-sm text-muted-foreground">
               All variable sets in this organization are already attached.
             </p>
           )}
-          {unattachedSets.map((set: VariableSet): React.JSX.Element => (
-            <div key={set.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{set.attributes.name}</span>
-                  {set.attributes.global && <Badge variant="secondary">Global</Badge>}
-                </div>
-                {set.attributes.description !== null && set.attributes.description !== "" && (
-                  <p className="truncate text-xs text-muted-foreground">{set.attributes.description}</p>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  {set.attributes["var-count"]} variable{set.attributes["var-count"] === 1 ? "" : "s"}
-                  {set.attributes["workspace-count"] > 0 && (
-                    <> · {set.attributes["workspace-count"]} workspace{set.attributes["workspace-count"] === 1 ? "" : "s"} attached</>
+          {unattachedSets.map(
+            (set: VariableSet): React.JSX.Element => (
+              <div key={set.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{set.attributes.name}</span>
+                    {set.attributes.global && <Badge variant="secondary">Global</Badge>}
+                  </div>
+                  {set.attributes.description !== null && set.attributes.description !== "" && (
+                    <p className="truncate text-xs text-muted-foreground">{set.attributes.description}</p>
                   )}
-                </p>
+                  <p className="text-xs text-muted-foreground">
+                    {set.attributes["var-count"]} variable{set.attributes["var-count"] === 1 ? "" : "s"}
+                    {set.attributes["workspace-count"] > 0 && (
+                      <>
+                        {" "}
+                        · {set.attributes["workspace-count"]} workspace
+                        {set.attributes["workspace-count"] === 1 ? "" : "s"} attached
+                      </>
+                    )}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={busySetId === set.id}
+                  onClick={(): void => {
+                    onAttach(set);
+                  }}
+                >
+                  {busySetId === set.id && <Spinner data-icon="inline-start" />}
+                  Attach
+                </Button>
               </div>
-              <Button
-                size="sm"
-                disabled={busySetId === set.id}
-                onClick={(): void => { onAttach(set); }}
-              >
-                {busySetId === set.id && <Spinner data-icon="inline-start" />}
-                Attach
-              </Button>
-            </div>
-          ))}
+            ),
+          )}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>
@@ -515,19 +529,25 @@ function DeleteVariableDialog({
       open={pendingDelete !== null}
       onOpenChange={onOpenChange}
       title="Delete variable?"
-      description={pendingDelete === null ? undefined : (
-        <>
-          Variable <strong className="font-mono">{pendingDelete.attributes.key}</strong> will stop
-          reaching runs in this workspace.
-          {pendingDelete.attributes.sensitive
-            ? " Its value is write-only and cannot be recovered — re-enter it if anything still needs it."
-            : ""}
-        </>
-      )}
+      description={
+        pendingDelete === null ? undefined : (
+          <>
+            Variable <strong className="font-mono">{pendingDelete.attributes.key}</strong> will stop reaching runs in
+            this workspace.
+            {pendingDelete.attributes.sensitive
+              ? " Its value is write-only and cannot be recovered — re-enter it if anything still needs it."
+              : ""}
+          </>
+        )
+      }
       confirmText="Delete variable"
       confirmVariant="destructive"
       requireText={pendingDelete?.attributes.sensitive === true ? pendingDelete.attributes.key : undefined}
-      requireTextLabel={pendingDelete?.attributes.sensitive === true ? `Type ${pendingDelete.attributes.key} to delete this sensitive variable` : undefined}
+      requireTextLabel={
+        pendingDelete?.attributes.sensitive === true
+          ? `Type ${pendingDelete.attributes.key} to delete this sensitive variable`
+          : undefined
+      }
       onConfirm={onConfirm}
     />
   );
@@ -601,11 +621,7 @@ function VariableRowActions({
           <Button size="sm" variant="outline" onClick={onEdit}>
             Edit
           </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={onDelete}
-          >
+          <Button size="sm" variant="destructive" onClick={onDelete}>
             Delete
           </Button>
         </>
@@ -637,14 +653,17 @@ function WorkspaceVariablesCard({
           <Badge variant="secondary">{variables.length}</Badge>
         </CardTitle>
         <CardDescription>
-          Variables owned by this workspace. They override matching values from non-priority sets; priority sets override them instead. Hover a duplicated key to see which source wins.
+          Variables owned by this workspace. They override matching values from non-priority sets; priority sets
+          override them instead. Hover a duplicated key to see which source wins.
         </CardDescription>
-        {canUpdate && <CardAction>
-          <Button onClick={onAdd}>
-            <Plus data-icon="inline-start" />
-            Add variable
-          </Button>
-        </CardAction>}
+        {canUpdate && (
+          <CardAction>
+            <Button onClick={onAdd}>
+              <Plus data-icon="inline-start" />
+              Add variable
+            </Button>
+          </CardAction>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {!canUpdate && (
@@ -677,7 +696,10 @@ function WorkspaceVariablesCard({
                   </TableCell>
                 </TableRow>
               )}
-              {!loading && variables.flatMap((variable): React.JSX.Element[] => renderRow(variable, null, "Workspace", "Workspace", false))}
+              {!loading &&
+                variables.flatMap((variable): React.JSX.Element[] =>
+                  renderRow(variable, null, "Workspace", "Workspace", false),
+                )}
               {!loading && variables.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={canUpdate ? 6 : 5} className="h-20 text-center text-muted-foreground">
@@ -722,14 +744,18 @@ function VariableSetsCard({
           <Badge variant="secondary">{sets.length}</Badge>
         </CardTitle>
         <CardDescription>
-          Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable set itself; sensitive values remain hidden. Precedence is visible per row: non-priority sets, then workspace values, then priority sets; same-rank ties go to the alphabetically-first set name.
+          Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable
+          set itself; sensitive values remain hidden. Precedence is visible per row: non-priority sets, then workspace
+          values, then priority sets; same-rank ties go to the alphabetically-first set name.
         </CardDescription>
-        {canUpdate && <CardAction>
-          <Button onClick={onOpenAttach}>
-            <Plus data-icon="inline-start" />
-            Attach variable set
-          </Button>
-        </CardAction>}
+        {canUpdate && (
+          <CardAction>
+            <Button onClick={onOpenAttach}>
+              <Plus data-icon="inline-start" />
+              Attach variable set
+            </Button>
+          </CardAction>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {setsError !== "" && (
@@ -737,79 +763,85 @@ function VariableSetsCard({
             {setsError}
           </p>
         )}
-        {setsLoading && (
-          <p className="text-sm text-muted-foreground">Loading variable sets…</p>
-        )}
+        {setsLoading && <p className="text-sm text-muted-foreground">Loading variable sets…</p>}
         {!setsLoading && sets.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No variable sets are attached to this workspace.
-          </p>
+          <p className="text-sm text-muted-foreground">No variable sets are attached to this workspace.</p>
         )}
-        {!setsLoading && sets.map((set: VariableSet): React.JSX.Element => {
-          const inherited = setsVars[set.id] ?? [];
-          return (
-            <div key={set.id} className="rounded-md border">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{set.attributes.name}</span>
-                  {set.attributes.global && <Badge variant="secondary">Global</Badge>}
-                  {set.attributes.priority && <Badge variant="secondary">Priority</Badge>}
-                  {!set.attributes.global && set.attributes["parent-project-id"] != null && (
-                    <Badge variant="outline">Project-owned</Badge>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {set.attributes["workspace-count"]} workspace{set.attributes["workspace-count"] === 1 ? "" : "s"}
-                    {set.attributes["project-count"] > 0 && (
-                      <> · {set.attributes["project-count"]} project{set.attributes["project-count"] === 1 ? "" : "s"}</>
+        {!setsLoading &&
+          sets.map((set: VariableSet): React.JSX.Element => {
+            const inherited = setsVars[set.id] ?? [];
+            return (
+              <div key={set.id} className="rounded-md border">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{set.attributes.name}</span>
+                    {set.attributes.global && <Badge variant="secondary">Global</Badge>}
+                    {set.attributes.priority && <Badge variant="secondary">Priority</Badge>}
+                    {!set.attributes.global && set.attributes["parent-project-id"] != null && (
+                      <Badge variant="outline">Project-owned</Badge>
                     )}
-                  </span>
-                  {canUpdate && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busySetId === set.id}
-                      onClick={(): void => { onDetach(set); }}
-                    >
-                      {busySetId === set.id
-                        ? <Spinner data-icon="inline-start" />
-                        : <Unplug data-icon="inline-start" />}
-                      Detach
-                    </Button>
-                  )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {set.attributes["workspace-count"]} workspace{set.attributes["workspace-count"] === 1 ? "" : "s"}
+                      {set.attributes["project-count"] > 0 && (
+                        <>
+                          {" "}
+                          · {set.attributes["project-count"]} project{set.attributes["project-count"] === 1 ? "" : "s"}
+                        </>
+                      )}
+                    </span>
+                    {canUpdate && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busySetId === set.id}
+                        onClick={(): void => {
+                          onDetach(set);
+                        }}
+                      >
+                        {busySetId === set.id ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <Unplug data-icon="inline-start" />
+                        )}
+                        Detach
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-              {set.attributes.description !== null && set.attributes.description !== "" && (
-                <p className="px-4 pt-3 text-sm text-muted-foreground">{set.attributes.description}</p>
-              )}
-              <div className="overflow-x-auto">
-                <Table density="dense">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Key</TableHead>
-                      <TableHead>Value</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Effective source</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>Details</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {inherited.length === 0 && (
+                {set.attributes.description !== null && set.attributes.description !== "" && (
+                  <p className="px-4 pt-3 text-sm text-muted-foreground">{set.attributes.description}</p>
+                )}
+                <div className="overflow-x-auto">
+                  <Table density="dense">
+                    <TableHeader>
                       <TableRow>
-                        <TableCell colSpan={6} className="h-12 text-center text-muted-foreground">
-                          This variable set has no variables.
-                        </TableCell>
+                        <TableHead>Key</TableHead>
+                        <TableHead>Value</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Effective source</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Details</TableHead>
                       </TableRow>
-                    )}
-                    {inherited.flatMap((variable): React.JSX.Element[] => renderRow(variable, set.id, set.attributes.name, "Variable set", set.attributes.priority))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {inherited.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={6} className="h-12 text-center text-muted-foreground">
+                            This variable set has no variables.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {inherited.flatMap((variable): React.JSX.Element[] =>
+                        renderRow(variable, set.id, set.attributes.name, "Variable set", set.attributes.priority),
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </CardContent>
     </Card>
   );
@@ -863,7 +895,7 @@ export function WorkspaceVariables({
   const duplicatedKeys = useMemo((): ReadonlySet<string> => {
     const counts = new Map<string, number>();
     const note = (category: string, key: string): void => {
-      const mapKey = category + ':' + key;
+      const mapKey = category + ":" + key;
       counts.set(mapKey, (counts.get(mapKey) ?? 0) + 1);
     };
     for (const variable of variables) note(variable.attributes.category, variable.attributes.key);
@@ -877,8 +909,8 @@ export function WorkspaceVariables({
   // when the winner is unknown or this row is the only source. Identity is
   // by set ID (null for the workspace row); the name is display-only.
   const winnerTitle = (category: string, key: string, ownId: string | null): string | undefined => {
-    if (!duplicatedKeys.has(category + ':' + key)) return undefined;
-    const winner = winners.get(category + ':' + key);
+    if (!duplicatedKeys.has(category + ":" + key)) return undefined;
+    const winner = winners.get(category + ":" + key);
     if (winner === undefined) return undefined;
     if (winner.id === ownId) return "Effective value for " + key + " (wins for this workspace)";
     const winnerLabel = winner.id === null ? "the workspace value" : "variable set " + JSON.stringify(winner.name);
@@ -913,7 +945,8 @@ export function WorkspaceVariables({
       }
     }
     return candidates.sort((left, right): number => {
-      const rank = (candidate: VariableCandidate): number => candidate.scope === "Workspace" ? 1 : candidate.priority ? 2 : 0;
+      const rank = (candidate: VariableCandidate): number =>
+        candidate.scope === "Workspace" ? 1 : candidate.priority ? 2 : 0;
       const rankDifference = rank(left) - rank(right);
       if (rankDifference !== 0) return rankDifference;
       const nameDifference = left.sourceName.localeCompare(right.sourceName);
@@ -922,12 +955,21 @@ export function WorkspaceVariables({
     });
   };
 
-  const sourceResolution = (category: VariableCategory, variableKey: string, sourceId: string | null): SourceResolution => {
-    const mapKey = category + ':' + variableKey;
+  const sourceResolution = (
+    category: VariableCategory,
+    variableKey: string,
+    sourceId: string | null,
+  ): SourceResolution => {
+    const mapKey = category + ":" + variableKey;
     const winner = winners.get(mapKey);
     const duplicate = duplicatedKeys.has(mapKey);
     if (winner === undefined && duplicate) {
-      return { label: "Unable to verify", detail: "The effective source could not be verified for this duplicated key.", effective: false, unknown: true };
+      return {
+        label: "Unable to verify",
+        detail: "The effective source could not be verified for this duplicated key.",
+        effective: false,
+        unknown: true,
+      };
     }
     const effective = winner === undefined || winner.id === sourceId;
     return {
@@ -947,23 +989,29 @@ export function WorkspaceVariables({
   // Winner metadata must refresh after every mutation that can change
   // precedence (CodeRabbit review): attach, detach, save, and delete all
   // re-resolve here so a stale map never marks a new winner as overridden.
-  const reloadWinners = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
-    try {
-      const data = await fetchAllApiPages<EffectiveVariable>(`/workspaces/${workspaceId}/all-vars?page[size]=100`, signal);
-      if (signal?.aborted === true) return;
-      const map = new Map<string, WinnerInfo>();
-      for (const row of data) {
-        const setId = row.attributes["variable-set-id"];
-        map.set(row.attributes.category + ':' + row.attributes.key, {
-          id: setId ?? null,
-          name: row.attributes["variable-set-name"] ?? "Workspace",
-        });
+  const reloadWinners = useCallback(
+    async (signal?: Readonly<AbortSignal>): Promise<void> => {
+      try {
+        const data = await fetchAllApiPages<EffectiveVariable>(
+          `/workspaces/${workspaceId}/all-vars?page[size]=100`,
+          signal,
+        );
+        if (signal?.aborted === true) return;
+        const map = new Map<string, WinnerInfo>();
+        for (const row of data) {
+          const setId = row.attributes["variable-set-id"];
+          map.set(row.attributes.category + ":" + row.attributes.key, {
+            id: setId ?? null,
+            name: row.attributes["variable-set-name"] ?? "Workspace",
+          });
+        }
+        setWinners(map);
+      } catch {
+        if (signal?.aborted !== true) setWinners(new Map());
       }
-      setWinners(map);
-    } catch {
-      if (signal?.aborted !== true) setWinners(new Map());
-    }
-  }, [workspaceId]);
+    },
+    [workspaceId],
+  );
 
   const loadAttachedSets = useCallback((): void => {
     const generation = attachedLoadGeneration.current + 1;
@@ -974,10 +1022,14 @@ export function WorkspaceVariables({
     fetchAllApiPages<VariableSet>(`/workspaces/${workspaceId}/varsets?page[size]=100`)
       .then(async (attached: VariableSet[]): Promise<void> => {
         if (!isCurrent()) return;
-        const varsBySet = await Promise.all(attached.map(async (set: VariableSet): Promise<[string, VariableSetVariable[]]> => {
-          const vars = await fetchAllApiPages<VariableSetVariable>(`/varsets/${set.id}/relationships/vars?page[size]=100`);
-          return [set.id, vars];
-        }));
+        const varsBySet = await Promise.all(
+          attached.map(async (set: VariableSet): Promise<[string, VariableSetVariable[]]> => {
+            const vars = await fetchAllApiPages<VariableSetVariable>(
+              `/varsets/${set.id}/relationships/vars?page[size]=100`,
+            );
+            return [set.id, vars];
+          }),
+        );
         if (!isCurrent()) return;
         setSets(attached);
         setSetsVars(Object.fromEntries(varsBySet));
@@ -1031,7 +1083,9 @@ export function WorkspaceVariables({
     setAllSets([]);
     setAttachOpen(true);
     fetchAllApiPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`)
-      .then((orgSets: VariableSet[]): void => { setAllSets(orgSets); })
+      .then((orgSets: VariableSet[]): void => {
+        setAllSets(orgSets);
+      })
       .catch((error: unknown): void => {
         setAttachError(messageFrom(error, "Failed to load organization variable sets"));
       })
@@ -1099,18 +1153,27 @@ export function WorkspaceVariables({
       setEditorError(validationError);
       return;
     }
-    const attributes = variableSubmitAttributes(key, category, sensitive, hcl, description, value, editing?.attributes.sensitive);
+    const attributes = variableSubmitAttributes(
+      key,
+      category,
+      sensitive,
+      hcl,
+      description,
+      value,
+      editing?.attributes.sensitive,
+    );
 
     setSaving(true);
     setEditorError("");
     try {
       const saved = await persistWorkspaceVariable(workspaceId, editing, attributes);
       setVariables((current: WorkspaceVariable[]): WorkspaceVariable[] => {
-        const next = editing == null
-          ? [...current, saved]
-          : current.map((variable: WorkspaceVariable): WorkspaceVariable =>
-              variable.id === saved.id ? saved : variable,
-            );
+        const next =
+          editing == null
+            ? [...current, saved]
+            : current.map(
+                (variable: WorkspaceVariable): WorkspaceVariable => (variable.id === saved.id ? saved : variable),
+              );
         return next.sort((left: WorkspaceVariable, right: WorkspaceVariable): number =>
           left.attributes.key.localeCompare(right.attributes.key),
         );
@@ -1166,9 +1229,8 @@ export function WorkspaceVariables({
     const candidates = candidateSources(category, variable.attributes.key);
     const expanded = expandedVariable === rowId;
     const columnCount = canUpdate ? 6 : 5;
-    const sourceHref = scope === "Variable set" && sourceId !== null
-      ? `/app/${encodeURIComponent(orgName)}/variable-sets`
-      : undefined;
+    const sourceHref =
+      scope === "Variable set" && sourceId !== null ? `/app/${encodeURIComponent(orgName)}/variable-sets` : undefined;
     const winner = winners.get(variableKey);
     const isDuplicated = duplicatedKeys.has(variableKey);
     return [
@@ -1177,7 +1239,10 @@ export function WorkspaceVariables({
           <div className="flex items-center gap-2">
             {variable.attributes.key}
             {variable.attributes.sensitive && (
-              <span className="inline-flex items-center text-muted-foreground" title="Sensitive — value hidden after save">
+              <span
+                className="inline-flex items-center text-muted-foreground"
+                title="Sensitive — value hidden after save"
+              >
                 <LockKeyhole className="size-3.5" aria-hidden="true" />
                 <span className="sr-only">Sensitive</span>
               </span>
@@ -1185,15 +1250,25 @@ export function WorkspaceVariables({
           </div>
         </TableCell>
         <TableCell className="max-w-48 truncate font-mono text-xs">
-          {variable.attributes.sensitive ? <span className="text-muted-foreground">Write only</span> : variable.attributes.value ?? "—"}
+          {variable.attributes.sensitive ? (
+            <span className="text-muted-foreground">Write only</span>
+          ) : (
+            (variable.attributes.value ?? "—")
+          )}
         </TableCell>
         <TableCell>
           <span className="text-sm text-muted-foreground">
-            {category === "env" ? "Environment" : "Terraform"}{variable.attributes.hcl ? " · HCL" : ""}
+            {category === "env" ? "Environment" : "Terraform"}
+            {variable.attributes.hcl ? " · HCL" : ""}
           </span>
         </TableCell>
         <TableCell className="min-w-40" title={winnerTitle(category, variable.attributes.key, sourceId)}>
-          <VariableSourceCell resolution={resolution} sourceName={sourceName} sourceHref={sourceHref} priority={priority} />
+          <VariableSourceCell
+            resolution={resolution}
+            sourceName={sourceName}
+            sourceHref={sourceHref}
+            priority={priority}
+          />
         </TableCell>
         <TableCell className="max-w-48 truncate text-muted-foreground">
           {variable.attributes.description ?? "—"}
@@ -1205,21 +1280,29 @@ export function WorkspaceVariables({
             variableKey={variable.attributes.key}
             canUpdate={canUpdate}
             scope={scope}
-            onToggle={(): void => { setExpandedVariable(expanded ? null : rowId); }}
-            onEdit={(): void => { openEditor(variable as WorkspaceVariable); }}
-            onDelete={(): void => { setPendingDelete(variable as WorkspaceVariable); }}
+            onToggle={(): void => {
+              setExpandedVariable(expanded ? null : rowId);
+            }}
+            onEdit={(): void => {
+              openEditor(variable as WorkspaceVariable);
+            }}
+            onDelete={(): void => {
+              setPendingDelete(variable as WorkspaceVariable);
+            }}
           />
         </TableCell>
       </TableRow>,
       ...(expanded
-        ? [<PrecedenceDetailsRow
-            key={`${rowId}-details`}
-            rowId={rowId}
-            columnCount={columnCount}
-            candidates={candidates}
-            winner={winner}
-            isDuplicated={isDuplicated}
-          />]
+        ? [
+            <PrecedenceDetailsRow
+              key={`${rowId}-details`}
+              rowId={rowId}
+              columnCount={columnCount}
+              candidates={candidates}
+              winner={winner}
+              isDuplicated={isDuplicated}
+            />,
+          ]
         : []),
     ];
   };
@@ -1233,7 +1316,9 @@ export function WorkspaceVariables({
           canUpdate={canUpdate}
           pageError={pageError}
           renderRow={renderVariableRow}
-          onAdd={(): void => { openEditor(); }}
+          onAdd={(): void => {
+            openEditor();
+          }}
         />
 
         <VariableSetsCard
@@ -1268,7 +1353,9 @@ export function WorkspaceVariables({
         editorError={editorError}
         saving={saving}
         onSubmit={saveVariable}
-        onCancel={(): void => { setEditorOpen(false); }}
+        onCancel={(): void => {
+          setEditorOpen(false);
+        }}
       />
 
       <AttachSetDialog
@@ -1281,7 +1368,9 @@ export function WorkspaceVariables({
         unattachedSets={unattachedSets}
         busySetId={busySetId}
         onAttach={attachSet}
-        onClose={(): void => { setAttachOpen(false); }}
+        onClose={(): void => {
+          setAttachOpen(false);
+        }}
       />
       <DeleteVariableDialog
         pendingDelete={pendingDelete}

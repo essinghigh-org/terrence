@@ -35,7 +35,13 @@ describe("backup verification and restore rehearsal", () => {
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", key, iv);
     const ciphertext = Buffer.concat([cipher.update("backup-secret", "utf8"), cipher.final()]);
-    const encrypted = ["enc", "v1", iv.toString("base64"), cipher.getAuthTag().toString("base64"), ciphertext.toString("base64")].join(":");
+    const encrypted = [
+      "enc",
+      "v1",
+      iv.toString("base64"),
+      cipher.getAuthTag().toString("base64"),
+      ciphertext.toString("base64"),
+    ].join(":");
     await writeFile(join(backupStorage, ".encryption-key"), key.toString("base64"), { mode: 0o600 });
     const archivePath = join(backupStorage, "configuration.tar.gz");
     await writeFile(archivePath, "backup archive fixture", { mode: 0o600 });
@@ -45,8 +51,17 @@ describe("backup verification and restore rehearsal", () => {
       migrate(fixture, { migrationsFolder: join(import.meta.dir, "../../drizzle") });
       await fixture.insert(schema.organizations).values({ id: "org-backup", name: "backup" });
       await fixture.insert(schema.workspaces).values({ id: "ws-backup", orgId: "org-backup", name: "backup" });
-      await fixture.insert(schema.configurationVersions).values({ id: "cv-backup", workspaceId: "ws-backup", status: "uploaded", archivePath });
-      await fixture.insert(schema.workspaceVariables).values({ id: "var-backup", workspaceId: "ws-backup", key: "secret", value: "", valueEncrypted: encrypted, sensitive: true });
+      await fixture
+        .insert(schema.configurationVersions)
+        .values({ id: "cv-backup", workspaceId: "ws-backup", status: "uploaded", archivePath });
+      await fixture.insert(schema.workspaceVariables).values({
+        id: "var-backup",
+        workspaceId: "ws-backup",
+        key: "secret",
+        value: "",
+        valueEncrypted: encrypted,
+        sensitive: true,
+      });
     } finally {
       sqlite.close();
     }
@@ -66,8 +81,12 @@ describe("backup verification and restore rehearsal", () => {
     expect(report.passed).toBe(true);
     expect(report.checks.find((check) => check.name === "database-integrity")?.status).toBe("pass");
     expect(report.checks.find((check) => check.name === "key-identifiers")?.status).toBe("pass");
-    expect(report.checks.find((check) => check.name === "encrypted-records")?.detail).toBe("1 selected encrypted record(s) decrypted");
-    expect(report.checks.find((check) => check.name === "artifact-references")?.detail).toBe("1 referenced artifact(s) are readable");
+    expect(report.checks.find((check) => check.name === "encrypted-records")?.detail).toBe(
+      "1 selected encrypted record(s) decrypted",
+    );
+    expect(report.checks.find((check) => check.name === "artifact-references")?.detail).toBe(
+      "1 referenced artifact(s) are readable",
+    );
 
     // A colocated SQLite file is a supported source form as long as its
     // manifest is beside it.
@@ -99,7 +118,11 @@ describe("backup verification and restore rehearsal", () => {
     await mkdir(manifestRoot, { recursive: true });
     await cp(join(work, "terrence-backup-manifest.json"), join(manifestRoot, "terrence-backup-manifest.json"));
     const separate = await runRestoreRehearsal({
-      source: { sourcePath: manifestRoot, storagePath: externalStorage, databasePath: join(externalStorage, "terrence.db") },
+      source: {
+        sourcePath: manifestRoot,
+        storagePath: externalStorage,
+        databasePath: join(externalStorage, "terrence.db"),
+      },
       requireCli: false,
     });
     expect(separate.passed).toBe(true);
@@ -108,7 +131,9 @@ describe("backup verification and restore rehearsal", () => {
 
   it("rejects a changed artifact before rehearsal", async () => {
     if (work === undefined) throw new Error("backup fixture was not created");
-    const manifest = JSON.parse(await readFile(join(work, "terrence-backup-manifest.json"), "utf8")) as { storage: { files: readonly { path: string }[] } };
+    const manifest = JSON.parse(await readFile(join(work, "terrence-backup-manifest.json"), "utf8")) as {
+      storage: { files: readonly { path: string }[] };
+    };
     const first = manifest.storage.files[0];
     if (first === undefined) throw new Error("backup fixture has no files");
     await writeFile(join(work, "storage", first.path), "tampered", { mode: 0o600 });

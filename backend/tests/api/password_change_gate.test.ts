@@ -25,11 +25,13 @@ describe("forced password change gates all surfaces (#570)", () => {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     };
-    return app.handle(new Request(`http://terrence.test${path}`, path === "/mcp" && method === "POST" ? modernMcpInit(init) : init));
+    return app.handle(
+      new Request(`http://terrence.test${path}`, path === "/mcp" && method === "POST" ? modernMcpInit(init) : init),
+    );
   };
 
   const passwordTitle = async (res: Response): Promise<string | undefined> => {
-    const body = await res.json() as { errors?: { title?: string }[] };
+    const body = (await res.json()) as { errors?: { title?: string }[] };
     return body.errors?.[0]?.title;
   };
 
@@ -44,8 +46,14 @@ describe("forced password change gates all surfaces (#570)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.id, `tok-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .catch((): void => undefined);
   });
 
   it("leaves account details readable", async () => {

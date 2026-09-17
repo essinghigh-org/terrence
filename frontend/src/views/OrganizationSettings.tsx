@@ -21,7 +21,10 @@ import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
 type Team = Readonly<{ id: string; attributes: Readonly<JsonObject> }>;
-type Role = Readonly<{ id: string; attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }> }>;
+type Role = Readonly<{
+  id: string;
+  attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }>;
+}>;
 type Membership = Readonly<{
   id: string;
   attributes: Readonly<{ email?: string | null; username?: string | null; role?: string; status?: string }>;
@@ -62,14 +65,12 @@ const organizationPermissions = [
   "manage-organization-access",
 ] as const;
 
-type OrganizationPermission = typeof organizationPermissions[number];
+type OrganizationPermission = (typeof organizationPermissions)[number];
 
 function teamOrganizationAccess(team: Team): Record<OrganizationPermission, boolean> {
   const raw = team.attributes["organization-access"];
   // SAFETY: the typeof-object guard is the boundary check; fields are typeof-validated below.
-  const access = isRecord(raw) && !Array.isArray(raw)
-    ? raw as JsonObject
-    : {};
+  const access = isRecord(raw) && !Array.isArray(raw) ? (raw as JsonObject) : {};
   // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
   return Object.fromEntries(
     organizationPermissions.map((permission): [OrganizationPermission, boolean] => [
@@ -80,11 +81,39 @@ function teamOrganizationAccess(team: Team): Record<OrganizationPermission, bool
 }
 
 function permissionLabel(permission: OrganizationPermission): string {
-  return permission.split("-").map((word: string): string =>
-    word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+  return permission
+    .split("-")
+    .map((word: string): string => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
-function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmailChange, defaultIacBinary, onDefaultIacBinaryChange, defaultTerraformVersion, onDefaultTerraformVersionChange, defaultExecutionMode, onDefaultExecutionModeChange, moduleTestTokenTtl, onModuleTestTokenTtlChange, aggregatedCommitStatusEnabled, onAggregatedCommitStatusChange, sendPassingStatuses, onSendPassingStatusesChange, allowForceDeleteWorkspaces, onAllowForceDeleteChange, stacksEnabled, onStacksEnabledChange, showPreReleases, onShowPreReleasesChange, saving, canUpdateOrganization, onSubmit }: Readonly<{
+function GeneralForm({
+  name,
+  onNameChange,
+  notificationEmail,
+  onNotificationEmailChange,
+  defaultIacBinary,
+  onDefaultIacBinaryChange,
+  defaultTerraformVersion,
+  onDefaultTerraformVersionChange,
+  defaultExecutionMode,
+  onDefaultExecutionModeChange,
+  moduleTestTokenTtl,
+  onModuleTestTokenTtlChange,
+  aggregatedCommitStatusEnabled,
+  onAggregatedCommitStatusChange,
+  sendPassingStatuses,
+  onSendPassingStatusesChange,
+  allowForceDeleteWorkspaces,
+  onAllowForceDeleteChange,
+  stacksEnabled,
+  onStacksEnabledChange,
+  showPreReleases,
+  onShowPreReleasesChange,
+  saving,
+  canUpdateOrganization,
+  onSubmit,
+}: Readonly<{
   name: string;
   onNameChange: (value: string) => void;
   notificationEmail: string;
@@ -113,126 +142,164 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
 }>): React.JSX.Element {
   return (
     <form onSubmit={onSubmit} className="space-y-6">
-      {!canUpdateOrganization && <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>}
+      {!canUpdateOrganization && (
+        <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>
+      )}
       <SettingsSection title="Organization" description="The name and contact address for your infrastructure.">
-          <div className="space-y-1.5">
-            <label htmlFor="org-name" className="text-sm font-semibold text-foreground">Organization name</label>
-            <Input
-              id="org-name"
-              name="organization-name"
-              autoComplete="off"
-              spellCheck={false}
-              value={name}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
-              disabled={!canUpdateOrganization}
-              required
-              className="h-10"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="org-email" className="text-sm font-semibold text-foreground">Notification email</label>
-            <Input
-              id="org-email"
-              name="notification-email"
-              autoComplete="email"
-              spellCheck={false}
-              type="email"
-              value={notificationEmail}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNotificationEmailChange(event.target.value); }}
-              disabled={!canUpdateOrganization}
-              placeholder="admin@example.com"
-              className="h-10"
-            />
-            <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
-          </div>
+        <div className="space-y-1.5">
+          <label htmlFor="org-name" className="text-sm font-semibold text-foreground">
+            Organization name
+          </label>
+          <Input
+            id="org-name"
+            name="organization-name"
+            autoComplete="off"
+            spellCheck={false}
+            value={name}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onNameChange(event.target.value);
+            }}
+            disabled={!canUpdateOrganization}
+            required
+            className="h-10"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor="org-email" className="text-sm font-semibold text-foreground">
+            Notification email
+          </label>
+          <Input
+            id="org-email"
+            name="notification-email"
+            autoComplete="email"
+            spellCheck={false}
+            type="email"
+            value={notificationEmail}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onNotificationEmailChange(event.target.value);
+            }}
+            disabled={!canUpdateOrganization}
+            placeholder="admin@example.com"
+            className="h-10"
+          />
+          <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
+        </div>
       </SettingsSection>
-      <SettingsSection title="Workspace defaults" description="Choose the starting settings for new workspaces. Individual workspaces can override these defaults.">
-          <div className="space-y-1.5">
-            <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
-              Default engine
-              <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
-            </label>
-            <Select
-              id="org-iac"
-              name="default-iac-binary"
-
-              value={defaultIacBinary}
-              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { onDefaultIacBinaryChange(event.target.value); }}
+      <SettingsSection
+        title="Workspace defaults"
+        description="Choose the starting settings for new workspaces. Individual workspaces can override these defaults."
+      >
+        <div className="space-y-1.5">
+          <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
+            Default engine
+            <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
+          </label>
+          <Select
+            id="org-iac"
+            name="default-iac-binary"
+            value={defaultIacBinary}
+            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+              onDefaultIacBinaryChange(event.target.value);
+            }}
+            disabled={!canUpdateOrganization}
+          >
+            <option value="tofu">OpenTofu</option>
+            <option value="terraform">Terraform</option>
+          </Select>
+          <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
+            Default engine version
+            <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
+          </label>
+          <Input
+            id="org-version"
+            name="terraform-version"
+            autoComplete="off"
+            value={defaultTerraformVersion}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onDefaultTerraformVersionChange(event.target.value);
+            }}
+            disabled={!canUpdateOrganization}
+            placeholder="latest"
+            className="h-10"
+          />
+        </div>
+        <div className="space-y-2 border-t pt-4">
+          <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
+          <p className="text-sm text-muted-foreground">
+            Changing the execution mode discards any active runs in workspaces.
+          </p>
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <input
+              type="radio"
+              name="org-exec-mode"
+              className="size-4 accent-primary"
+              checked={defaultExecutionMode === "remote"}
+              onChange={(): void => {
+                onDefaultExecutionModeChange("remote");
+              }}
               disabled={!canUpdateOrganization}
-            >
-              <option value="tofu">OpenTofu</option>
-              <option value="terraform">Terraform</option>
-            </Select>
-            <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
-              Default engine version
-              <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
-            </label>
-            <Input
-              id="org-version"
-              name="terraform-version"
-              autoComplete="off"
-              value={defaultTerraformVersion}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onDefaultTerraformVersionChange(event.target.value); }}
-              disabled={!canUpdateOrganization}
-              placeholder="latest"
-              className="h-10"
             />
-          </div>
-          <div className="space-y-2 border-t pt-4">
-            <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
-            <p className="text-sm text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <input
-                type="radio"
-                name="org-exec-mode"
-                className="size-4 accent-primary"
-                checked={defaultExecutionMode === "remote"}
-                onChange={(): void => { onDefaultExecutionModeChange("remote"); }}
-                disabled={!canUpdateOrganization}
-              />
-              <span>
-                Remote
-                <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
+            <span>
+              Remote
+              <span className="block text-sm font-normal text-muted-foreground">
+                Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on
+                runs directly in the app.
               </span>
-            </label>
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <input
-                type="radio"
-                name="org-exec-mode"
-                className="size-4 accent-primary"
-                checked={defaultExecutionMode === "local"}
-                onChange={(): void => { onDefaultExecutionModeChange("local"); }}
-                disabled={!canUpdateOrganization}
-              />
-              <span>
-                Local
-                <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <input
+              type="radio"
+              name="org-exec-mode"
+              className="size-4 accent-primary"
+              checked={defaultExecutionMode === "local"}
+              onChange={(): void => {
+                onDefaultExecutionModeChange("local");
+              }}
+              disabled={!canUpdateOrganization}
+            />
+            <span>
+              Local
+              <span className="block text-sm font-normal text-muted-foreground">
+                Your plans and applies run on your own machines. Terrence only stores and synchronizes state.
               </span>
-            </label>
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <input
-                type="radio"
-                name="org-exec-mode"
-                className="size-4 accent-primary"
-                checked={defaultExecutionMode === "agent"}
-                onChange={(): void => { onDefaultExecutionModeChange("agent"); }}
-                disabled={!canUpdateOrganization}
-              />
-              <span>
-                Agent
-                <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <input
+              type="radio"
+              name="org-exec-mode"
+              className="size-4 accent-primary"
+              checked={defaultExecutionMode === "agent"}
+              onChange={(): void => {
+                onDefaultExecutionModeChange("agent");
+              }}
+              disabled={!canUpdateOrganization}
+            />
+            <span>
+              Agent
+              <span className="block text-sm font-normal text-muted-foreground">
+                Your plans and applies run on a configured agent pool in your organization.
               </span>
-            </label>
-          </div>
+            </span>
+          </label>
+        </div>
       </SettingsSection>
       <details className="rounded-xl border bg-card">
-        <summary className="cursor-pointer rounded-xl px-6 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Advanced organization settings<span className="mt-1 block text-xs font-normal text-muted-foreground">Module tests, Git status checks, Stacks, and deletion permissions</span></summary>
+        <summary className="cursor-pointer rounded-xl px-6 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Advanced organization settings
+          <span className="mt-1 block text-xs font-normal text-muted-foreground">
+            Module tests, Git status checks, Stacks, and deletion permissions
+          </span>
+        </summary>
         <div className="space-y-6 border-t p-6">
           <div className="space-y-1.5">
-            <label htmlFor="org-module-test-token-ttl" className="text-sm font-semibold text-foreground">Module test token lifetime</label>
+            <label htmlFor="org-module-test-token-ttl" className="text-sm font-semibold text-foreground">
+              Module test token lifetime
+            </label>
             <Input
               id="org-module-test-token-ttl"
               name="module-test-token-ttl"
@@ -241,11 +308,16 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
               max={1800}
               step={1}
               value={moduleTestTokenTtl}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onModuleTestTokenTtlChange(Number(event.target.value)); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onModuleTestTokenTtlChange(Number(event.target.value));
+              }}
               disabled={!canUpdateOrganization}
               className="h-10"
             />
-            <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800). Applies to tokens created after save; existing tokens are unaffected.</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              OIDC token lifetime for private module tests, in seconds (300–1800). Applies to tokens created after save;
+              existing tokens are unaffected.
+            </p>
           </div>
           <div className="space-y-2 border-t pt-4">
             <p className="text-sm font-semibold text-foreground">VCS status checks</p>
@@ -257,7 +329,9 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
               />
               <span>
                 Aggregate status checks
-                <span className="block text-sm font-normal text-muted-foreground mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">
+                  Send one GitHub status for all workspace runs triggered by the same VCS event.
+                </span>
               </span>
             </label>
             {!aggregatedCommitStatusEnabled && (
@@ -269,7 +343,9 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
                 />
                 <span>
                   Send passing statuses for unaffected pull requests
-                  <span className="block text-sm font-normal text-muted-foreground mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
+                  <span className="block text-sm font-normal text-muted-foreground mt-0.5">
+                    Mark pull requests green when shared-repository file triggers do not start a speculative plan.
+                  </span>
                 </span>
               </label>
             )}
@@ -283,7 +359,9 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
               />
               <span>
                 Workspace administrators can force delete workspaces
-                <span className="block text-sm font-normal text-muted-foreground mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">
+                  When disabled, only the owners team can force delete workspaces that are locked or managing resources.
+                </span>
               </span>
             </label>
             <label className="flex items-start gap-3 text-sm font-medium text-foreground">
@@ -294,7 +372,10 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
               />
               <span>
                 Stacks
-                <span className="block text-sm font-normal text-muted-foreground mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">
+                  Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within
+                  projects.
+                </span>
               </span>
             </label>
             <label className="flex items-start gap-3 text-sm font-medium text-foreground">
@@ -305,20 +386,34 @@ function GeneralForm({ name, onNameChange, notificationEmail, onNotificationEmai
               />
               <span>
                 Show Terraform pre-releases
-                <span className="block text-sm font-normal text-muted-foreground mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
+                <span className="block text-sm font-normal text-muted-foreground mt-0.5">
+                  When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas,
+                  and release candidates) in the workspace version list.
+                </span>
               </span>
             </label>
           </div>
         </div>
       </details>
       <div className="flex justify-end">
-        <Button type="submit" disabled={saving || !canUpdateOrganization}>{saving ? "Saving…" : "Save settings"}</Button>
+        <Button type="submit" disabled={saving || !canUpdateOrganization}>
+          {saving ? "Saving…" : "Save settings"}
+        </Button>
       </div>
     </form>
   );
 }
 
-function RetentionCard({ retentionLoading, retentionCount, onRetentionCountChange, retentionDays, onRetentionDaysChange, retentionSaving, canUpdateOrganization, onSubmit }: Readonly<{
+function RetentionCard({
+  retentionLoading,
+  retentionCount,
+  onRetentionCountChange,
+  retentionDays,
+  onRetentionDaysChange,
+  retentionSaving,
+  canUpdateOrganization,
+  onSubmit,
+}: Readonly<{
   retentionLoading: boolean;
   retentionCount: number;
   onRetentionCountChange: (value: number) => void;
@@ -331,25 +426,65 @@ function RetentionCard({ retentionLoading, retentionCount, onRetentionCountChang
   return (
     <Card className="border-border shadow-sm rounded-md">
       <CardHeader variant="section">
-        <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
-        <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
+        <CardTitle className="flex items-center gap-2">
+          <History className="size-4" />
+          Organization data retention
+        </CardTitle>
+        <CardDescription>
+          Apply a default state-version cleanup policy to workspaces in this organization.
+        </CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} className="contents">
         <CardContent>
-          {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
+          {retentionLoading ? (
+            <p className="text-sm text-muted-foreground">Loading retention policy…</p>
+          ) : (
             <FieldGroup className="grid gap-4 sm:grid-cols-2">
-              <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" name="retention-count" type="number" inputMode="numeric" min="0" value={retentionCount} onChange={(event): void => { onRetentionCountChange(Number(event.target.value)); }} /></Field>
-              <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" name="retention-days" type="number" inputMode="numeric" min="0" value={retentionDays} onChange={(event): void => { onRetentionDaysChange(Number(event.target.value)); }} /></Field>
+              <Field>
+                <FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel>
+                <Input
+                  id="org-retention-count"
+                  name="retention-count"
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  value={retentionCount}
+                  onChange={(event): void => {
+                    onRetentionCountChange(Number(event.target.value));
+                  }}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel>
+                <Input
+                  id="org-retention-days"
+                  name="retention-days"
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  value={retentionDays}
+                  onChange={(event): void => {
+                    onRetentionDaysChange(Number(event.target.value));
+                  }}
+                />
+              </Field>
             </FieldGroup>
           )}
         </CardContent>
-        <CardFooter><Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>{retentionSaving ? "Saving…" : "Save retention policy"}</Button></CardFooter>
+        <CardFooter>
+          <Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>
+            {retentionSaving ? "Saving…" : "Save retention policy"}
+          </Button>
+        </CardFooter>
       </form>
     </Card>
   );
 }
 
-function DangerZoneCard({ canDestroyOrganization, onDeleteRequest }: Readonly<{
+function DangerZoneCard({
+  canDestroyOrganization,
+  onDeleteRequest,
+}: Readonly<{
   canDestroyOrganization: boolean;
   onDeleteRequest: () => void;
 }>): React.JSX.Element {
@@ -360,7 +495,8 @@ function DangerZoneCard({ canDestroyOrganization, onDeleteRequest }: Readonly<{
       </CardHeader>
       <CardContent>
         <p className="text-sm text-foreground/85 mb-4">
-          Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and configurations. This action cannot be undone.
+          Deleting this organization will permanently remove all workspaces, runs, state versions, variables, and
+          configurations. This action cannot be undone.
         </p>
         <Button
           variant="outline"
@@ -375,7 +511,19 @@ function DangerZoneCard({ canDestroyOrganization, onDeleteRequest }: Readonly<{
   );
 }
 
-function RolesTab({ roles, newRoleName, onNewRoleNameChange, newRoleDescription, onNewRoleDescriptionChange, newRolePermissions, onNewRolePermissionChange, savingRole, canUpdateOrganizationAccess, onSubmit, onUpdatePermission }: Readonly<{
+function RolesTab({
+  roles,
+  newRoleName,
+  onNewRoleNameChange,
+  newRoleDescription,
+  onNewRoleDescriptionChange,
+  newRolePermissions,
+  onNewRolePermissionChange,
+  savingRole,
+  canUpdateOrganizationAccess,
+  onSubmit,
+  onUpdatePermission,
+}: Readonly<{
   roles: readonly Role[];
   newRoleName: string;
   onNewRoleNameChange: (value: string) => void;
@@ -397,21 +545,80 @@ function RolesTab({ roles, newRoleName, onNewRoleNameChange, newRoleDescription,
       <CardContent className="space-y-5">
         <form onSubmit={onSubmit} className="space-y-3 rounded-md border p-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Input id="organization-role-name" name="role-name" autoComplete="off" spellCheck={false} aria-label="Role name" placeholder="Role name…" value={newRoleName} onChange={(event): void => { onNewRoleNameChange(event.target.value); }} disabled={!canUpdateOrganizationAccess} required />
-            <Input id="organization-role-description" name="role-description" autoComplete="off" aria-label="Role description" placeholder="Description (optional)…" value={newRoleDescription} onChange={(event): void => { onNewRoleDescriptionChange(event.target.value); }} disabled={!canUpdateOrganizationAccess} />
+            <Input
+              id="organization-role-name"
+              name="role-name"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Role name"
+              placeholder="Role name…"
+              value={newRoleName}
+              onChange={(event): void => {
+                onNewRoleNameChange(event.target.value);
+              }}
+              disabled={!canUpdateOrganizationAccess}
+              required
+            />
+            <Input
+              id="organization-role-description"
+              name="role-description"
+              autoComplete="off"
+              aria-label="Role description"
+              placeholder="Description (optional)…"
+              value={newRoleDescription}
+              onChange={(event): void => {
+                onNewRoleDescriptionChange(event.target.value);
+              }}
+              disabled={!canUpdateOrganizationAccess}
+            />
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            {organizationPermissions.map((permission): React.JSX.Element => (
-              <label key={permission} className="flex items-center gap-2 text-sm">
-                <Checkbox checked={newRolePermissions[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { onNewRolePermissionChange(permission, checked); }} />
-                {permissionLabel(permission)}
-              </label>
-            ))}
+            {organizationPermissions.map(
+              (permission): React.JSX.Element => (
+                <label key={permission} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={newRolePermissions[permission] === true}
+                    disabled={!canUpdateOrganizationAccess}
+                    onCheckedChange={(checked: boolean): void => {
+                      onNewRolePermissionChange(permission, checked);
+                    }}
+                  />
+                  {permissionLabel(permission)}
+                </label>
+              ),
+            )}
           </div>
-          <Button type="submit" disabled={!canUpdateOrganizationAccess || savingRole || newRoleName.trim() === ""}>{savingRole ? "Creating…" : "Create role"}</Button>
+          <Button type="submit" disabled={!canUpdateOrganizationAccess || savingRole || newRoleName.trim() === ""}>
+            {savingRole ? "Creating…" : "Create role"}
+          </Button>
         </form>
         <div className="divide-y rounded-md border">
-          {roles.map((role): React.JSX.Element => <div key={role.id} className="space-y-3 p-4"><div><p className="font-semibold">{role.attributes.name}</p><p className="text-sm text-muted-foreground">{role.attributes.description ?? "No description"}</p></div><div className="grid gap-2 sm:grid-cols-2">{organizationPermissions.map((permission): React.JSX.Element => <label key={permission} className="flex items-center gap-2 text-xs"><Checkbox checked={role.attributes.permissions?.[permission] === true} disabled={!canUpdateOrganizationAccess} onCheckedChange={(checked: boolean): void => { void onUpdatePermission(role, permission, checked); }} />{permissionLabel(permission)}</label>)}</div></div>)}
+          {roles.map(
+            (role): React.JSX.Element => (
+              <div key={role.id} className="space-y-3 p-4">
+                <div>
+                  <p className="font-semibold">{role.attributes.name}</p>
+                  <p className="text-sm text-muted-foreground">{role.attributes.description ?? "No description"}</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {organizationPermissions.map(
+                    (permission): React.JSX.Element => (
+                      <label key={permission} className="flex items-center gap-2 text-xs">
+                        <Checkbox
+                          checked={role.attributes.permissions?.[permission] === true}
+                          disabled={!canUpdateOrganizationAccess}
+                          onCheckedChange={(checked: boolean): void => {
+                            void onUpdatePermission(role, permission, checked);
+                          }}
+                        />
+                        {permissionLabel(permission)}
+                      </label>
+                    ),
+                  )}
+                </div>
+              </div>
+            ),
+          )}
           {roles.length === 0 && <p className="p-5 text-sm text-muted-foreground">No reusable roles yet.</p>}
         </div>
       </CardContent>
@@ -419,7 +626,21 @@ function RolesTab({ roles, newRoleName, onNewRoleNameChange, newRoleDescription,
   );
 }
 
-function UsersTab({ orgNameParam, memberships, membershipsError, canManageUsers, teams, inviteEmail, onInviteEmailInput, inviteTeamId, onInviteTeamChange, inviting, onInvite, onRetry, onRemoveRequest }: Readonly<{
+function UsersTab({
+  orgNameParam,
+  memberships,
+  membershipsError,
+  canManageUsers,
+  teams,
+  inviteEmail,
+  onInviteEmailInput,
+  inviteTeamId,
+  onInviteTeamChange,
+  inviting,
+  onInvite,
+  onRetry,
+  onRemoveRequest,
+}: Readonly<{
   orgNameParam: string;
   memberships: readonly Membership[];
   membershipsError: string;
@@ -442,9 +663,14 @@ function UsersTab({ orgNameParam, memberships, membershipsError, canManageUsers,
       </CardHeader>
       <CardContent className="space-y-6">
         {membershipsError !== "" && (
-          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+          >
             <span>Could not load organization members. {membershipsError}</span>
-            <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button>
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              Retry
+            </Button>
           </div>
         )}
         <Table>
@@ -457,34 +683,42 @@ function UsersTab({ orgNameParam, memberships, membershipsError, canManageUsers,
             </TableRow>
           </TableHeader>
           <TableBody>
-            {memberships.map((membership): React.JSX.Element => (
-              <TableRow key={membership.id}>
-                <TableCell>
-                  <div className="flex flex-col">
-                    <span className="font-medium">{membership.attributes.username ?? "—"}</span>
-                    {membership.attributes.email !== undefined && membership.attributes.email !== null && (
-                      <span className="text-xs text-muted-foreground">{membership.attributes.email}</span>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
-                <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
-                    disabled={!canManageUsers}
-                    onClick={(): void => { onRemoveRequest(membership); }}
-                  >
-                    <UserMinus className="size-4 text-muted-foreground hover:text-destructive" />
-                  </Button>
+            {memberships.map(
+              (membership): React.JSX.Element => (
+                <TableRow key={membership.id}>
+                  <TableCell>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{membership.attributes.username ?? "—"}</span>
+                      {membership.attributes.email !== undefined && membership.attributes.email !== null && (
+                        <span className="text-xs text-muted-foreground">{membership.attributes.email}</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
+                  <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
+                      disabled={!canManageUsers}
+                      onClick={(): void => {
+                        onRemoveRequest(membership);
+                      }}
+                    >
+                      <UserMinus className="size-4 text-muted-foreground hover:text-destructive" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ),
+            )}
+            {membershipsError === "" && memberships.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                  No organization users found.
                 </TableCell>
               </TableRow>
-            ))}
-            {membershipsError === "" && memberships.length === 0 && (
-              <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization users found.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
@@ -492,23 +726,49 @@ function UsersTab({ orgNameParam, memberships, membershipsError, canManageUsers,
         <div className="border-t pt-6">
           <div className="flex flex-col gap-1 mb-4">
             <h3 className="font-semibold">Invite a user</h3>
-            <p className="text-sm text-muted-foreground">Invite a teammate to collaborate within the {orgNameParam} organization.</p>
+            <p className="text-sm text-muted-foreground">
+              Invite a teammate to collaborate within the {orgNameParam} organization.
+            </p>
           </div>
           <form onSubmit={onInvite}>
             <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
               <Field>
                 <FieldLabel htmlFor="users-invite-email">Email Address</FieldLabel>
-                <Input id="users-invite-email" name="invite-email" autoComplete="email" spellCheck={false} type="email" value={inviteEmail} onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onInviteEmailInput(event.currentTarget.value); }} disabled={!canManageUsers} required />
+                <Input
+                  id="users-invite-email"
+                  name="invite-email"
+                  autoComplete="email"
+                  spellCheck={false}
+                  type="email"
+                  value={inviteEmail}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    onInviteEmailInput(event.currentTarget.value);
+                  }}
+                  disabled={!canManageUsers}
+                  required
+                />
               </Field>
               <Field>
                 <FieldLabel htmlFor="users-invite-team">Add to teams</FieldLabel>
-                <Select id="users-invite-team" name="invite-team" value={inviteTeamId} onValueChange={onInviteTeamChange} disabled={!canManageUsers}>
+                <Select
+                  id="users-invite-team"
+                  name="invite-team"
+                  value={inviteTeamId}
+                  onValueChange={onInviteTeamChange}
+                  disabled={!canManageUsers}
+                >
                   <option value="">No team</option>
-                  {teams.map((team): React.JSX.Element => (
-// SAFETY: the fixture field is a string per the API contract.
-                    <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-team.attributes["name"] as string}</option>
-                  ))}
+                  {teams.map(
+                    (team): React.JSX.Element => (
+                      // SAFETY: the fixture field is a string per the API contract.
+                      <option key={team.id} value={team.id}>
+                        {
+                          // SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+                          team.attributes["name"] as string
+                        }
+                      </option>
+                    ),
+                  )}
                 </Select>
               </Field>
               <Field className="justify-end">
@@ -525,7 +785,17 @@ team.attributes["name"] as string}</option>
   );
 }
 
-function TeamMembersEditor({ teamId, teamName, teamMemberList, teamMemberCounts, memberships, addMemberTeam, onAddMemberChange, onAddMember, onRemoveMember }: Readonly<{
+function TeamMembersEditor({
+  teamId,
+  teamName,
+  teamMemberList,
+  teamMemberCounts,
+  memberships,
+  addMemberTeam,
+  onAddMemberChange,
+  onAddMember,
+  onRemoveMember,
+}: Readonly<{
   teamId: string;
   teamName: string;
   teamMemberList: Readonly<Record<string, readonly { id: string; username: string; email?: string }[]>>;
@@ -539,27 +809,35 @@ function TeamMembersEditor({ teamId, teamName, teamMemberList, teamMemberCounts,
   return (
     <div className="px-4 py-4">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-sm font-semibold text-foreground">Members ({(teamMemberCounts[teamId] ?? 0)})</p>
+        <p className="text-sm font-semibold text-foreground">Members ({teamMemberCounts[teamId] ?? 0})</p>
         <div className="flex gap-2">
           <Select
             id={`team-${teamId}-member`}
             name={`team-${teamId}-member`}
-// SAFETY: the fixture field is a string per the API contract.
+            // SAFETY: the fixture field is a string per the API contract.
             aria-label={`Add a member to ${teamName}`}
             className="h-8"
             value={addMemberTeam[teamId] ?? ""}
-            onChange={(e): void => { onAddMemberChange(teamId, e.target.value); }}
+            onChange={(e): void => {
+              onAddMemberChange(teamId, e.target.value);
+            }}
           >
             <option value="">Select user…</option>
-            {memberships.map((m): React.JSX.Element => (
-              <option key={m.id} value={m.attributes.username ?? m.id}>{m.attributes.username ?? m.attributes.email ?? m.id}</option>
-            ))}
+            {memberships.map(
+              (m): React.JSX.Element => (
+                <option key={m.id} value={m.attributes.username ?? m.id}>
+                  {m.attributes.username ?? m.attributes.email ?? m.id}
+                </option>
+              ),
+            )}
           </Select>
           <Button
             type="button"
             size="sm"
             disabled={addMemberTeam[teamId] === undefined || addMemberTeam[teamId] === ""}
-            onClick={(): void => { onAddMember(teamId); }}
+            onClick={(): void => {
+              onAddMember(teamId);
+            }}
           >
             Add member
           </Button>
@@ -569,30 +847,58 @@ function TeamMembersEditor({ teamId, teamName, teamMemberList, teamMemberCounts,
         <p className="text-xs text-muted-foreground">No members in this team.</p>
       ) : (
         <div className="space-y-1">
-          {(teamMemberList[teamId] ?? []).map((member): React.JSX.Element => (
-            <div key={member.id} className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm">
-              <div>
-                <span className="font-medium">{member.username}</span>
-                {member.email !== undefined && <span className="ml-2 text-muted-foreground">{member.email}</span>}
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={`Remove ${member.username}`}
-                onClick={(): void => { onRemoveMember(teamId, member); }}
+          {(teamMemberList[teamId] ?? []).map(
+            (member): React.JSX.Element => (
+              <div
+                key={member.id}
+                className="flex items-center justify-between rounded border bg-background px-3 py-2 text-sm"
               >
-                <UserMinus className="size-3.5" />
-              </Button>
-            </div>
-          ))}
+                <div>
+                  <span className="font-medium">{member.username}</span>
+                  {member.email !== undefined && <span className="ml-2 text-muted-foreground">{member.email}</span>}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove ${member.username}`}
+                  onClick={(): void => {
+                    onRemoveMember(teamId, member);
+                  }}
+                >
+                  <UserMinus className="size-3.5" />
+                </Button>
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVisibility, teamTokenMgmt, teamMemberList, teamMemberCounts, memberships, addMemberTeam, canUpdateOrganizationAccess, onEdit, onCancelEdit, onSavePermissions, onPermissionToggle, onVisibilityChange, onTokenMgmtChange, onAddMemberChange, onAddMember, onRemoveMember }: Readonly<{
+function TeamRow({
+  team,
+  editing,
+  teamPermissions,
+  savingTeamPermissions,
+  teamVisibility,
+  teamTokenMgmt,
+  teamMemberList,
+  teamMemberCounts,
+  memberships,
+  addMemberTeam,
+  canUpdateOrganizationAccess,
+  onEdit,
+  onCancelEdit,
+  onSavePermissions,
+  onPermissionToggle,
+  onVisibilityChange,
+  onTokenMgmtChange,
+  onAddMemberChange,
+  onAddMember,
+  onRemoveMember,
+}: Readonly<{
   team: Team;
   editing: boolean;
   teamPermissions: Readonly<Record<OrganizationPermission, boolean>>;
@@ -614,7 +920,7 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
   onAddMember: (teamId: string) => void;
   onRemoveMember: (teamId: string, member: { id: string; username: string }) => void;
 }>): React.JSX.Element {
-// SAFETY: the fixture field is a string per the API contract.
+  // SAFETY: the fixture field is a string per the API contract.
   const teamName = team.attributes["name"] as string;
   return (
     <div key={team.id}>
@@ -624,19 +930,24 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
             <Users className="h-4 w-4 text-muted-foreground" />
           </div>
           <div>
-            <p className="font-semibold text-sm text-primary">
-              {teamName}
-            </p>
+            <p className="font-semibold text-sm text-primary">{teamName}</p>
             {/* SAFETY: the fixture field matches the API contract type. */}
-            <p className="text-xs text-muted-foreground mt-0.5">{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-(team.attributes["users-count"] as number | undefined) ?? 0} members</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {
+                // SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+                (team.attributes["users-count"] as number | undefined) ?? 0
+              }{" "}
+              members
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full border border-border capitalize font-medium tracking-wide">
             {/* SAFETY: the fixture field matches the API contract type. */}
-            {// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-(team.attributes["visibility"] as string | undefined) ?? "organization"}
+            {
+              // SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+              (team.attributes["visibility"] as string | undefined) ?? "organization"
+            }
           </span>
           <Button
             type="button"
@@ -644,7 +955,9 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
             size="sm"
             aria-label={`Manage permissions for ${teamName}`}
             disabled={!canUpdateOrganizationAccess}
-            onClick={(): void => { onEdit(team); }}
+            onClick={(): void => {
+              onEdit(team);
+            }}
           >
             Permissions
           </Button>
@@ -664,7 +977,9 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
                       name={`visibility-${team.id}`}
                       className="size-4 accent-primary"
                       checked={teamVisibility[team.id] !== "secret"}
-                      onChange={(): void => { onVisibilityChange(team.id, "organization"); }}
+                      onChange={(): void => {
+                        onVisibilityChange(team.id, "organization");
+                      }}
                     />
                     Visible
                   </label>
@@ -674,27 +989,39 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
                       name={`visibility-${team.id}`}
                       className="size-4 accent-primary"
                       checked={teamVisibility[team.id] === "secret"}
-                      onChange={(): void => { onVisibilityChange(team.id, "secret"); }}
+                      onChange={(): void => {
+                        onVisibilityChange(team.id, "secret");
+                      }}
                     />
                     Secret
                   </label>
                 </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">Visible to every member of this organization / Only visible to team members and organization owners.</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Visible to every member of this organization / Only visible to team members and organization owners.
+                </p>
               </fieldset>
               <div className="flex items-center gap-3 text-sm">
                 <Checkbox
                   id={`token-mgmt-${team.id}`}
                   checked={teamTokenMgmt[team.id] === true}
-                  onCheckedChange={(checked: boolean): void => { onTokenMgmtChange(team.id, checked); }}
+                  onCheckedChange={(checked: boolean): void => {
+                    onTokenMgmtChange(team.id, checked);
+                  }}
                 />
-                <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-foreground">Team API tokens</label>
+                <label htmlFor={`token-mgmt-${team.id}`} className="font-medium text-foreground">
+                  Team API tokens
+                </label>
               </div>
             </div>
-            <p className="mb-3 text-xs text-muted-foreground">Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can create, revoke, and view API tokens for this team.</p>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Team members can manage API tokens. When disabled, only the owners team and users with "Manage teams" can
+              create, revoke, and view API tokens for this team.
+            </p>
 
             <p className="mb-2 text-sm font-semibold text-foreground">Organization access for {teamName}</p>
             <p className="mb-3 text-xs text-muted-foreground">
-              Permissions not selected remain denied. Project permissions automatically include their workspace counterpart.
+              Permissions not selected remain denied. Project permissions automatically include their workspace
+              counterpart.
             </p>
             <form onSubmit={onSavePermissions}>
               <div className="grid gap-3 sm:grid-cols-2 mb-3">
@@ -705,21 +1032,20 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
                       <Checkbox
                         id={id}
                         checked={teamPermissions[permission]}
-                        onCheckedChange={(checked: boolean): void => { onPermissionToggle(permission, checked); }}
+                        onCheckedChange={(checked: boolean): void => {
+                          onPermissionToggle(permission, checked);
+                        }}
                         disabled={savingTeamPermissions || !canUpdateOrganizationAccess}
                       />
-                      <label htmlFor={id} className="text-sm text-foreground/85">{permissionLabel(permission)}</label>
+                      <label htmlFor={id} className="text-sm text-foreground/85">
+                        {permissionLabel(permission)}
+                      </label>
                     </div>
                   );
                 })}
               </div>
               <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={savingTeamPermissions}
-                  onClick={onCancelEdit}
-                >
+                <Button type="button" variant="outline" disabled={savingTeamPermissions} onClick={onCancelEdit}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={savingTeamPermissions || !canUpdateOrganizationAccess}>
@@ -746,7 +1072,44 @@ function TeamRow({ team, editing, teamPermissions, savingTeamPermissions, teamVi
   );
 }
 
-function TeamsTab({ teams, teamsError, editingTeamId, teamPermissions, savingTeamPermissions, teamVisibility, teamTokenMgmt, teamMemberList, teamMemberCounts, addMemberTeam, memberships, membershipsError, inviteEmail, onInviteEmailInput, inviteTeamId, onInviteTeamChange, inviting, canCreateTeam, canManageUsers, canUpdateOrganizationAccess, onCreateTeam, onNewTeamNameChange, newTeamName, onEditPermissions, onCancelEdit, onSavePermissions, onPermissionToggle, onVisibilityChange, onTokenMgmtChange, onAddMemberChange, onAddMember, onRemoveMember, onInvite, onRetryTeams, onRetryMembers, onRemoveRequest }: Readonly<{
+function TeamsTab({
+  teams,
+  teamsError,
+  editingTeamId,
+  teamPermissions,
+  savingTeamPermissions,
+  teamVisibility,
+  teamTokenMgmt,
+  teamMemberList,
+  teamMemberCounts,
+  addMemberTeam,
+  memberships,
+  membershipsError,
+  inviteEmail,
+  onInviteEmailInput,
+  inviteTeamId,
+  onInviteTeamChange,
+  inviting,
+  canCreateTeam,
+  canManageUsers,
+  canUpdateOrganizationAccess,
+  onCreateTeam,
+  onNewTeamNameChange,
+  newTeamName,
+  onEditPermissions,
+  onCancelEdit,
+  onSavePermissions,
+  onPermissionToggle,
+  onVisibilityChange,
+  onTokenMgmtChange,
+  onAddMemberChange,
+  onAddMember,
+  onRemoveMember,
+  onInvite,
+  onRetryTeams,
+  onRetryMembers,
+  onRemoveRequest,
+}: Readonly<{
   teams: readonly Team[];
   teamsError: string;
   editingTeamId: string;
@@ -801,7 +1164,9 @@ function TeamsTab({ teams, teamsError, editingTeamId, teamPermissions, savingTea
               aria-label="New team name"
               placeholder="New team name"
               value={newTeamName}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNewTeamNameChange(event.target.value); }}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                onNewTeamNameChange(event.target.value);
+              }}
               disabled={!canCreateTeam}
               className="h-10"
             />
@@ -816,38 +1181,43 @@ function TeamsTab({ teams, teamsError, editingTeamId, teamPermissions, savingTea
         </div>
         <div className="divide-y divide-border">
           {teamsError !== "" && (
-            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 bg-destructive/10 p-4 text-sm text-destructive">
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 bg-destructive/10 p-4 text-sm text-destructive"
+            >
               <span>Could not load teams. {teamsError}</span>
               <Button type="button" size="sm" variant="outline" onClick={onRetryTeams}>
                 Retry teams
               </Button>
             </div>
           )}
-          {teams.map((team): React.JSX.Element => (
-            <TeamRow
-              key={team.id}
-              team={team}
-              editing={editingTeamId === team.id}
-              teamPermissions={teamPermissions}
-              savingTeamPermissions={savingTeamPermissions}
-              teamVisibility={teamVisibility}
-              teamTokenMgmt={teamTokenMgmt}
-              teamMemberList={teamMemberList}
-              teamMemberCounts={teamMemberCounts}
-              memberships={memberships}
-              addMemberTeam={addMemberTeam}
-              canUpdateOrganizationAccess={canUpdateOrganizationAccess}
-              onEdit={onEditPermissions}
-              onCancelEdit={onCancelEdit}
-              onSavePermissions={onSavePermissions}
-              onPermissionToggle={onPermissionToggle}
-              onVisibilityChange={onVisibilityChange}
-              onTokenMgmtChange={onTokenMgmtChange}
-              onAddMemberChange={onAddMemberChange}
-              onAddMember={onAddMember}
-              onRemoveMember={onRemoveMember}
-            />
-          ))}
+          {teams.map(
+            (team): React.JSX.Element => (
+              <TeamRow
+                key={team.id}
+                team={team}
+                editing={editingTeamId === team.id}
+                teamPermissions={teamPermissions}
+                savingTeamPermissions={savingTeamPermissions}
+                teamVisibility={teamVisibility}
+                teamTokenMgmt={teamTokenMgmt}
+                teamMemberList={teamMemberList}
+                teamMemberCounts={teamMemberCounts}
+                memberships={memberships}
+                addMemberTeam={addMemberTeam}
+                canUpdateOrganizationAccess={canUpdateOrganizationAccess}
+                onEdit={onEditPermissions}
+                onCancelEdit={onCancelEdit}
+                onSavePermissions={onSavePermissions}
+                onPermissionToggle={onPermissionToggle}
+                onVisibilityChange={onVisibilityChange}
+                onTokenMgmtChange={onTokenMgmtChange}
+                onAddMemberChange={onAddMemberChange}
+                onAddMember={onAddMember}
+                onRemoveMember={onRemoveMember}
+              />
+            ),
+          )}
           {teamsError === "" && teams.length === 0 && (
             <p className="p-8 text-sm text-muted-foreground text-center">No teams created yet.</p>
           )}
@@ -855,9 +1225,7 @@ function TeamsTab({ teams, teamsError, editingTeamId, teamPermissions, savingTea
         <div className="flex flex-col gap-5 border-t p-5">
           <div className="flex flex-col gap-1">
             <h3 className="font-semibold">Organization members</h3>
-            <p className="text-sm text-muted-foreground">
-              Invite a user and optionally add them to a team.
-            </p>
+            <p className="text-sm text-muted-foreground">Invite a user and optionally add them to a team.</p>
           </div>
           <form onSubmit={onInvite}>
             <FieldGroup className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(10rem,0.7fr)_auto]">
@@ -870,20 +1238,34 @@ function TeamsTab({ teams, teamsError, editingTeamId, teamPermissions, savingTea
                   spellCheck={false}
                   type="email"
                   value={inviteEmail}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onInviteEmailInput(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    onInviteEmailInput(event.currentTarget.value);
+                  }}
                   disabled={!canManageUsers}
                   required
                 />
               </Field>
               <Field>
                 <FieldLabel htmlFor="member-team">Team</FieldLabel>
-                <Select id="member-team" name="member-team" value={inviteTeamId} onValueChange={onInviteTeamChange} disabled={!canManageUsers}>
+                <Select
+                  id="member-team"
+                  name="member-team"
+                  value={inviteTeamId}
+                  onValueChange={onInviteTeamChange}
+                  disabled={!canManageUsers}
+                >
                   <option value="">No team</option>
-                  {teams.map((team): React.JSX.Element => (
-// SAFETY: the fixture field is a string per the API contract.
-                    <option key={team.id} value={team.id}>{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-team.attributes["name"] as string}</option>
-                  ))}
+                  {teams.map(
+                    (team): React.JSX.Element => (
+                      // SAFETY: the fixture field is a string per the API contract.
+                      <option key={team.id} value={team.id}>
+                        {
+                          // SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+                          team.attributes["name"] as string
+                        }
+                      </option>
+                    ),
+                  )}
                 </Select>
               </Field>
               <Field className="justify-end">
@@ -895,7 +1277,10 @@ team.attributes["name"] as string}</option>
             </FieldGroup>
           </form>
           {membershipsError !== "" && (
-            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+            >
               <span>Could not load organization members. {membershipsError}</span>
               <Button type="button" size="sm" variant="outline" onClick={onRetryMembers}>
                 Retry members
@@ -904,30 +1289,43 @@ team.attributes["name"] as string}</option>
           )}
           <Table>
             <TableHeader>
-              <TableRow><TableHead>Email</TableHead><TableHead>Status</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
+              <TableRow>
+                <TableHead>Email</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
             </TableHeader>
             <TableBody>
-              {memberships.map((membership): React.JSX.Element => (
-                <TableRow key={membership.id}>
-                  <TableCell className="font-medium">{membership.attributes.email ?? "Local user"}</TableCell>
-                  <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
-                  <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
-                      disabled={!canManageUsers}
-                      onClick={(): void => { onRemoveRequest(membership); }}
-                    >
-                      <UserMinus className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                    </Button>
+              {memberships.map(
+                (membership): React.JSX.Element => (
+                  <TableRow key={membership.id}>
+                    <TableCell className="font-medium">{membership.attributes.email ?? "Local user"}</TableCell>
+                    <TableCell className="capitalize">{membership.attributes.status ?? "active"}</TableCell>
+                    <TableCell className="capitalize">{membership.attributes.role ?? "member"}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
+                        disabled={!canManageUsers}
+                        onClick={(): void => {
+                          onRemoveRequest(membership);
+                        }}
+                      >
+                        <UserMinus className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )}
+              {membershipsError === "" && memberships.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                    No organization members found.
                   </TableCell>
                 </TableRow>
-              ))}
-              {membershipsError === "" && memberships.length === 0 && (
-                <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">No organization members found.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -937,7 +1335,16 @@ team.attributes["name"] as string}</option>
   );
 }
 
-function OrgConfirmDialogs({ orgNameParam, confirmDeleteOrgOpen, onDeleteOpenChange, deletingOrg, onConfirmDelete, memberToRemove, onClearMember, onConfirmRemove }: Readonly<{
+function OrgConfirmDialogs({
+  orgNameParam,
+  confirmDeleteOrgOpen,
+  onDeleteOpenChange,
+  deletingOrg,
+  onConfirmDelete,
+  memberToRemove,
+  onClearMember,
+  onConfirmRemove,
+}: Readonly<{
   orgNameParam: string;
   confirmDeleteOrgOpen: boolean;
   onDeleteOpenChange: (open: boolean) => void;
@@ -955,7 +1362,9 @@ function OrgConfirmDialogs({ orgNameParam, confirmDeleteOrgOpen, onDeleteOpenCha
         title="Delete Organization"
         description={
           <>
-            This action <strong className="text-foreground">cannot be undone</strong>. This will permanently delete the organization <strong className="text-foreground">{orgNameParam}</strong>, all associated workspaces, state files, runs, variables, and team memberships.
+            This action <strong className="text-foreground">cannot be undone</strong>. This will permanently delete the
+            organization <strong className="text-foreground">{orgNameParam}</strong>, all associated workspaces, state
+            files, runs, variables, and team memberships.
           </>
         }
         confirmText="Delete Organization"
@@ -968,7 +1377,9 @@ function OrgConfirmDialogs({ orgNameParam, confirmDeleteOrgOpen, onDeleteOpenCha
 
       <ConfirmDialog
         open={memberToRemove !== null}
-        onOpenChange={(open): void => { if (!open) onClearMember(); }}
+        onOpenChange={(open): void => {
+          if (!open) onClearMember();
+        }}
         title="Remove Organization Member"
         description={`Are you sure you want to remove ${memberToRemove?.attributes.email ?? memberToRemove?.attributes.username ?? "this member"} from ${orgNameParam}?`}
         confirmText="Remove Member"
@@ -986,7 +1397,14 @@ function OrgConfirmDialogs({ orgNameParam, confirmDeleteOrgOpen, onDeleteOpenCha
 type SettingsTab = "general" | "teams" | "roles" | "cidr" | "tags" | "users" | "ssh-keys";
 
 function parseSettingsTab(requestedTab: string | null): SettingsTab {
-  return requestedTab === "teams" || requestedTab === "roles" || requestedTab === "cidr" || requestedTab === "tags" || requestedTab === "users" || requestedTab === "ssh-keys" ? requestedTab : "general";
+  return requestedTab === "teams" ||
+    requestedTab === "roles" ||
+    requestedTab === "cidr" ||
+    requestedTab === "tags" ||
+    requestedTab === "users" ||
+    requestedTab === "ssh-keys"
+    ? requestedTab
+    : "general";
 }
 
 type OrgCapabilityFlags = {
@@ -1031,7 +1449,8 @@ export function OrganizationSettings(): React.JSX.Element {
   const [showPreReleases, setShowPreReleases] = useState(false);
   const [defaultExecutionMode, setDefaultExecutionMode] = useState<ExecutionMode>("remote");
   const [aggregatedCommitStatusEnabled, setAggregatedCommitStatusEnabled] = useState(true);
-  const [sendPassingStatusesForUntriggeredSpeculativePlans, setSendPassingStatusesForUntriggeredSpeculativePlans] = useState(false);
+  const [sendPassingStatusesForUntriggeredSpeculativePlans, setSendPassingStatusesForUntriggeredSpeculativePlans] =
+    useState(false);
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -1047,12 +1466,16 @@ export function OrganizationSettings(): React.JSX.Element {
   const [teamPermissions, setTeamPermissions] = useState<Record<OrganizationPermission, boolean>>(
     (): Record<OrganizationPermission, boolean> =>
       // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
-      Object.fromEntries(organizationPermissions.map((permission): [OrganizationPermission, boolean] => [permission, false])) as Record<OrganizationPermission, boolean>,
+      Object.fromEntries(
+        organizationPermissions.map((permission): [OrganizationPermission, boolean] => [permission, false]),
+      ) as Record<OrganizationPermission, boolean>,
   );
   const [savingTeamPermissions, setSavingTeamPermissions] = useState(false);
   const [teamVisibility, setTeamVisibility] = useState<Record<string, string>>({});
   const [teamTokenMgmt, setTeamTokenMgmt] = useState<Record<string, boolean>>({});
-  const [teamMemberList, setTeamMemberList] = useState<Record<string, { id: string; username: string; email?: string }[]>>({});
+  const [teamMemberList, setTeamMemberList] = useState<
+    Record<string, { id: string; username: string; email?: string }[]>
+  >({});
   const [teamMemberCounts, setTeamMemberCounts] = useState<Record<string, number>>({});
   const [addMemberTeam, setAddMemberTeam] = useState<Record<string, string>>({});
   const [inviteEmail, setInviteEmail] = useState("");
@@ -1069,13 +1492,8 @@ export function OrganizationSettings(): React.JSX.Element {
   activeOrganizationName.current = orgNameParam;
   const activeTab = parseSettingsTab(searchParams.get("tab"));
   const orgIsCurrent = org !== null && org.attributes["name"] === orgNameParam;
-  const {
-    canUpdateOrganization,
-    canDestroyOrganization,
-    canCreateTeam,
-    canManageUsers,
-    canUpdateOrganizationAccess,
-  } = orgCapabilityFlags(org, orgNameParam);
+  const { canUpdateOrganization, canDestroyOrganization, canCreateTeam, canManageUsers, canUpdateOrganizationAccess } =
+    orgCapabilityFlags(org, orgNameParam);
 
   useEffect((): void => {
     setTeams([]);
@@ -1094,27 +1512,29 @@ export function OrganizationSettings(): React.JSX.Element {
     setLoading(true);
     setLoadError("");
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}`) as { data: Organization };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const res = (await fetchApi(`/api/v2/organizations/${encodedOrgName}`)) as { data: Organization };
       if (activeOrganizationName.current !== orgNameParam) return;
       setOrg(res.data);
-// SAFETY: the fixture field is a string per the API contract.
+      // SAFETY: the fixture field is a string per the API contract.
       setName(res.data.attributes["name"] as string);
-// SAFETY: the fixture field matches the API contract type.
+      // SAFETY: the fixture field matches the API contract type.
       setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "terraform");
-// SAFETY: the fixture field matches the API contract type.
+      // SAFETY: the fixture field matches the API contract type.
       setDefaultTerraformVersion((res.data.attributes["default-terraform-version"] as string | undefined) ?? "latest");
       const ttl = res.data.attributes["module-test-token-ttl"];
       setModuleTestTokenTtl(typeof ttl === "number" && Number.isInteger(ttl) ? ttl : 600);
-// SAFETY: the fixture field matches the API contract type.
+      // SAFETY: the fixture field matches the API contract type.
       setNotificationEmail((res.data.attributes["email"] as string | null | undefined) ?? "");
       setAllowForceDeleteWorkspaces(res.data.attributes["allow-force-delete-workspaces"] !== false);
       setStacksEnabled(res.data.attributes["stacks-enabled"] === true);
       setShowPreReleases(res.data.attributes["show-pre-releases"] === true);
-// SAFETY: the fixture field matches the API contract type.
+      // SAFETY: the fixture field matches the API contract type.
       setDefaultExecutionMode(parseExecutionMode(res.data.attributes["default-execution-mode"] as string | undefined));
       setAggregatedCommitStatusEnabled(res.data.attributes["aggregated-commit-status-enabled"] !== false);
-      setSendPassingStatusesForUntriggeredSpeculativePlans(res.data.attributes["send-passing-statuses-for-untriggered-speculative-plans"] === true);
+      setSendPassingStatusesForUntriggeredSpeculativePlans(
+        res.data.attributes["send-passing-statuses-for-untriggered-speculative-plans"] === true,
+      );
     } catch (err: unknown) {
       if (activeOrganizationName.current !== orgNameParam) return;
       setLoadError(err instanceof Error ? err.message : "Could not load organization settings");
@@ -1125,8 +1545,8 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const loadTeams = async (): Promise<void> => {
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}/teams`) as { data?: Team[] };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const res = (await fetchApi(`/api/v2/organizations/${encodedOrgName}/teams`)) as { data?: Team[] };
       if (activeOrganizationName.current !== orgNameParam) return;
       setTeams(Array.isArray(res.data) ? res.data : []);
       setTeamsError("");
@@ -1139,10 +1559,12 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const loadRoles = async (): Promise<void> => {
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`) as { data?: Role[] };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const response = (await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`)) as { data?: Role[] };
       if (activeOrganizationName.current === orgNameParam) setRoles(Array.isArray(response.data) ? response.data : []);
-    } catch { /* restricted members may not list roles */ }
+    } catch {
+      /* restricted members may not list roles */
+    }
   };
 
   const saveRole = async (event: React.SyntheticEvent): Promise<void> => {
@@ -1150,29 +1572,69 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess || newRoleName.trim() === "") return;
     setSavingRole(true);
     try {
-      await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`, { method: "POST", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: newRoleName.trim(), description: newRoleDescription.trim() === "" ? null : newRoleDescription.trim(), permissions: newRolePermissions } } }) });
-      setNewRoleName(""); setNewRoleDescription(""); setNewRolePermissions({}); await loadRoles();
+      await fetchApi(`/api/v2/organizations/${encodedOrgName}/roles`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            type: "organization-roles",
+            attributes: {
+              name: newRoleName.trim(),
+              description: newRoleDescription.trim() === "" ? null : newRoleDescription.trim(),
+              permissions: newRolePermissions,
+            },
+          },
+        }),
+      });
+      setNewRoleName("");
+      setNewRoleDescription("");
+      setNewRolePermissions({});
+      await loadRoles();
       toast.add({ title: "Role created", type: "success" });
-    } catch (error: unknown) { toast.add({ title: "Could not create role", description: error instanceof Error ? error.message : "Unknown error", type: "error" }); }
-    finally { setSavingRole(false); }
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not create role",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    } finally {
+      setSavingRole(false);
+    }
   };
 
-  const updateRolePermission = async (role: Role, permission: OrganizationPermission, enabled: boolean): Promise<void> => {
+  const updateRolePermission = async (
+    role: Role,
+    permission: OrganizationPermission,
+    enabled: boolean,
+  ): Promise<void> => {
     if (!canUpdateOrganizationAccess) return;
     const permissions = { ...(role.attributes.permissions ?? {}), [permission]: enabled };
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi(`/api/v2/organization-roles/${encodeURIComponent(role.id)}`, { method: "PATCH", body: JSON.stringify({ data: { type: "organization-roles", attributes: { name: role.attributes.name, description: role.attributes.description ?? null, permissions } } }) }) as { data: Role };
-      setRoles((current) => current.map((item) => item.id === role.id ? response.data : item));
-    } catch (error: unknown) { toast.add({ title: "Could not update role", description: error instanceof Error ? error.message : "Unknown error", type: "error" }); }
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const response = (await fetchApi(`/api/v2/organization-roles/${encodeURIComponent(role.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: {
+            type: "organization-roles",
+            attributes: { name: role.attributes.name, description: role.attributes.description ?? null, permissions },
+          },
+        }),
+      })) as { data: Role };
+      setRoles((current) => current.map((item) => (item.id === role.id ? response.data : item)));
+    } catch (error: unknown) {
+      toast.add({
+        title: "Could not update role",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    }
   };
 
   const loadMemberships = async (): Promise<void> => {
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(
         `/organizations/${encodeURIComponent(orgNameParam)}/organization-memberships`,
-      ) as { data?: Membership[] };
+      )) as { data?: Membership[] };
       if (activeOrganizationName.current !== orgNameParam) return;
       setMemberships(Array.isArray(response.data) ? response.data : []);
       setMembershipsError("");
@@ -1186,14 +1648,17 @@ export function OrganizationSettings(): React.JSX.Element {
   const loadRetention = async (): Promise<void> => {
     setRetentionLoading(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/organizations/${encodedOrgName}/relationships/data-retention-policy`) as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/organizations/${encodedOrgName}/relationships/data-retention-policy`)) as {
         data?: { attributes?: { "delete-older-than-n-days"?: number | null; "state-versions-count"?: number | null } };
       };
       setRetentionDays(response.data?.attributes?.["delete-older-than-n-days"] ?? 0);
       setRetentionCount(response.data?.attributes?.["state-versions-count"] ?? 0);
-    } catch { /* no policy is a valid initial state */ }
-    finally { setRetentionLoading(false); }
+    } catch {
+      /* no policy is a valid initial state */
+    } finally {
+      setRetentionLoading(false);
+    }
   };
 
   const saveRetention = async (event: React.SyntheticEvent): Promise<void> => {
@@ -1214,8 +1679,14 @@ export function OrganizationSettings(): React.JSX.Element {
       });
       toast.add({ title: "Organization retention policy saved", type: "success" });
     } catch (error: unknown) {
-      toast.add({ title: "Could not save retention policy", description: error instanceof Error ? error.message : "Unknown error", type: "error" });
-    } finally { setRetentionSaving(false); }
+      toast.add({
+        title: "Could not save retention policy",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error",
+      });
+    } finally {
+      setRetentionSaving(false);
+    }
   };
 
   const saveSettings = async (e: React.SyntheticEvent): Promise<void> => {
@@ -1223,8 +1694,8 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganization) return;
     setSaving(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const res = await fetchApi(`/api/v2/organizations/${encodedOrgName}`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const res = (await fetchApi(`/api/v2/organizations/${encodedOrgName}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -1239,15 +1710,14 @@ export function OrganizationSettings(): React.JSX.Element {
               "show-pre-releases": showPreReleases,
               "default-execution-mode": defaultExecutionMode,
               "aggregated-commit-status-enabled": aggregatedCommitStatusEnabled,
-              "send-passing-statuses-for-untriggered-speculative-plans": sendPassingStatusesForUntriggeredSpeculativePlans,
+              "send-passing-statuses-for-untriggered-speculative-plans":
+                sendPassingStatusesForUntriggeredSpeculativePlans,
             },
           },
         }),
-      }) as { data: Organization };
+      })) as { data: Organization };
       setOrg(res.data);
-      const updatedName = isString(res.data.attributes["name"])
-        ? res.data.attributes["name"]
-        : name.trim();
+      const updatedName = isString(res.data.attributes["name"]) ? res.data.attributes["name"] : name.trim();
       setName(updatedName);
       if (updatedName !== orgNameParam) {
         void navigate(`/app/${encodeURIComponent(updatedName)}/settings`);
@@ -1300,26 +1770,44 @@ export function OrganizationSettings(): React.JSX.Element {
     if (!canUpdateOrganizationAccess) return;
     setEditingTeamId(team.id);
     setTeamPermissions(teamOrganizationAccess(team));
-// SAFETY: the fixture field matches the API contract type.
-    setTeamVisibility((prev) => ({ ...prev, [team.id]: (team.attributes["visibility"] as string | undefined) ?? "organization" }));
+    // SAFETY: the fixture field matches the API contract type.
+    setTeamVisibility((prev) => ({
+      ...prev,
+      [team.id]: (team.attributes["visibility"] as string | undefined) ?? "organization",
+    }));
     setTeamTokenMgmt((prev) => ({ ...prev, [team.id]: team.attributes["allow-member-token-management"] === true }));
     // Load team members via include=users (returns included user resources)
-    void fetchApi<{ data: { id: string; attributes: JsonObject; relationships?: JsonObject } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] }>(`/teams/${encodeURIComponent(team.id)}?include=users`).then((r): void => {
-      if (r.data !== undefined) {
-        const d = r.data;
-// SAFETY: the fixture field matches the API contract type.
-        setTeamMemberCounts((prev) => ({ ...prev, [team.id]: (d.attributes["users-count"] as number | undefined) ?? 0 }));
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const userRelations = ((d.relationships)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
-        const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [
-          u.id,
-          { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" },
-        ]));
-        const members = userRelations.map((u): { id: string; username: string; email: string } =>
-          userById.get(u.id) ?? { id: u.id, username: u.id, email: "" });
-        setTeamMemberList((prev) => ({ ...prev, [team.id]: members }));
-      }
-    }).catch((): void => { setTeamMemberList((prev) => ({ ...prev, [team.id]: [] })); });
+    void fetchApi<{
+      data: { id: string; attributes: JsonObject; relationships?: JsonObject } | undefined;
+      included?: { id: string; type: string; attributes: { username?: string; email?: string } }[];
+    }>(`/teams/${encodeURIComponent(team.id)}?include=users`)
+      .then((r): void => {
+        if (r.data !== undefined) {
+          const d = r.data;
+          // SAFETY: the fixture field matches the API contract type.
+          setTeamMemberCounts((prev) => ({
+            ...prev,
+            [team.id]: (d.attributes["users-count"] as number | undefined) ?? 0,
+          }));
+          // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+          const userRelations =
+            (d.relationships?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
+          const userById = new Map(
+            (r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [
+              u.id,
+              { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" },
+            ]),
+          );
+          const members = userRelations.map(
+            (u): { id: string; username: string; email: string } =>
+              userById.get(u.id) ?? { id: u.id, username: u.id, email: "" },
+          );
+          setTeamMemberList((prev) => ({ ...prev, [team.id]: members }));
+        }
+      })
+      .catch((): void => {
+        setTeamMemberList((prev) => ({ ...prev, [team.id]: [] }));
+      });
   };
 
   const setTeamPermission = (permission: OrganizationPermission, enabled: boolean): void => {
@@ -1339,8 +1827,8 @@ export function OrganizationSettings(): React.JSX.Element {
     if (editingTeamId === "") return;
     setSavingTeamPermissions(true);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/teams/${encodeURIComponent(editingTeamId)}`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/teams/${encodeURIComponent(editingTeamId)}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -1348,9 +1836,10 @@ export function OrganizationSettings(): React.JSX.Element {
             attributes: { "organization-access": teamPermissions },
           },
         }),
-      }) as { data: Team };
+      })) as { data: Team };
       setTeams((current: Team[]): Team[] =>
-        current.map((team: Team): Team => team.id === response.data.id ? response.data : team));
+        current.map((team: Team): Team => (team.id === response.data.id ? response.data : team)),
+      );
       setEditingTeamId("");
       toast.add({ title: "Team organization access saved", type: "success" });
     } catch (error: unknown) {
@@ -1366,22 +1855,24 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const updateTeamSetting = async (teamId: string, field: string, value: string | boolean): Promise<void> => {
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/teams/${encodeURIComponent(teamId)}`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/teams/${encodeURIComponent(teamId)}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: { type: "teams", attributes: { [field]: value } },
         }),
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      }) as { data: Team };
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      })) as { data: Team };
       setTeams((current: Team[]): Team[] =>
-        current.map((team: Team): Team => team.id === response.data.id ? response.data : team));
+        current.map((team: Team): Team => (team.id === response.data.id ? response.data : team)),
+      );
       // SAFETY: the select value is one of the union members the UI renders.
       if (field === "visibility") {
         // SAFETY: the visibility change event carries one of the union values.
         setTeamVisibility((prev) => ({ ...prev, [teamId]: value as string }));
       }
-      if (field === "allow-member-token-management") setTeamTokenMgmt((prev) => ({ ...prev, [teamId]: value === true }));
+      if (field === "allow-member-token-management")
+        setTeamTokenMgmt((prev) => ({ ...prev, [teamId]: value === true }));
       toast.add({ title: "Team setting updated", type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -1402,16 +1893,32 @@ export function OrganizationSettings(): React.JSX.Element {
       });
       setTeamMemberCounts((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
       // Refresh member list
-      void fetchApi<{ data: { id: string; attributes: JsonObject; relationships?: JsonObject } | undefined; included?: { id: string; type: string; attributes: { username?: string; email?: string } }[] }>(`/teams/${encodeURIComponent(teamId)}?include=users`).then((r): void => {
-        if (r.data !== undefined) {
-          const d = r.data;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-          const userRelations = ((d.relationships)?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
-          const userById = new Map((r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [u.id, { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" }]));
-          const members = userRelations.map((u): { id: string; username: string; email: string } => userById.get(u.id) ?? { id: u.id, username: u.id, email: "" });
-          setTeamMemberList((prev) => ({ ...prev, [teamId]: members }));
-        }
-      }).catch((): void => { /* ignore */ });
+      void fetchApi<{
+        data: { id: string; attributes: JsonObject; relationships?: JsonObject } | undefined;
+        included?: { id: string; type: string; attributes: { username?: string; email?: string } }[];
+      }>(`/teams/${encodeURIComponent(teamId)}?include=users`)
+        .then((r): void => {
+          if (r.data !== undefined) {
+            const d = r.data;
+            // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+            const userRelations =
+              (d.relationships?.["users"] as { data?: { id: string; type: string }[] } | undefined)?.data ?? [];
+            const userById = new Map(
+              (r.included ?? []).map((u): [string, { id: string; username: string; email: string }] => [
+                u.id,
+                { id: u.id, username: u.attributes.username ?? u.id, email: u.attributes.email ?? "" },
+              ]),
+            );
+            const members = userRelations.map(
+              (u): { id: string; username: string; email: string } =>
+                userById.get(u.id) ?? { id: u.id, username: u.id, email: "" },
+            );
+            setTeamMemberList((prev) => ({ ...prev, [teamId]: members }));
+          }
+        })
+        .catch((): void => {
+          /* ignore */
+        });
       setAddMemberTeam((prev) => ({ ...prev, [teamId]: "" }));
       toast.add({ title: "Member added to team", type: "success" });
     } catch (error: unknown) {
@@ -1429,7 +1936,10 @@ export function OrganizationSettings(): React.JSX.Element {
         method: "DELETE",
         body: JSON.stringify({ data: [{ id: member.id, type: "users" }] }),
       });
-      setTeamMemberList((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? []).filter((m): boolean => m.id !== member.id) }));
+      setTeamMemberList((prev) => ({
+        ...prev,
+        [teamId]: (prev[teamId] ?? []).filter((m): boolean => m.id !== member.id),
+      }));
       setTeamMemberCounts((prev) => ({ ...prev, [teamId]: Math.max((prev[teamId] ?? 1) - 1, 0) }));
       toast.add({ title: `${member.username} removed from team`, type: "success" });
     } catch (error: unknown) {
@@ -1458,16 +1968,18 @@ export function OrganizationSettings(): React.JSX.Element {
           data: {
             type: "organization-memberships",
             attributes: { email },
-            relationships: inviteTeamId === ""
-              ? undefined
-              : { teams: { data: [{ id: inviteTeamId, type: "teams" }] } },
+            relationships: inviteTeamId === "" ? undefined : { teams: { data: [{ id: inviteTeamId, type: "teams" }] } },
           },
         }),
       });
       setInviteEmail("");
       setInviteTeamId("");
       await Promise.all([loadMemberships(), loadTeams()]);
-      toast.add({ title: "Invitation created", description: `${email} was added to the organization.`, type: "success" });
+      toast.add({
+        title: "Invitation created",
+        description: `${email} was added to the organization.`,
+        type: "success",
+      });
     } catch (error: unknown) {
       toast.add({
         title: "Could not invite member",
@@ -1517,14 +2029,25 @@ export function OrganizationSettings(): React.JSX.Element {
   if (org === null) {
     return (
       <PageShell variant="form">
-        <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
-        <div>
-          <h1 className="text-lg font-semibold">Could not load organization settings</h1>
-          <p className="mt-1 text-sm"><OrgLoadErrorMessage loadError={loadError} /></p>
-        </div>
-        <Button type="button" variant="outline" onClick={(): void => { void loadOrg(); }}>
-          Try again
-        </Button>
+        <div
+          role="alert"
+          className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive"
+        >
+          <div>
+            <h1 className="text-lg font-semibold">Could not load organization settings</h1>
+            <p className="mt-1 text-sm">
+              <OrgLoadErrorMessage loadError={loadError} />
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={(): void => {
+              void loadOrg();
+            }}
+          >
+            Try again
+          </Button>
         </div>
       </PageShell>
     );
@@ -1533,11 +2056,13 @@ export function OrganizationSettings(): React.JSX.Element {
   return (
     <PageShell variant="form">
       <div className="space-y-3">
-        <Breadcrumbs items={[
-          { label: "Dashboard", to: "/app" },
-          { label: orgNameParam, to: `/app/${encodedOrgName}` },
-          { label: "Settings" },
-        ]} />
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", to: "/app" },
+            { label: orgNameParam, to: `/app/${encodedOrgName}` },
+            { label: "Settings" },
+          ]}
+        />
         <PageHeader
           eyebrow="Organization settings"
           title="Organization Settings"
@@ -1546,135 +2071,155 @@ export function OrganizationSettings(): React.JSX.Element {
       </div>
 
       <div className="space-y-6">
-          {activeTab === "general" && (
-            <>
-              <GeneralForm
-                name={name}
-                onNameChange={setName}
-                notificationEmail={notificationEmail}
-                onNotificationEmailChange={setNotificationEmail}
-                defaultIacBinary={defaultIacBinary}
-                onDefaultIacBinaryChange={setDefaultIacBinary}
-                defaultTerraformVersion={defaultTerraformVersion}
-                onDefaultTerraformVersionChange={setDefaultTerraformVersion}
-                defaultExecutionMode={defaultExecutionMode}
-                onDefaultExecutionModeChange={setDefaultExecutionMode}
-                moduleTestTokenTtl={moduleTestTokenTtl}
-                onModuleTestTokenTtlChange={setModuleTestTokenTtl}
-                aggregatedCommitStatusEnabled={aggregatedCommitStatusEnabled}
-                onAggregatedCommitStatusChange={setAggregatedCommitStatusEnabled}
-                sendPassingStatuses={sendPassingStatusesForUntriggeredSpeculativePlans}
-                onSendPassingStatusesChange={setSendPassingStatusesForUntriggeredSpeculativePlans}
-                allowForceDeleteWorkspaces={allowForceDeleteWorkspaces}
-                onAllowForceDeleteChange={setAllowForceDeleteWorkspaces}
-                stacksEnabled={stacksEnabled}
-                onStacksEnabledChange={setStacksEnabled}
-                showPreReleases={showPreReleases}
-                onShowPreReleasesChange={setShowPreReleases}
-                saving={saving}
-                canUpdateOrganization={canUpdateOrganization}
-                onSubmit={saveSettings}
-              />
+        {activeTab === "general" && (
+          <>
+            <GeneralForm
+              name={name}
+              onNameChange={setName}
+              notificationEmail={notificationEmail}
+              onNotificationEmailChange={setNotificationEmail}
+              defaultIacBinary={defaultIacBinary}
+              onDefaultIacBinaryChange={setDefaultIacBinary}
+              defaultTerraformVersion={defaultTerraformVersion}
+              onDefaultTerraformVersionChange={setDefaultTerraformVersion}
+              defaultExecutionMode={defaultExecutionMode}
+              onDefaultExecutionModeChange={setDefaultExecutionMode}
+              moduleTestTokenTtl={moduleTestTokenTtl}
+              onModuleTestTokenTtlChange={setModuleTestTokenTtl}
+              aggregatedCommitStatusEnabled={aggregatedCommitStatusEnabled}
+              onAggregatedCommitStatusChange={setAggregatedCommitStatusEnabled}
+              sendPassingStatuses={sendPassingStatusesForUntriggeredSpeculativePlans}
+              onSendPassingStatusesChange={setSendPassingStatusesForUntriggeredSpeculativePlans}
+              allowForceDeleteWorkspaces={allowForceDeleteWorkspaces}
+              onAllowForceDeleteChange={setAllowForceDeleteWorkspaces}
+              stacksEnabled={stacksEnabled}
+              onStacksEnabledChange={setStacksEnabled}
+              showPreReleases={showPreReleases}
+              onShowPreReleasesChange={setShowPreReleases}
+              saving={saving}
+              canUpdateOrganization={canUpdateOrganization}
+              onSubmit={saveSettings}
+            />
 
-              <RetentionCard
-                retentionLoading={retentionLoading}
-                retentionCount={retentionCount}
-                onRetentionCountChange={setRetentionCount}
-                retentionDays={retentionDays}
-                onRetentionDaysChange={setRetentionDays}
-                retentionSaving={retentionSaving}
-                canUpdateOrganization={canUpdateOrganization}
-                onSubmit={saveRetention}
-              />
-              <DangerZoneCard
-                canDestroyOrganization={canDestroyOrganization}
-                onDeleteRequest={(): void => { setConfirmDeleteOrgOpen(true); }}
-              />
-            </>
-          )}
-
-          {activeTab === "roles" && (
-            <RolesTab
-              roles={roles}
-              newRoleName={newRoleName}
-              onNewRoleNameChange={setNewRoleName}
-              newRoleDescription={newRoleDescription}
-              onNewRoleDescriptionChange={setNewRoleDescription}
-              newRolePermissions={newRolePermissions}
-              onNewRolePermissionChange={(permission: OrganizationPermission, checked: boolean): void => {
-                setNewRolePermissions((current) => ({ ...current, [permission]: checked }));
+            <RetentionCard
+              retentionLoading={retentionLoading}
+              retentionCount={retentionCount}
+              onRetentionCountChange={setRetentionCount}
+              retentionDays={retentionDays}
+              onRetentionDaysChange={setRetentionDays}
+              retentionSaving={retentionSaving}
+              canUpdateOrganization={canUpdateOrganization}
+              onSubmit={saveRetention}
+            />
+            <DangerZoneCard
+              canDestroyOrganization={canDestroyOrganization}
+              onDeleteRequest={(): void => {
+                setConfirmDeleteOrgOpen(true);
               }}
-              savingRole={savingRole}
-              canUpdateOrganizationAccess={canUpdateOrganizationAccess}
-              onSubmit={saveRole}
-              onUpdatePermission={updateRolePermission}
             />
-          )}
+          </>
+        )}
 
-          {activeTab === "cidr" && <OrganizationCidrRanges orgName={orgNameParam} />}
+        {activeTab === "roles" && (
+          <RolesTab
+            roles={roles}
+            newRoleName={newRoleName}
+            onNewRoleNameChange={setNewRoleName}
+            newRoleDescription={newRoleDescription}
+            onNewRoleDescriptionChange={setNewRoleDescription}
+            newRolePermissions={newRolePermissions}
+            onNewRolePermissionChange={(permission: OrganizationPermission, checked: boolean): void => {
+              setNewRolePermissions((current) => ({ ...current, [permission]: checked }));
+            }}
+            savingRole={savingRole}
+            canUpdateOrganizationAccess={canUpdateOrganizationAccess}
+            onSubmit={saveRole}
+            onUpdatePermission={updateRolePermission}
+          />
+        )}
 
-          {activeTab === "tags" && <OrganizationTags orgName={orgNameParam} />}
+        {activeTab === "cidr" && <OrganizationCidrRanges orgName={orgNameParam} />}
 
-          {activeTab === "ssh-keys" && <OrganizationSshKeys orgName={orgNameParam} />}
+        {activeTab === "tags" && <OrganizationTags orgName={orgNameParam} />}
 
-          {activeTab === "users" && (
-            <UsersTab
-              orgNameParam={orgNameParam}
-              memberships={memberships}
-              membershipsError={membershipsError}
-              canManageUsers={canManageUsers}
-              teams={teams}
-              inviteEmail={inviteEmail}
-              onInviteEmailInput={setInviteEmail}
-              inviteTeamId={inviteTeamId}
-              onInviteTeamChange={setInviteTeamId}
-              inviting={inviting}
-              onInvite={inviteMember}
-              onRetry={(): void => { void loadMemberships(); }}
-              onRemoveRequest={handleMemberRemoveRequest}
-            />
-          )}
+        {activeTab === "ssh-keys" && <OrganizationSshKeys orgName={orgNameParam} />}
 
-          {activeTab === "teams" && (
-            <TeamsTab
-              teams={teams}
-              teamsError={teamsError}
-              editingTeamId={editingTeamId}
-              teamPermissions={teamPermissions}
-              savingTeamPermissions={savingTeamPermissions}
-              teamVisibility={teamVisibility}
-              teamTokenMgmt={teamTokenMgmt}
-              teamMemberList={teamMemberList}
-              teamMemberCounts={teamMemberCounts}
-              addMemberTeam={addMemberTeam}
-              memberships={memberships}
-              membershipsError={membershipsError}
-              inviteEmail={inviteEmail}
-              onInviteEmailInput={setInviteEmail}
-              inviteTeamId={inviteTeamId}
-              onInviteTeamChange={setInviteTeamId}
-              inviting={inviting}
-              canCreateTeam={canCreateTeam}
-              canManageUsers={canManageUsers}
-              canUpdateOrganizationAccess={canUpdateOrganizationAccess}
-              onCreateTeam={createTeam}
-              onNewTeamNameChange={setNewTeamName}
-              newTeamName={newTeamName}
-              onEditPermissions={editTeamPermissions}
-              onCancelEdit={(): void => { setEditingTeamId(""); }}
-              onSavePermissions={saveTeamPermissions}
-              onPermissionToggle={setTeamPermission}
-              onVisibilityChange={(teamId: string, value: string): void => { void updateTeamSetting(teamId, "visibility", value); }}
-              onTokenMgmtChange={(teamId: string, checked: boolean): void => { void updateTeamSetting(teamId, "allow-member-token-management", checked); }}
-              onAddMemberChange={(teamId: string, value: string): void => { setAddMemberTeam((prev) => ({ ...prev, [teamId]: value })); }}
-              onAddMember={(teamId: string): void => { void addTeamMember(teamId); }}
-              onRemoveMember={(teamId: string, member: { id: string; username: string }): void => { void removeTeamMember(teamId, member); }}
-              onInvite={inviteMember}
-              onRetryTeams={(): void => { void loadTeams(); }}
-              onRetryMembers={(): void => { void loadMemberships(); }}
-              onRemoveRequest={handleMemberRemoveRequest}
-            />
-          )}
+        {activeTab === "users" && (
+          <UsersTab
+            orgNameParam={orgNameParam}
+            memberships={memberships}
+            membershipsError={membershipsError}
+            canManageUsers={canManageUsers}
+            teams={teams}
+            inviteEmail={inviteEmail}
+            onInviteEmailInput={setInviteEmail}
+            inviteTeamId={inviteTeamId}
+            onInviteTeamChange={setInviteTeamId}
+            inviting={inviting}
+            onInvite={inviteMember}
+            onRetry={(): void => {
+              void loadMemberships();
+            }}
+            onRemoveRequest={handleMemberRemoveRequest}
+          />
+        )}
+
+        {activeTab === "teams" && (
+          <TeamsTab
+            teams={teams}
+            teamsError={teamsError}
+            editingTeamId={editingTeamId}
+            teamPermissions={teamPermissions}
+            savingTeamPermissions={savingTeamPermissions}
+            teamVisibility={teamVisibility}
+            teamTokenMgmt={teamTokenMgmt}
+            teamMemberList={teamMemberList}
+            teamMemberCounts={teamMemberCounts}
+            addMemberTeam={addMemberTeam}
+            memberships={memberships}
+            membershipsError={membershipsError}
+            inviteEmail={inviteEmail}
+            onInviteEmailInput={setInviteEmail}
+            inviteTeamId={inviteTeamId}
+            onInviteTeamChange={setInviteTeamId}
+            inviting={inviting}
+            canCreateTeam={canCreateTeam}
+            canManageUsers={canManageUsers}
+            canUpdateOrganizationAccess={canUpdateOrganizationAccess}
+            onCreateTeam={createTeam}
+            onNewTeamNameChange={setNewTeamName}
+            newTeamName={newTeamName}
+            onEditPermissions={editTeamPermissions}
+            onCancelEdit={(): void => {
+              setEditingTeamId("");
+            }}
+            onSavePermissions={saveTeamPermissions}
+            onPermissionToggle={setTeamPermission}
+            onVisibilityChange={(teamId: string, value: string): void => {
+              void updateTeamSetting(teamId, "visibility", value);
+            }}
+            onTokenMgmtChange={(teamId: string, checked: boolean): void => {
+              void updateTeamSetting(teamId, "allow-member-token-management", checked);
+            }}
+            onAddMemberChange={(teamId: string, value: string): void => {
+              setAddMemberTeam((prev) => ({ ...prev, [teamId]: value }));
+            }}
+            onAddMember={(teamId: string): void => {
+              void addTeamMember(teamId);
+            }}
+            onRemoveMember={(teamId: string, member: { id: string; username: string }): void => {
+              void removeTeamMember(teamId, member);
+            }}
+            onInvite={inviteMember}
+            onRetryTeams={(): void => {
+              void loadTeams();
+            }}
+            onRetryMembers={(): void => {
+              void loadMemberships();
+            }}
+            onRemoveRequest={handleMemberRemoveRequest}
+          />
+        )}
       </div>
 
       <OrgConfirmDialogs
@@ -1684,7 +2229,9 @@ export function OrganizationSettings(): React.JSX.Element {
         deletingOrg={deletingOrg}
         onConfirmDelete={deleteOrg}
         memberToRemove={memberToRemove}
-        onClearMember={(): void => { setMemberToRemove(null); }}
+        onClearMember={(): void => {
+          setMemberToRemove(null);
+        }}
         onConfirmRemove={removeMembership}
       />
     </PageShell>

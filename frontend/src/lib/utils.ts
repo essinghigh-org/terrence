@@ -7,10 +7,10 @@ import { isString } from "../lib/type-guards";
 export type DeepReadonly<T> = T extends null | undefined
   ? T
   : T extends (infer R)[]
-  ? readonly DeepReadonly<R>[]
-  : T extends object
-  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-  : T;
+    ? readonly DeepReadonly<R>[]
+    : T extends object
+      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+      : T;
 
 // NOTE: a memoized cn() was benchmarked and REVERTED (bench/frontend.bench.ts).
 // Key building + Map lookups cost ~0.23us/call while twMerge costs ~0.6us;
@@ -88,7 +88,10 @@ function toDisplayDate(value: Readonly<Date> | string | number | null | undefine
  * Older than a week falls back to formatDate; pass the exact value to the
  * element's title attribute for precision (review item 14.23).
  */
-export function formatRelativeTime(value: Readonly<Date> | string | number | null | undefined, now: Readonly<Date> = new Date()): string {
+export function formatRelativeTime(
+  value: Readonly<Date> | string | number | null | undefined,
+  now: Readonly<Date> = new Date(),
+): string {
   if (value === null || value === undefined || value === "") return "—";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -112,9 +115,15 @@ export function formatRelativeTime(value: Readonly<Date> | string | number | nul
   return past ? `${text} ago` : `in ${text}`;
 }
 
-export function formatDate(value: Readonly<Date> | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
+export function formatDate(
+  value: Readonly<Date> | string | number | null | undefined,
+  fallback = "—",
+  timeZone = resolveDisplayTimeZone(),
+): string {
   const date = toDisplayDate(value, timeZone);
-  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString("en-US", timeZone !== undefined ? { timeZone } : undefined);
+  return Number.isNaN(date.valueOf())
+    ? fallback
+    : date.toLocaleDateString("en-US", timeZone !== undefined ? { timeZone } : undefined);
 }
 
 /**

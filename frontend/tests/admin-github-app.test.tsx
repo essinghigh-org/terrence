@@ -42,11 +42,11 @@ test("manifest setup requests the JSON:API media type the Accept gate requires",
   stubLocationAssign(assignedUrls);
 
   const setupAccepts: (string | null)[] = [];
-  const handoffUrl = new URL("/api/v2/admin/github-app/manifest/redirect?state=state-1", window.location.origin).toString();
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const handoffUrl = new URL(
+    "/api/v2/admin/github-app/manifest/redirect?state=state-1",
+    window.location.origin,
+  ).toString();
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(getUrl(input), window.location.origin);
     if (url.pathname === "/api/v2/admin/github-app") {
       return json({ data: { attributes: { status: "unconfigured" } } });
@@ -65,7 +65,7 @@ test("manifest setup requests the JSON:API media type the Accept gate requires",
     }
     throw new Error(`Unexpected request: ${url.toString()}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(<AdminGitHubApp />);
   const startButton = await view.findByRole("button", { name: "Create GitHub App" });

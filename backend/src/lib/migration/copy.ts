@@ -57,7 +57,7 @@ export type CopyOptions = Readonly<{
 const DEFAULT_BATCH_SIZE = 250;
 
 function quoted(name: string): string {
-  return `"${name.replace(/"/g, "\"\"")}"`;
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 function coerceBoolean(value: unknown): boolean {
@@ -106,13 +106,12 @@ function readCopyBatch(
   total: number,
   cursor: number,
 ): readonly Readonly<Record<string, unknown>>[] {
-  const sql = rowid === null
-    ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
-    : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
+  const sql =
+    rowid === null
+      ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
+      : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
   try {
-    const rows = rowid === null
-      ? source.query(sql).all(batchSize, total)
-      : source.query(sql).all(cursor, batchSize);
+    const rows = rowid === null ? source.query(sql).all(batchSize, total) : source.query(sql).all(cursor, batchSize);
     return rows as readonly Readonly<Record<string, unknown>>[];
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -151,12 +150,16 @@ export async function copyTable(
         values.push(coerceCell(row[column.name], column.mode));
       }
       params.push(...values);
-      valueGroups.push(`(${values.map((_, index): string => `$${params.length - values.length + index + 1}`).join(", ")})`);
+      valueGroups.push(
+        `(${values.map((_, index): string => `$${params.length - values.length + index + 1}`).join(", ")})`,
+      );
     }
-    await target.unsafe(`${insertPrefix}${valueGroups.join(", ")} ON CONFLICT DO NOTHING`, params).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Copy failed on table "${table.name}" (batch of ${String(rows.length)} rows): ${message}`);
-    });
+    await target
+      .unsafe(`${insertPrefix}${valueGroups.join(", ")} ON CONFLICT DO NOTHING`, params)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Copy failed on table "${table.name}" (batch of ${String(rows.length)} rows): ${message}`);
+      });
     total += rows.length;
     if (rowid !== null) {
       const lastRow = rows[rows.length - 1];
@@ -225,12 +228,18 @@ function canonicalBlobCell(value: unknown): string {
 export function canonicalCell(value: unknown, mode: ColumnMode): string {
   if (value === null || value === undefined) return "n";
   switch (mode) {
-    case "boolean": return canonicalBooleanCell(value);
-    case "json": return canonicalJsonCell(value);
-    case "integer": return canonicalIntegerCell(value);
-    case "numeric": return canonicalNumericCell(value);
-    case "real": return canonicalRealCell(value);
-    case "blob": return canonicalBlobCell(value);
+    case "boolean":
+      return canonicalBooleanCell(value);
+    case "json":
+      return canonicalJsonCell(value);
+    case "integer":
+      return canonicalIntegerCell(value);
+    case "numeric":
+      return canonicalNumericCell(value);
+    case "real":
+      return canonicalRealCell(value);
+    case "blob":
+      return canonicalBlobCell(value);
     case "text":
     case "datetime":
     default:
@@ -248,10 +257,7 @@ export type TableDigestResult = Readonly<{
  * Both source and target must order by the same key; Terrence primary keys
  * are ASCII so SQLite BINARY and PostgreSQL locale collation agree.
  */
-export function digestTableSource(
-  source: SqliteQueryable,
-  table: CopyTable,
-): TableDigestResult {
+export function digestTableSource(source: SqliteQueryable, table: CopyTable): TableDigestResult {
   if (table.pkColumns.length === 0) {
     throw new Error(`Table ${table.name} has no primary key; digest requires one`);
   }
@@ -270,10 +276,7 @@ export function digestTableSource(
   return { digest: hash.digest("hex"), rows };
 }
 
-export async function digestTableTarget(
-  target: PostgresQueryable,
-  table: CopyTable,
-): Promise<TableDigestResult> {
+export async function digestTableTarget(target: PostgresQueryable, table: CopyTable): Promise<TableDigestResult> {
   if (table.pkColumns.length === 0) {
     throw new Error(`Table ${table.name} has no primary key; digest requires one`);
   }
@@ -306,10 +309,10 @@ export async function syncIdentitySequences(target: PostgresQueryable, tables: r
       // Only identity-capable single-column PKs carry a sequence; probe
       // pg_get_serial_sequence for every integer PK column.
       if (!table.pkColumns.includes(column.name)) continue;
-      const sequenceRow = await target.unsafe(
-        `SELECT pg_get_serial_sequence($1, $2) AS seq`,
-        [table.name, column.name],
-      );
+      const sequenceRow = await target.unsafe(`SELECT pg_get_serial_sequence($1, $2) AS seq`, [
+        table.name,
+        column.name,
+      ]);
       const sequence = sequenceRow[0]?.["seq"];
       if (typeof sequence !== "string" || sequence === "") continue;
       await target.unsafe(

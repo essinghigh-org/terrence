@@ -38,10 +38,11 @@ const outsiderTokenId = `ot-repository-discovery-outsider-${suffix}`;
 const calls: { authorization: string | null; url: string }[] = [];
 
 function request(connectionId: string): Promise<Response> {
-  return app.handle(new Request(
-    `http://terrence.test/api/v2/organizations/${orgName}/vcs-connections/${connectionId}/repositories`,
-    { headers: { Authorization: `Bearer ${apiToken}` } },
-  ));
+  return app.handle(
+    new Request(`http://terrence.test/api/v2/organizations/${orgName}/vcs-connections/${connectionId}/repositories`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    }),
+  );
 }
 
 function jsonResponse(body: unknown, headers: Record<string, string> = {}): Response {
@@ -59,16 +60,17 @@ beforeAll(async () => {
     const parsed = new URL(url);
 
     if (parsed.hostname === "api.github.com") {
-      return jsonResponse([{ full_name: "octo/public-repository", name: "public-repository", owner: { login: "octo" } }]);
+      return jsonResponse([
+        { full_name: "octo/public-repository", name: "public-repository", owner: { login: "octo" } },
+      ]);
     }
     if (parsed.hostname === "github.enterprise.test") {
       if (parsed.searchParams.get("page") === "2") {
         return jsonResponse([{ full_name: "enterprise/second", name: "second", owner: { login: "enterprise" } }]);
       }
-      return jsonResponse(
-        [{ full_name: "enterprise/first", name: "first", owner: { login: "enterprise" } }],
-        { Link: '<https://github.enterprise.test/api/v3/user/repos?per_page=100&sort=updated&page=2>; rel="next"' },
-      );
+      return jsonResponse([{ full_name: "enterprise/first", name: "first", owner: { login: "enterprise" } }], {
+        Link: '<https://github.enterprise.test/api/v3/user/repos?per_page=100&sort=updated&page=2>; rel="next"',
+      });
     }
     if (parsed.hostname === "gitlab.enterprise.test") {
       if (parsed.searchParams.get("page") === "2") {
@@ -90,7 +92,9 @@ beforeAll(async () => {
     }
     if (parsed.hostname === "api.bitbucket.org" && parsed.pathname.endsWith("/repositories/team")) {
       if (parsed.searchParams.get("page") === "2") {
-        return jsonResponse({ values: [{ full_name: "team/second", name: "second", owner: { display_name: "Team" } }] });
+        return jsonResponse({
+          values: [{ full_name: "team/second", name: "second", owner: { display_name: "Team" } }],
+        });
       }
       return jsonResponse({
         next: "https://api.bitbucket.org/2.0/repositories/team?pagelen=100&sort=-updated_on&page=2",
@@ -148,7 +152,13 @@ beforeAll(async () => {
       httpUrl: "https://api.bitbucket.org",
       createdAt: Date.now(),
     },
-    { id: boundedBitbucketClientId, orgId, name: "Bounded Bitbucket", serviceProvider: "bitbucket", createdAt: Date.now() },
+    {
+      id: boundedBitbucketClientId,
+      orgId,
+      name: "Bounded Bitbucket",
+      serviceProvider: "bitbucket",
+      createdAt: Date.now(),
+    },
     {
       id: outsiderClientId,
       orgId: outsiderOrgId,
@@ -179,27 +189,34 @@ beforeEach(() => {
 
 afterAll(async () => {
   setExternalUrlTransportForTests(undefined);
-  await db.delete(oauthTokens).where(inArray(oauthTokens.id, [
-    githubTokenId,
-    githubEnterpriseTokenId,
-    gitlabTokenId,
-    bitbucketTokenId,
-    boundedBitbucketTokenId,
-    outsiderTokenId,
-  ]));
-  await db.delete(oauthClients).where(inArray(oauthClients.id, [
-    githubClientId,
-    githubEnterpriseClientId,
-    gitlabClientId,
-    bitbucketClientId,
-    boundedBitbucketClientId,
-    outsiderClientId,
-  ]));
+  await db
+    .delete(oauthTokens)
+    .where(
+      inArray(oauthTokens.id, [
+        githubTokenId,
+        githubEnterpriseTokenId,
+        gitlabTokenId,
+        bitbucketTokenId,
+        boundedBitbucketTokenId,
+        outsiderTokenId,
+      ]),
+    );
+  await db
+    .delete(oauthClients)
+    .where(
+      inArray(oauthClients.id, [
+        githubClientId,
+        githubEnterpriseClientId,
+        gitlabClientId,
+        bitbucketClientId,
+        boundedBitbucketClientId,
+        outsiderClientId,
+      ]),
+    );
   await db.delete(apiTokens).where(eq(apiTokens.userId, userId));
-  await db.delete(organizationMemberships).where(and(
-    eq(organizationMemberships.orgId, orgId),
-    eq(organizationMemberships.userId, userId),
-  ));
+  await db
+    .delete(organizationMemberships)
+    .where(and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, userId)));
   await db.delete(organizations).where(inArray(organizations.id, [orgId, outsiderOrgId]));
   await db.delete(users).where(eq(users.id, userId));
 });
@@ -208,11 +225,13 @@ describe("VCS OAuth repository discovery", () => {
   test("keeps the existing GitHub OAuth discovery path", async () => {
     const response = await request(`oauth-token:${githubTokenId}`);
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toEqual([{
-      id: "octo/public-repository",
-      type: "vcs-repositories",
-      attributes: { identifier: "octo/public-repository", name: "public-repository", owner: "octo" },
-    }]);
+    expect((await response.json()).data).toEqual([
+      {
+        id: "octo/public-repository",
+        type: "vcs-repositories",
+        attributes: { identifier: "octo/public-repository", name: "public-repository", owner: "octo" },
+      },
+    ]);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.authorization).toBe("Bearer github-token");
     expect(new URL(calls[0]?.url ?? "").pathname).toBe("/user/repos");
@@ -232,24 +251,29 @@ describe("VCS OAuth repository discovery", () => {
 
   test("rejects HTTP API URLs before sending bearer credentials", async () => {
     const previousApiUrl = "https://github.enterprise.test/api/v3";
-    await db.update(oauthClients).set({ apiUrl: "http://github.enterprise.test/api/v3" }).where(eq(oauthClients.id, githubEnterpriseClientId));
+    await db
+      .update(oauthClients)
+      .set({ apiUrl: "http://github.enterprise.test/api/v3" })
+      .where(eq(oauthClients.id, githubEnterpriseClientId));
     try {
       const response = await request(githubEnterpriseTokenId);
       expect(response.status).toBe(200);
       expect((await response.json()).data).toEqual([]);
       expect(calls).toHaveLength(0);
     } finally {
-      await db.update(oauthClients).set({ apiUrl: previousApiUrl }).where(eq(oauthClients.id, githubEnterpriseClientId));
+      await db
+        .update(oauthClients)
+        .set({ apiUrl: previousApiUrl })
+        .where(eq(oauthClients.id, githubEnterpriseClientId));
     }
   });
 
   test("uses GitLab's paginated projects API and normalizes paths", async () => {
     const response = await request(gitlabTokenId);
     expect(response.status).toBe(200);
-    expect((await response.json()).data.map((item: { attributes: { identifier: string } }) => item.attributes.identifier)).toEqual([
-      "platform/first",
-      "platform/second",
-    ]);
+    expect(
+      (await response.json()).data.map((item: { attributes: { identifier: string } }) => item.attributes.identifier),
+    ).toEqual(["platform/first", "platform/second"]);
     expect(calls).toHaveLength(2);
     expect(new URL(calls[0]?.url ?? "").pathname).toBe("/api/v4/projects");
     expect(new URL(calls[0]?.url ?? "").searchParams.get("membership")).toBe("true");
@@ -259,10 +283,12 @@ describe("VCS OAuth repository discovery", () => {
   test("uses Bitbucket's values/next response shape", async () => {
     const response = await request(bitbucketTokenId);
     expect(response.status).toBe(200);
-    expect((await response.json()).data.map((item: { attributes: { identifier: string; owner: string } }) => [
-      item.attributes.identifier,
-      item.attributes.owner,
-    ])).toEqual([
+    expect(
+      (await response.json()).data.map((item: { attributes: { identifier: string; owner: string } }) => [
+        item.attributes.identifier,
+        item.attributes.owner,
+      ]),
+    ).toEqual([
       ["team/first", "Team"],
       ["team/second", "Team"],
     ]);

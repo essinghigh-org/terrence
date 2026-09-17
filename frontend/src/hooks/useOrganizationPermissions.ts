@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchApi } from "../lib/api";
 
-export const orgPermissionsCache = new Map<string, { permissions: Readonly<Record<string, boolean>> | undefined; expires: number }>();
+export const orgPermissionsCache = new Map<
+  string,
+  { permissions: Readonly<Record<string, boolean>> | undefined; expires: number }
+>();
 export const ORG_CACHE_TTL_MS = 30_000;
 
 /**
@@ -28,13 +31,15 @@ export type OrganizationPermissions = Readonly<{
 }>;
 
 export function useOrganizationPermissions(orgName: string | undefined): OrganizationPermissions {
-  const [permissions, setPermissions] = useState<Readonly<Record<string, boolean>> | undefined>((): Readonly<Record<string, boolean>> | undefined => {
-    if (orgName !== undefined && orgName !== "") {
-      const cached = orgPermissionsCache.get(orgName);
-      if (cached !== undefined && cached.expires > Date.now()) return cached.permissions;
-    }
-    return undefined;
-  });
+  const [permissions, setPermissions] = useState<Readonly<Record<string, boolean>> | undefined>(
+    (): Readonly<Record<string, boolean>> | undefined => {
+      if (orgName !== undefined && orgName !== "") {
+        const cached = orgPermissionsCache.get(orgName);
+        if (cached !== undefined && cached.expires > Date.now()) return cached.permissions;
+      }
+      return undefined;
+    },
+  );
   const [loaded, setLoaded] = useState((): boolean => {
     if (orgName !== undefined && orgName !== "") {
       const cached = orgPermissionsCache.get(orgName);
@@ -64,25 +69,26 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
     setLoaded(false);
     setPermissions(undefined);
 
-    void fetchApi(
-      `/organizations/${encodeURIComponent(orgName)}`,
-      { signal: controller.signal },
-    ).then((result): void => {
-      if (controller.signal.aborted) return;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const attributes = (result as {
-        data?: { attributes?: { permissions?: Record<string, boolean> } };
-      }).data?.attributes;
-      const perms = attributes?.permissions;
-      orgPermissionsCache.set(orgName, { permissions: perms, expires: Date.now() + ORG_CACHE_TTL_MS });
-      setPermissions(perms);
-      setLoaded(true);
-    }).catch((caught: unknown): void => {
-      if (controller.signal.aborted) return;
-      setPermissions(undefined);
-      setLoaded(false);
-      setError(caught instanceof Error ? caught.message : "Failed to load organization permissions.");
-    });
+    void fetchApi(`/organizations/${encodeURIComponent(orgName)}`, { signal: controller.signal })
+      .then((result): void => {
+        if (controller.signal.aborted) return;
+        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+        const attributes = (
+          result as {
+            data?: { attributes?: { permissions?: Record<string, boolean> } };
+          }
+        ).data?.attributes;
+        const perms = attributes?.permissions;
+        orgPermissionsCache.set(orgName, { permissions: perms, expires: Date.now() + ORG_CACHE_TTL_MS });
+        setPermissions(perms);
+        setLoaded(true);
+      })
+      .catch((caught: unknown): void => {
+        if (controller.signal.aborted) return;
+        setPermissions(undefined);
+        setLoaded(false);
+        setError(caught instanceof Error ? caught.message : "Failed to load organization permissions.");
+      });
 
     return (): void => {
       controller.abort();

@@ -16,7 +16,9 @@ import { networkSetting } from "./runtime-config";
 import { getSettings } from "./settings";
 import { isIPv4InCidr } from "./url-safety";
 
-type PeelServer = Readonly<{ readonly requestIP?: (request: unknown) => Readonly<{ readonly address?: string }> | null }> | null;
+type PeelServer = Readonly<{
+  readonly requestIP?: (request: unknown) => Readonly<{ readonly address?: string }> | null;
+}> | null;
 
 let cachedTrustedHeaders: string[] = [];
 let cachedTrustedProxyCidrs: string[] = [];
@@ -34,9 +36,8 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
     const settingsCidrs = Array.isArray(configuredCidrs)
       ? configuredCidrs.filter((cidr): cidr is string => typeof cidr === "string" && cidr.trim() !== "")
       : [];
-    cachedTrustedProxyCidrs = settingsCidrs.length > 0
-      ? settingsCidrs
-      : [...networkSetting("TERRENCE_TRUSTED_PROXY_CIDRS")];
+    cachedTrustedProxyCidrs =
+      settingsCidrs.length > 0 ? settingsCidrs : [...networkSetting("TERRENCE_TRUSTED_PROXY_CIDRS")];
   } catch {
     cachedTrustedHeaders = [];
     cachedTrustedProxyCidrs = [];
@@ -71,10 +72,14 @@ export function trustedClientIpForPeer(request: unknown, peer: string | null): s
  * when the proxy is configured prevents an off-proxy client from spoofing HTTPS.
  */
 /** @public Intentional surface: used by security-headers HSTS check. */
-export function requestIsHttps(request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>): boolean {
+export function requestIsHttps(
+  request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>,
+): boolean {
   try {
     if (new URL(request.url).protocol === "https:") return true;
-  } catch { /* fall through to header check */ }
+  } catch {
+    /* fall through to header check */
+  }
   // This helper has no socket peer, so it cannot authenticate a proxy. Callers
   // must use PUBLIC_URL when TLS terminates upstream; never trust a forwarded
   // scheme from an unbound request object.

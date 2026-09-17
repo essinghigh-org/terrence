@@ -50,22 +50,16 @@ afterEach((): void => {
 
 test("formats the plan summary as markdown", () => {
   const markdown = planSummaryMarkdown({ add: 1, change: 1, destroy: 1, replace: 0, importCount: 1 });
-  expect(markdown).toBe([
-    "## Plan summary",
-    "",
-    "- 1 to import",
-    "- 1 to create",
-    "- 1 to change",
-    "- 1 to destroy",
-    "",
-  ].join("\n"));
+  expect(markdown).toBe(
+    ["## Plan summary", "", "- 1 to import", "- 1 to create", "- 1 to change", "- 1 to destroy", ""].join("\n"),
+  );
 });
 
 test("copies the plan summary as markdown from the toolbar", async () => {
   const writeText = mock(async (): Promise<void> => undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (): Promise<Response> => json(planFixture()))) as unknown as typeof fetch;
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (): Promise<Response> => json(planFixture())) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-summary" status="planned" />);
   await waitFor((): void => {
@@ -75,14 +69,8 @@ test("copies the plan summary as markdown from the toolbar", async () => {
   fireEvent.click(view.getByRole("button", { name: "Copy plan summary as markdown" }));
 
   await waitFor(() => {
-    expect(writeText).toHaveBeenCalledWith([
-      "## Plan summary",
-      "",
-      "- 1 to import",
-      "- 2 to create",
-      "- 1 to change",
-      "- 1 to destroy",
-      "",
-    ].join("\n"));
+    expect(writeText).toHaveBeenCalledWith(
+      ["## Plan summary", "", "- 1 to import", "- 2 to create", "- 1 to change", "- 1 to destroy", ""].join("\n"),
+    );
   });
 });

@@ -21,14 +21,53 @@ const getUrl = (input: string | URL | Request): string =>
 
 const docsIndex = {
   data: [
-    { attributes: { slug: "overview", title: "Overview", category: "Getting started", order: 1, description: "What Terrence is." } },
-    { attributes: { slug: "quickstart", title: "Quickstart", category: "Getting started", order: 2, description: "First steps." } },
-    { attributes: { slug: "workspaces", title: "Workspaces", category: "Workspaces", order: 10, description: "Manage workspaces." } },
-    { attributes: { slug: "variables", title: "Variables", category: "Workspaces", order: 20, description: "Manage variables." } },
+    {
+      attributes: {
+        slug: "overview",
+        title: "Overview",
+        category: "Getting started",
+        order: 1,
+        description: "What Terrence is.",
+      },
+    },
+    {
+      attributes: {
+        slug: "quickstart",
+        title: "Quickstart",
+        category: "Getting started",
+        order: 2,
+        description: "First steps.",
+      },
+    },
+    {
+      attributes: {
+        slug: "workspaces",
+        title: "Workspaces",
+        category: "Workspaces",
+        order: 10,
+        description: "Manage workspaces.",
+      },
+    },
+    {
+      attributes: {
+        slug: "variables",
+        title: "Variables",
+        category: "Workspaces",
+        order: 20,
+        description: "Manage variables.",
+      },
+    },
   ],
 };
 
-const docDetail = (slug: string, title: string, category: string, order: number, description: string, markdown: string): JsonObject => ({
+const docDetail = (
+  slug: string,
+  title: string,
+  category: string,
+  order: number,
+  description: string,
+  markdown: string,
+): JsonObject => ({
   data: {
     attributes: { slug, title, category, order, description, markdown },
   },
@@ -39,20 +78,35 @@ function installFetchMock(): Mock<(input: string | URL | Request, init?: Request
     const url = getUrl(input);
     if (url === "/api/v2/docs") return json(docsIndex);
     if (url === "/api/v2/docs/overview") {
-      return json(docDetail("overview", "Overview", "Getting started", 1, "What Terrence is.", "# Overview docs\n\n[Read variables](variables)"));
+      return json(
+        docDetail(
+          "overview",
+          "Overview",
+          "Getting started",
+          1,
+          "What Terrence is.",
+          "# Overview docs\n\n[Read variables](variables)",
+        ),
+      );
     }
     if (url === "/api/v2/docs/quickstart") {
-      return json(docDetail("quickstart", "Quickstart", "Getting started", 2, "First steps.", "# Quickstart docs\n\nContent."));
+      return json(
+        docDetail("quickstart", "Quickstart", "Getting started", 2, "First steps.", "# Quickstart docs\n\nContent."),
+      );
     }
     if (url === "/api/v2/docs/workspaces") {
-      return json(docDetail("workspaces", "Workspaces", "Workspaces", 10, "Manage workspaces.", "# Workspaces docs\n\nContent."));
+      return json(
+        docDetail("workspaces", "Workspaces", "Workspaces", 10, "Manage workspaces.", "# Workspaces docs\n\nContent."),
+      );
     }
     if (url === "/api/v2/docs/variables") {
-      return json(docDetail("variables", "Variables", "Workspaces", 20, "Manage variables.", "# Variables docs\n\nContent."));
+      return json(
+        docDetail("variables", "Variables", "Workspaces", 20, "Manage variables.", "# Variables docs\n\nContent."),
+      );
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
 }
 
@@ -78,11 +132,7 @@ function renderDocs(initialPath: string): ReturnType<typeof render> {
 
 function CurrentLocation(): React.JSX.Element {
   const location = useLocation();
-  return (
-    <output aria-label="Current location">
-      {location.pathname}
-    </output>
-  );
+  return <output aria-label="Current location">{location.pathname}</output>;
 }
 
 afterEach((): void => {

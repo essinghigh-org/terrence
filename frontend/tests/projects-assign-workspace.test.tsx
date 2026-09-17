@@ -35,11 +35,13 @@ test("assigns a workspace to another project via the workspace assignment dialog
     }
     if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100") && method === "GET") {
       return json({
-        data: [{
-          id: "ws-1",
-          attributes: { name: "production" },
-          relationships: { project: { data: { id: "prj-1", type: "projects" } } },
-        }],
+        data: [
+          {
+            id: "ws-1",
+            attributes: { name: "production" },
+            relationships: { project: { data: { id: "prj-1", type: "projects" } } },
+          },
+        ],
       });
     }
     if (url === "/api/v2/organizations/acme" && method === "GET") {
@@ -48,7 +50,7 @@ test("assigns a workspace to another project via the workspace assignment dialog
       });
     }
     if (url === "/api/v2/workspaces/ws-1" && method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const body = JSON.parse(init?.body as string) as {
         data?: { relationships?: { project?: { data?: { id?: string } } } };
       };
@@ -59,7 +61,7 @@ test("assigns a workspace to another project via the workspace assignment dialog
     }
     throw new Error(`Unexpected request: ${method} ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -69,7 +71,9 @@ test("assigns a workspace to another project via the workspace assignment dialog
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Platform")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Platform")).toBeTruthy();
+  });
 
   fireEvent.click(view.getByRole("button", { name: "Assign workspaces" }));
   await waitFor((): void => {
@@ -79,9 +83,11 @@ test("assigns a workspace to another project via the workspace assignment dialog
   fireEvent.change(view.getByLabelText("Project for production"), { target: { value: "prj-2" } });
 
   await waitFor((): void => {
-    const patchCall = fetchMock.mock.calls.find(([callUrl, callInit]): boolean =>
-// SAFETY: the fixture field is a string per the API contract.
-      urlOf(callUrl as string | URL | Request) === "/api/v2/workspaces/ws-1" && callInit?.method === "PATCH");
+    const patchCall = fetchMock.mock.calls.find(
+      ([callUrl, callInit]): boolean =>
+        // SAFETY: the fixture field is a string per the API contract.
+        urlOf(callUrl as string | URL | Request) === "/api/v2/workspaces/ws-1" && callInit?.method === "PATCH",
+    );
     expect(patchCall).toBeTruthy();
   });
 });
@@ -100,7 +106,7 @@ test("does not allow workspace assignment without manage-project permission", as
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -110,9 +116,15 @@ test("does not allow workspace assignment without manage-project permission", as
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Default")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Default")).toBeTruthy();
+  });
   expect(view.queryByRole("button", { name: "Assign workspaces" })).toBeNull();
-  expect(fetchMock.mock.calls.some(([callUrl]): boolean =>
-// SAFETY: the fixture field is a string per the API contract.
-    urlOf(callUrl as string | URL | Request) === "/api/v2/workspaces/ws-1")).toBeFalse();
+  expect(
+    fetchMock.mock.calls.some(
+      ([callUrl]): boolean =>
+        // SAFETY: the fixture field is a string per the API contract.
+        urlOf(callUrl as string | URL | Request) === "/api/v2/workspaces/ws-1",
+    ),
+  ).toBeFalse();
 });

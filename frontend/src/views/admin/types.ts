@@ -3,15 +3,7 @@ import type { JsonValue } from "../../lib/json";
 import type { DeepReadonly } from "@/lib/utils";
 
 // Shared types and helpers for the admin dashboard sections.
-export type AdminSection =
-  | "security"
-  | "users"
-  | "orgs"
-  | "workspaces"
-  | "runs"
-  | "versions"
-  | "audit"
-  | "auth";
+export type AdminSection = "security" | "users" | "orgs" | "workspaces" | "runs" | "versions" | "audit" | "auth";
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export const attrString = (attrs: DeepReadonly<Record<string, JsonValue>>, key: string, fallback: string): string => {
@@ -20,7 +12,11 @@ export const attrString = (attrs: DeepReadonly<Record<string, JsonValue>>, key: 
 };
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
-export const attrBoolean = (attrs: DeepReadonly<Record<string, JsonValue>>, key: string, fallback: boolean): boolean => {
+export const attrBoolean = (
+  attrs: DeepReadonly<Record<string, JsonValue>>,
+  key: string,
+  fallback: boolean,
+): boolean => {
   const value = attrs[key];
   return isBoolean(value) ? value : fallback;
 };

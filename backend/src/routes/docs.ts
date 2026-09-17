@@ -62,16 +62,23 @@ function loadDocs(): DocEntry[] {
     // The docs directory is absent in some dev/test layouts; an empty
     // index degrades cleanly instead of failing route registration. The
     // failure is loud so a broken image cannot hide the documentation.
-    console.warn(`[terrence] Documentation directory ${DOCS_DIR} could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn(
+      `[terrence] Documentation directory ${DOCS_DIR} could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return [];
   }
 }
 
 const DOCS: readonly DocEntry[] = loadDocs();
-const DOCS_BY_SLUG: ReadonlyMap<string, DocEntry> = new Map(DOCS.map((entry): [string, DocEntry] => [entry.slug, entry]));
+const DOCS_BY_SLUG: ReadonlyMap<string, DocEntry> = new Map(
+  DOCS.map((entry): [string, DocEntry] => [entry.slug, entry]),
+);
 
 /** Small, deterministic documentation search used by the operations surfaces. */
-export function documentationMatches(query: string, limit = 8): readonly Readonly<{
+export function documentationMatches(
+  query: string,
+  limit = 8,
+): readonly Readonly<{
   slug: string;
   title: string;
   category: string;
@@ -84,14 +91,16 @@ export function documentationMatches(query: string, limit = 8): readonly Readonl
     .map((entry) => {
       const haystack = `${entry.title}\n${entry.category}\n${entry.description}\n${entry.markdown}`.toLocaleLowerCase();
       const index = haystack.indexOf(needle);
-      return index < 0 ? null : {
-        slug: entry.slug,
-        title: entry.title,
-        category: entry.category,
-        description: entry.description,
-        version: createHash("sha256").update(entry.markdown, "utf8").digest("hex").slice(0, 16),
-        index,
-      };
+      return index < 0
+        ? null
+        : {
+            slug: entry.slug,
+            title: entry.title,
+            category: entry.category,
+            description: entry.description,
+            version: createHash("sha256").update(entry.markdown, "utf8").digest("hex").slice(0, 16),
+            index,
+          };
     })
     .filter((entry): entry is Exclude<typeof entry, null> => entry !== null)
     .sort((a, b): number => a.index - b.index || a.slug.localeCompare(b.slug))
@@ -129,7 +138,8 @@ export const docsRoutes = new Elysia({ name: "docs" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const sorted = [...DOCS].sort((a, b): number =>
-      a.category === b.category ? a.order - b.order : a.category.localeCompare(b.category));
+      a.category === b.category ? a.order - b.order : a.category.localeCompare(b.category),
+    );
     return { data: sorted.map((entry): Record<string, unknown> => docResource(entry, false)) };
   })
   .get("/api/v2/docs/:slug", async ({ user, params, set }: DocsCtx): Promise<unknown> => {

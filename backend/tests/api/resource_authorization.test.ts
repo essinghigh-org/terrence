@@ -41,14 +41,16 @@ describe("direct resource authorization", () => {
   const archivePath = join(testDir, "module-archive.tar.gz");
 
   const request = (path: string, token: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await writeFile(archivePath, new Uint8Array([0x1f, 0x8b, 0x08]));
@@ -143,13 +145,21 @@ describe("direct resource authorization", () => {
       [`/api/v2/state-versions/${stateId}/download`, "GET"],
       [`/api/v2/workspaces/${workspaceId}/state-versions`, "POST", stateBody],
       [`/api/v2/workspaces/${workspaceId}/vars`, "GET"],
-      [`/api/v2/workspaces/${workspaceId}/vars`, "POST", {
-        data: { type: "vars", attributes: { key: "injected", value: "no" } },
-      }],
+      [
+        `/api/v2/workspaces/${workspaceId}/vars`,
+        "POST",
+        {
+          data: { type: "vars", attributes: { key: "injected", value: "no" } },
+        },
+      ],
       [`/api/v2/workspaces/${workspaceId}/vars/${variableId}`, "GET"],
-      [`/api/v2/workspaces/${workspaceId}/vars/${variableId}`, "PATCH", {
-        data: { type: "vars", attributes: { value: "changed" } },
-      }],
+      [
+        `/api/v2/workspaces/${workspaceId}/vars/${variableId}`,
+        "PATCH",
+        {
+          data: { type: "vars", attributes: { value: "changed" } },
+        },
+      ],
       [`/api/v2/workspaces/${workspaceId}/vars/${variableId}`, "DELETE"],
       [`/api/v2/workspaces/${workspaceId}/configuration-versions`, "GET"],
       [`/api/v2/workspaces/${workspaceId}/configuration-versions`, "POST"],
@@ -179,7 +189,9 @@ describe("direct resource authorization", () => {
 
     expect((await request(`/api/v2/state-versions/${stateId}`, orgToken)).status).toBe(200);
     expect((await request(`/api/v2/configuration-versions/${configurationVersionId}`, orgToken)).status).toBe(200);
-    expect((await request(`/api/v2/configuration-versions/${configurationVersionId}/download`, orgToken)).status).toBe(200);
+    expect((await request(`/api/v2/configuration-versions/${configurationVersionId}/download`, orgToken)).status).toBe(
+      200,
+    );
     const orgRunResponse = await request(`/api/v2/runs/${runId}`, orgToken);
     expect(orgRunResponse.status).toBe(200);
     const orgRun = (await orgRunResponse.json()).data;
@@ -205,22 +217,21 @@ describe("direct resource authorization", () => {
     );
     expect(mismatchedConfiguration.status).toBe(422);
 
-    const alreadyApplied = await request(
-      `/api/v2/runs/${appliedRunId}/actions/apply`,
-      ownerToken,
-      "POST",
-    );
+    const alreadyApplied = await request(`/api/v2/runs/${appliedRunId}/actions/apply`, ownerToken, "POST");
     expect(alreadyApplied.status).toBe(409);
 
-    expect(await db.query.stateVersions.findMany({ where: eq(stateVersions.workspaceId, workspaceId) }))
-      .toHaveLength(1);
-    expect(await db.query.workspaceVariables.findMany({ where: eq(workspaceVariables.workspaceId, workspaceId) }))
-      .toMatchObject([{ id: variableId, value: "do-not-leak" }]);
-    expect(await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, workspaceId) }))
-      .toHaveLength(1);
+    expect(await db.query.stateVersions.findMany({ where: eq(stateVersions.workspaceId, workspaceId) })).toHaveLength(
+      1,
+    );
+    expect(
+      await db.query.workspaceVariables.findMany({ where: eq(workspaceVariables.workspaceId, workspaceId) }),
+    ).toMatchObject([{ id: variableId, value: "do-not-leak" }]);
+    expect(
+      await db.query.configurationVersions.findMany({ where: eq(configurationVersions.workspaceId, workspaceId) }),
+    ).toHaveLength(1);
     const storedRuns = await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) });
     expect(storedRuns).toHaveLength(2);
-    expect(storedRuns.find(run => run.id === runId)?.status).toBe("planned");
-    expect(storedRuns.find(run => run.id === appliedRunId)?.status).toBe("applied");
+    expect(storedRuns.find((run) => run.id === runId)?.status).toBe("planned");
+    expect(storedRuns.find((run) => run.id === appliedRunId)?.status).toBe("applied");
   });
 });

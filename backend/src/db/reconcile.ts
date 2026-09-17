@@ -29,7 +29,9 @@ export type MigrationJournalEntry = { readonly idx: number; readonly tag: string
 export type MigrationJournalRow = { readonly hash: string; readonly createdAt: number };
 
 export function readBundledMigrationJournal(folder: string): MigrationJournalEntry[] {
-  const raw = JSON.parse(readFileSync(join(folder, "meta/_journal.json"), "utf8")) as { entries?: MigrationJournalEntry[] };
+  const raw = JSON.parse(readFileSync(join(folder, "meta/_journal.json"), "utf8")) as {
+    entries?: MigrationJournalEntry[];
+  };
   return raw.entries ?? [];
 }
 
@@ -149,7 +151,9 @@ export function sparseJournalReconcilePlan(
   facts: SparseJournalFacts,
 ): readonly SparseJournalPlanEntry[] {
   if (entries.length === 0 || facts.appliedRows.length === 0) return [];
-  const newestAppliedAt = Math.max(...facts.appliedRows.map((row: { readonly createdAt: number }): number => row.createdAt));
+  const newestAppliedAt = Math.max(
+    ...facts.appliedRows.map((row: { readonly createdAt: number }): number => row.createdAt),
+  );
   const appliedHashes = new Set(facts.appliedRows.map((row: { readonly hash: string }): string => row.hash));
   const bundledMaxWhen = entries.reduce((max, entry): number => (entry.when > max ? entry.when : max), 0);
   // A journal whose newest row is NEWER than every bundled migration is
@@ -222,7 +226,11 @@ export async function reconcileSparseMigrationJournal(
     appliedRows,
     tables: new Set(tables),
     indexes: new Set(indexes),
-    columns: new Set(columnPairs.map((pair: { readonly table: string; readonly column: string }): string => `${pair.table}.${pair.column}`)),
+    columns: new Set(
+      columnPairs.map(
+        (pair: { readonly table: string; readonly column: string }): string => `${pair.table}.${pair.column}`,
+      ),
+    ),
   });
   for (const entry of plan) {
     for (const statement of entry.statements) {

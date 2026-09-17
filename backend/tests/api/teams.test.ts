@@ -3,13 +3,7 @@ import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, users, workspaces } from "../../src/db/schema";
 
 describe("teams and team access API contract", () => {
   const suffix = crypto.randomUUID();
@@ -22,14 +16,16 @@ describe("teams and team access API contract", () => {
   const workspaceId = `ws-teams-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -75,7 +71,9 @@ describe("teams and team access API contract", () => {
     expect(createBody.data.attributes.name).toBe("developers");
     expect(createBody.data.attributes["allow-member-token-management"]).toBe(true);
     for (const enabled of [false, true]) {
-      const updated = await request(`/api/v2/teams/${teamId}`, "PATCH", { data: { attributes: { "allow-member-token-management": enabled } } });
+      const updated = await request(`/api/v2/teams/${teamId}`, "PATCH", {
+        data: { attributes: { "allow-member-token-management": enabled } },
+      });
       expect(updated.status).toBe(200);
       const refreshed = await request(`/api/v2/teams/${teamId}`);
       expect((await refreshed.json()).data.attributes["allow-member-token-management"]).toBe(enabled);
@@ -99,7 +97,10 @@ describe("teams and team access API contract", () => {
     const getBody = await getRes.json();
     expect(getBody.data.attributes["users-count"]).toBe(1);
     expect(getBody.included?.[0]?.id).toBe(memberUserId);
-    expect((await request(`/api/v2/teams/${teamId}/relationships/users`, "POST", { data: [{ id: userId, type: "users" }] })).status).toBe(204);
+    expect(
+      (await request(`/api/v2/teams/${teamId}/relationships/users`, "POST", { data: [{ id: userId, type: "users" }] }))
+        .status,
+    ).toBe(204);
     const membershipPath = `/api/v2/teams/${teamId}/relationships/organization-memberships?page[size]=1`;
     const firstPage = await request(membershipPath);
     expect(firstPage.status).toBe(200);
@@ -113,20 +114,35 @@ describe("teams and team access API contract", () => {
     expect((await request(membershipPath, "GET", undefined, "invalid-token")).status).toBe(404);
     try {
       for (const canRead of [false, true]) {
-        await db.update(apiTokens).set({ scopes: JSON.stringify({ version: 1, orgs: [orgId], permissions: { "teams:read": true, "members:read": canRead } }) }).where(eq(apiTokens.userId, userId));
+        await db
+          .update(apiTokens)
+          .set({
+            scopes: JSON.stringify({
+              version: 1,
+              orgs: [orgId],
+              permissions: { "teams:read": true, "members:read": canRead },
+            }),
+          })
+          .where(eq(apiTokens.userId, userId));
         expect((await request(membershipPath)).status).toBe(canRead ? 200 : 404);
       }
     } finally {
       await db.update(apiTokens).set({ scopes: null }).where(eq(apiTokens.userId, userId));
     }
-    expect((await request(`/api/v2/teams/${teamId}`, "PATCH", { data: { attributes: { "organization-access": { "manage-teams": true } } } })).status).toBe(200);
-    expect((await request(`/api/v2/teams/${teamId}`, "PATCH", { data: { attributes: { name: "developers" } } }, memberToken)).status).toBe(200);
+    expect(
+      (
+        await request(`/api/v2/teams/${teamId}`, "PATCH", {
+          data: { attributes: { "organization-access": { "manage-teams": true } } },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await request(`/api/v2/teams/${teamId}`, "PATCH", { data: { attributes: { name: "developers" } } }, memberToken))
+        .status,
+    ).toBe(200);
     const policy = { data: { attributes: { name: "forbidden-policy", "allow-member-token-management": false } } };
     expect((await request(`/api/v2/teams/${teamId}`, "PATCH", policy, memberToken)).status).toBe(404);
     expect((await request(`/api/v2/organizations/${orgName}/teams`, "POST", policy, memberToken)).status).toBe(404);
-
-
-
 
     // 5. Create team authentication token
     const createTokenRes = await request(`/api/v2/teams/${teamId}/authentication-tokens`, "POST", {

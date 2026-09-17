@@ -38,7 +38,9 @@ const INSTANCE_ID = `registry-sync-${crypto.randomUUID()}`;
 /** Try to claim the lease for `key`. Returns true if this replica now owns it. */
 export async function claimRegistrySyncLease(key: string, now = Date.now()): Promise<boolean> {
   const expiresAt = now + REGISTRY_SYNC_LEASE_MS;
-  await db.insert(registrySyncLeases).values({ key, owner: INSTANCE_ID, expiresAt })
+  await db
+    .insert(registrySyncLeases)
+    .values({ key, owner: INSTANCE_ID, expiresAt })
     .onConflictDoUpdate({
       target: registrySyncLeases.key,
       set: { owner: INSTANCE_ID, expiresAt },
@@ -56,7 +58,8 @@ export async function claimRegistrySyncLease(key: string, now = Date.now()): Pro
  * so the sync can abort rather than continue writing under a lost lock.
  */
 export async function renewRegistrySyncLease(key: string, now = Date.now()): Promise<boolean> {
-  const updated = await db.update(registrySyncLeases)
+  const updated = await db
+    .update(registrySyncLeases)
     .set({ expiresAt: now + REGISTRY_SYNC_LEASE_MS })
     .where(and(eq(registrySyncLeases.key, key), eq(registrySyncLeases.owner, INSTANCE_ID)))
     .returning({ key: registrySyncLeases.key });
@@ -65,7 +68,8 @@ export async function renewRegistrySyncLease(key: string, now = Date.now()): Pro
 
 /** Release a lease this replica holds. Safe to call when not the owner. */
 export async function releaseRegistrySyncLease(key: string): Promise<void> {
-  await db.delete(registrySyncLeases)
+  await db
+    .delete(registrySyncLeases)
     .where(and(eq(registrySyncLeases.key, key), eq(registrySyncLeases.owner, INSTANCE_ID)));
 }
 
@@ -80,8 +84,7 @@ export class RegistrySyncLease {
   private alive = true;
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  private constructor(private readonly key: string) {
-  }
+  private constructor(private readonly key: string) {}
 
   /** Claim `key`, or return null when another replica holds an unexpired lease. */
   public static async acquire(key: string): Promise<RegistrySyncLease | null> {
@@ -89,8 +92,12 @@ export class RegistrySyncLease {
     const lease = new RegistrySyncLease(key);
     lease.timer = setInterval((): void => {
       renewRegistrySyncLease(key).then(
-        (ok): void => { if (!ok) lease.alive = false; },
-        (): void => { lease.alive = false; },
+        (ok): void => {
+          if (!ok) lease.alive = false;
+        },
+        (): void => {
+          lease.alive = false;
+        },
       );
     }, REGISTRY_SYNC_RENEWAL_MS);
     return lease;
@@ -118,7 +125,8 @@ export class RegistrySyncLease {
 /** Drop expired leases (periodic sweep). Returns the number reaped. */
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export async function reapExpiredRegistrySyncLeases(now = Date.now()): Promise<number> {
-  const deleted = await db.delete(registrySyncLeases)
+  const deleted = await db
+    .delete(registrySyncLeases)
     .where(lt(registrySyncLeases.expiresAt, now))
     .returning({ key: registrySyncLeases.key });
   return deleted.length;
@@ -126,7 +134,8 @@ export async function reapExpiredRegistrySyncLeases(now = Date.now()): Promise<n
 
 /** Current version identifiers for a module; used as the result for non-owners. */
 export async function currentModuleVersions(moduleId: string): Promise<readonly string[]> {
-  const rows = await db.select({ version: registryModuleVersions.version })
+  const rows = await db
+    .select({ version: registryModuleVersions.version })
     .from(registryModuleVersions)
     .where(eq(registryModuleVersions.moduleId, moduleId));
   return rows.map((row): string => row.version);

@@ -16,7 +16,17 @@
  * termination. All writes are best-effort — a controller file that is
  * absent on a given kernel never fails the run.
  */
-import { accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { envText } from "./constants";
 
@@ -153,7 +163,9 @@ export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.
       const file = join(path, controller);
       try {
         writeFileSync(file, value);
-      } catch { /* read-only or absent controller: skip */ }
+      } catch {
+        /* read-only or absent controller: skip */
+      }
     }
     return path;
   } catch {

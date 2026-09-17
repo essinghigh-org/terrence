@@ -51,4 +51,6 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Terrence frontend dev server running at http://localhost:${String(server.port)} (proxying /api -> ${backendUrl})`);
+console.log(
+  `Terrence frontend dev server running at http://localhost:${String(server.port)} (proxying /api -> ${backendUrl})`,
+);

@@ -46,18 +46,21 @@ describe("SAML SSO flow", () => {
   let originalSamlLink: typeof adminSettings.$inferSelect | undefined;
 
   const request = (method: string, path: string, token?: string, body?: unknown): Promise<Response> =>
-    app.handle(new Request(`https://terrence.test${path}`, {
-      method,
-      headers: {
-        ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`https://terrence.test${path}`, {
+        method,
+        headers: {
+          ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   const cookieValue = (response: Response, name: string): string => {
     const prefix = `${name}=`;
-    const pair = response.headers.getSetCookie()
+    const pair = response.headers
+      .getSetCookie()
       .map((value): string => value.split(";")[0] ?? "")
       .find((value): boolean => value.startsWith(prefix));
     return pair?.slice(prefix.length) ?? "";
@@ -69,9 +72,14 @@ describe("SAML SSO flow", () => {
     authHeaders: Record<string, string> = {},
     acsHeaders: Record<string, string> = authHeaders,
   ): Promise<Response> => {
-    const auth = await app.handle(new Request(`https://terrence.test/users/saml/auth${relayState === undefined ? "" : `?RelayState=${encodeURIComponent(relayState)}`}`, {
-      headers: authHeaders,
-    }));
+    const auth = await app.handle(
+      new Request(
+        `https://terrence.test/users/saml/auth${relayState === undefined ? "" : `?RelayState=${encodeURIComponent(relayState)}`}`,
+        {
+          headers: authHeaders,
+        },
+      ),
+    );
     const location = new URL(auth.headers.get("Location") ?? "");
     const state = cookieValue(auth, "terrence_saml_state");
     if (state === "") throw new Error("SAML auth response has no state cookie");
@@ -89,7 +97,9 @@ describe("SAML SSO flow", () => {
       // Local account used for conflict/link tests.
       { id: orgUserId, username: `local-${suffix}`, email: "conflict@example.com", passwordHash: "unused" },
     ]);
-    await db.insert(organizations).values({ id: orgId, name: orgName, samlEnabled: true, ownersTeamSamlRoleId: "admins" });
+    await db
+      .insert(organizations)
+      .values({ id: orgId, name: orgName, samlEnabled: true, ownersTeamSamlRoleId: "admins" });
     await db.insert(teams).values({ id: `team-dev-${suffix}`, orgId, name: "developers" });
     await db.insert(apiTokens).values({
       id: `api-samlflow-${suffix}`,
@@ -115,10 +125,14 @@ describe("SAML SSO flow", () => {
     const { id: _samlId, ...samlUpdate } = samlValues;
     // Upsert so a row left behind by a crashed parallel suite cannot fail the
     // whole file's setup.
-    await db.insert(samlSettings).values(samlValues)
-      .onConflictDoUpdate({ target: samlSettings.id, set: samlUpdate });
-    await db.insert(adminSettings).values({ id: "saml", values: { "link-by-email": true }, updatedAt: Date.now() })
-      .onConflictDoUpdate({ target: adminSettings.id, set: { values: { "link-by-email": true }, updatedAt: Date.now() } });
+    await db.insert(samlSettings).values(samlValues).onConflictDoUpdate({ target: samlSettings.id, set: samlUpdate });
+    await db
+      .insert(adminSettings)
+      .values({ id: "saml", values: { "link-by-email": true }, updatedAt: Date.now() })
+      .onConflictDoUpdate({
+        target: adminSettings.id,
+        set: { values: { "link-by-email": true }, updatedAt: Date.now() },
+      });
     invalidateSettingsCache();
   });
 
@@ -135,7 +149,9 @@ describe("SAML SSO flow", () => {
     if (originalSamlLink === undefined) {
       await db.delete(adminSettings).where(eq(adminSettings.id, "saml"));
     } else {
-      await db.update(adminSettings).set({ values: originalSamlLink.values, updatedAt: Date.now() })
+      await db
+        .update(adminSettings)
+        .set({ values: originalSamlLink.values, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "saml"));
     }
     invalidateSettingsCache();
@@ -144,8 +160,12 @@ describe("SAML SSO flow", () => {
     // team ID, so group-mapped rows cannot remain and trip the FK on teams.
     const orgTeams = await db.query.teams.findMany({ where: eq(teams.orgId, orgId) });
     if (orgTeams.length > 0) {
-      await db.delete(teamMemberships)
-        .where(inArray(teamMemberships.teamId, orgTeams.map((row): string => row.id)));
+      await db.delete(teamMemberships).where(
+        inArray(
+          teamMemberships.teamId,
+          orgTeams.map((row): string => row.id),
+        ),
+      );
     }
     await db.delete(teams).where(eq(teams.orgId, orgId));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
@@ -175,7 +195,9 @@ describe("SAML SSO flow", () => {
     expect(authnRequest).toContain(`Destination="https://idp.example.test/sso"`);
     expect(authnRequest).toContain(`ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"`);
     expect(location.searchParams.get("RelayState")).toBe("api");
-    const stateCookie = response.headers.getSetCookie().find((value): boolean => value.startsWith("terrence_saml_state="));
+    const stateCookie = response.headers
+      .getSetCookie()
+      .find((value): boolean => value.startsWith("terrence_saml_state="));
     expect(stateCookie).toContain("HttpOnly");
     expect(stateCookie).toContain("SameSite=None");
     expect(stateCookie).toContain("Secure");
@@ -185,7 +207,9 @@ describe("SAML SSO flow", () => {
     const response = await app.handle(new Request("http://terrence.test/users/saml/auth"));
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("HTTPS");
-    expect(response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state="))).toBeFalse();
+    expect(
+      response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state=")),
+    ).toBeFalse();
   });
 
   test("returns 404 for the auth endpoint when SAML is disabled", async () => {
@@ -208,7 +232,9 @@ describe("SAML SSO flow", () => {
     const firstAuth = await app.handle(new Request("https://terrence.test/users/saml/auth"));
     const firstLocation = new URL(firstAuth.headers.get("Location") ?? "");
     const firstState = cookieValue(firstAuth, "terrence_saml_state");
-    const firstRequestId = /\bID="([^"]+)"/.exec(inflateAndDecode(firstLocation.searchParams.get("SAMLRequest") ?? ""))?.[1];
+    const firstRequestId = /\bID="([^"]+)"/.exec(
+      inflateAndDecode(firstLocation.searchParams.get("SAMLRequest") ?? ""),
+    )?.[1];
     const secondAuth = await app.handle(new Request("https://terrence.test/users/saml/auth"));
     const secondState = cookieValue(secondAuth, "terrence_saml_state");
     if (firstState === "" || secondState === "" || firstRequestId === undefined) {
@@ -220,16 +246,20 @@ describe("SAML SSO flow", () => {
       email: `${username}@example.com`,
       inResponseTo: firstRequestId,
     });
-    const mismatched = await app.handle(samlAcsRequest(assertion, undefined, {
-      Cookie: `terrence_saml_state=${secondState}`,
-    }));
+    const mismatched = await app.handle(
+      samlAcsRequest(assertion, undefined, {
+        Cookie: `terrence_saml_state=${secondState}`,
+      }),
+    );
     expect(mismatched.status).toBe(400);
     expect(await mismatched.text()).toContain("browser");
     expect(await db.query.users.findFirst({ where: eq(users.username, username) })).toBeUndefined();
 
-    const matched = await app.handle(samlAcsRequest(assertion, undefined, {
-      Cookie: `terrence_saml_state=${firstState}`,
-    }));
+    const matched = await app.handle(
+      samlAcsRequest(assertion, undefined, {
+        Cookie: `terrence_saml_state=${firstState}`,
+      }),
+    );
     expect(matched.status).toBe(200);
     expect(await matched.text()).toContain("You are signed in");
     expect(await db.query.users.findFirst({ where: eq(users.username, username) })).not.toBeUndefined();
@@ -259,8 +289,10 @@ describe("SAML SSO flow", () => {
     });
     expect(response.status).toBe(200);
     expect(response.headers.has("Set-Cookie")).toBe(true);
-    expect(response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state=;"))).toBeTrue();
-    expect((await response.text())).toContain("You are signed in");
+    expect(
+      response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state=;")),
+    ).toBeTrue();
+    expect(await response.text()).toContain("You are signed in");
 
     const created = await db.query.users.findFirst({
       where: eq(users.username, `alice-${suffix}`),
@@ -271,12 +303,14 @@ describe("SAML SSO flow", () => {
 
     // The issued browser session is usable.
     const refreshToken = cookieValue(response, "terrence_refresh");
-    const refreshResponse = await app.handle(new Request("https://terrence.test/api/v2/users/refresh", {
-      method: "POST",
-      headers: { Cookie: `terrence_refresh=${refreshToken}` },
-    }));
+    const refreshResponse = await app.handle(
+      new Request("https://terrence.test/api/v2/users/refresh", {
+        method: "POST",
+        headers: { Cookie: `terrence_refresh=${refreshToken}` },
+      }),
+    );
     expect(refreshResponse.status).toBe(200);
-    const session = await refreshResponse.json() as { data: { attributes: { token: string } } };
+    const session = (await refreshResponse.json()) as { data: { attributes: { token: string } } };
     expect(session.data.attributes.token).toMatch(/^user-/);
   });
 
@@ -298,7 +332,9 @@ describe("SAML SSO flow", () => {
     expect(first.status).toBe(200);
     const secondAuth = await app.handle(new Request("https://terrence.test/users/saml/auth"));
     const secondState = cookieValue(secondAuth, "terrence_saml_state");
-    const secondRequestId = /\bID="([^"]+)"/.exec(inflateAndDecode(new URL(secondAuth.headers.get("Location") ?? "").searchParams.get("SAMLRequest") ?? ""))?.[1];
+    const secondRequestId = /\bID="([^"]+)"/.exec(
+      inflateAndDecode(new URL(secondAuth.headers.get("Location") ?? "").searchParams.get("SAMLRequest") ?? ""),
+    )?.[1];
     if (secondState === "" || secondRequestId === undefined) throw new Error("SAML AuthnRequest has no second state");
     const replayAssertion = buildSignedSamlResponse({
       username: `replay-${suffix}`,
@@ -306,7 +342,9 @@ describe("SAML SSO flow", () => {
       inResponseTo: secondRequestId,
       assertionId,
     });
-    const replay = await app.handle(samlAcsRequest(replayAssertion, undefined, { Cookie: `terrence_saml_state=${secondState}` }));
+    const replay = await app.handle(
+      samlAcsRequest(replayAssertion, undefined, { Cookie: `terrence_saml_state=${secondState}` }),
+    );
     expect(replay.status).toBe(400);
     expect(await replay.text()).toContain("already been used");
   });
@@ -317,10 +355,9 @@ describe("SAML SSO flow", () => {
       email: `wrapped-${suffix}@example.com`,
       inResponseTo: "_not-used",
     });
-    const xml = Buffer.from(signed, "base64").toString("utf8").replace(
-      "</samlp:Response>",
-      '<saml:Assertion ID="_unsigned" Version="2.0"></saml:Assertion></samlp:Response>',
-    );
+    const xml = Buffer.from(signed, "base64")
+      .toString("utf8")
+      .replace("</samlp:Response>", '<saml:Assertion ID="_unsigned" Version="2.0"></saml:Assertion></samlp:Response>');
     const response = await app.handle(samlAcsRequest(Buffer.from(xml, "utf8").toString("base64")));
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("exactly one Assertion");
@@ -345,7 +382,7 @@ describe("SAML SSO flow", () => {
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toContain("application/vnd.api+json");
-    const json = await response.json() as { data: { attributes: { token: string } } };
+    const json = (await response.json()) as { data: { attributes: { token: string } } };
     expect(json.data.attributes.token).toMatch(/^user-/);
     const completedAt = Date.now();
 
@@ -399,8 +436,10 @@ describe("SAML SSO flow", () => {
       { Accept: "text/html" },
     );
     expect(response.status).toBe(200);
-    expect(response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state=;"))).toBeTrue();
-    const json = await response.json() as { data: { attributes: { token: string; "expired-at": string } } };
+    expect(
+      response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state=;")),
+    ).toBeTrue();
+    const json = (await response.json()) as { data: { attributes: { token: string; "expired-at": string } } };
     expect(json.data.attributes.token).toMatch(/^user-/);
     expect(json.data.attributes["expired-at"]).toBeDefined();
   });
@@ -446,13 +485,18 @@ describe("SAML SSO flow", () => {
   });
 
   test("rejects an IdP logout signed by an unconfigured certificate", async () => {
-    const response = await app.handle(new Request("https://terrence.test/users/saml/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        SAMLRequest: buildSignedLogoutRequest(`wrong-cert-${suffix}`, { privateKey: IDP_OLD_KEY, publicCert: IDP_OLD_CERT }),
-      }).toString(),
-    }));
+    const response = await app.handle(
+      new Request("https://terrence.test/users/saml/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          SAMLRequest: buildSignedLogoutRequest(`wrong-cert-${suffix}`, {
+            privateKey: IDP_OLD_KEY,
+            publicCert: IDP_OLD_CERT,
+          }),
+        }).toString(),
+      }),
+    );
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("signature");
   });
@@ -460,7 +504,9 @@ describe("SAML SSO flow", () => {
   test("verifies with the previous certificate during rotation", async () => {
     // Current cert is the NEW one; responses signed with the OLD cert must
     // still verify because the old cert is retained during rotation.
-    await db.update(samlSettings).set({ idpCert: IDP_CERT, oldIdpCert: IDP_OLD_CERT, updatedAt: Date.now() })
+    await db
+      .update(samlSettings)
+      .set({ idpCert: IDP_CERT, oldIdpCert: IDP_OLD_CERT, updatedAt: Date.now() })
       .where(eq(samlSettings.id, "saml"));
     try {
       const response = await validAcs({
@@ -472,8 +518,7 @@ describe("SAML SSO flow", () => {
       expect(response.status).toBe(200);
     } finally {
       // Restore so later tests that sign with the old key still reject.
-      await db.update(samlSettings).set({ oldIdpCert: null, updatedAt: Date.now() })
-        .where(eq(samlSettings.id, "saml"));
+      await db.update(samlSettings).set({ oldIdpCert: null, updatedAt: Date.now() }).where(eq(samlSettings.id, "saml"));
     }
   });
 
@@ -500,10 +545,14 @@ describe("SAML SSO flow", () => {
   });
 
   test("rejects an unsolicited assertion without signed InResponseTo", async () => {
-    const response = await app.handle(samlAcsRequest(buildSignedSamlResponse({
-      username: `unsolicited-${suffix}`,
-      email: `unsolicited-${suffix}@example.com`,
-    })));
+    const response = await app.handle(
+      samlAcsRequest(
+        buildSignedSamlResponse({
+          username: `unsolicited-${suffix}`,
+          email: `unsolicited-${suffix}@example.com`,
+        }),
+      ),
+    );
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("confirmation");
   });
@@ -538,12 +587,16 @@ describe("SAML SSO flow", () => {
     expect(first.status).toBe(200);
     const grouped = await db.query.users.findFirst({ where: eq(users.username, groupedUsername) });
     expect(grouped).not.toBeUndefined();
-    expect(await db.query.organizationMemberships.findFirst({
-      where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, grouped!.id)),
-    })).not.toBeUndefined();
-    expect(await db.query.teamMemberships.findFirst({
-      where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
-    })).not.toBeUndefined();
+    expect(
+      await db.query.organizationMemberships.findFirst({
+        where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, grouped!.id)),
+      }),
+    ).not.toBeUndefined();
+    expect(
+      await db.query.teamMemberships.findFirst({
+        where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
+      }),
+    ).not.toBeUndefined();
 
     // Next login omits the groups attribute; the empty-group synchronization
     // prunes the SAML-sourced team membership and downgrades the org role.
@@ -552,9 +605,11 @@ describe("SAML SSO flow", () => {
       email: `${groupedUsername}@example.com`,
     });
     expect(second.status).toBe(200);
-    expect(await db.query.teamMemberships.findFirst({
-      where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
-    })).toBeUndefined();
+    expect(
+      await db.query.teamMemberships.findFirst({
+        where: and(eq(teamMemberships.teamId, `team-dev-${suffix}`), eq(teamMemberships.userId, grouped!.id)),
+      }),
+    ).toBeUndefined();
     const membershipAfter = await db.query.organizationMemberships.findFirst({
       where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, grouped!.id)),
     });
@@ -572,7 +627,10 @@ describe("SAML SSO flow", () => {
       const created = await db.query.users.findFirst({ where: eq(users.username, username) });
       expect(created?.email).toBe(`${username}@example.com`);
     } finally {
-      await db.update(samlSettings).set({ attrEmail: "email", updatedAt: Date.now() }).where(eq(samlSettings.id, "saml"));
+      await db
+        .update(samlSettings)
+        .set({ attrEmail: "email", updatedAt: Date.now() })
+        .where(eq(samlSettings.id, "saml"));
     }
   });
 
@@ -640,16 +698,20 @@ describe("SAML SSO flow", () => {
     const username = `sp-slo-${suffix}`;
     const login = await validAcs({ username, email: `${username}@example.com` });
     const refreshToken = cookieValue(login, "terrence_refresh");
-    const response = await app.handle(new Request("https://terrence.test/users/saml/slo", {
-      headers: { Cookie: `terrence_refresh=${refreshToken}`, "Sec-Fetch-Site": "same-origin" },
-    }));
+    const response = await app.handle(
+      new Request("https://terrence.test/users/saml/slo", {
+        headers: { Cookie: `terrence_refresh=${refreshToken}`, "Sec-Fetch-Site": "same-origin" },
+      }),
+    );
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");
     expect(location.origin + location.pathname).toBe("https://idp.example.test/slo");
     expect(location.searchParams.has("SAMLRequest")).toBeTrue();
     const logoutRequest = inflateAndDecode(location.searchParams.get("SAMLRequest") ?? "");
     expect(logoutRequest).toContain('Destination="https://idp.example.test/slo"');
-    expect(logoutRequest).toContain(`<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${username}</saml:NameID>`);
+    expect(logoutRequest).toContain(
+      `<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">${username}</saml:NameID>`,
+    );
   });
 
   test("rejects an SP-initiated SLO request from a cross-site caller", async () => {
@@ -658,9 +720,11 @@ describe("SAML SSO flow", () => {
     const refreshToken = cookieValue(login, "terrence_refresh");
     // A cross-site request cannot start an SP-initiated logout: the browser
     // binding guard rejects it instead of redirecting to the IdP.
-    const response = await app.handle(new Request("https://terrence.test/users/saml/slo", {
-      headers: { Cookie: `terrence_refresh=${refreshToken}`, "Sec-Fetch-Site": "cross-site" },
-    }));
+    const response = await app.handle(
+      new Request("https://terrence.test/users/saml/slo", {
+        headers: { Cookie: `terrence_refresh=${refreshToken}`, "Sec-Fetch-Site": "cross-site" },
+      }),
+    );
     expect(response.status).toBe(400);
     expect(response.headers.get("Location")).toBeNull();
   });
@@ -678,14 +742,17 @@ describe("SAML SSO flow", () => {
     const signedInput = `SAMLRequest=${encodeURIComponent(encodedRequest)}&RelayState=${encodedRelayState}&SigAlg=${encodedSigAlg}`;
     const signature = createSign("RSA-SHA256").update(signedInput).sign(IDP_KEY).toString("base64");
     const logoutUrl = `https://terrence.test/users/saml/slo?${signedInput}&Signature=${encodeURIComponent(signature)}`;
-    const response = await app.handle(new Request(logoutUrl, { headers: { Cookie: `terrence_refresh=${refreshToken}` } }));
+    const response = await app.handle(
+      new Request(logoutUrl, { headers: { Cookie: `terrence_refresh=${refreshToken}` } }),
+    );
     expect(response.status).toBe(302);
     const location = new URL(response.headers.get("Location") ?? "");
     expect(location.origin + location.pathname).toBe("https://idp.example.test/slo");
     expect(location.searchParams.get("RelayState")).toBe(relayState);
-    expect(inflateAndDecode(location.searchParams.get("SAMLResponse") ?? ""))
-      .toContain("LogoutResponse");
-    const replay = await app.handle(new Request(logoutUrl, { headers: { Cookie: `terrence_refresh=${refreshToken}` } }));
+    expect(inflateAndDecode(location.searchParams.get("SAMLResponse") ?? "")).toContain("LogoutResponse");
+    const replay = await app.handle(
+      new Request(logoutUrl, { headers: { Cookie: `terrence_refresh=${refreshToken}` } }),
+    );
     expect(replay.status).toBe(400);
   });
 
@@ -697,23 +764,27 @@ describe("SAML SSO flow", () => {
     const refreshToken = cookieValue(login, "terrence_refresh");
     expect(refreshToken).not.toBe("");
 
-    const refresh = await app.handle(new Request("https://terrence.test/api/v2/users/refresh", {
-      method: "POST",
-      headers: { Cookie: `terrence_refresh=${refreshToken}` },
-    }));
+    const refresh = await app.handle(
+      new Request("https://terrence.test/api/v2/users/refresh", {
+        method: "POST",
+        headers: { Cookie: `terrence_refresh=${refreshToken}` },
+      }),
+    );
     expect(refresh.status).toBe(200);
     const activeRefreshToken = cookieValue(refresh, "terrence_refresh");
     expect(activeRefreshToken).not.toBe("");
 
     // An IdP-initiated LogoutRequest (signed) clears the session.
-    const logoutResponse = await app.handle(new Request("https://terrence.test/users/saml/logout", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Cookie: `terrence_refresh=${activeRefreshToken}`,
-      },
-      body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest(options.username) }).toString(),
-    }));
+    const logoutResponse = await app.handle(
+      new Request("https://terrence.test/users/saml/logout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Cookie: `terrence_refresh=${activeRefreshToken}`,
+        },
+        body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest(options.username) }).toString(),
+      }),
+    );
     expect(logoutResponse.status).toBe(302);
     const logoutLocation = new URL(logoutResponse.headers.get("Location") ?? "");
     expect(logoutLocation.origin + logoutLocation.pathname).toBe("https://idp.example.test/slo");
@@ -722,10 +793,12 @@ describe("SAML SSO flow", () => {
     expect(logoutXml).toContain('InResponseTo="_logout_');
     expect(logoutXml).toContain("urn:oasis:names:tc:SAML:2.0:status:Success");
 
-    const revokedRefresh = await app.handle(new Request("https://terrence.test/api/v2/users/refresh", {
-      method: "POST",
-      headers: { Cookie: `terrence_refresh=${activeRefreshToken}` },
-    }));
+    const revokedRefresh = await app.handle(
+      new Request("https://terrence.test/api/v2/users/refresh", {
+        method: "POST",
+        headers: { Cookie: `terrence_refresh=${activeRefreshToken}` },
+      }),
+    );
     expect(revokedRefresh.status).toBe(401);
   });
 });

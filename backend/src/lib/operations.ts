@@ -70,7 +70,10 @@ function windowMinutes(value: unknown): number | undefined {
   return hours * 60 + minutes;
 }
 
-function localDayAndMinutes(window: MaintenanceWindow, now: DeepReadonly<Date>): { day: number; minutes: number } | undefined {
+function localDayAndMinutes(
+  window: MaintenanceWindow,
+  now: DeepReadonly<Date>,
+): { day: number; minutes: number } | undefined {
   const timezone = typeof window.timezone === "string" && window.timezone !== "" ? window.timezone : "UTC";
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -109,25 +112,30 @@ export function inMaintenanceWindow(window: MaintenanceWindow, now: DeepReadonly
 /** True when the window entry is structurally usable (has days and a
  * parseable start/end clock). Used to warn about misconfigured windows. */
 export function isValidMaintenanceWindow(window: MaintenanceWindow): boolean {
-  return windowDayNumbers(window).length > 0
-    && windowMinutes(window["start-time"]) !== undefined
-    && windowMinutes(window["end-time"]) !== undefined;
+  return (
+    windowDayNumbers(window).length > 0 &&
+    windowMinutes(window["start-time"]) !== undefined &&
+    windowMinutes(window["end-time"]) !== undefined
+  );
 }
 
 /** True when an apply must be blocked because the site has maintenance
  * windows configured and `now` is outside every one of them. */
 export function maintenanceWindowsBlockApply(settings: Readonly<Settings>, now: DeepReadonly<Date>): boolean {
   if (settings["enabled"] !== true) return false;
-  const windows = Array.isArray(settings["windows"]) ? settings["windows"] as MaintenanceWindow[] : [];
+  const windows = Array.isArray(settings["windows"]) ? (settings["windows"] as MaintenanceWindow[]) : [];
   if (windows.length === 0) return false;
   if (windows.every((window: MaintenanceWindow): boolean => !isValidMaintenanceWindow(window))) {
     // A malformed window never matches, so with only malformed windows the
     // site would stay blocked forever. Log loudly so operators fix the
     // config; the blocking result is still returned (invalid windows simply
     // never match), which is the documented maintenance-window contract.
-    log.warn("Maintenance windows are enabled but every configured window is malformed; applies will remain blocked until fixed", {
-      windows,
-    });
+    log.warn(
+      "Maintenance windows are enabled but every configured window is malformed; applies will remain blocked until fixed",
+      {
+        windows,
+      },
+    );
   }
   return !windows.some((window: MaintenanceWindow): boolean => inMaintenanceWindow(window, now));
 }
@@ -163,10 +171,12 @@ export function nextMaintenanceWindowStart(settings: Readonly<Settings>, now = n
 
 /** Return a safe operator-facing schedule snapshot for admin previews. */
 export function maintenanceSchedule(settings: Readonly<Settings>, now = new Date()): MaintenanceSchedule {
-  const windows = Array.isArray(settings["windows"]) ? settings["windows"] as MaintenanceWindow[] : [];
+  const windows = Array.isArray(settings["windows"]) ? (settings["windows"] as MaintenanceWindow[]) : [];
   const active = settings["enabled"] === true && windows.some((window): boolean => inMaintenanceWindow(window, now));
   const next = active ? now : nextMaintenanceWindowStart(settings, now);
-  const timezone = windows.find((window): boolean => typeof window.timezone === "string" && window.timezone !== "")?.timezone;
+  const timezone = windows.find(
+    (window): boolean => typeof window.timezone === "string" && window.timezone !== "",
+  )?.timezone;
   return {
     active,
     nextEligibleAt: next?.toISOString() ?? null,
@@ -184,10 +194,7 @@ export function approvalWebhookBlocksApply(settings: Readonly<Settings>): boolea
  * worker's auto-apply path so no confirmation path can bypass the gates.
  * `skipApprovalGate` is set by the approval webhook itself: the webhook IS
  * the approval, so it must not block on the gate it exists to satisfy. */
-export async function applyGateBlockReason(
-  now: DeepReadonly<Date>,
-  skipApprovalGate = false,
-): Promise<string | null> {
+export async function applyGateBlockReason(now: DeepReadonly<Date>, skipApprovalGate = false): Promise<string | null> {
   const [approvalSettings, maintenanceSettings] = await Promise.all([
     getSettings("approval-webhook"),
     getSettings("maintenance-windows"),
@@ -254,10 +261,14 @@ export async function confirmRunForApply(
           ...(before.statusTimestamps ?? {}),
           "confirmed-at": new Date().toISOString(),
         };
-        const confirmed = await tx.update(runs).set({
-          status: "confirmed",
-          statusTimestamps: confirmedTimestamps,
-        }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+        const confirmed = await tx
+          .update(runs)
+          .set({
+            status: "confirmed",
+            statusTimestamps: confirmedTimestamps,
+          })
+          .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+          .returning({ id: runs.id });
         if (confirmed.length === 0) return undefined;
         return insertAgentApplyJobTx(tx, runId, poolId, confirmedTimestamps);
       });
@@ -267,7 +278,8 @@ export async function confirmRunForApply(
     if (queued === undefined) {
       return {
         ok: false,
-        reason: queueError === null ? "Run apply is already queued" : `Agent apply job could not be queued: ${queueError}`,
+        reason:
+          queueError === null ? "Run apply is already queued" : `Agent apply job could not be queued: ${queueError}`,
       };
     }
     await auditLog("apply", "runs", runId, null, workspace.orgId, {
@@ -280,13 +292,17 @@ export async function confirmRunForApply(
     void reportRunVcsStatus(runId, "apply_queued");
     return { ok: true, status: "apply_queued" };
   }
-  const confirmed = await db.update(runs).set({
-    status: "confirmed",
-    statusTimestamps: {
-      ...(before.statusTimestamps ?? {}),
-      "confirmed-at": new Date().toISOString(),
-    },
-  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+  const confirmed = await db
+    .update(runs)
+    .set({
+      status: "confirmed",
+      statusTimestamps: {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+      },
+    })
+    .where(and(eq(runs.id, runId), eq(runs.status, before.status)))
+    .returning({ id: runs.id });
   if (confirmed.length === 0) {
     return { ok: false, reason: "Run apply is already queued" };
   }

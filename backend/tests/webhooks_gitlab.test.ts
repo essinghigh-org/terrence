@@ -81,7 +81,8 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
       mergeRequestUrls.push(url);
       if (url.includes("/merge_requests/7/diffs")) {
         const page = new URL(url).searchParams.get("page");
-        const responseBody = page === "2" && mergeRequestDiffPageTwo !== undefined ? mergeRequestDiffPageTwo : mergeRequestDiffs;
+        const responseBody =
+          page === "2" && mergeRequestDiffPageTwo !== undefined ? mergeRequestDiffPageTwo : mergeRequestDiffs;
         if (responseBody instanceof Response) return responseBody;
         const headers = page === "1" && mergeRequestNextPage !== null ? { "x-next-page": mergeRequestNextPage } : {};
         return Response.json(responseBody, { headers });
@@ -137,7 +138,10 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
 
   it("creates a speculative run when the MR changes match the trigger patterns", async () => {
     resetTarballCounter();
-    mergeRequestDiffs = [{ old_path: "src/main.tf", new_path: "src/main.tf" }, { old_path: "docs/readme.md", new_path: "docs/readme.md" }];
+    mergeRequestDiffs = [
+      { old_path: "src/main.tf", new_path: "src/main.tf" },
+      { old_path: "docs/readme.md", new_path: "docs/readme.md" },
+    ];
     const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
     expect(handled).toBe(true);
     expect(await runCount()).toBe(1);
@@ -163,11 +167,13 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
   });
 
   it("fails open when GitLab reports an incomplete diff", async () => {
-    mergeRequestDiffs = [{
-      old_path: "src/main.tf",
-      new_path: "src/main.tf",
-      too_large: true,
-    }];
+    mergeRequestDiffs = [
+      {
+        old_path: "src/main.tf",
+        new_path: "src/main.tf",
+        too_large: true,
+      },
+    ];
     const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
     expect(handled).toBe(true);
     expect(await runCount()).toBe(1);

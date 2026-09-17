@@ -20,7 +20,18 @@ import { eq } from "drizzle-orm";
  * "" is the organization-token slot. Agent is the pool credential used by
  * the agent protocol; the two hyphen/underscore spellings are accepted as
  * compatibility aliases and stored canonically as "agent". */
-export const TTL_POLICY_TOKEN_TYPES = ["", "organization", "user", "team", "team-legacy", "audit-trails", "audit_trails", "agent", "agent-pool", "agent_pool"] as const;
+export const TTL_POLICY_TOKEN_TYPES = [
+  "",
+  "organization",
+  "user",
+  "team",
+  "team-legacy",
+  "audit-trails",
+  "audit_trails",
+  "agent",
+  "agent-pool",
+  "agent_pool",
+] as const;
 export type TtlPolicyTokenType = (typeof TTL_POLICY_TOKEN_TYPES)[number];
 
 export function isTtlPolicyTokenType(value: string): value is TtlPolicyTokenType {
@@ -69,10 +80,16 @@ export async function resolveTokenExpiryUnderPolicy(
   const policies = await db.query.orgTokenTTLPolicies.findMany({
     where: eq(orgTokenTTLPolicies.orgId, orgId),
   });
-  const policy = policies.find((p: Readonly<{ tokenType: string; maxTtlMs: number }>): boolean => normalizeTtlPolicyTokenType(p.tokenType) === canonicalTokenType);
+  const policy = policies.find(
+    (p: Readonly<{ tokenType: string; maxTtlMs: number }>): boolean =>
+      normalizeTtlPolicyTokenType(p.tokenType) === canonicalTokenType,
+  );
   if (policy === undefined) return { kind: "ok", expiresAt: requestedExpiresAt };
   if (policy.maxTtlMs === 0) {
-    return { kind: "forbidden", detail: `Organization policy forbids ${canonicalTokenType === "" ? "organization" : canonicalTokenType} tokens` };
+    return {
+      kind: "forbidden",
+      detail: `Organization policy forbids ${canonicalTokenType === "" ? "organization" : canonicalTokenType} tokens`,
+    };
   }
 
   const maxExpiresAt = Date.now() + policy.maxTtlMs;

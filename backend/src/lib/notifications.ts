@@ -20,25 +20,29 @@ import {
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 import { decryptSecret } from "./secrets";
-import { notificationSnoozedForTrigger, resetSharedDeliveryStateForTests as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
+import {
+  notificationSnoozedForTrigger,
+  resetSharedDeliveryStateForTests as resetSharedStateImpl,
+  sharedBreakerRecordFailure,
+  sharedBreakerRecordSuccess,
+  sharedDedupRecord,
+  sharedDedupSuppressed,
+} from "./notification-state";
 import { getSettings } from "./settings";
 import { isSmtpEncryption, sendEmail } from "./smtp";
-import {
-  enqueueOutboxEvent,
-  enqueueOutboxEventTx,
-  RUN_NOTIFICATION_OUTBOX_TOPIC,
-} from "./outbox";
+import { enqueueOutboxEvent, enqueueOutboxEventTx, RUN_NOTIFICATION_OUTBOX_TOPIC } from "./outbox";
 
 type NotificationConfiguration = DeepReadonly<
-  Omit<typeof notificationConfigurations.$inferSelect, "triggers">
-  & { triggers: readonly string[] }
+  Omit<typeof notificationConfigurations.$inferSelect, "triggers"> & { triggers: readonly string[] }
 >;
 
 async function withoutProjectExclusions(
   configurations: readonly NotificationConfiguration[],
   workspaceId: string,
 ): Promise<NotificationConfiguration[]> {
-  const ids = configurations.filter((configuration): boolean => configuration.projectId !== null).map((configuration): string => configuration.id);
+  const ids = configurations
+    .filter((configuration): boolean => configuration.projectId !== null)
+    .map((configuration): string => configuration.id);
   if (ids.length === 0) return [...configurations];
   const exclusions = await db.query.notificationConfigurationWorkspaceExclusions.findMany({
     where: and(
@@ -132,18 +136,25 @@ type BreakerState = Readonly<{ failures: number; openedAfterSample: number | nul
 const breakers = new Map<string, BreakerState>();
 
 /** Only exported for tests. */
-export function breakerStateForTests(configurationId: string): Readonly<{ open: boolean; remainingMs: number; failures: number }> {
+export function breakerStateForTests(
+  configurationId: string,
+): Readonly<{ open: boolean; remainingMs: number; failures: number }> {
   const state = breakers.get(configurationId);
   if (state === undefined) return { open: false, remainingMs: 0, failures: 0 };
   const open = state.openedAfterSample !== null && Date.now() < state.openedAfterSample + BREAKER_OPEN_MS;
-  if (open) return { open: true, remainingMs: state.openedAfterSample + BREAKER_OPEN_MS - Date.now(), failures: state.failures };
+  if (open)
+    return {
+      open: true,
+      remainingMs: state.openedAfterSample + BREAKER_OPEN_MS - Date.now(),
+      failures: state.failures,
+    };
   return { open: false, remainingMs: 0, failures: state.failures };
 }
 
 function recordBreakerFailure(configurationId: string): void {
   const current = breakers.get(configurationId);
   const failures = (current?.failures ?? 0) + 1;
-  const openedAfterSample = failures >= BREAKER_FAILURE_LIMIT ? Date.now() : current?.openedAfterSample ?? null;
+  const openedAfterSample = failures >= BREAKER_FAILURE_LIMIT ? Date.now() : (current?.openedAfterSample ?? null);
   breakers.set(configurationId, { failures, openedAfterSample });
   // Mirror into the shared store (kanban 15): other replicas must see the
   // breaker trip without waiting for their own three failures. Fire-and-
@@ -331,7 +342,15 @@ async function doPostNotification(
   const allowPrivate = envFlag("TERRENCE_ALLOW_PRIVATE_URLS");
   const destination = await resolveExternalUrl(configuration.url, allowPrivate);
   if ("error" in destination) {
-    return { body: destination.error, code: "422", headers: {}, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
+    return {
+      body: destination.error,
+      code: "422",
+      headers: {},
+      sentAt: new Date().toISOString(),
+      successful: false,
+      url: configuration.url,
+      attempts: 0,
+    };
   }
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -382,19 +401,26 @@ async function doPostNotification(
  * generic payload shape shared by run and assessment notifications.
  */
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character): string => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  })[character] ?? character);
+  return value.replace(
+    /[&<>"']/g,
+    (character): string =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character] ?? character,
+  );
 }
 
-function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ subject: string; text: string; html: string }> {
+function emailContent(
+  payload: Readonly<Record<string, unknown>>,
+): Readonly<{ subject: string; text: string; html: string }> {
   const notifications = Array.isArray(payload["notifications"]) ? payload["notifications"] : [];
   const first = (notifications[0] ?? {}) as Readonly<Record<string, unknown>>;
-  const message = typeof first["message"] === "string" && first["message"] !== "" ? first["message"] : "Terrence notification";
+  const message =
+    typeof first["message"] === "string" && first["message"] !== "" ? first["message"] : "Terrence notification";
   const workspace = typeof payload["workspace_name"] === "string" ? payload["workspace_name"] : undefined;
   const subject = workspace === undefined ? message : `${message} - ${workspace}`;
 
@@ -404,7 +430,8 @@ function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ su
   if (typeof payload["run_id"] === "string") lines.push(`Run: ${payload["run_id"]}`);
   if (typeof first["trigger"] === "string") lines.push(`Trigger: ${first["trigger"]}`);
   if (typeof first["run_status"] === "string") lines.push(`Status: ${first["run_status"]}`);
-  if (typeof payload["run_message"] === "string" && payload["run_message"] !== "") lines.push(`Message: ${payload["run_message"]}`);
+  if (typeof payload["run_message"] === "string" && payload["run_message"] !== "")
+    lines.push(`Message: ${payload["run_message"]}`);
   if (typeof payload["run_url"] === "string") lines.push(`Details: ${payload["run_url"]}`);
   const text = lines.join("\n");
   const htmlLines = lines.map((line): string => {
@@ -418,18 +445,32 @@ function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ su
 }
 
 async function emailMemberIds(configuration: NotificationConfiguration): Promise<readonly string[]> {
-  if ((configuration.teamId === null && configuration.projectId === null)
-    || (configuration.emailAllMembers !== true && (configuration.emailUserIds ?? []).length === 0)) return [];
+  if (
+    (configuration.teamId === null && configuration.projectId === null) ||
+    (configuration.emailAllMembers !== true && (configuration.emailUserIds ?? []).length === 0)
+  )
+    return [];
   if (configuration.emailAllMembers === true) {
     if (configuration.teamId !== null) {
-      return (await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, configuration.teamId), columns: { userId: true } }))
-        .map((member): string => member.userId);
+      return (
+        await db.query.teamMemberships.findMany({
+          where: eq(teamMemberships.teamId, configuration.teamId),
+          columns: { userId: true },
+        })
+      ).map((member): string => member.userId);
     }
     if (configuration.projectId !== null) {
-      const project = await db.query.projects.findFirst({ where: eq(projects.id, configuration.projectId), columns: { orgId: true } });
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, configuration.projectId),
+        columns: { orgId: true },
+      });
       if (project === undefined) return [];
-      return (await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, project.orgId), columns: { userId: true } }))
-        .map((member): string => member.userId);
+      return (
+        await db.query.organizationMemberships.findMany({
+          where: eq(organizationMemberships.orgId, project.orgId),
+          columns: { userId: true },
+        })
+      ).map((member): string => member.userId);
     }
     return [];
   }
@@ -440,8 +481,12 @@ async function emailRecipientList(configuration: NotificationConfiguration): Pro
   const recipients = new Set(configuration.emailAddresses ?? []);
   const memberIds = await emailMemberIds(configuration);
   if (memberIds.length > 0) {
-    const memberRows = await db.query.users.findMany({ where: inArray(users.id, [...new Set(memberIds)]), columns: { email: true } });
-    for (const member of memberRows) if (typeof member.email === "string" && member.email !== "") recipients.add(member.email);
+    const memberRows = await db.query.users.findMany({
+      where: inArray(users.id, [...new Set(memberIds)]),
+      columns: { email: true },
+    });
+    for (const member of memberRows)
+      if (typeof member.email === "string" && member.email !== "") recipients.add(member.email);
   }
   return [...recipients];
 }
@@ -489,7 +534,8 @@ async function deliverEmailNotification(
   const smtp = await getSettings("smtp");
   const enabled = smtp["enabled"] === true;
   const host = typeof smtp["host"] === "string" && smtp["host"] !== "" ? smtp["host"] : null;
-  const senderEmail = typeof smtp["sender-email"] === "string" && smtp["sender-email"] !== "" ? smtp["sender-email"] : null;
+  const senderEmail =
+    typeof smtp["sender-email"] === "string" && smtp["sender-email"] !== "" ? smtp["sender-email"] : null;
   const recipientList = await emailRecipientList(configuration);
   const now = new Date().toISOString();
 
@@ -508,10 +554,12 @@ async function deliverEmailNotification(
 
   const { subject, text, html } = emailContent(payload);
   try {
-    await sendEmail(
-      await smtpNotificationSettings(smtp, emailConfiguration.host, emailConfiguration.senderEmail),
-      { to: recipientList, subject, text, html },
-    );
+    await sendEmail(await smtpNotificationSettings(smtp, emailConfiguration.host, emailConfiguration.senderEmail), {
+      to: recipientList,
+      subject,
+      text,
+      html,
+    });
     recordBreakerSuccess(configuration.id);
     return {
       body: `Sent to ${recipientList.join(", ")}`,
@@ -539,14 +587,22 @@ async function deliverEmailNotification(
 
 function runNotificationMessage(trigger: string, status: string): string {
   switch (trigger) {
-    case "run:created": return "Run Created";
-    case "run:planning": return "Run Planning";
-    case "run:needs_attention": return "Run Needs Attention";
-    case "run:applying": return "Run Applying";
-    case "run:completed": return "Run Completed";
-    case "run:errored": return `Run ${status === "canceled" ? "Canceled" : "Errored"}`;
-    case "run:confirmed": return "Run Confirmed";
-    default: return trigger;
+    case "run:created":
+      return "Run Created";
+    case "run:planning":
+      return "Run Planning";
+    case "run:needs_attention":
+      return "Run Needs Attention";
+    case "run:applying":
+      return "Run Applying";
+    case "run:completed":
+      return "Run Completed";
+    case "run:errored":
+      return `Run ${status === "canceled" ? "Canceled" : "Errored"}`;
+    case "run:confirmed":
+      return "Run Confirmed";
+    default:
+      return trigger;
   }
 }
 
@@ -569,7 +625,7 @@ type NotificationSummary = {
   linkLabel: string;
   linkUrl: string;
   status?: string;
-}
+};
 
 function safeJson(value: unknown, fallback: string): string {
   try {
@@ -593,10 +649,7 @@ function stringify(value: unknown): string {
 }
 
 function firstUrl(payload: Readonly<Record<string, unknown>>): string {
-  const candidates = [
-    payload["run_url"],
-    payload["change_request_url"],
-  ];
+  const candidates = [payload["run_url"], payload["change_request_url"]];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.length > 0) return candidate;
   }
@@ -612,13 +665,12 @@ type NotificationRecord = Readonly<Record<string, unknown>>;
 function notificationMessage(payload: NotificationRecord, notification: NotificationRecord | undefined): string {
   return typeof notification?.["message"] === "string" && notification["message"].length > 0
     ? notification["message"]
-    : (typeof payload["message"] === "string" ? payload["message"] : "Terrence notification");
+    : typeof payload["message"] === "string"
+      ? payload["message"]
+      : "Terrence notification";
 }
 
-function addAssessmentFields(
-  payload: NotificationRecord,
-  addField: (label: string, value: unknown) => void,
-): void {
+function addAssessmentFields(payload: NotificationRecord, addField: (label: string, value: unknown) => void): void {
   const details = payload["details"] as NotificationRecord | null | undefined;
   if (details === undefined || details === null) return;
   const result = details["new_assessment_result"] as NotificationRecord | undefined;
@@ -631,12 +683,16 @@ function addAssessmentFields(
 function notificationStatus(payload: NotificationRecord, notification: NotificationRecord | undefined): unknown {
   return typeof payload["run_status"] === "string"
     ? payload["run_status"]
-    : (typeof payload["change_request_status"] === "string" ? payload["change_request_status"] : notification?.["run_status"]);
+    : typeof payload["change_request_status"] === "string"
+      ? payload["change_request_status"]
+      : notification?.["run_status"];
 }
 
 function summarizePayload(payload: Readonly<Record<string, unknown>>): NotificationSummary {
   const notifications = payload["notifications"];
-  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as NotificationRecord | undefined;
+  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as
+    | NotificationRecord
+    | undefined;
   const message = notificationMessage(payload, notification);
 
   const fields: { label: string; value: string }[] = [];
@@ -670,7 +726,9 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
 
 function renderSlack(payload: Readonly<Record<string, unknown>>): string {
   const summary = summarizePayload(payload);
-  const blocks: Record<string, unknown>[] = [{ type: "header", text: { type: "plain_text", text: summary.title.slice(0, 150) } }];
+  const blocks: Record<string, unknown>[] = [
+    { type: "header", text: { type: "plain_text", text: summary.title.slice(0, 150) } },
+  ];
   if (summary.subtext.length > 0) {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: summary.subtext.slice(0, 2_900) } });
   }
@@ -682,16 +740,14 @@ function renderSlack(payload: Readonly<Record<string, unknown>>): string {
     blocks.push({ type: "section", fields: pairs.slice(0, 10) });
   }
   const href = summary.linkUrl.length > 0 ? summary.linkUrl : "https://terrence.local";
-  blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: summary.linkLabel }, url: href }] });
+  blocks.push({
+    type: "actions",
+    elements: [{ type: "button", text: { type: "plain_text", text: summary.linkLabel }, url: href }],
+  });
   return JSON.stringify({ text: summary.title, blocks });
 }
 
-const FAILED_STATUS_COLORS: ReadonlySet<string> = new Set([
-  "canceled",
-  "errored",
-  "force_canceled",
-  "discarded",
-]);
+const FAILED_STATUS_COLORS: ReadonlySet<string> = new Set(["canceled", "errored", "force_canceled", "discarded"]);
 
 /** Discord webhook embeds (issue #633): title, description, capped fields,
  * and a red accent for failure statuses, mirroring the Teams card. Field
@@ -715,7 +771,10 @@ function renderDiscord(payload: Readonly<Record<string, unknown>>): string {
     const value = take(field.value, 1024);
     if (name !== "" && value !== "") fields.push({ name, value, inline: true });
   }
-  const embed: Record<string, unknown> = { title, color: summary.status !== undefined && FAILED_STATUS_COLORS.has(summary.status) ? 0xc0392b : 0x2b579a };
+  const embed: Record<string, unknown> = {
+    title,
+    color: summary.status !== undefined && FAILED_STATUS_COLORS.has(summary.status) ? 0xc0392b : 0x2b579a,
+  };
   if (description !== "") embed["description"] = description;
   if (fields.length > 0) embed["fields"] = fields;
   if (summary.linkUrl !== "") embed["url"] = summary.linkUrl;
@@ -736,7 +795,9 @@ function renderTeams(payload: Readonly<Record<string, unknown>>): string {
   if (summary.subtext.length > 0) card["text"] = summary.subtext;
   if (facts.length > 0) card["sections"] = [{ facts }];
   if (summary.linkUrl.length > 0) {
-    card["potentialAction"] = [{ "@type": "OpenUri", name: summary.linkLabel, targets: [{ os: "default", uri: summary.linkUrl }] }];
+    card["potentialAction"] = [
+      { "@type": "OpenUri", name: summary.linkLabel, targets: [{ os: "default", uri: summary.linkUrl }] },
+    ];
   }
   return JSON.stringify(card);
 }
@@ -747,7 +808,8 @@ export function renderPayloadForDestination(
 ): DestinationRender {
   if (configuration.destinationType === "slack") {
     return { body: renderSlack(payload), contentType: "application/json" };
-  }  if (configuration.destinationType === "discord") {
+  }
+  if (configuration.destinationType === "discord") {
     return { body: renderDiscord(payload), contentType: "application/json" };
   }
   if (configuration.destinationType === "microsoft-teams") {
@@ -839,9 +901,10 @@ export async function verifyDestinationOwnership(
   // response header is the verification condition; body reflection alone is a
   // weaker proof (a generic echo server echoes anything, including our token)
   // and is not sufficient on its own.
-  const boundedBody = await response.arrayBuffer().then(
-    (buffer): string => new TextDecoder().decode(buffer).slice(0, 4096),
-  ).catch(() => "");
+  const boundedBody = await response
+    .arrayBuffer()
+    .then((buffer): string => new TextDecoder().decode(buffer).slice(0, 4096))
+    .catch(() => "");
   const headerEcho = response.headers.get("x-terrence-ownership-challenge") ?? "";
   const bodyLacksEcho = !boundedBody.includes(challenge);
   const headerLacksEcho = headerEcho !== challenge;
@@ -854,7 +917,9 @@ export async function verifyDestinationOwnership(
 type NotificationRunRow = DeepReadonly<typeof runs.$inferSelect>;
 type NotificationWorkspaceRow = DeepReadonly<typeof workspaces.$inferSelect>;
 
-async function loadNotifiableRun(runId: string): Promise<{ run: NotificationRunRow; workspace: NotificationWorkspaceRow } | null> {
+async function loadNotifiableRun(
+  runId: string,
+): Promise<{ run: NotificationRunRow; workspace: NotificationWorkspaceRow } | null> {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   if (run === undefined) return null;
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
@@ -884,15 +949,21 @@ async function matchingConfigurations(
   workspaceId: string,
   trigger: string,
 ): Promise<NotificationConfiguration[]> {
-  const candidates = (await withoutProjectExclusions(configurations, workspaceId)).filter((configuration: NotificationConfiguration): boolean =>
-    configuration.enabled === true && configuration.triggers.includes(trigger));
+  const candidates = (await withoutProjectExclusions(configurations, workspaceId)).filter(
+    (configuration: NotificationConfiguration): boolean =>
+      configuration.enabled === true && configuration.triggers.includes(trigger),
+  );
   // Snoozes suppress repetitive low-priority events at the destination, while
   // critical failures remain visible. The state is shared across replicas and
   // expires automatically, so a muted endpoint cannot hide a later incident.
-  return (await Promise.all(candidates.map(async (configuration): Promise<NotificationConfiguration | null> =>
-    await notificationSnoozedForTrigger(configuration.id, trigger) ? null : configuration))).filter(
-      (configuration): configuration is NotificationConfiguration => configuration !== null,
-    );
+  return (
+    await Promise.all(
+      candidates.map(
+        async (configuration): Promise<NotificationConfiguration | null> =>
+          (await notificationSnoozedForTrigger(configuration.id, trigger)) ? null : configuration,
+      ),
+    )
+  ).filter((configuration): configuration is NotificationConfiguration => configuration !== null);
 }
 
 function runPageUrl(
@@ -921,27 +992,33 @@ async function postRunNotifications(
     eventId: string | undefined;
   }>,
 ): Promise<NotificationDelivery[]> {
-  return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
-    postNotification(configuration, {
-      payload_version: 1,
-      ...(input.eventId === undefined ? {} : { event_id: input.eventId }),
-      notification_configuration_id: configuration.id,
-      run_url: input.runUrl,
-      run_id: input.run.id,
-      run_message: input.run.message ?? "",
-      run_created_at: new Date(input.run.createdAt).toISOString(),
-      run_created_by: input.creator?.username ?? null,
-      workspace_id: input.workspace.id,
-      workspace_name: input.workspace.name,
-      organization_name: input.organization?.name ?? input.workspace.orgId,
-      notifications: [{
-        message: runNotificationMessage(input.trigger, input.runStatus),
-        trigger: input.trigger,
-        run_status: input.runStatus,
-        run_updated_at: input.updatedAt,
-        run_updated_by: input.creator?.username ?? null,
-      }],
-    })));
+  return Promise.all(
+    matching.map(
+      async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
+        postNotification(configuration, {
+          payload_version: 1,
+          ...(input.eventId === undefined ? {} : { event_id: input.eventId }),
+          notification_configuration_id: configuration.id,
+          run_url: input.runUrl,
+          run_id: input.run.id,
+          run_message: input.run.message ?? "",
+          run_created_at: new Date(input.run.createdAt).toISOString(),
+          run_created_by: input.creator?.username ?? null,
+          workspace_id: input.workspace.id,
+          workspace_name: input.workspace.name,
+          organization_name: input.organization?.name ?? input.workspace.orgId,
+          notifications: [
+            {
+              message: runNotificationMessage(input.trigger, input.runStatus),
+              trigger: input.trigger,
+              run_status: input.runStatus,
+              run_updated_at: input.updatedAt,
+              run_updated_by: input.creator?.username ?? null,
+            },
+          ],
+        }),
+    ),
+  );
 }
 
 export async function deliverRunNotifications(
@@ -960,12 +1037,13 @@ export async function deliverRunNotifications(
       ? Promise.resolve(undefined)
       : db.query.users.findFirst({ where: eq(users.id, run.createdBy) }),
     db.query.notificationConfigurations.findMany({
-      where: workspace.projectId === null
-        ? eq(notificationConfigurations.workspaceId, workspace.id)
-        : or(
-            eq(notificationConfigurations.workspaceId, workspace.id),
-            eq(notificationConfigurations.projectId, workspace.projectId),
-          ),
+      where:
+        workspace.projectId === null
+          ? eq(notificationConfigurations.workspaceId, workspace.id)
+          : or(
+              eq(notificationConfigurations.workspaceId, workspace.id),
+              eq(notificationConfigurations.projectId, workspace.projectId),
+            ),
     }),
   ]);
 
@@ -973,7 +1051,7 @@ export async function deliverRunNotifications(
   const runStatus = statusOverride ?? run.status;
 
   const dedupKey = `${run.id}:${trigger}:${runStatus}`;
-  if (options.skipDedup !== true && await deliveryDeduplicated("run", dedupKey)) {
+  if (options.skipDedup !== true && (await deliveryDeduplicated("run", dedupKey))) {
     return [];
   }
   // Only record the logical emission when there is at least one matching
@@ -1039,7 +1117,6 @@ export function queueRunNotification(runId: string, trigger: string, status?: st
   });
 }
 
-
 type AssessmentResult = DeepReadonly<typeof assessmentResults.$inferSelect>;
 
 function assessmentNotificationResult(result: AssessmentResult, baseUrl: string): Record<string, unknown> {
@@ -1077,28 +1154,32 @@ export async function deliverAssessmentNotifications(
   const [organization, prior, configurations] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
     db.query.assessmentResults.findFirst({
-      where: and(
-        eq(assessmentResults.workspaceId, workspace.id),
-        lt(assessmentResults.createdAt, result.createdAt),
-      ),
+      where: and(eq(assessmentResults.workspaceId, workspace.id), lt(assessmentResults.createdAt, result.createdAt)),
       orderBy: [desc(assessmentResults.createdAt)],
     }),
     db.query.notificationConfigurations.findMany({
-      where: workspace.projectId === null
-        ? eq(notificationConfigurations.workspaceId, workspace.id)
-        : or(
-            eq(notificationConfigurations.workspaceId, workspace.id),
-            eq(notificationConfigurations.projectId, workspace.projectId),
-          ),
+      where:
+        workspace.projectId === null
+          ? eq(notificationConfigurations.workspaceId, workspace.id)
+          : or(
+              eq(notificationConfigurations.workspaceId, workspace.id),
+              eq(notificationConfigurations.projectId, workspace.projectId),
+            ),
     }),
   ]);
 
-  const candidates = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
-    configuration.enabled === true && configuration.triggers.includes(trigger));
-  const matching = (await Promise.all(candidates.map(async (configuration): Promise<NotificationConfiguration | null> =>
-    await notificationSnoozedForTrigger(configuration.id, trigger) ? null : configuration))).filter(
-      (configuration): configuration is NotificationConfiguration => configuration !== null,
-    );
+  const candidates = (await withoutProjectExclusions(configurations, workspace.id)).filter(
+    (configuration: NotificationConfiguration): boolean =>
+      configuration.enabled === true && configuration.triggers.includes(trigger),
+  );
+  const matching = (
+    await Promise.all(
+      candidates.map(
+        async (configuration): Promise<NotificationConfiguration | null> =>
+          (await notificationSnoozedForTrigger(configuration.id, trigger)) ? null : configuration,
+      ),
+    )
+  ).filter((configuration): configuration is NotificationConfiguration => configuration !== null);
   const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
   const messages = {
     "assessment:drifted": "Drift Detected",
@@ -1110,25 +1191,29 @@ export async function deliverAssessmentNotifications(
     await deliveryDedupRecord("assessment", `${assessmentResultId}:${trigger}`);
   }
 
-  return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
-    postNotification(configuration, {
-      payload_version: "2",
-      notification_configuration_id: configuration.id,
-      notification_configuration_url: new URL(
-        `/api/v2/notification-configurations/${encodeURIComponent(configuration.id)}`,
-        baseUrl,
-      ).toString(),
-      trigger_scope: "assessment",
-      trigger,
-      message: messages[trigger],
-      details: {
-        new_assessment_result: assessmentNotificationResult(result, baseUrl),
-        prior_assessment_result: prior === undefined ? null : assessmentNotificationResult(prior, baseUrl),
-        workspace_id: workspace.id,
-        workspace_name: workspace.name,
-        organization_name: organization?.name ?? workspace.orgId,
-      },
-    })));
+  return Promise.all(
+    matching.map(
+      async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
+        postNotification(configuration, {
+          payload_version: "2",
+          notification_configuration_id: configuration.id,
+          notification_configuration_url: new URL(
+            `/api/v2/notification-configurations/${encodeURIComponent(configuration.id)}`,
+            baseUrl,
+          ).toString(),
+          trigger_scope: "assessment",
+          trigger,
+          message: messages[trigger],
+          details: {
+            new_assessment_result: assessmentNotificationResult(result, baseUrl),
+            prior_assessment_result: prior === undefined ? null : assessmentNotificationResult(prior, baseUrl),
+            workspace_id: workspace.id,
+            workspace_name: workspace.name,
+            organization_name: organization?.name ?? workspace.orgId,
+          },
+        }),
+    ),
+  );
 }
 
 export function queueAssessmentNotification(
@@ -1140,9 +1225,7 @@ export function queueAssessmentNotification(
   });
 }
 
-async function deliverExplorerBulkActionNotifications(
-  recordId: string,
-): Promise<NotificationDelivery[]> {
+async function deliverExplorerBulkActionNotifications(recordId: string): Promise<NotificationDelivery[]> {
   const record = await db.query.explorerBulkActionRecords.findFirst({
     where: eq(explorerBulkActionRecords.id, recordId),
   });
@@ -1167,43 +1250,55 @@ async function deliverExplorerBulkActionNotifications(
     where: eq(teamWorkspaces.workspaceId, workspace.id),
   });
   const teamIds: string[] = workspaceTeams.map((tw: Readonly<{ teamId: string }>): string => tw.teamId);
-  const teamConfigurations = teamIds.length > 0
-    ? await db.query.notificationConfigurations.findMany({
-        where: or(...teamIds.map((id: string) => eq(notificationConfigurations.teamId, id))),
-      })
-    : [];
+  const teamConfigurations =
+    teamIds.length > 0
+      ? await db.query.notificationConfigurations.findMany({
+          where: or(...teamIds.map((id: string) => eq(notificationConfigurations.teamId, id))),
+        })
+      : [];
 
   const allConfigurations = await withoutProjectExclusions([...configurations, ...teamConfigurations], workspace.id);
-  const matching = allConfigurations.filter((configuration: NotificationConfiguration): boolean =>
-    configuration.enabled === true && configuration.triggers.includes("team:change_request"));
+  const matching = allConfigurations.filter(
+    (configuration: NotificationConfiguration): boolean =>
+      configuration.enabled === true && configuration.triggers.includes("team:change_request"),
+  );
 
   // The field names and trigger value are provider wire compatibility fields.
   // There is no detail page for the Explorer artifact, so the URL is honest null.
-  return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
-    postNotification(configuration, {
-      payload_version: 1,
-      notification_configuration_id: configuration.id,
-      change_request_id: record.id,
-      change_request_subject: record.subject,
-      change_request_message: record.message,
-      change_request_status: record.status,
-      change_request_url: null,
-      workspace_id: workspace.id,
-      workspace_name: workspace.name,
-      organization_name: organization?.name ?? workspace.orgId,
-      notifications: [{
-        message: "Change Request Created",
-        trigger: "team:change_request",
-        change_request_subject: record.subject,
-        change_request_status: record.status,
-      }],
-    })));
+  return Promise.all(
+    matching.map(
+      async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
+        postNotification(configuration, {
+          payload_version: 1,
+          notification_configuration_id: configuration.id,
+          change_request_id: record.id,
+          change_request_subject: record.subject,
+          change_request_message: record.message,
+          change_request_status: record.status,
+          change_request_url: null,
+          workspace_id: workspace.id,
+          workspace_name: workspace.name,
+          organization_name: organization?.name ?? workspace.orgId,
+          notifications: [
+            {
+              message: "Change Request Created",
+              trigger: "team:change_request",
+              change_request_subject: record.subject,
+              change_request_status: record.status,
+            },
+          ],
+        }),
+    ),
+  );
 }
 
 export async function queueExplorerBulkActionNotification(recordId: string): Promise<void> {
   try {
     await deliverExplorerBulkActionNotifications(recordId);
   } catch (error: unknown) {
-    console.error(`[terrence] Failed to deliver team:change_request notification for Explorer bulk-action record ${recordId}:`, error);
+    console.error(
+      `[terrence] Failed to deliver team:change_request notification for Explorer bulk-action record ${recordId}:`,
+      error,
+    );
   }
 }

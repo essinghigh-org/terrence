@@ -19,10 +19,7 @@ import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { durableJobs, githubWebhookDeliveries } from "../../src/db/schema";
-import {
-  claimDurableJob,
-  DURABLE_MAX_ATTEMPTS,
-} from "../../src/lib/durable-jobs";
+import { claimDurableJob, DURABLE_MAX_ATTEMPTS } from "../../src/lib/durable-jobs";
 import {
   collectWebhookQueueMetrics,
   enqueueVcsWebhookJob,
@@ -45,13 +42,17 @@ const gitlabDedupeKey = [
   "refs/heads/main",
   "",
   "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-].map(encodeURIComponent).join(":");
+]
+  .map(encodeURIComponent)
+  .join(":");
 const bitbucketDedupeKey = [
   "bitbucket",
   "durability/repo",
   "repo:push",
   "branch:main::feedfacefeedfacefeedfacefeedfacefeedface",
-].map(encodeURIComponent).join(":");
+]
+  .map(encodeURIComponent)
+  .join(":");
 
 async function jobByDedupeKey(dedupeKey: string) {
   return db.query.durableJobs.findFirst({
@@ -73,18 +74,27 @@ describe("vcs webhook durability", () => {
   test("provider identity derivation", () => {
     expect(vcsWebhookDeliveryId("github", "push", {}, "guid-123")).toBe("guid-123");
     expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, null)).toBe(gitlabDedupeKey);
-    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", {
-      repository: { full_name: "durability/repo" },
-      push: {
-        changes: [{
-          new: {
-            type: "branch",
-            name: "main",
-            target: { hash: "feedfacefeedfacefeedfacefeedfacefeedface", message: "x" },
+    expect(
+      vcsWebhookDeliveryId(
+        "bitbucket",
+        "repo:push",
+        {
+          repository: { full_name: "durability/repo" },
+          push: {
+            changes: [
+              {
+                new: {
+                  type: "branch",
+                  name: "main",
+                  target: { hash: "feedfacefeedfacefeedfacefeedfacefeedface", message: "x" },
+                },
+              },
+            ],
           },
-        }],
-      },
-    }, null)).toBe(bitbucketDedupeKey);
+        },
+        null,
+      ),
+    ).toBe(bitbucketDedupeKey);
 
     const gitlabRelease = { ...gitlabPayload, ref: "refs/heads/release" };
     expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabRelease, null)).not.toBe(gitlabDedupeKey);
@@ -114,22 +124,36 @@ describe("vcs webhook durability", () => {
       repository: { full_name: "durability/repo" },
       push: { changes: [bitbucketTag, bitbucketBranch] },
     };
-    const bitbucketBranchKey = vcsWebhookDeliveryId("bitbucket", "repo:push", {
-      repository: { full_name: "durability/repo" },
-      push: { changes: [bitbucketBranch] },
-    }, null);
-    const bitbucketTagKey = vcsWebhookDeliveryId("bitbucket", "repo:push", {
-      repository: { full_name: "durability/repo" },
-      push: { changes: [bitbucketTag] },
-    }, null);
+    const bitbucketBranchKey = vcsWebhookDeliveryId(
+      "bitbucket",
+      "repo:push",
+      {
+        repository: { full_name: "durability/repo" },
+        push: { changes: [bitbucketBranch] },
+      },
+      null,
+    );
+    const bitbucketTagKey = vcsWebhookDeliveryId(
+      "bitbucket",
+      "repo:push",
+      {
+        repository: { full_name: "durability/repo" },
+        push: { changes: [bitbucketTag] },
+      },
+      null,
+    );
     expect(bitbucketBranchKey).toBe(bitbucketDedupeKey);
     expect(bitbucketTagKey).not.toBe(bitbucketBranchKey);
     expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, null)).toBe(
       vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChangeReversed, null),
     );
     expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, null)).not.toBe(bitbucketBranchKey);
-    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, "gitlab-request-uuid")).toBe("gitlab:gitlab-request-uuid");
-    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, "bitbucket-request-uuid")).toBe("bitbucket:bitbucket-request-uuid");
+    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, "gitlab-request-uuid")).toBe(
+      "gitlab:gitlab-request-uuid",
+    );
+    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, "bitbucket-request-uuid")).toBe(
+      "bitbucket:bitbucket-request-uuid",
+    );
 
     // Unparseable payloads fall back to no dedupe rather than collapsing distinct events.
     expect(vcsWebhookDeliveryId("gitlab", "Push Hook", {}, null)).toBeNull();
@@ -154,8 +178,15 @@ describe("vcs webhook durability", () => {
     // occupies the claim queue head).
     await db.delete(durableJobs).where(eq(durableJobs.kind, "vcs-webhook"));
     await db.delete(githubWebhookDeliveries);
-    await db.insert(githubWebhookDeliveries).values({ id: failingDeliveryId, status: "queued", receivedAt: Date.now() });
-    await enqueueVcsWebhookJob({ provider: "github", eventName: "push", payload: { _forceFail: true }, deliveryId: failingDeliveryId });
+    await db
+      .insert(githubWebhookDeliveries)
+      .values({ id: failingDeliveryId, status: "queued", receivedAt: Date.now() });
+    await enqueueVcsWebhookJob({
+      provider: "github",
+      eventName: "push",
+      payload: { _forceFail: true },
+      deliveryId: failingDeliveryId,
+    });
 
     // Simulate the durable worker's retry loop: each cycle claims the
     // job, the handler throws, and the worker requeues until attempts
@@ -171,27 +202,39 @@ describe("vcs webhook durability", () => {
       // directly to isolate the queue/admin-retry contract from provider
       // parsing.
       if (claimed.attempts >= DURABLE_MAX_ATTEMPTS) {
-        await db.update(githubWebhookDeliveries).set({ status: "failed" }).where(eq(githubWebhookDeliveries.id, failingDeliveryId));
+        await db
+          .update(githubWebhookDeliveries)
+          .set({ status: "failed" })
+          .where(eq(githubWebhookDeliveries.id, failingDeliveryId));
         await db.update(durableJobs).set({ status: "failed" }).where(eq(durableJobs.id, claimed.id));
       } else {
-        await db.update(durableJobs)
+        await db
+          .update(durableJobs)
           .set({ status: "queued", runAfter: Date.now() - 1 })
           .where(eq(durableJobs.id, claimed.id));
       }
     }
     const deadJob = await jobByDedupeKey(failingDeliveryId);
     expect(deadJob?.attempts).toBe(DURABLE_MAX_ATTEMPTS);
-    expect((await db.query.githubWebhookDeliveries.findFirst({
-      where: eq(githubWebhookDeliveries.id, failingDeliveryId),
-    }))?.status).toBe("failed");
+    expect(
+      (
+        await db.query.githubWebhookDeliveries.findFirst({
+          where: eq(githubWebhookDeliveries.id, failingDeliveryId),
+        })
+      )?.status,
+    ).toBe("failed");
 
     // Admin retry re-arms a dead-lettered delivery and preserves the dedupe key.
     expect(await retryFailedVcsWebhookDelivery(failingDeliveryId)).toBe(true);
     const retryJob = await jobByDedupeKey(failingDeliveryId);
     expect(retryJob?.status).toBe("queued");
-    expect((await db.query.githubWebhookDeliveries.findFirst({
-      where: eq(githubWebhookDeliveries.id, failingDeliveryId),
-    }))?.status).toBe("queued");
+    expect(
+      (
+        await db.query.githubWebhookDeliveries.findFirst({
+          where: eq(githubWebhookDeliveries.id, failingDeliveryId),
+        })
+      )?.status,
+    ).toBe("queued");
     // Retry of a never-failed delivery is a no-op.
     expect(await retryFailedVcsWebhookDelivery("github:never-failed")).toBe(false);
   });
@@ -230,15 +273,17 @@ describe("vcs webhook durability", () => {
   test("gitlab webhook route ACKs after durable enqueue (todo 190)", async () => {
     process.env["GITLAB_WEBHOOK_SECRET"] = "durability-secret";
     const rawBody = JSON.stringify(gitlabPayload);
-    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-gitlab-event": "Push Hook",
-        "x-gitlab-token": "durability-secret",
-      },
-      body: rawBody,
-    }));
+    const response = await app.handle(
+      new Request("http://127.0.0.1/api/webhooks/gitlab", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-gitlab-event": "Push Hook",
+          "x-gitlab-token": "durability-secret",
+        },
+        body: rawBody,
+      }),
+    );
     expect(response.status).toBe(200);
     // Worker-disabled test node: the delivery was processed inline, not stranded queued.
     const delivery = await db.query.githubWebhookDeliveries.findFirst({

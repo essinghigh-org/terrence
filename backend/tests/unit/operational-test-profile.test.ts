@@ -40,18 +40,32 @@ describe("operational test profiles", () => {
   test("derives repeatable bounded fixture names", () => {
     expect(operationalFixtureSuffix("eng21", "terraform")).toBe("eng21-terraform");
     expect(operationalFixtureSuffix("a".repeat(32), "terraform").length).toBeLessThanOrEqual(30);
-    expect(`pe2e-proj-${operationalFixtureSuffix("eng21-terraform-current", "terraform")}`.length).toBeLessThanOrEqual(40);
-    expect(operationalFixtureSuffix("a".repeat(32), "terraform")).not.toBe(operationalFixtureSuffix("a".repeat(31) + "b", "terraform"));
-    expect(operationalFixtureSuffix("a".repeat(32), "terraform")).toBe(operationalFixtureSuffix("a".repeat(32), "terraform"));
+    expect(`pe2e-proj-${operationalFixtureSuffix("eng21-terraform-current", "terraform")}`.length).toBeLessThanOrEqual(
+      40,
+    );
+    expect(operationalFixtureSuffix("a".repeat(32), "terraform")).not.toBe(
+      operationalFixtureSuffix("a".repeat(31) + "b", "terraform"),
+    );
+    expect(operationalFixtureSuffix("a".repeat(32), "terraform")).toBe(
+      operationalFixtureSuffix("a".repeat(32), "terraform"),
+    );
   });
 
   test("redacts credentials from environments and diagnostics", () => {
-    expect(redactOperationalEnvironment({ TOKEN: "secret-token", SAFE: "value", DATABASE_URL: "postgres://u:p@localhost/db" })).toEqual({
+    expect(
+      redactOperationalEnvironment({
+        TOKEN: "secret-token",
+        SAFE: "value",
+        DATABASE_URL: "postgres://u:p@localhost/db",
+      }),
+    ).toEqual({
       TOKEN: "[redacted]",
       SAFE: "value",
       DATABASE_URL: "postgres://u:[redacted]@localhost/db",
     });
-    expect(redactOperationalDiagnostic("Authorization: Bearer abc password=topsecret")).toBe("Authorization: Bearer [redacted] password=[redacted]");
+    expect(redactOperationalDiagnostic("Authorization: Bearer abc password=topsecret")).toBe(
+      "Authorization: Bearer [redacted] password=[redacted]",
+    );
   });
 
   test("creates isolated directories and process groups", async () => {
@@ -59,7 +73,10 @@ describe("operational test profiles", () => {
     createdDirectories.push(directory);
     expect(directory.startsWith(tmpdir())).toBe(true);
     if (process.platform !== "linux") return;
-    const child = Bun.spawn(managedCommand(["bun", "-e", "setTimeout(() => {}, 60000)"]), { stdout: "ignore", stderr: "ignore" });
+    const child = Bun.spawn(managedCommand(["bun", "-e", "setTimeout(() => {}, 60000)"]), {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
     await terminateManagedProcess(child, 100);
     expect(await child.exited).not.toBe(0);
   }, 10_000);

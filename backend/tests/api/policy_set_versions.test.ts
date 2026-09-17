@@ -4,13 +4,7 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  policySets,
-  users,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, policySets, users } from "../../src/db/schema";
 
 describe("policy set version uploads", () => {
   const suffix = crypto.randomUUID();
@@ -21,20 +15,24 @@ describe("policy set version uploads", () => {
   let policySetId = "";
 
   const request = (path: string, method = "GET", body?: BodyInit, authenticated = true): Promise<Response> =>
-    app.handle(new Request(new URL(path, "http://terrence.test"), {
-      method,
-      headers: {
-        ...(authenticated ? { Authorization: `Bearer ${token}` } : {}),
-        ...(body === undefined ? {} : { "Content-Type": "application/octet-stream" }),
-      },
-      ...(body === undefined ? {} : { body }),
-    }));
+    app.handle(
+      new Request(new URL(path, "http://terrence.test"), {
+        method,
+        headers: {
+          ...(authenticated ? { Authorization: `Bearer ${token}` } : {}),
+          ...(body === undefined ? {} : { "Content-Type": "application/octet-stream" }),
+        },
+        ...(body === undefined ? {} : { body }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId });
+    await db
+      .insert(apiTokens)
+      .values({ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId });
     policySetId = `polset-${crypto.randomUUID()}`;
     await db.insert(policySets).values({ id: policySetId, orgId, name: "Uploaded policies", kind: "opa" });
   });

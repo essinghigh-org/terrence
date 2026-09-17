@@ -7,8 +7,14 @@ import { TEST_PATHS } from "./helpers/fixture";
 
 let server: TestServer;
 let page: BrowserPage;
-beforeAll(async () => { server = await startTestServer(); page = await createBrowser(); });
-afterAll(async () => { page?.close(); await server?.close(); });
+beforeAll(async () => {
+  server = await startTestServer();
+  page = await createBrowser();
+});
+afterAll(async () => {
+  page?.close();
+  await server?.close();
+});
 
 async function typeComment(): Promise<void> {
   await page.waitForSelector("#run-comment");
@@ -21,12 +27,18 @@ async function typeComment(): Promise<void> {
 }
 async function choose(label: string): Promise<void> {
   await page.waitForSelector('[role="dialog"]');
-  await page.evaluate(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(button => button.textContent === ${JSON.stringify(label)}).click()`);
+  await page.evaluate(
+    `Array.from(document.querySelectorAll('[role="dialog"] button')).find(button => button.textContent === ${JSON.stringify(label)}).click()`,
+  );
   await page.waitForSelector('[role="dialog"]', { state: "hidden" });
 }
 
 test("built app preserves comments across canceled Back/Forward and discards only after confirmation", async () => {
-  await page.goto(`${server.baseUrl}${TEST_PATHS.workspace}`, { initStorage: authInitStorage(), waitUntil: "networkidle", timeout: 15000 });
+  await page.goto(`${server.baseUrl}${TEST_PATHS.workspace}`, {
+    initStorage: authInitStorage(),
+    waitUntil: "networkidle",
+    timeout: 15000,
+  });
   await page.waitForSelector(`a[href="${TEST_PATHS.runDetail}"]`);
   await page.click(`a[href="${TEST_PATHS.runDetail}"]`);
   await typeComment();
@@ -35,7 +47,9 @@ test("built app preserves comments across canceled Back/Forward and discards onl
   await expectNoA11yViolations(page, { filterInputPlaceholderContrast: true });
   await choose("Stay");
   await page.waitForURL(TEST_PATHS.runDetail);
-  expect(await page.evaluate<string>("document.querySelector('#run-comment').value")).toBe("Unsaved browser regression comment");
+  expect(await page.evaluate<string>("document.querySelector('#run-comment').value")).toBe(
+    "Unsaved browser regression comment",
+  );
   await page.click(`a[href="${TEST_PATHS.workspace}"]`);
   await choose("Discard and leave");
   await page.waitForSelector("#run-comment", { state: "hidden" });
@@ -45,7 +59,9 @@ test("built app preserves comments across canceled Back/Forward and discards onl
   await page.evaluate("history.forward()");
   await choose("Stay");
   await page.waitForURL(TEST_PATHS.runDetail);
-  expect(await page.evaluate<string>("document.querySelector('#run-comment').value")).toBe("Unsaved browser regression comment");
+  expect(await page.evaluate<string>("document.querySelector('#run-comment').value")).toBe(
+    "Unsaved browser regression comment",
+  );
   await page.evaluate("history.forward()");
   await choose("Discard and leave");
   await page.waitForSelector("#run-comment", { state: "hidden" });

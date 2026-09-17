@@ -1,9 +1,7 @@
 const MCP_PROTOCOL_VERSION = "2026-07-28";
 
 function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 /** Upgrade a JSON-RPC RequestInit to the modern stateless MCP HTTP envelope. */

@@ -194,7 +194,9 @@ describe("Registry module sync on tag push", () => {
     expect(other?.lastSyncAttemptAt).toBeNull();
 
     // Same repo but the tag does not match the tag prefix: skipped.
-    const wrongPrefix = await db.query.registryModules.findFirst({ where: eq(registryModules.id, wrongPrefixModuleId) });
+    const wrongPrefix = await db.query.registryModules.findFirst({
+      where: eq(registryModules.id, wrongPrefixModuleId),
+    });
     expect(wrongPrefix?.lastSyncAttemptAt).toBeNull();
 
     // Same repository identifier, but a different GitHub host: never routed.
@@ -203,7 +205,9 @@ describe("Registry module sync on tag push", () => {
 
     // Same host and repository, but a different GitHub App installation:
     // installation identity must also remain isolated.
-    const otherInstallation = await db.query.registryModules.findFirst({ where: eq(registryModules.id, otherInstallationModuleId) });
+    const otherInstallation = await db.query.registryModules.findFirst({
+      where: eq(registryModules.id, otherInstallationModuleId),
+    });
     expect(otherInstallation?.lastSyncAttemptAt).toBeNull();
   });
 });

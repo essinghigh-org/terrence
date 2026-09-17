@@ -8,7 +8,11 @@ test("workspace core routes persist settings and execute from the configured sub
   const testDir = await mkdtemp(join(tmpdir(), "terrence-workspace-core-"));
 
   try {
-    const child = Bun.spawn([Bun.which("bun")!, "-e", `
+    const child = Bun.spawn(
+      [
+        Bun.which("bun")!,
+        "-e",
+        `
       const { chmod, mkdir, readFile, rm, writeFile } = await import("fs/promises");
       const { join } = await import("path");
       const { tmpdir } = await import("os");
@@ -245,29 +249,32 @@ test("workspace core routes persist settings and execute from the configured sub
         safeDeleteByName: safeDeleteByName.status,
       }));
       process.exit(0);
-    `], {
-      cwd: join(import.meta.dir, "../.."),
-      env: {
-        ...Bun.env,
-        TEST_DIR: testDir,
-        DATABASE_URL: `file:${join(testDir, "terrence.db")}`,
-        STORAGE_DIR: join(testDir, "storage"),
-        NODE_ENV: "production",
-        PUBLIC_URL: "https://tfe.example.test",
-        SIMULATED_RUNS: "false",
-        // Fake tofu is fabricated under this spawn's storage dir; keep the
-        // binary cache test-local (setup.ts defaults it to the shared cache).
-        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
-        // Run queue executes the fabricated runs in the spawned app.
-        TERRENCE_DISABLE_WORKER: "0",
-        // Let the sandboxed fake-tofu write its cwd record file.
-        TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
-        TERRENCE_SANDBOX_EXTRA_RW_ALLOWED: "true",
-        TERRENCE_RUN_SANDBOX: process.env["TERRENCE_RUN_SANDBOX"] ?? (probeLandlockAbi() >= 1 ? "true" : "false"),
+    `,
+      ],
+      {
+        cwd: join(import.meta.dir, "../.."),
+        env: {
+          ...Bun.env,
+          TEST_DIR: testDir,
+          DATABASE_URL: `file:${join(testDir, "terrence.db")}`,
+          STORAGE_DIR: join(testDir, "storage"),
+          NODE_ENV: "production",
+          PUBLIC_URL: "https://tfe.example.test",
+          SIMULATED_RUNS: "false",
+          // Fake tofu is fabricated under this spawn's storage dir; keep the
+          // binary cache test-local (setup.ts defaults it to the shared cache).
+          TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
+          // Run queue executes the fabricated runs in the spawned app.
+          TERRENCE_DISABLE_WORKER: "0",
+          // Let the sandboxed fake-tofu write its cwd record file.
+          TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
+          TERRENCE_SANDBOX_EXTRA_RW_ALLOWED: "true",
+          TERRENCE_RUN_SANDBOX: process.env["TERRENCE_RUN_SANDBOX"] ?? (probeLandlockAbi() >= 1 ? "true" : "false"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
       },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    );
 
     const [exitCode, stdout, stderr] = await Promise.all([
       child.exited,

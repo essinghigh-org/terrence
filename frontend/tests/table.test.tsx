@@ -10,8 +10,16 @@ afterEach((): void => {
 test("tables expose a keyboard-focusable horizontal scroll region", () => {
   const view = render(
     <Table scrollLabel="Workspace results">
-      <TableHeader><TableRow><TableHead>Name</TableHead></TableRow></TableHeader>
-      <TableBody><TableRow><TableCell>production</TableCell></TableRow></TableBody>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Name</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow>
+          <TableCell>production</TableCell>
+        </TableRow>
+      </TableBody>
     </Table>,
   );
   const region = view.getByRole("region", { name: "Workspace results" });

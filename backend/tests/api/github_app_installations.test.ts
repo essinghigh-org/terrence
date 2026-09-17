@@ -30,13 +30,11 @@ const apiToken = `github-app-token-${suffix}`;
 const outsiderToken = `github-app-outsider-token-${suffix}`;
 const installationId = 7_654_321;
 const originalFetch = globalThis.fetch;
-const originalEnvironment = Object.fromEntries([
-  "GITHUB_APP_API_URL",
-  "GITHUB_APP_HTTP_URL",
-  "GITHUB_APP_ID",
-  "GITHUB_APP_PRIVATE_KEY",
-  "GITHUB_APP_SLUG",
-].map((key): [string, string | undefined] => [key, process.env[key]]));
+const originalEnvironment = Object.fromEntries(
+  ["GITHUB_APP_API_URL", "GITHUB_APP_HTTP_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_SLUG"].map(
+    (key): [string, string | undefined] => [key, process.env[key]],
+  ),
+);
 
 let publicKey = "";
 let providerMode: "valid" | "mismatch" = "valid";
@@ -54,19 +52,23 @@ function restoreEnvironment(): void {
 }
 
 function request(path: string, token: string | null = apiToken, accept?: string): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    headers: {
-      ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
-      ...(accept === undefined ? {} : { Accept: accept }),
-    },
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      headers: {
+        ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
+        ...(accept === undefined ? {} : { Accept: accept }),
+      },
+    }),
+  );
 }
 
 function requestDelete(path: string, token: string | null = apiToken): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method: "DELETE",
-    headers: token === null ? {} : { Authorization: `Bearer ${token}` },
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method: "DELETE",
+      headers: token === null ? {} : { Authorization: `Bearer ${token}` },
+    }),
+  );
 }
 
 async function startSetup(token = apiToken): Promise<{ response: Response; state: string }> {
@@ -74,7 +76,7 @@ async function startSetup(token = apiToken): Promise<{ response: Response; state
   const location = response.headers.get("location");
   return {
     response,
-    state: location === null ? "" : new URL(location).searchParams.get("state") ?? "",
+    state: location === null ? "" : (new URL(location).searchParams.get("state") ?? ""),
   };
 }
 
@@ -98,9 +100,7 @@ beforeAll(async () => {
 
   const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : input.toString();
-    const authorization = input instanceof Request
-      ? input.headers.get("authorization")
-      : null;
+    const authorization = input instanceof Request ? input.headers.get("authorization") : null;
     const headers = new Headers(init?.headers);
     providerRequests.push({
       authorization: authorization ?? headers.get("authorization"),
@@ -118,7 +118,11 @@ beforeAll(async () => {
       }
       return Response.json(
         { repositories: [{ full_name: "acme/first-repository", name: "first-repository" }] },
-        { headers: { Link: '<https://github.example/api/v3/installation/repositories?per_page=100&page=2>; rel="next"' } },
+        {
+          headers: {
+            Link: '<https://github.example/api/v3/installation/repositories?per_page=100&page=2>; rel="next"',
+          },
+        },
       );
     }
     return Response.json({
@@ -192,24 +196,30 @@ beforeEach(async () => {
   rawFetchCalls = 0;
   externalFetchOverride = undefined;
   process.env["GITHUB_APP_SLUG"] = "terrence-test";
-  await db.insert(organizationMemberships).values({
-    id: `mem-github-app-${suffix}`,
-    orgId,
-    role: "member",
-    userId,
-  }).onConflictDoNothing();
-  await db.insert(apiTokens).values([
-    {
-      id: apiTokenId,
-      token: legacyHashAuthenticationToken(apiToken),
+  await db
+    .insert(organizationMemberships)
+    .values({
+      id: `mem-github-app-${suffix}`,
+      orgId,
+      role: "member",
       userId,
-    },
-    {
-      id: outsiderTokenId,
-      token: legacyHashAuthenticationToken(outsiderToken),
-      userId: outsiderId,
-    },
-  ]).onConflictDoNothing();
+    })
+    .onConflictDoNothing();
+  await db
+    .insert(apiTokens)
+    .values([
+      {
+        id: apiTokenId,
+        token: legacyHashAuthenticationToken(apiToken),
+        userId,
+      },
+      {
+        id: outsiderTokenId,
+        token: legacyHashAuthenticationToken(outsiderToken),
+        userId: outsiderId,
+      },
+    ])
+    .onConflictDoNothing();
   await db.delete(githubAppInstallations).where(eq(githubAppInstallations.orgId, orgId));
 });
 
@@ -229,7 +239,9 @@ afterAll(async () => {
 describe("GitHub App installation setup", () => {
   test("authorizes the organization before redirecting to the configured App", async () => {
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, null)).status).toBe(404);
-    expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, outsiderToken)).status).toBe(404);
+    expect(
+      (await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, outsiderToken)).status,
+    ).toBe(404);
 
     delete process.env["GITHUB_APP_SLUG"];
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`)).status).toBe(422);
@@ -276,10 +288,9 @@ describe("GitHub App installation setup", () => {
 
   test("rechecks the initiating user's organization membership and token", async () => {
     const { state } = await startSetup();
-    await db.delete(organizationMemberships).where(and(
-      eq(organizationMemberships.orgId, orgId),
-      eq(organizationMemberships.userId, userId),
-    ));
+    await db
+      .delete(organizationMemberships)
+      .where(and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, userId)));
     expect((await callback(state)).status).toBe(403);
     expect(providerRequests).toHaveLength(0);
 
@@ -313,10 +324,7 @@ describe("GitHub App installation setup", () => {
     expect(claims.iss).toBe("12345");
 
     const stored = await db.query.githubAppInstallations.findFirst({
-      where: and(
-        eq(githubAppInstallations.orgId, orgId),
-        eq(githubAppInstallations.installationId, installationId),
-      ),
+      where: and(eq(githubAppInstallations.orgId, orgId), eq(githubAppInstallations.installationId, installationId)),
     });
     expect(stored).toBeDefined();
     if (stored === undefined) throw new Error("Installation was not stored");
@@ -341,9 +349,11 @@ describe("GitHub App installation setup", () => {
     providerMode = "mismatch";
     const { state } = await startSetup();
     expect((await callback(state)).status).toBe(502);
-    expect(await db.query.githubAppInstallations.findFirst({
-      where: eq(githubAppInstallations.orgId, orgId),
-    })).toBeUndefined();
+    expect(
+      await db.query.githubAppInstallations.findFirst({
+        where: eq(githubAppInstallations.orgId, orgId),
+      }),
+    ).toBeUndefined();
   });
 
   test("discovers all installation repositories across bounded Link pages", async () => {
@@ -357,14 +367,18 @@ describe("GitHub App installation setup", () => {
       installationId: installationId + 10,
     });
     try {
-      const response = await request(`/api/v2/organizations/${orgName}/vcs-connections/github-app:${localId}/repositories`);
+      const response = await request(
+        `/api/v2/organizations/${orgName}/vcs-connections/github-app:${localId}/repositories`,
+      );
       expect(response.status).toBe(200);
-      const body = await response.json() as { data?: { id: string }[] };
+      const body = (await response.json()) as { data?: { id: string }[] };
       expect(body.data?.map((repository): string => repository.id)).toEqual([
         "acme/first-repository",
         "acme/second-repository",
       ]);
-      expect(providerRequests.filter((entry): boolean => entry.url.includes("/installation/repositories"))).toHaveLength(2);
+      expect(
+        providerRequests.filter((entry): boolean => entry.url.includes("/installation/repositories")),
+      ).toHaveLength(2);
     } finally {
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
       if (previousApiUrl === undefined) delete process.env["GITHUB_APP_API_URL"];
@@ -383,10 +397,12 @@ describe("GitHub App installation setup", () => {
         url,
       });
       if (url.includes("/installation/repositories")) {
-        return Response.json({ repositories: [
-          { archived: true, full_name: "acme/archived-repository" },
-          { archived: false, full_name: "acme/active-repository" },
-        ] });
+        return Response.json({
+          repositories: [
+            { archived: true, full_name: "acme/archived-repository" },
+            { archived: false, full_name: "acme/active-repository" },
+          ],
+        });
       }
       if (url.includes("/statuses/")) {
         return new Response(JSON.stringify({ message: "No commit found for SHA" }), {
@@ -411,7 +427,7 @@ describe("GitHub App installation setup", () => {
     try {
       const response = await request(`/api/v2/organizations/${orgName}/github-app/diagnostics`);
       expect(response.status).toBe(200);
-      const body = await response.json() as {
+      const body = (await response.json()) as {
         data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
       };
       const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
@@ -442,12 +458,12 @@ describe("GitHub App installation setup", () => {
     try {
       const response = await request(`/api/v2/organizations/${orgName}/github-app/diagnostics`);
       expect(response.status).toBe(200);
-      const body = await response.json() as {
+      const body = (await response.json()) as {
         data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
       };
       const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
       expect(check).toEqual(expect.objectContaining({ ok: false, status: null }));
-      expect(check?.detail).toContain("reports Commit statuses permission as \"read\"");
+      expect(check?.detail).toContain('reports Commit statuses permission as "read"');
     } finally {
       accessTokenPermissions = previousPermissions;
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
@@ -492,7 +508,7 @@ describe("GitHub App installation setup", () => {
     try {
       const response = await request(`/api/v2/organizations/${orgName}/github-app/diagnostics`);
       expect(response.status).toBe(200);
-      const body = await response.json() as {
+      const body = (await response.json()) as {
         data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
       };
       const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
@@ -530,12 +546,15 @@ describe("GitHub App installation setup", () => {
       vcsRepo: { identifier: "acme/repository", githubAppInstallationId: localId },
     });
 
-    const outsider = await requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`, outsiderToken);
+    const outsider = await requestDelete(
+      `/api/v2/organizations/${orgName}/github-app/installations/${localId}`,
+      outsiderToken,
+    );
     expect(outsider.status).toBe(404);
 
     const blocked = await requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`);
     expect(blocked.status).toBe(409);
-    const blockedBody = await blocked.json() as { errors?: { detail?: string }[] };
+    const blockedBody = (await blocked.json()) as { errors?: { detail?: string }[] };
     expect(blockedBody.errors?.[0]?.detail).toContain("connected-workspace");
     expect(blockedBody.errors?.[0]?.detail).toContain("connected-policy-set");
 
@@ -543,7 +562,9 @@ describe("GitHub App installation setup", () => {
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     const removed = await requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`);
     expect(removed.status).toBe(204);
-    expect(await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, localId) })).toBeUndefined();
+    expect(
+      await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, localId) }),
+    ).toBeUndefined();
   });
 
   test("keeps installation deletion safe when a workspace reference races it", async () => {
@@ -566,7 +587,9 @@ describe("GitHub App installation setup", () => {
       }),
       requestDelete(`/api/v2/organizations/${orgName}/github-app/installations/${localId}`),
     ]);
-    const storedInstallation = await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, localId) });
+    const storedInstallation = await db.query.githubAppInstallations.findFirst({
+      where: eq(githubAppInstallations.id, localId),
+    });
     const storedWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
 
     expect(storedInstallation === undefined && storedWorkspace !== undefined).toBe(false);

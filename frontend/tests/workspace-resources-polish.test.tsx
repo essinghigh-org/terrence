@@ -18,21 +18,23 @@ afterEach((): void => {
 });
 
 test("shows searchable resources and redacts sensitive outputs", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
-        data: [{
-          id: "resource-1",
-          attributes: {
-            address: "aws_instance.web",
-            provider: "aws",
-            "provider-type": "aws_instance",
-            module: "root",
-            "updated-at": "2026-07-29",
+        data: [
+          {
+            id: "resource-1",
+            attributes: {
+              address: "aws_instance.web",
+              provider: "aws",
+              "provider-type": "aws_instance",
+              module: "root",
+              "updated-at": "2026-07-29",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/workspaces/ws-1/current-state-version-outputs") {
@@ -48,7 +50,8 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
         data: {
           id: "readme-run-1",
           attributes: {
-            content: "# Infrastructure\n\nA **safe** deployment.\n> Read this first.\n\n- Terraform\n- OpenTofu\n\n```hcl\nterraform {}\n```",
+            content:
+              "# Infrastructure\n\nA **safe** deployment.\n> Read this first.\n\n- Terraform\n- OpenTofu\n\n```hcl\nterraform {}\n```",
             "run-id": "run-1",
             "created-at": "2026-07-29T10:00:00.000Z",
           },
@@ -69,10 +72,12 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(<WorkspaceResources workspaceId="ws-1" />);
-  await waitFor((): void => { expect(view.getByText("aws_instance.web")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("aws_instance.web")).toBeTruthy();
+  });
   expect(view.getByRole("heading", { name: "README.md" })).toBeTruthy();
   expect(view.getByRole("heading", { name: "Infrastructure" })).toBeTruthy();
   expect(view.getByText("safe", { selector: "strong" })).toBeTruthy();
@@ -89,9 +94,9 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
   fireEvent.click(view.getByRole("tab", { name: "Dependency graph" }));
   await waitFor((): void => {
     const canvas = view.getByRole("region", { name: "Terraform resource dependency graph" });
-    expect(canvas.querySelector(".react-flow__node[data-id=\"aws_vpc.main\"]")).toBeTruthy();
-    expect(canvas.querySelector(".react-flow__node[data-id=\"aws_subnet.web\"]")).toBeTruthy();
-    expect(canvas.querySelector(".react-flow__edge[data-id=\"aws_vpc.main->aws_subnet.web\"]")).toBeTruthy();
+    expect(canvas.querySelector('.react-flow__node[data-id="aws_vpc.main"]')).toBeTruthy();
+    expect(canvas.querySelector('.react-flow__node[data-id="aws_subnet.web"]')).toBeTruthy();
+    expect(canvas.querySelector('.react-flow__edge[data-id="aws_vpc.main->aws_subnet.web"]')).toBeTruthy();
   });
 
   fireEvent.click(view.getByText("aws_subnet.web"));
@@ -113,7 +118,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
   expect(view.queryByLabelText("Resource details")).toBeNull();
 
   const canvas = view.getByRole("region", { name: "Terraform resource dependency graph" });
-  const edge = canvas.querySelector(".react-flow__edge[data-id=\"aws_vpc.main->aws_subnet.web\"]");
+  const edge = canvas.querySelector('.react-flow__edge[data-id="aws_vpc.main->aws_subnet.web"]');
   expect(edge).not.toBeNull();
   if (edge !== null) fireEvent.click(edge);
   await waitFor((): void => {
@@ -130,8 +135,8 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
 });
 
 test("paginates resources and outputs independently", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
@@ -152,10 +157,12 @@ test("paginates resources and outputs independently", async () => {
     if (url === "/api/v2/workspaces/ws-1/readme") return json({ errors: [{ status: "404" }] }, 404);
     if (url === "/api/v2/workspaces/ws-1/dependency-graph") return json({ errors: [{ status: "404" }] }, 404);
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(<WorkspaceResources workspaceId="ws-1" />);
-  await waitFor((): void => { expect(view.getByText("aws_instance.web_0")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("aws_instance.web_0")).toBeTruthy();
+  });
   expect(view.getByText("Page 1 of 2")).toBeTruthy();
   fireEvent.click(view.getByRole("button", { name: "Next resources page" }));
   expect(view.getByText("aws_instance.web_20")).toBeTruthy();

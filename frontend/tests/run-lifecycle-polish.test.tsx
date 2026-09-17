@@ -25,7 +25,12 @@ function requestUrl(input: string | URL | Request): string {
 
 function CurrentLocation(): React.JSX.Element {
   const location = useLocation();
-  return <output aria-label="Current location">{location.pathname}{location.search}</output>;
+  return (
+    <output aria-label="Current location">
+      {location.pathname}
+      {location.search}
+    </output>
+  );
 }
 
 /** Type into a controlled field the way React observes here (see
@@ -75,8 +80,8 @@ test("separates phase logs and only renders backend-authorized run actions", asy
       });
     }
     if (url === "/api/v2/runs/run-polished/actions/apply" && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      applyBody = isString(init.body) ? JSON.parse(init.body) as unknown : undefined;
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      applyBody = isString(init.body) ? (JSON.parse(init.body) as unknown) : undefined;
       applied = true;
       return new Response(null, { status: 202 });
     }
@@ -156,34 +161,37 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     if (url === "/api/v2/plans/plan-run-polished/json-output") {
       return json({
         terraform_version: "1.11.0",
-        action_invocations: [
-          { address: "terraform_data.first" },
-          { address: "terraform_data.second" },
+        action_invocations: [{ address: "terraform_data.first" }, { address: "terraform_data.second" }],
+        resource_changes: [
+          {
+            address: "aws_vpc.main",
+            type: "aws_vpc",
+            change: {
+              actions: ["create"],
+              before: null,
+              after: { cidr_block: "10.0.0.0/16" },
+            },
+          },
+          {
+            address: "aws_instance.web",
+            type: "aws_instance",
+            change: {
+              actions: ["create"],
+              before: null,
+              after: { instance_type: "t3.small" },
+              importing: { id: "i-web" },
+            },
+          },
         ],
-        resource_changes: [{
-          address: "aws_vpc.main",
-          type: "aws_vpc",
-          change: {
-            actions: ["create"],
-            before: null,
-            after: { cidr_block: "10.0.0.0/16" },
-          },
-        }, {
-          address: "aws_instance.web",
-          type: "aws_instance",
-          change: {
-            actions: ["create"],
-            before: null,
-            after: { instance_type: "t3.small" },
-            importing: { id: "i-web" },
-          },
-        }],
         configuration: {
           root_module: {
-            resources: [{ address: "aws_vpc.main", expressions: {} }, {
-              address: "aws_instance.web",
-              expressions: { vpc_id: { references: ["aws_vpc.main.id"] } },
-            }],
+            resources: [
+              { address: "aws_vpc.main", expressions: {} },
+              {
+                address: "aws_instance.web",
+                expressions: { vpc_id: { references: ["aws_vpc.main.id"] } },
+              },
+            ],
           },
         },
       });
@@ -191,35 +199,39 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     if (url === "/api/v2/runs/run-polished/run-events") {
       return json({
-        data: [{
-          id: "event-confirmed",
-          type: "run-events",
-          attributes: {
-            action: "apply",
-            "actor-username": "essinghigh",
-            "created-at": "2026-07-29T09:00:03.000Z",
-            details: { fromStatus: "planned", toStatus: "confirmed" },
+        data: [
+          {
+            id: "event-confirmed",
+            type: "run-events",
+            attributes: {
+              action: "apply",
+              "actor-username": "essinghigh",
+              "created-at": "2026-07-29T09:00:03.000Z",
+              details: { fromStatus: "planned", toStatus: "confirmed" },
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/runs/run-polished/comments") {
       return json({
-        data: [{
-          id: "comment-1",
-          type: "comments",
-          attributes: {
-            body: "Approved for production",
-            "actor-username": "essinghigh",
-            "created-at": "2026-07-29T09:00:02.500Z",
+        data: [
+          {
+            id: "comment-1",
+            type: "comments",
+            attributes: {
+              body: "Approved for production",
+              "actor-username": "essinghigh",
+              "created-at": "2026-07-29T09:00:02.500Z",
+            },
           },
-        }],
+        ],
       });
     }
     if (url.endsWith("/policy-checks")) return json({ data: [] });
     return phaseLogOrThrow(url);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   const writeText = mock(async (text: string): Promise<void> => {
     expect(text).toBe("run-polished");
   });
@@ -247,37 +259,36 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(planSection).not.toBeNull();
   expect(applySection).not.toBeNull();
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  expect((planSection!).open).toBeTrue();
+  expect(planSection!.open).toBeTrue();
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  expect((applySection!).open).toBeFalse();
+  expect(applySection!.open).toBeFalse();
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  const planLog = (planSection!).querySelector("pre");
+  const planLog = planSection!.querySelector("pre");
   // SAFETY: closest("details") above resolved the details elements for the headings.
-  const applyLog = (applySection!).querySelector("pre");
+  const applyLog = applySection!.querySelector("pre");
   expect(planLog?.textContent).toBe("PLAN_PHASE_ONLY\nPLAN_PHASE_SECOND");
   expect(applyLog?.textContent).toBe("APPLY_PHASE_ONLY\nAPPLY_PHASE_SECOND");
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).queryByText("APPLY_PHASE_ONLY")).toBeNull();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).getByRole("link", { name: "Download raw log" })).toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).getByText(/Started/)).toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   // "Finished" renders twice by design: the heading status label and the
   // completed timestamp in the phase meta row.
   expect(within(planSection as HTMLElement).getAllByText(/Finished/)).toHaveLength(2);
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(applySection as HTMLElement).queryByText("PLAN_PHASE_ONLY")).toBeNull();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(applySection as HTMLElement).getByText("Resources pending")).toBeTruthy();
   expect(view.getByText("Plan & apply duration")).toBeTruthy();
   expect(view.getByText("Less than a minute")).toBeTruthy();
   expect(view.getByText("Resources changed", { selector: "dt" })).toBeTruthy();
   // One decision surface, stating what the run wants rather than four
   // separately-derived claims about it.
-  expect(view.getByRole("heading", { name: "Needs confirmation" }))
-    .toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  expect(view.getByRole("heading", { name: "Needs confirmation" })).toBeTruthy();
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).queryByText("&2 to import")).toBeNull();
   expect(view.getByText("Resources changed", { selector: "dt" }).closest("div")?.textContent).toContain("&2 to import");
   await waitFor((): void => {
@@ -285,35 +296,38 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   });
 
   expect(view.getByRole("button", { name: "Apply changes" })).toBeTruthy();
-  expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
-    .toBe("/app/acme/workspaces/production/runs?new-run=true");
+  expect(view.getByRole("link", { name: "New run" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/runs?new-run=true",
+  );
   expect(view.getAllByRole("navigation", { name: "Breadcrumb" })).toHaveLength(1);
   expect(view.getByLabelText("Copy run ID")).toBeTruthy();
   expect(view.getByText("Run ID:")).toBeTruthy();
   fireEvent.click(view.getByLabelText("Copy run ID"));
-  await waitFor((): void => { expect(writeText).toHaveBeenCalledWith("run-polished"); });
+  await waitFor((): void => {
+    expect(writeText).toHaveBeenCalledWith("run-polished");
+  });
   expect(view.queryByRole("button", { name: "Discard run" })).toBeNull();
   expect(view.queryByRole("button", { name: "Cancel run" })).toBeNull();
   expect(view.queryByRole("button", { name: "Force cancel" })).toBeNull();
 
   const activitySection = view.getByRole("heading", { name: "Activity" }).closest("section");
   const commentsSection = view.getByRole("heading", { name: "Comments" }).closest("section");
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(activitySection!).getByText("Run confirmed")).toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(activitySection!).getByText("Needs confirmation → Confirmed")).toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(activitySection!).getByText("essinghigh")).toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(commentsSection!).getByText("essinghigh")).toBeTruthy();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+  // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(commentsSection!).getByText("Approved for production")).toBeTruthy();
 
   fireEvent.click(view.getByRole("button", { name: "Apply changes" }));
   expect(view.getByRole("heading", { name: "Apply these changes?" })).toBeTruthy();
-// SAFETY: the component renders this element type for the queried role/label.
-// Scoped to the confirmation step: the comments section form below carries a
-// matching label since the UI rework.
+  // SAFETY: the component renders this element type for the queried role/label.
+  // Scoped to the confirmation step: the comments section form below carries a
+  // matching label since the UI rework.
   const confirmSection = view.getByRole("heading", { name: "Apply these changes?" }).closest("section");
   const actionComment = within(confirmSection!).getByLabelText(/^Comment/) as HTMLTextAreaElement;
   changeInput(actionComment, "Approved after reviewing the dependency graph");
@@ -336,16 +350,17 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
   let createBody: unknown;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
-    if (url === "/api/v2/workspaces/ws-1/runs" || url === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
+    if (url === "/api/v2/workspaces/ws-1/runs" || url === "/api/v2/workspaces/ws-1/runs?sort=-created-at")
+      return json({ data: [] });
     if (url === "/api/v2/runs" && init?.method === "POST") {
       if (!isString(init.body)) throw new Error("Expected a JSON request body");
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-plan-only" } }, 201);
     }
     return phaseLogOrThrow(url);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs?new-run=true"]}>
@@ -354,10 +369,7 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
           path="/app/:orgName/workspaces/:workspaceName/runs"
           element={<RunList workspaceId="ws-1" orgName="acme" workspaceName="production" />}
         />
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<p>Created run detail</p>}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<p>Created run detail</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -407,13 +419,13 @@ test("clones an existing run's settings into the new-run dialog", async () => {
     }
     if (url === "/api/v2/runs" && init?.method === "POST") {
       if (!isString(init.body)) throw new Error("Expected a JSON request body");
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-cloned" } }, 201);
     }
     return phaseLogOrThrow(url);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -422,10 +434,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
           path="/app/:orgName/workspaces/:workspaceName/runs"
           element={<RunList workspaceId="ws-1" orgName="acme" workspaceName="production" canStartRun />}
         />
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<p>Cloned run detail</p>}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<p>Cloned run detail</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -440,17 +449,18 @@ test("clones an existing run's settings into the new-run dialog", async () => {
   });
   // The cloned run's message, plan-only radio, destroy checkbox and address
   // fields are prefilled from the source run.
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByLabelText("Run name") as HTMLInputElement).value).toBe("Targeted DB migration");
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByRole("radio", { name: "Plan only" }) as HTMLInputElement).checked).toBe(true);
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByRole("checkbox", { name: "Destroy infrastructure" }) as HTMLInputElement).checked).toBe(true);
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   expect((view.getByLabelText("Target addresses") as HTMLInputElement).value).toBe("aws_instance.db");
-// SAFETY: the component renders this element type for the queried role/label.
-  expect((view.getByLabelText("Replace addresses") as HTMLInputElement).value)
-    .toBe("aws_instance.web, aws_instance.api");
+  // SAFETY: the component renders this element type for the queried role/label.
+  expect((view.getByLabelText("Replace addresses") as HTMLInputElement).value).toBe(
+    "aws_instance.web, aws_instance.api",
+  );
 
   fireEvent.click(view.getByRole("button", { name: "Start run" }));
   await waitFor((): void => {
@@ -474,23 +484,27 @@ test("clones an existing run's settings into the new-run dialog", async () => {
 });
 
 test("closing a deep-linked new-run dialog clears the query", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
-    if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs" || requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    if (
+      requestUrl(input) === "/api/v2/workspaces/ws-1/runs" ||
+      requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at"
+    )
+      return json({ data: [] });
     return phaseLogOrThrow(requestUrl(input));
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs?new-run=true"]}>
       <Routes>
         <Route
           path="/app/:orgName/workspaces/:workspaceName/runs"
-          element={(
+          element={
             <>
               <RunList workspaceId="ws-1" canStartRun />
               <CurrentLocation />
             </>
-          )}
+          }
         />
       </Routes>
     </MemoryRouter>,
@@ -502,26 +516,24 @@ test("closing a deep-linked new-run dialog clears the query", async () => {
   fireEvent.click(view.getByRole("button", { name: "Cancel" }));
   await waitFor((): void => {
     expect(view.queryByRole("dialog")).toBeNull();
-    expect(view.getByLabelText("Current location").textContent)
-      .toBe("/app/acme/workspaces/production/runs");
+    expect(view.getByLabelText("Current location").textContent).toBe("/app/acme/workspaces/production/runs");
   });
 });
 
 test("does not offer run creation without workspace permission", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
-    if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" || requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at") return json({ data: [] });
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    if (
+      requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" ||
+      requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at"
+    )
+      return json({ data: [] });
     return phaseLogOrThrow(requestUrl(input));
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
-      <RunList
-        workspaceId="ws-readonly"
-        orgName="acme"
-        workspaceName="production"
-        canStartRun={false}
-      />
+      <RunList workspaceId="ws-readonly" orgName="acme" workspaceName="production" canStartRun={false} />
     </MemoryRouter>,
   );
 
@@ -532,8 +544,8 @@ test("does not offer run creation without workspace permission", async () => {
 });
 
 test("omits stages that cannot run for a finished plan-only run", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-speculative") {
       return json({
@@ -557,23 +569,22 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
     if (url === "/api/v2/plans/plan-run-speculative/json-output") {
       return json({ resource_changes: [] });
     }
-    if (url.endsWith("/logs")
-      || url.endsWith("/policy-checks")
-      || url.endsWith("/run-events")
-      || url.endsWith("/comments")) {
+    if (
+      url.endsWith("/logs") ||
+      url.endsWith("/policy-checks") ||
+      url.endsWith("/run-events") ||
+      url.endsWith("/comments")
+    ) {
       return json({ data: [] });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return phaseLogOrThrow(url);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-speculative"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -589,8 +600,8 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
 });
 
 test("opens failed applies and presents their diagnostics", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-apply-error") {
       return json({
@@ -612,12 +623,14 @@ test("opens failed applies and presents their diagnostics", async () => {
     }
     if (url === "/api/v2/runs/run-apply-error/logs") {
       return json({
-        data: [{
-          attributes: {
-            phase: "apply",
-            "output-text": "Error: resource name already exists\n  on main.tf line 5",
+        data: [
+          {
+            attributes: {
+              phase: "apply",
+              "output-text": "Error: resource name already exists\n  on main.tf line 5",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/runs/run-apply-error/plan") {
@@ -646,21 +659,16 @@ test("opens failed applies and presents their diagnostics", async () => {
     if (url.startsWith("/api/v2/runs/run-apply-error/apply/log")) {
       return phaseLogResponse("Error: resource name already exists\n  on main.tf line 5\n", url);
     }
-    if (url.endsWith("/policy-checks")
-      || url.endsWith("/run-events")
-      || url.endsWith("/comments")) {
+    if (url.endsWith("/policy-checks") || url.endsWith("/run-events") || url.endsWith("/comments")) {
       return json({ data: [] });
     }
     return phaseLogOrThrow(url);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-apply-error"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -679,7 +687,9 @@ test("opens failed applies and presents their diagnostics", async () => {
   // The DiagnosticsBanner is collapsible and starts closed; expand it so the
   // structured error is visible, then assert it is rendered inside the banner's
   // list (structured diagnostics) rather than leaking only through a raw log.
-  const diagnosticsSummary = within(applySection).getByText(/Diagnostics/).closest("summary")!;
+  const diagnosticsSummary = within(applySection)
+    .getByText(/Diagnostics/)
+    .closest("summary")!;
   fireEvent.click(diagnosticsSummary);
   const diagnosticList = within(applySection).getByRole("list");
   expect(within(diagnosticList).getByText(/resource name already exists/)).toBeTruthy();
@@ -690,8 +700,8 @@ test("clears stale activity immediately when navigating to another run", async (
   const secondEvents = new Promise<Response>((resolve): void => {
     resolveSecondEvents = resolve;
   });
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     const runId = url.includes("run-activity-second") ? "run-activity-second" : "run-activity-first";
     if (url === `/api/v2/runs/${runId}`) {
@@ -710,14 +720,16 @@ test("clears stale activity immediately when navigating to another run", async (
     if (url === `/api/v2/runs/${runId}/run-events`) {
       if (runId === "run-activity-second") return await secondEvents;
       return json({
-        data: [{
-          id: "first-event",
-          attributes: {
-            action: "apply",
-            "actor-username": "first-user",
-            "created-at": "2026-07-29T09:00:00.000Z",
+        data: [
+          {
+            id: "first-event",
+            attributes: {
+              action: "apply",
+              "actor-username": "first-user",
+              "created-at": "2026-07-29T09:00:00.000Z",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === `/api/v2/runs/${runId}/plan`) {
@@ -734,16 +746,13 @@ test("clears stale activity immediately when navigating to another run", async (
       return json({ data: [] });
     }
     return phaseLogOrThrow(url);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-activity-first"]}>
       <Link to="/app/acme/workspaces/production/runs/run-activity-second">Next run</Link>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -764,8 +773,8 @@ test("clears stale activity immediately when navigating to another run", async (
 });
 
 test("shows a slow-run indicator when duration exceeds the recent baseline", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-slow") {
       return json({
@@ -797,24 +806,39 @@ test("shows a slow-run indicator when duration exceeds the recent baseline", asy
     }
     if (url === "/api/v2/runs/run-slow/plan") {
       return json({
-        data: { attributes: { status: "finished", "resource-additions": 0, "resource-changes": 0, "resource-destructions": 0, "resource-imports": 0 } },
+        data: {
+          attributes: {
+            status: "finished",
+            "resource-additions": 0,
+            "resource-changes": 0,
+            "resource-destructions": 0,
+            "resource-imports": 0,
+          },
+        },
       });
     }
     if (url === "/api/v2/applies/apply-run-slow") {
-      return json({ data: { attributes: { status: "finished", "resource-additions": 0, "resource-changes": 0, "resource-destructions": 0, "resource-imports": 0 } } });
+      return json({
+        data: {
+          attributes: {
+            status: "finished",
+            "resource-additions": 0,
+            "resource-changes": 0,
+            "resource-destructions": 0,
+            "resource-imports": 0,
+          },
+        },
+      });
     }
     if (url === "/api/v2/runs/run-slow/logs") return json({ data: [] });
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-slow"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );

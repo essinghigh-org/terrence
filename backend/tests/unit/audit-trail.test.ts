@@ -7,7 +7,9 @@ import {
   setAuditPrincipal,
 } from "../../src/lib/audit-trail";
 
-afterEach(() => { resetAuditRequest(); });
+afterEach(() => {
+  resetAuditRequest();
+});
 
 describe("audit event envelope", () => {
   test("captures request, credential and lifecycle context while redacting at construction", () => {

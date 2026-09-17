@@ -95,7 +95,7 @@ function executionModeSetting(resource: WorkspaceSettingsResource): ExecutionMod
 
 function agentPoolSetting(resource: WorkspaceSettingsResource): string {
   return resource.attributes["setting-overwrites"]?.["agent-pool"] === true
-    ? resource.attributes["agent-pool-id"] ?? ""
+    ? (resource.attributes["agent-pool-id"] ?? "")
     : "";
 }
 
@@ -109,7 +109,9 @@ type RemoteStateWorkspace = {
 function snapshotSharing(savedSnapshot: WorkspaceSettingsResource): RemoteStateSharing {
   return savedSnapshot.attributes["global-remote-state"] === true
     ? "global"
-    : savedSnapshot.attributes["project-remote-state"] === true ? "project" : "specific";
+    : savedSnapshot.attributes["project-remote-state"] === true
+      ? "project"
+      : "specific";
 }
 
 function explicitIacBinaryValue(value: unknown): "terraform" | "tofu" | null {
@@ -145,7 +147,9 @@ function effectiveEngineLabel(
     ? "agent execution default"
     : explicit !== null
       ? "this workspace"
-      : orgDefault !== null ? "organization default" : "built-in default";
+      : orgDefault !== null
+        ? "organization default"
+        : "built-in default";
   return `Effective engine: ${binary === "terraform" ? "Terraform" : "OpenTofu"} (${source}).`;
 }
 
@@ -178,8 +182,7 @@ function remoteStateConsumersChanged(
   consumerIds: readonly string[],
   savedKeys: string,
 ): boolean {
-  return sharing === "specific"
-    && [...consumerIds].sort().join(",") !== savedKeys;
+  return sharing === "specific" && [...consumerIds].sort().join(",") !== savedKeys;
 }
 
 function isSettingsDirty(
@@ -188,17 +191,19 @@ function isSettingsDirty(
   remoteStateConsumerIds: readonly string[],
   savedConsumerKeys: string,
 ): boolean {
-  return form.name !== savedSnapshot.attributes.name
-    || form.description !== (savedSnapshot.attributes.description ?? "")
-    || form.iacBinary !== (savedSnapshot.attributes["iac-binary"] === "terraform" ? "terraform" : "tofu")
-    || form.terraformVersion !== (savedSnapshot.attributes["terraform-version"] ?? "latest")
-    || form.executionMode !== executionModeSetting(savedSnapshot)
-    || form.agentPoolId !== agentPoolSetting(savedSnapshot)
-    || form.workingDirectory !== (savedSnapshot.attributes["working-directory"] ?? "")
-    || form.remoteStateSharing !== snapshotSharing(savedSnapshot)
-    || form.autoApply !== (savedSnapshot.attributes["auto-apply"] === true)
-    || form.autoApplyRunTrigger !== (savedSnapshot.attributes["auto-apply-run-trigger"] === true)
-    || remoteStateConsumersChanged(form.remoteStateSharing, remoteStateConsumerIds, savedConsumerKeys);
+  return (
+    form.name !== savedSnapshot.attributes.name ||
+    form.description !== (savedSnapshot.attributes.description ?? "") ||
+    form.iacBinary !== (savedSnapshot.attributes["iac-binary"] === "terraform" ? "terraform" : "tofu") ||
+    form.terraformVersion !== (savedSnapshot.attributes["terraform-version"] ?? "latest") ||
+    form.executionMode !== executionModeSetting(savedSnapshot) ||
+    form.agentPoolId !== agentPoolSetting(savedSnapshot) ||
+    form.workingDirectory !== (savedSnapshot.attributes["working-directory"] ?? "") ||
+    form.remoteStateSharing !== snapshotSharing(savedSnapshot) ||
+    form.autoApply !== (savedSnapshot.attributes["auto-apply"] === true) ||
+    form.autoApplyRunTrigger !== (savedSnapshot.attributes["auto-apply-run-trigger"] === true) ||
+    remoteStateConsumersChanged(form.remoteStateSharing, remoteStateConsumerIds, savedConsumerKeys)
+  );
 }
 
 type SavedWorkspaceSync = Readonly<{
@@ -270,9 +275,7 @@ async function syncRemoteStateConsumers(
     await fetchApi(`/workspaces/${workspaceId}/relationships/remote-state-consumers`, {
       method: "PATCH",
       body: JSON.stringify({
-        data: [...consumerIds]
-          .sort()
-          .map((id): { id: string; type: string } => ({ id, type: "workspaces" })),
+        data: [...consumerIds].sort().map((id): { id: string; type: string } => ({ id, type: "workspaces" })),
       }),
     });
     return null;
@@ -306,39 +309,40 @@ function GeneralSettingsSection({
   onDescriptionChange: (value: string) => void;
 }>): React.JSX.Element {
   return (
-    <SettingsSection
-      title="General settings"
-      description="Name and description for this workspace."
-    >
-        <FieldGroup>
-          <Field data-disabled={!canUpdate} data-invalid={invalidName}>
-            <FieldLabel htmlFor="workspace-name">Name</FieldLabel>
-            <Input
-              id="workspace-name"
-              name="workspace-name"
-              autoComplete="off"
-              spellCheck={false}
-              value={name}
-              onInput={(event): void => { onNameChange(event.currentTarget.value); }}
-              disabled={!canUpdate}
-            />
-            <FieldDescription>Use letters, numbers, underscores, or hyphens.</FieldDescription>
-            {invalidName && <FieldError>Enter a valid workspace name.</FieldError>}
-          </Field>
-          <Field data-disabled={!canUpdate}>
-            <FieldLabel htmlFor="workspace-description">Description</FieldLabel>
-            <Textarea
-              id="workspace-description"
-              name="workspace-description"
-              autoComplete="off"
-              spellCheck={false}
-              rows={3}
-              value={description}
-              onInput={(event): void => { onDescriptionChange(event.currentTarget.value); }}
-              disabled={!canUpdate}
-            />
-          </Field>
-        </FieldGroup>
+    <SettingsSection title="General settings" description="Name and description for this workspace.">
+      <FieldGroup>
+        <Field data-disabled={!canUpdate} data-invalid={invalidName}>
+          <FieldLabel htmlFor="workspace-name">Name</FieldLabel>
+          <Input
+            id="workspace-name"
+            name="workspace-name"
+            autoComplete="off"
+            spellCheck={false}
+            value={name}
+            onInput={(event): void => {
+              onNameChange(event.currentTarget.value);
+            }}
+            disabled={!canUpdate}
+          />
+          <FieldDescription>Use letters, numbers, underscores, or hyphens.</FieldDescription>
+          {invalidName && <FieldError>Enter a valid workspace name.</FieldError>}
+        </Field>
+        <Field data-disabled={!canUpdate}>
+          <FieldLabel htmlFor="workspace-description">Description</FieldLabel>
+          <Textarea
+            id="workspace-description"
+            name="workspace-description"
+            autoComplete="off"
+            spellCheck={false}
+            rows={3}
+            value={description}
+            onInput={(event): void => {
+              onDescriptionChange(event.currentTarget.value);
+            }}
+            disabled={!canUpdate}
+          />
+        </Field>
+      </FieldGroup>
     </SettingsSection>
   );
 }
@@ -383,129 +387,123 @@ function ExecutionSettingsSection({
   agentIgnoresOrgDefault: boolean;
 }>): React.JSX.Element {
   return (
-    <SettingsSection
-      title="Execution"
-      description="How and where infrastructure runs execute."
-    >
-        <FieldGroup className="gap-5">
-          <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-execution-mode">Execution mode</FieldLabel>
-              <Select
-                id="workspace-execution-mode"
-                name="execution-mode"
-                value={executionMode}
-                onValueChange={(value: string): void => {
-                  const nextMode: ExecutionModeSetting = value === "agent" || value === "local" || value === "remote"
-                    ? value
-                    : "inherit";
-                  setExecutionMode(nextMode);
-                  const nextEffectiveMode = nextMode === "inherit" ? projectExecutionMode : nextMode;
-                  if (nextEffectiveMode !== "agent") setAgentPoolId("");
-                }}
-                disabled={!canUpdate}
-              >
-                <SelectItem value="inherit">Use project default</SelectItem>
-                <SelectItem value="remote">Remote</SelectItem>
-                <SelectItem value="local">Local</SelectItem>
-                <SelectItem value="agent">Agent</SelectItem>
-              </Select>
-              <FieldDescription>
-                Use project default or override for this workspace.
-              </FieldDescription>
-            </Field>
+    <SettingsSection title="Execution" description="How and where infrastructure runs execute.">
+      <FieldGroup className="gap-5">
+        <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
+          <Field data-disabled={!canUpdate}>
+            <FieldLabel htmlFor="workspace-execution-mode">Execution mode</FieldLabel>
+            <Select
+              id="workspace-execution-mode"
+              name="execution-mode"
+              value={executionMode}
+              onValueChange={(value: string): void => {
+                const nextMode: ExecutionModeSetting =
+                  value === "agent" || value === "local" || value === "remote" ? value : "inherit";
+                setExecutionMode(nextMode);
+                const nextEffectiveMode = nextMode === "inherit" ? projectExecutionMode : nextMode;
+                if (nextEffectiveMode !== "agent") setAgentPoolId("");
+              }}
+              disabled={!canUpdate}
+            >
+              <SelectItem value="inherit">Use project default</SelectItem>
+              <SelectItem value="remote">Remote</SelectItem>
+              <SelectItem value="local">Local</SelectItem>
+              <SelectItem value="agent">Agent</SelectItem>
+            </Select>
+            <FieldDescription>Use project default or override for this workspace.</FieldDescription>
+          </Field>
 
-            {effectiveExecutionMode === "agent" && (
-              <Field data-disabled={!canUpdate}>
-                <FieldLabel htmlFor="workspace-agent-pool">Agent pool</FieldLabel>
-                <Select
-                  id="workspace-agent-pool"
-                  name="agent-pool"
-                  value={agentPoolId}
-                  onValueChange={setAgentPoolId}
-                  disabled={!canUpdate || poolsLoading}
-                >
-                  <SelectItem value="">Use project default</SelectItem>
-                  {agentPoolOptions.map((pool): React.JSX.Element => (
-                    <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>
-                  ))}
-                </Select>
-                <FieldDescription>
-                  Select a workspace-specific agent pool.
-                </FieldDescription>
-                {poolsLoading && <span className="text-xs text-muted-foreground">Loading agent pools…</span>}
-                {poolsError !== "" && <FieldError>{poolsError}</FieldError>}
-              </Field>
+          {effectiveExecutionMode === "agent" && (
+            <Field data-disabled={!canUpdate}>
+              <FieldLabel htmlFor="workspace-agent-pool">Agent pool</FieldLabel>
+              <Select
+                id="workspace-agent-pool"
+                name="agent-pool"
+                value={agentPoolId}
+                onValueChange={setAgentPoolId}
+                disabled={!canUpdate || poolsLoading}
+              >
+                <SelectItem value="">Use project default</SelectItem>
+                {agentPoolOptions.map(
+                  (pool): React.JSX.Element => (
+                    <SelectItem key={pool.id} value={pool.id}>
+                      {pool.attributes.name}
+                    </SelectItem>
+                  ),
+                )}
+              </Select>
+              <FieldDescription>Select a workspace-specific agent pool.</FieldDescription>
+              {poolsLoading && <span className="text-xs text-muted-foreground">Loading agent pools…</span>}
+              {poolsError !== "" && <FieldError>{poolsError}</FieldError>}
+            </Field>
+          )}
+        </FieldGroup>
+
+        <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
+          <Field data-disabled={!canUpdate}>
+            <FieldLabel htmlFor="workspace-iac-binary">Execution engine</FieldLabel>
+            <Select
+              id="workspace-iac-binary"
+              name="iac-binary"
+              value={iacBinary}
+              onValueChange={(value: string): void => {
+                setIacBinary(value as IacBinary);
+              }}
+              disabled={!canUpdate}
+            >
+              <SelectItem value="tofu">OpenTofu</SelectItem>
+              <SelectItem value="terraform">Terraform</SelectItem>
+            </Select>
+            <FieldDescription>Binary used for plans and applies. {engineLabel}</FieldDescription>
+            {agentIgnoresOrgDefault && (
+              <p className="text-sm text-muted-foreground mt-1">
+                <span className="font-medium text-foreground">Agent runs will use Terraform.</span> Agent execution
+                ignores the organization default when no engine is set here. Select an explicit engine to pin both local
+                and agent runs.
+              </p>
             )}
-          </FieldGroup>
-
-          <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-iac-binary">Execution engine</FieldLabel>
-              <Select
-                id="workspace-iac-binary"
-                name="iac-binary"
-                value={iacBinary}
-                onValueChange={(value: string): void => {
-                  setIacBinary(value as IacBinary);
-                }}
-                disabled={!canUpdate}
-              >
-                <SelectItem value="tofu">OpenTofu</SelectItem>
-                <SelectItem value="terraform">Terraform</SelectItem>
-              </Select>
-              <FieldDescription>
-                Binary used for plans and applies. {engineLabel}
-              </FieldDescription>
-              {agentIgnoresOrgDefault && (
-                <p className="text-sm text-muted-foreground mt-1">
-                  <span className="font-medium text-foreground">Agent runs will use Terraform.</span>
-                  {" "}Agent execution ignores the organization default when no engine is set here.
-                  Select an explicit engine to pin both local and agent runs.
-                </p>
-              )}
-            </Field>
-
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-terraform-version">Engine version</FieldLabel>
-              <Input
-                id="workspace-terraform-version"
-                name="terraform-version"
-                autoComplete="off"
-                spellCheck={false}
-                value={terraformVersion}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                  setTerraformVersion(event.target.value);
-                }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                  setTerraformVersion(event.currentTarget.value);
-                }}
-                placeholder="latest or 1.9.3"
-                disabled={!canUpdate}
-              />
-              <FieldDescription>
-                Use latest or a version constraint.
-              </FieldDescription>
-            </Field>
-          </FieldGroup>
+          </Field>
 
           <Field data-disabled={!canUpdate}>
-            <FieldLabel htmlFor="workspace-working-directory">{iacBinary === "tofu" ? "OpenTofu" : "Terraform"} working directory</FieldLabel>
+            <FieldLabel htmlFor="workspace-terraform-version">Engine version</FieldLabel>
             <Input
-              id="workspace-working-directory"
-              name="working-directory"
+              id="workspace-terraform-version"
+              name="terraform-version"
               autoComplete="off"
               spellCheck={false}
-              value={workingDirectory}
-              onInput={(event): void => { setWorkingDirectory(event.currentTarget.value); }}
-              placeholder="Defaults to repository root"
+              value={terraformVersion}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                setTerraformVersion(event.target.value);
+              }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                setTerraformVersion(event.currentTarget.value);
+              }}
+              placeholder="latest or 1.9.3"
               disabled={!canUpdate}
             />
-            <FieldDescription>
-              A relative subdirectory within the configuration where execution occurs.
-            </FieldDescription>
+            <FieldDescription>Use latest or a version constraint.</FieldDescription>
           </Field>
         </FieldGroup>
+
+        <Field data-disabled={!canUpdate}>
+          <FieldLabel htmlFor="workspace-working-directory">
+            {iacBinary === "tofu" ? "OpenTofu" : "Terraform"} working directory
+          </FieldLabel>
+          <Input
+            id="workspace-working-directory"
+            name="working-directory"
+            autoComplete="off"
+            spellCheck={false}
+            value={workingDirectory}
+            onInput={(event): void => {
+              setWorkingDirectory(event.currentTarget.value);
+            }}
+            placeholder="Defaults to repository root"
+            disabled={!canUpdate}
+          />
+          <FieldDescription>A relative subdirectory within the configuration where execution occurs.</FieldDescription>
+        </Field>
+      </FieldGroup>
     </SettingsSection>
   );
 }
@@ -536,69 +534,55 @@ function RemoteStateSection({
       title="State sharing"
       description="Which workspaces may read this workspace's outputs through remote state."
     >
-        <FieldGroup className="gap-4">
-          <Field data-disabled={!canUpdate}>
-            <FieldLabel htmlFor="workspace-remote-state-sharing">Remote state sharing</FieldLabel>
-            <Select
-              id="workspace-remote-state-sharing"
-              name="remote-state-sharing"
-              value={sharing}
-              onValueChange={(value: string): void => {
-                setSharing(value as RemoteStateSharing);
-              }}
-              disabled={!canUpdate}
-            >
-              <SelectItem value="specific">Specific approved workspaces</SelectItem>
-              <SelectItem value="project">All workspaces in this project</SelectItem>
-              <SelectItem value="global">All workspaces in this organization</SelectItem>
-            </Select>
-          </Field>
+      <FieldGroup className="gap-4">
+        <Field data-disabled={!canUpdate}>
+          <FieldLabel htmlFor="workspace-remote-state-sharing">Remote state sharing</FieldLabel>
+          <Select
+            id="workspace-remote-state-sharing"
+            name="remote-state-sharing"
+            value={sharing}
+            onValueChange={(value: string): void => {
+              setSharing(value as RemoteStateSharing);
+            }}
+            disabled={!canUpdate}
+          >
+            <SelectItem value="specific">Specific approved workspaces</SelectItem>
+            <SelectItem value="project">All workspaces in this project</SelectItem>
+            <SelectItem value="global">All workspaces in this organization</SelectItem>
+          </Select>
+        </Field>
 
-          {sharing === "specific" && (
-            <FieldSet
-              disabled={!canUpdate}
-              className="rounded-lg border border-border bg-muted/20 p-4"
-            >
-              <FieldLegend variant="label">Approved workspaces</FieldLegend>
-              <FieldDescription>
-                Select the workspaces that may read this workspace&apos;s outputs.
-              </FieldDescription>
-              {loadState === "loading" && (
-                <span
-                  role="status"
-                  className="flex items-center gap-2 text-sm text-muted-foreground"
-                >
-                  <Spinner data-icon="inline-start" />
-                  Loading approved workspaces…
-                </span>
-              )}
-              {loadState === "error" && (
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <FieldError role="alert">{loadError}</FieldError>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={onRetry}
-                  >
-                    Try again
-                  </Button>
-                  <p className="w-full text-sm text-muted-foreground">
-                    Saving other settings will leave the current approved workspace list unchanged.
-                  </p>
-                </div>
-              )}
-              {loadState === "ready" && workspaces.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  There are no other workspaces in this organization.
+        {sharing === "specific" && (
+          <FieldSet disabled={!canUpdate} className="rounded-lg border border-border bg-muted/20 p-4">
+            <FieldLegend variant="label">Approved workspaces</FieldLegend>
+            <FieldDescription>Select the workspaces that may read this workspace&apos;s outputs.</FieldDescription>
+            {loadState === "loading" && (
+              <span role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Spinner data-icon="inline-start" />
+                Loading approved workspaces…
+              </span>
+            )}
+            {loadState === "error" && (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <FieldError role="alert">{loadError}</FieldError>
+                <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+                  Try again
+                </Button>
+                <p className="w-full text-sm text-muted-foreground">
+                  Saving other settings will leave the current approved workspace list unchanged.
                 </p>
-              )}
-              {loadState === "ready" && workspaces.length > 0 && (
-                <FieldGroup
-                  data-slot="checkbox-group"
-                  className="max-h-56 gap-0 overflow-y-auto rounded-lg border border-border bg-background"
-                >
-                  {workspaces.map((candidate): React.JSX.Element => (
+              </div>
+            )}
+            {loadState === "ready" && workspaces.length === 0 && (
+              <p className="text-sm text-muted-foreground">There are no other workspaces in this organization.</p>
+            )}
+            {loadState === "ready" && workspaces.length > 0 && (
+              <FieldGroup
+                data-slot="checkbox-group"
+                className="max-h-56 gap-0 overflow-y-auto rounded-lg border border-border bg-background"
+              >
+                {workspaces.map(
+                  (candidate): React.JSX.Element => (
                     <Field
                       key={candidate.id}
                       orientation="horizontal"
@@ -608,9 +592,13 @@ function RemoteStateSection({
                         id={`remote-state-consumer-${candidate.id}`}
                         checked={consumerIds.includes(candidate.id)}
                         onCheckedChange={(checked: boolean): void => {
-                          setConsumerIds((current): string[] => checked
-                            ? current.includes(candidate.id) ? current : [...current, candidate.id]
-                            : current.filter((id): boolean => id !== candidate.id));
+                          setConsumerIds((current): string[] =>
+                            checked
+                              ? current.includes(candidate.id)
+                                ? current
+                                : [...current, candidate.id]
+                              : current.filter((id): boolean => id !== candidate.id),
+                          );
                         }}
                         disabled={!canUpdate}
                       />
@@ -618,12 +606,13 @@ function RemoteStateSection({
                         {candidate.attributes.name}
                       </FieldLabel>
                     </Field>
-                  ))}
-                </FieldGroup>
-              )}
-            </FieldSet>
-          )}
-        </FieldGroup>
+                  ),
+                )}
+              </FieldGroup>
+            )}
+          </FieldSet>
+        )}
+      </FieldGroup>
     </SettingsSection>
   );
 }
@@ -649,10 +638,7 @@ function SettingsFormFooter({
       {/* On success the button already says "Saved", so the live region goes
           sr-only rather than repeating it on screen. It stays mounted and
           visible for the permission message, which has no other home. */}
-      <span
-        role="status"
-        className={cn("text-sm text-muted-foreground", justSaved && "sr-only")}
-      >
+      <span role="status" className={cn("text-sm text-muted-foreground", justSaved && "sr-only")}>
         {justSaved ? "Settings saved." : canUpdate ? "" : "You do not have permission to update this workspace."}
       </span>
       <Button type="submit" disabled={saving || !canUpdate || invalidName || !dirty}>
@@ -675,24 +661,16 @@ export function WorkspaceSettings({
 }>): React.JSX.Element {
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
   const workspaceExecutionMode = parseExecutionMode(workspace.attributes["execution-mode"]);
-  const [iacBinary, setIacBinary] = useState<IacBinary>(
-    initialIacBinary(workspace.attributes["iac-binary"]),
-  );
-  const [terraformVersion, setTerraformVersion] = useState(
-    workspace.attributes["terraform-version"] ?? "latest",
-  );
+  const [iacBinary, setIacBinary] = useState<IacBinary>(initialIacBinary(workspace.attributes["iac-binary"]));
+  const [terraformVersion, setTerraformVersion] = useState(workspace.attributes["terraform-version"] ?? "latest");
   const [name, setName] = useState(workspace.attributes.name);
   const [description, setDescription] = useState(workspace.attributes.description ?? "");
   const [executionMode, setExecutionMode] = useState<ExecutionModeSetting>(executionModeSetting(workspace));
   const [agentPoolId, setAgentPoolId] = useState(agentPoolSetting(workspace));
   const [projectExecutionMode, setProjectExecutionMode] = useState<ExecutionMode>(workspaceExecutionMode);
   const [orgDefaultIacBinary, setOrgDefaultIacBinary] = useState<IacBinary | null>(null);
-  const [workingDirectory, setWorkingDirectory] = useState(
-    workspace.attributes["working-directory"] ?? "",
-  );
-  const [remoteStateSharing, setRemoteStateSharing] = useState<RemoteStateSharing>(
-    snapshotSharing(workspace),
-  );
+  const [workingDirectory, setWorkingDirectory] = useState(workspace.attributes["working-directory"] ?? "");
+  const [remoteStateSharing, setRemoteStateSharing] = useState<RemoteStateSharing>(snapshotSharing(workspace));
   const [autoApply, setAutoApply] = useState(workspace.attributes["auto-apply"] === true);
   const [autoApplyRunTrigger, setAutoApplyRunTrigger] = useState(
     workspace.attributes["auto-apply-run-trigger"] === true,
@@ -775,55 +753,62 @@ export function WorkspaceSettings({
         controller.signal,
         { retryAttempts: 0 },
       ),
-      fetchApi(
-        `/workspaces/${workspace.id}/relationships/remote-state-consumers`,
-        { signal: controller.signal },
-      ) as Promise<{ data?: { id: string; type?: string }[] }>,
-    ]).then(([workspaces, consumers]): void => {
-      if (controller.signal.aborted) return;
-      setRemoteStateWorkspaces(
-        workspaces
-          .filter((candidate): boolean => candidate.id !== workspace.id)
-          .sort((left, right): number => {
-            const byName = left.attributes.name.localeCompare(right.attributes.name);
-            return byName === 0 ? left.id.localeCompare(right.id) : byName;
-          }),
-      );
-      setRemoteStateConsumerIds([
-        ...new Set(
-          (Array.isArray(consumers.data) ? consumers.data : [])
-            .map((consumer): string => consumer.id)
-            .filter((id): boolean => id !== ""),
-        ),
-      ]);
-      setSavedConsumerKeys(
-        [
+      fetchApi(`/workspaces/${workspace.id}/relationships/remote-state-consumers`, {
+        signal: controller.signal,
+      }) as Promise<{ data?: { id: string; type?: string }[] }>,
+    ])
+      .then(([workspaces, consumers]): void => {
+        if (controller.signal.aborted) return;
+        setRemoteStateWorkspaces(
+          workspaces
+            .filter((candidate): boolean => candidate.id !== workspace.id)
+            .sort((left, right): number => {
+              const byName = left.attributes.name.localeCompare(right.attributes.name);
+              return byName === 0 ? left.id.localeCompare(right.id) : byName;
+            }),
+        );
+        setRemoteStateConsumerIds([
           ...new Set(
             (Array.isArray(consumers.data) ? consumers.data : [])
               .map((consumer): string => consumer.id)
               .filter((id): boolean => id !== ""),
           ),
-        ].sort().join(","),
-      );
-      setRemoteStateLoadState("ready");
-    }).catch((caught: unknown): void => {
-      if (controller.signal.aborted) return;
-      setRemoteStateLoadState("error");
-      setRemoteStateLoadError(
-        caught instanceof Error
-          ? `Could not load approved workspaces: ${caught.message}`
-          : "Could not load approved workspaces.",
-      );
-    });
+        ]);
+        setSavedConsumerKeys(
+          [
+            ...new Set(
+              (Array.isArray(consumers.data) ? consumers.data : [])
+                .map((consumer): string => consumer.id)
+                .filter((id): boolean => id !== ""),
+            ),
+          ]
+            .sort()
+            .join(","),
+        );
+        setRemoteStateLoadState("ready");
+      })
+      .catch((caught: unknown): void => {
+        if (controller.signal.aborted) return;
+        setRemoteStateLoadState("error");
+        setRemoteStateLoadError(
+          caught instanceof Error
+            ? `Could not load approved workspaces: ${caught.message}`
+            : "Could not load approved workspaces.",
+        );
+      });
 
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [canUpdate, orgName, remoteStateReload, workspace.id]);
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
     setProjectExecutionMode(workspaceExecutionMode);
     if (projectId === "") {
-      return (): void => { controller.abort(); };
+      return (): void => {
+        controller.abort();
+      };
     }
 
     void fetchApi<ProjectSettingsResponse>(`/projects/${encodeURIComponent(projectId)}`, { signal: controller.signal })
@@ -836,14 +821,18 @@ export function WorkspaceSettings({
         // project document cannot be read by the current principal.
       });
 
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [projectId, workspace.id, workspaceExecutionMode]);
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
     setOrgDefaultIacBinary(null);
     if (orgName === "") {
-      return (): void => { controller.abort(); };
+      return (): void => {
+        controller.abort();
+      };
     }
 
     void fetchApi<{ data?: { attributes?: { "default-iac-binary"?: string } } }>(
@@ -860,7 +849,9 @@ export function WorkspaceSettings({
         // organization document cannot be read by the current principal.
       });
 
-    return (): void => { controller.abort(); };
+    return (): void => {
+      controller.abort();
+    };
   }, [orgName, workspace.id]);
 
   const saveSettings = async (event: React.SyntheticEvent): Promise<void> => {
@@ -884,8 +875,8 @@ export function WorkspaceSettings({
     setError("");
     setSaved(false);
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`/workspaces/${workspace.id}`, {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi(`/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           data: {
@@ -894,7 +885,7 @@ export function WorkspaceSettings({
             attributes,
           },
         }),
-      }) as { data: WorkspaceSettingsResource };
+      })) as { data: WorkspaceSettingsResource };
       onSaved(response.data);
       const synced = savedWorkspaceSync(response.data, normalizedVersion);
       setSavedSnapshot(response.data);
@@ -935,8 +926,12 @@ export function WorkspaceSettings({
         invalidName={invalidName}
         name={name}
         description={description}
-        onNameChange={(value: string): void => { setName(value); }}
-        onDescriptionChange={(value: string): void => { setDescription(value); }}
+        onNameChange={(value: string): void => {
+          setName(value);
+        }}
+        onDescriptionChange={(value: string): void => {
+          setDescription(value);
+        }}
       />
 
       <ExecutionSettingsSection
@@ -966,44 +961,45 @@ export function WorkspaceSettings({
         setSharing={setRemoteStateSharing}
         loadState={remoteStateLoadState}
         loadError={remoteStateLoadError}
-        onRetry={(): void => { setRemoteStateReload((current): number => current + 1); }}
+        onRetry={(): void => {
+          setRemoteStateReload((current): number => current + 1);
+        }}
         workspaces={remoteStateWorkspaces}
         consumerIds={remoteStateConsumerIds}
         setConsumerIds={setRemoteStateConsumerIds}
       />
 
-      <SettingsSection
-        title="Automatic apply"
-        description="Whether successful plans apply on their own."
-      >
-          <FieldGroup className="gap-3">
-            <Field orientation="horizontal" data-disabled={!canUpdate}>
-              <Checkbox
-                id="workspace-auto-apply"
-                checked={autoApply}
-                onCheckedChange={(checked: boolean): void => { setAutoApply(checked); }}
-                disabled={!canUpdate}
-              />
-              <FieldContent>
-                <FieldLabel htmlFor="workspace-auto-apply">Auto-apply API, UI, and VCS runs</FieldLabel>
-                <FieldDescription>Apply changes automatically after a successful plan.</FieldDescription>
-              </FieldContent>
-            </Field>
-            <Field orientation="horizontal" data-disabled={!canUpdate}>
-              <Checkbox
-                id="workspace-auto-apply-run-trigger"
-                checked={autoApplyRunTrigger}
-                onCheckedChange={(checked: boolean): void => { setAutoApplyRunTrigger(checked); }}
-                disabled={!canUpdate}
-              />
-              <FieldContent>
-                <FieldLabel htmlFor="workspace-auto-apply-run-trigger">Auto-apply run-triggered runs</FieldLabel>
-                <FieldDescription>
-                  Apply runs created when an upstream workspace finishes.
-                </FieldDescription>
-              </FieldContent>
-            </Field>
-          </FieldGroup>
+      <SettingsSection title="Automatic apply" description="Whether successful plans apply on their own.">
+        <FieldGroup className="gap-3">
+          <Field orientation="horizontal" data-disabled={!canUpdate}>
+            <Checkbox
+              id="workspace-auto-apply"
+              checked={autoApply}
+              onCheckedChange={(checked: boolean): void => {
+                setAutoApply(checked);
+              }}
+              disabled={!canUpdate}
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="workspace-auto-apply">Auto-apply API, UI, and VCS runs</FieldLabel>
+              <FieldDescription>Apply changes automatically after a successful plan.</FieldDescription>
+            </FieldContent>
+          </Field>
+          <Field orientation="horizontal" data-disabled={!canUpdate}>
+            <Checkbox
+              id="workspace-auto-apply-run-trigger"
+              checked={autoApplyRunTrigger}
+              onCheckedChange={(checked: boolean): void => {
+                setAutoApplyRunTrigger(checked);
+              }}
+              disabled={!canUpdate}
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="workspace-auto-apply-run-trigger">Auto-apply run-triggered runs</FieldLabel>
+              <FieldDescription>Apply runs created when an upstream workspace finishes.</FieldDescription>
+            </FieldContent>
+          </Field>
+        </FieldGroup>
       </SettingsSection>
 
       {/* One submit saves all four sections, so the action belongs to the form

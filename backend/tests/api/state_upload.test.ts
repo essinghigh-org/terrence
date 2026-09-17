@@ -35,13 +35,15 @@ describe("Terraform/OpenTofu state import", () => {
       version: 4,
       serial: 1,
       lineage: "migration-lineage",
-      resources: [{
-        mode: "managed",
-        type: "null_resource",
-        name: "example",
-        provider: "provider[\"registry.terraform.io/hashicorp/null\"]",
-        instances: [{ schema_version: 0, attributes: { id: "example" }, sensitive_attributes: [], dependencies: [] }],
-      }],
+      resources: [
+        {
+          mode: "managed",
+          type: "null_resource",
+          name: "example",
+          provider: 'provider["registry.terraform.io/hashicorp/null"]',
+          instances: [{ schema_version: 0, attributes: { id: "example" }, sensitive_attributes: [], dependencies: [] }],
+        },
+      ],
     });
     const resource = await expectSuccessResponse(
       await request(`/api/v2/workspaces/${workspaceId}/state-versions/upload`, {
@@ -76,7 +78,9 @@ describe("Terraform/OpenTofu state import", () => {
         400,
       );
     }
-    expect(await db.select({ id: stateVersions.id }).from(stateVersions).where(eq(stateVersions.workspaceId, workspaceId))).toHaveLength(1);
+    expect(
+      await db.select({ id: stateVersions.id }).from(stateVersions).where(eq(stateVersions.workspaceId, workspaceId)),
+    ).toHaveLength(1);
   });
 
   it("validates lineage when completing a pending state version", async () => {
@@ -100,7 +104,9 @@ describe("Terraform/OpenTofu state import", () => {
       body: foreignState,
     });
     expect(rejected.status).toBe(422);
-    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, pendingResource.id) }))?.status).toBe("pending");
+    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, pendingResource.id) }))?.status).toBe(
+      "pending",
+    );
 
     const matchingState = JSON.stringify({ version: 4, serial: 2, lineage: "migration-lineage", resources: [] });
     const accepted = await request(`/api/v2/state-versions/${pendingResource.id}/upload`, {
@@ -122,7 +128,8 @@ describe("Terraform/OpenTofu state import", () => {
     });
     expect(malformedPending.status).toBe(201);
     const malformedPendingResource = (await malformedPending.json()).data as { id: string };
-    await db.update(stateVersions)
+    await db
+      .update(stateVersions)
       .set({ statePayload: "not-a-json-state" })
       .where(eq(stateVersions.id, pendingResource.id));
 
@@ -132,7 +139,9 @@ describe("Terraform/OpenTofu state import", () => {
       body: JSON.stringify({ version: 4, serial: 3, lineage: "migration-lineage", resources: [] }),
     });
     expect(malformedRejected.status).toBe(422);
-    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedPendingResource.id) }))?.status).toBe("pending");
+    expect(
+      (await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedPendingResource.id) }))?.status,
+    ).toBe("pending");
 
     const deleted = await request(`/api/v2/state-versions/${malformedPendingResource.id}`, {
       method: "DELETE",
@@ -140,6 +149,8 @@ describe("Terraform/OpenTofu state import", () => {
     });
     expect(deleted.status).toBe(204);
     expect(await deleted.text()).toBe("");
-    expect(await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedPendingResource.id) })).toBeUndefined();
+    expect(
+      await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedPendingResource.id) }),
+    ).toBeUndefined();
   });
 });

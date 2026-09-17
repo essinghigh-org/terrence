@@ -42,4 +42,4 @@ export const adminRoutes = new Elysia({ name: "admin" })
   .use(dbMigrationRoutes)
   .use(resourceBudgetRoutes)
   .use(backupRoutes)
-  .use(systemApiTokenAdminRoutes)
+  .use(systemApiTokenAdminRoutes);

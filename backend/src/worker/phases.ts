@@ -25,20 +25,29 @@ export type ExecutionPhase =
   | "discarded";
 
 const PHASE_ORDER: ExecutionPhase[] = [
-  "queued","planning","cost_estimating","policy_checking",
-  "planned","confirmed","applying","applied",
+  "queued",
+  "planning",
+  "cost_estimating",
+  "policy_checking",
+  "planned",
+  "confirmed",
+  "applying",
+  "applied",
 ];
 
 // Terminal phases that never need resume — the run has stopped.
 // Note: canceled is NOT terminal (re-queueable via force-execute), so it stays out.
 // See backend/src/lib/run-status.ts RUN_TERMINAL_STATUSES for the canonical source.
-const TERMINAL_PHASES: ReadonlySet<ExecutionPhase> = new Set([
-  "applied","errored","discarded",
-]);
+const TERMINAL_PHASES: ReadonlySet<ExecutionPhase> = new Set(["applied", "errored", "discarded"]);
 
 // Phases that have been observed to hold significant persisted state.
 const DURABLE_PHASES: ReadonlySet<ExecutionPhase> = new Set([
-  "planning","cost_estimating","policy_checking","planned","confirmed","applying",
+  "planning",
+  "cost_estimating",
+  "policy_checking",
+  "planned",
+  "confirmed",
+  "applying",
 ]);
 
 export function phaseOrder(phase: ExecutionPhase): number | undefined {

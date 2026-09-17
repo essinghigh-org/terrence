@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  agentPools,
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  projects,
-  users,
-} from "../../src/db/schema";
+import { agentPools, apiTokens, organizationMemberships, organizations, projects, users } from "../../src/db/schema";
 
 describe("project defaults and workspace inheritance", () => {
   const suffix = crypto.randomUUID();
@@ -20,14 +13,17 @@ describe("project defaults and workspace inheritance", () => {
   const token = `token-${suffix}`;
   const poolId = `apool-${suffix}`;
 
-  const request = (method: string, path: string, body?: unknown) => app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  const request = (method: string, path: string, body?: unknown) =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
@@ -67,16 +63,25 @@ describe("project defaults and workspace inheritance", () => {
     const listed = await request("GET", `/api/v2/organizations/${orgName}/projects`);
     expect(listed.status).toBe(200);
     const defaultProject = (await listed.json()).data.find(
-      (project: Readonly<{ attributes: Readonly<{ name: string }> }>): boolean => project.attributes.name === "Default Project",
+      (project: Readonly<{ attributes: Readonly<{ name: string }> }>): boolean =>
+        project.attributes.name === "Default Project",
     );
     expect(defaultProject).toBeDefined();
 
-    expect((await request("POST", `/api/v2/organizations/${orgName}/projects`, {
-      data: { type: "projects", attributes: { name: "Invalid Mode", "default-execution-mode": "elsewhere" } },
-    })).status).toBe(422);
-    expect((await request("POST", `/api/v2/organizations/${orgName}/projects`, {
-      data: { type: "projects", attributes: { name: "Missing Pool", "default-execution-mode": "agent" } },
-    })).status).toBe(422);
+    expect(
+      (
+        await request("POST", `/api/v2/organizations/${orgName}/projects`, {
+          data: { type: "projects", attributes: { name: "Invalid Mode", "default-execution-mode": "elsewhere" } },
+        })
+      ).status,
+    ).toBe(422);
+    expect(
+      (
+        await request("POST", `/api/v2/organizations/${orgName}/projects`, {
+          data: { type: "projects", attributes: { name: "Missing Pool", "default-execution-mode": "agent" } },
+        })
+      ).status,
+    ).toBe(422);
 
     const createdProject = await request("POST", `/api/v2/organizations/${orgName}/projects`, {
       data: {
@@ -112,9 +117,13 @@ describe("project defaults and workspace inheritance", () => {
     expect(defaultedWorkspaceResponse.status).toBe(201);
     const defaultedWorkspace = (await defaultedWorkspaceResponse.json()).data;
     expect(defaultedWorkspace.relationships.project.data.id).toBe(defaultProject.id);
-    expect((await request("PATCH", `/api/v2/projects/${defaultProject.id}`, {
-      data: { type: "projects", attributes: { name: "Renamed Default" } },
-    })).status).toBe(200);
+    expect(
+      (
+        await request("PATCH", `/api/v2/projects/${defaultProject.id}`, {
+          data: { type: "projects", attributes: { name: "Renamed Default" } },
+        })
+      ).status,
+    ).toBe(200);
     expect((await request("DELETE", `/api/v2/projects/${defaultProject.id}`)).status).toBe(409);
     expect((await request("DELETE", `/api/v2/projects/${project.id}`)).status).toBe(409);
 
@@ -131,7 +140,9 @@ describe("project defaults and workspace inheritance", () => {
       },
     });
     expect(projectAgentUpdate.status).toBe(200);
-    const inheritedAfterProjectUpdate = (await (await request("GET", `/api/v2/workspaces/${inheritedWorkspace.id}`)).json()).data;
+    const inheritedAfterProjectUpdate = (
+      await (await request("GET", `/api/v2/workspaces/${inheritedWorkspace.id}`)).json()
+    ).data;
     expect(inheritedAfterProjectUpdate.attributes["execution-mode"]).toBe("agent");
     expect(inheritedAfterProjectUpdate.attributes["agent-pool-id"]).toBe(poolId);
     expect(inheritedAfterProjectUpdate.attributes["auto-destroy-activity-duration"]).toBe("30d");
@@ -161,20 +172,25 @@ describe("project defaults and workspace inheritance", () => {
     expect(overridden.status).toBe(200);
     expect((await overridden.json()).data.attributes["inherits-project-auto-destroy"]).toBe(false);
 
-    expect((await request("PATCH", `/api/v2/projects/${project.id}`, {
-      data: {
-        type: "projects",
-        attributes: {
-          "default-execution-mode": "local",
-          "auto-destroy-activity-duration": "7d",
-        },
-        relationships: { "default-agent-pool": { data: null } },
-      },
-    })).status).toBe(200);
+    expect(
+      (
+        await request("PATCH", `/api/v2/projects/${project.id}`, {
+          data: {
+            type: "projects",
+            attributes: {
+              "default-execution-mode": "local",
+              "auto-destroy-activity-duration": "7d",
+            },
+            relationships: { "default-agent-pool": { data: null } },
+          },
+        })
+      ).status,
+    ).toBe(200);
     const retainedOverride = (await (await request("GET", `/api/v2/workspaces/${inheritedWorkspace.id}`)).json()).data;
     expect(retainedOverride.attributes["execution-mode"]).toBe("remote");
     expect(retainedOverride.attributes["auto-destroy-activity-duration"]).toBeNull();
-    const inheritedAfterMove = (await (await request("GET", `/api/v2/workspaces/${defaultedWorkspace.id}`)).json()).data;
+    const inheritedAfterMove = (await (await request("GET", `/api/v2/workspaces/${defaultedWorkspace.id}`)).json())
+      .data;
     expect(inheritedAfterMove.attributes["execution-mode"]).toBe("local");
     expect(inheritedAfterMove.attributes["auto-destroy-activity-duration"]).toBe("7d");
 
@@ -196,14 +212,17 @@ describe("workspace agent-pool validation gates (RUN-021)", () => {
   const orgName = `agent-pool-validation-${suffix}`;
   const token = `token-${suffix}`;
 
-  const request = (method: string, path: string, body?: unknown) => app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  const request = (method: string, path: string, body?: unknown) =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   let workspaceId: string;
 

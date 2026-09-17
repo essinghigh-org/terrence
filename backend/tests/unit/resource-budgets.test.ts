@@ -43,32 +43,55 @@ describe("resource budget policy", () => {
 
   test("rejects malformed and unsafe operator policy values", () => {
     expect(() => parseResourceBudgetConfig({ TERRENCE_RESOURCE_BUDGETS_JSON: "{" })).toThrow();
-    expect(() => parseResourceBudgetConfig({
-      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { reservedCriticalSlots: 9, concurrency: 2 } }),
-    })).toThrow();
-    expect(() => parseResourceBudgetConfig({
-      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ organizations: { "bad id": { queue: 2 } } }),
-    })).toThrow();
-    expect(() => parseResourceBudgetConfig({
-      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ classes: { plan: { artifactBytes: 2 } } }),
-    })).toThrow();
+    expect(() =>
+      parseResourceBudgetConfig({
+        TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { reservedCriticalSlots: 9, concurrency: 2 } }),
+      }),
+    ).toThrow();
+    expect(() =>
+      parseResourceBudgetConfig({
+        TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ organizations: { "bad id": { queue: 2 } } }),
+      }),
+    ).toThrow();
+    expect(() =>
+      parseResourceBudgetConfig({
+        TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ classes: { plan: { artifactBytes: 2 } } }),
+      }),
+    ).toThrow();
   });
 
   test("returns retry guidance while allowing a fair queue", () => {
     const config = parseResourceBudgetConfig({
-      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { concurrency: 2, queue: 2, reservedCriticalSlots: 0 } }),
+      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({
+        global: { concurrency: 2, queue: 2, reservedCriticalSlots: 0 },
+      }),
     });
-    const admission = assessResourceBudget(config, state([job("q1", "org-a", "plan", 1)], [job("r1", "org-a", "plan", 0), job("r2", "org-b", "plan", 0)]), job("q2", "org-b", "plan", 2));
+    const admission = assessResourceBudget(
+      config,
+      state([job("q1", "org-a", "plan", 1)], [job("r1", "org-a", "plan", 0), job("r2", "org-b", "plan", 0)]),
+      job("q2", "org-b", "plan", 2),
+    );
     expect(admission.accepted).toBe(true);
     expect(admission.queuePosition).toBe(2);
     expect(admission.retryAfterMs).toBe(1_000);
     const classWaitConfig = parseResourceBudgetConfig({
-      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { concurrency: 4, reservedCriticalSlots: 0 }, classes: { plan: { concurrency: 1 } } }),
+      TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({
+        global: { concurrency: 4, reservedCriticalSlots: 0 },
+        classes: { plan: { concurrency: 1 } },
+      }),
     });
-    const classWait = assessResourceBudget(classWaitConfig, state([], [job("r1", "org-c", "plan", 0)]), job("q3", "org-b", "plan", 3));
+    const classWait = assessResourceBudget(
+      classWaitConfig,
+      state([], [job("r1", "org-c", "plan", 0)]),
+      job("q3", "org-b", "plan", 3),
+    );
     expect(classWait.accepted).toBe(true);
     expect(classWait.retryAfterMs).toBe(1_000);
-    const rejected = assessResourceBudget(config, state([job("q1", "org-a", "plan", 1), job("q2", "org-b", "plan", 2)]), job("q3", "org-c", "plan", 3));
+    const rejected = assessResourceBudget(
+      config,
+      state([job("q1", "org-a", "plan", 1), job("q2", "org-b", "plan", 2)]),
+      job("q3", "org-c", "plan", 3),
+    );
     expect(rejected.accepted).toBe(false);
     expect(rejected.reason).toBe("global-queue-limit");
     expect(rejected.retryAfterMs).toBe(1_000);
@@ -84,7 +107,11 @@ describe("resource budget policy", () => {
     const tooLarge = assessResourceBudget(config, state([]), job("large", "org-a", "export", 1, 81));
     expect(tooLarge.accepted).toBe(false);
     expect(tooLarge.reason).toBe("artifact-bytes-limit");
-    const waiting = assessResourceBudget(config, state([job("queued", "org-b", "export", 1, 70)]), job("next", "org-a", "export", 2, 40));
+    const waiting = assessResourceBudget(
+      config,
+      state([job("queued", "org-b", "export", 1, 70)]),
+      job("next", "org-a", "export", 2, 40),
+    );
     expect(waiting.accepted).toBe(true);
     expect(waiting.retryAfterMs).toBe(1_000);
   });
@@ -102,10 +129,20 @@ describe("resource budget policy", () => {
     const config = parseResourceBudgetConfig({
       TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { concurrency: 2, reservedCriticalSlots: 0 } }),
     });
-    const queued = [job("a-old", "org-a", "plan", 1), job("a-next", "org-a", "plan", 2), job("b-old", "org-b", "plan", 3)];
+    const queued = [
+      job("a-old", "org-a", "plan", 1),
+      job("a-next", "org-a", "plan", 2),
+      job("b-old", "org-b", "plan", 3),
+    ];
     const first = selectResourceBudgetJob(config, state(queued));
     expect(first?.id).toBe("a-old");
-    const second = selectResourceBudgetJob(config, state(queued.filter((item): boolean => item.id !== first?.id), [first!]));
+    const second = selectResourceBudgetJob(
+      config,
+      state(
+        queued.filter((item): boolean => item.id !== first?.id),
+        [first!],
+      ),
+    );
     expect(second?.id).toBe("b-old");
   });
 
@@ -113,25 +150,31 @@ describe("resource budget policy", () => {
     const config = parseResourceBudgetConfig({
       TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { concurrency: 2, reservedCriticalSlots: 1 } }),
     });
-    expect(selectResourceBudgetJob(config, state([job("waiting", "org-a", "critical", 1)], [
-      job("critical-running", "org-a", "critical", 0),
-      job("ordinary-running", "org-b", "run", 0),
-    ]))).toBeUndefined();
+    expect(
+      selectResourceBudgetJob(
+        config,
+        state(
+          [job("waiting", "org-a", "critical", 1)],
+          [job("critical-running", "org-a", "critical", 0), job("ordinary-running", "org-b", "run", 0)],
+        ),
+      ),
+    ).toBeUndefined();
 
     const fairConfig = parseResourceBudgetConfig({
       TERRENCE_RESOURCE_BUDGETS_JSON: JSON.stringify({ global: { concurrency: 2, reservedCriticalSlots: 0 } }),
     });
     const ordinary = [job("run", "org-a", "run", 1), job("explanation", "org-b", "explanation", 2)];
-    expect(selectResourceBudgetJob(fairConfig, state(ordinary, [job("run-running", "org-c", "run", 0)]))?.id).toBe("explanation");
+    expect(selectResourceBudgetJob(fairConfig, state(ordinary, [job("run-running", "org-c", "run", 0)]))?.id).toBe(
+      "explanation",
+    );
   });
 
   test("snapshots aggregate usage without organization identities", () => {
     const config = defaultResourceBudgetConfig();
-    const snapshot = resourceBudgetSnapshot(config, state([
-      job("q1", "secret-org-a", "export", 1, 10),
-    ], [
-      job("r1", "secret-org-b", "run", 1, 20),
-    ]));
+    const snapshot = resourceBudgetSnapshot(
+      config,
+      state([job("q1", "secret-org-a", "export", 1, 10)], [job("r1", "secret-org-b", "run", 1, 20)]),
+    );
     expect(snapshot.queued).toBe(1);
     expect(snapshot.runningBytes).toBe(20);
     expect(snapshot.queuedByClass.export).toBe(1);

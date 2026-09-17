@@ -20,13 +20,17 @@ describe("run provenance capsule", () => {
       inputStateId: "state-1",
       inputStateDigest: "c".repeat(64),
       runVariables: [{ key: "token", value: "TOP-SECRET", category: "env", sensitive: true }],
-      effectiveVariables: [{ source: "varset" as const, key: "region", category: "terraform", sensitive: false, variableSetId: "set-1" }],
+      effectiveVariables: [
+        { source: "varset" as const, key: "region", category: "terraform", sensitive: false, variableSetId: "set-1" },
+      ],
       effectiveExecutionVariables: [],
     };
     const capsule = await buildRunProvenanceCapsule(input);
     expect(JSON.stringify(capsule.publicManifest)).not.toContain("TOP-SECRET");
     expect(capsule.executionMaterial).toStartWith("enc:v1:");
-    const material = JSON.parse(await decryptSecret(capsule.executionMaterial)) as { variables: readonly { value: string }[] };
+    const material = JSON.parse(await decryptSecret(capsule.executionMaterial)) as {
+      variables: readonly { value: string }[];
+    };
     expect(material.variables[0]?.value).toBe("TOP-SECRET");
     expect(capsule.manifestSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(canonicalJson({ b: 2, a: 1 })).toBe(canonicalJson({ a: 1, b: 2 }));

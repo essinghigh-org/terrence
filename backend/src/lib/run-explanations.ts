@@ -24,7 +24,7 @@ import { log } from "./log";
 export type ExplainKind = "plan" | "apply";
 
 export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export const EXPLAIN_KINDS: readonly ExplainKind[] = ["plan", "apply"];
 
@@ -45,7 +45,9 @@ export type ExplainSource = Readonly<{
 }>;
 
 export function configuredReasoningEffort(value: unknown): ReasoningEffort | null {
-  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value) ? value as ReasoningEffort : null;
+  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value)
+    ? (value as ReasoningEffort)
+    : null;
 }
 
 export type StoredExplanation = Readonly<{
@@ -76,9 +78,10 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
     // Redact before truncating (issue #687): a secret spanning the cut
     // would otherwise leave an unredacted fragment in the prompt.
     const redactedBody = redactKnownSecrets(serialized, secrets);
-    const truncated = redactedBody.text.length > EXPLAIN_MAX_PROMPT_CHARS
-      ? `${redactedBody.text.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
-      : redactedBody.text;
+    const truncated =
+      redactedBody.text.length > EXPLAIN_MAX_PROMPT_CHARS
+        ? `${redactedBody.text.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
+        : redactedBody.text;
     const prompt = `Explain the following Terraform plan in plain language for a reviewer. Provide a brief overview of what will be added, changed, or destroyed, and flag anything risky. Use concise bullets where helpful; do not reproduce the full plan or your internal reasoning.\n\n${truncated}`;
     const scrubbedPrompt = redactKnownSecrets(prompt, secrets);
     return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: redactedBody.hits + scrubbedPrompt.hits };
@@ -87,9 +90,10 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
   if (logEntries.length === 0) return undefined;
   const fullLog = logEntries.map((entry) => entry.outputText).join("\n");
   const redactedLog = redactKnownSecrets(fullLog, secrets);
-  const tail = redactedLog.text.length > EXPLAIN_APPLY_LOG_TAIL_CHARS
-    ? `... (earlier output omitted)\n${redactedLog.text.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
-    : redactedLog.text;
+  const tail =
+    redactedLog.text.length > EXPLAIN_APPLY_LOG_TAIL_CHARS
+      ? `... (earlier output omitted)\n${redactedLog.text.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
+      : redactedLog.text;
   const prompt = `A Terraform apply failed. Provide a brief overview of what went wrong, quote the key error, and give 2–3 recommended troubleshooting steps. Focus on practical next actions; do not reproduce the full log or your internal reasoning.\n\n${tail}`;
   const scrubbedPrompt = redactKnownSecrets(prompt, secrets);
   return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: redactedLog.hits + scrubbedPrompt.hits };
@@ -100,7 +104,10 @@ export async function buildExplainSource(runId: string, kind: ExplainKind): Prom
  * cached or served (issue #687, defense in depth). Returns the scrubbed
  * text and the replacement count; callers report only the count.
  */
-export function scrubExplanationContent(content: string, secrets: readonly string[]): Readonly<{ content: string; scrubbed: number }> {
+export function scrubExplanationContent(
+  content: string,
+  secrets: readonly string[],
+): Readonly<{ content: string; scrubbed: number }> {
   const result = redactKnownSecrets(content, secrets);
   return { content: result.text, scrubbed: result.hits };
 }
@@ -126,7 +133,10 @@ export type PersistExplainerOutput = Readonly<{
  */
 export async function persistExplainerOutput(output: PersistExplainerOutput): Promise<void> {
   if (output.scrubbedOutputSecrets > 0) {
-    log.warn("Plan explainer response repeated known secrets; scrubbed before serving", { runId: output.runId, kind: output.kind });
+    log.warn("Plan explainer response repeated known secrets; scrubbed before serving", {
+      runId: output.runId,
+      kind: output.kind,
+    });
   }
   const baseUrl = output.settings["base-url"];
   let endpoint: string;
@@ -148,7 +158,9 @@ export async function persistExplainerOutput(output: PersistExplainerOutput): Pr
     // retained explanation without its egress record. Outside strict mode
     // the audit stays best-effort so storage pressure never breaks reads.
     await db.transaction(async (tx) => {
-      await tx.delete(runExplanations).where(and(eq(runExplanations.runId, output.runId), eq(runExplanations.kind, output.kind)));
+      await tx
+        .delete(runExplanations)
+        .where(and(eq(runExplanations.runId, output.runId), eq(runExplanations.kind, output.kind)));
       await tx.insert(runExplanations).values({
         id: explanationCacheKey(output.runId, output.kind),
         runId: output.runId,
@@ -157,14 +169,16 @@ export async function persistExplainerOutput(output: PersistExplainerOutput): Pr
         content: output.content,
         cacheKey: explanationCacheKey(output.runId, output.kind),
       });
-      await tx.insert(auditLogs).values(auditLogValues({
-        orgId: output.orgId,
-        userId: output.userId,
-        action: "request",
-        resourceType: "plan-explanation",
-        resourceId: output.runId,
-        details,
-      }) as typeof auditLogs.$inferInsert);
+      await tx.insert(auditLogs).values(
+        auditLogValues({
+          orgId: output.orgId,
+          userId: output.userId,
+          action: "request",
+          resourceType: "plan-explanation",
+          resourceId: output.runId,
+          details,
+        }) as typeof auditLogs.$inferInsert,
+      );
     });
     return;
   }
@@ -183,7 +197,11 @@ export function explanationCacheKey(runId: string, kind: ExplainKind): string {
  */
 export async function findExplanation(runId: string, kind: ExplainKind): Promise<StoredExplanation | undefined> {
   const rows = await db.query.runExplanations.findMany({
-    where: and(eq(runExplanations.runId, runId), eq(runExplanations.kind, kind), eq(runExplanations.cacheKey, explanationCacheKey(runId, kind))),
+    where: and(
+      eq(runExplanations.runId, runId),
+      eq(runExplanations.kind, kind),
+      eq(runExplanations.cacheKey, explanationCacheKey(runId, kind)),
+    ),
     orderBy: [desc(runExplanations.createdAt)],
     limit: 1,
   });
@@ -203,12 +221,7 @@ export async function findExplanation(runId: string, kind: ExplainKind): Promise
  * Persist a fresh explanation for (run, kind), replacing any earlier one.
  * One row per (run, kind): the latest generation is the cache.
  */
-export async function saveExplanation(
-  runId: string,
-  kind: ExplainKind,
-  model: string,
-  content: string,
-): Promise<void> {
+export async function saveExplanation(runId: string, kind: ExplainKind, model: string, content: string): Promise<void> {
   // Delete and insert run as one unit so concurrent regenerations can never
   // leave the table without a row for (run, kind).
   await db.transaction(async (tx) => {
@@ -270,14 +283,16 @@ export function upstreamRequest(settings: Readonly<Record<string, unknown>>, pro
   const baseUrl = settings["base-url"] as string;
   const endpointUrl = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const model = settings["model"] as string;
-  const apiKey = typeof settings["api-key"] === "string" && settings["api-key"] !== "" ? settings["api-key"] : undefined;
+  const apiKey =
+    typeof settings["api-key"] === "string" && settings["api-key"] !== "" ? settings["api-key"] : undefined;
   const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
   const provider = typeof settings["provider"] === "string" ? settings["provider"].toLowerCase() : "";
-  const reasoningOptions = reasoningEffort === null
-    ? {}
-    : provider === "openrouter"
-      ? { reasoning: { effort: reasoningEffort } }
-      : { reasoning_effort: reasoningEffort };
+  const reasoningOptions =
+    reasoningEffort === null
+      ? {}
+      : provider === "openrouter"
+        ? { reasoning: { effort: reasoningEffort } }
+        : { reasoning_effort: reasoningEffort };
   return new Request(endpointUrl, {
     method: "POST",
     headers: {
@@ -302,7 +317,9 @@ function reasoningFromMessage(message: Readonly<Record<string, unknown>> | undef
 
 /** Non-streaming completion parse: answer content plus transient reasoning. */
 export function parseCompletionBody(parsed: unknown): CompletionParts {
-  const choices = (parsed as Readonly<{ choices?: readonly Readonly<{ message?: Readonly<Record<string, unknown>> }>[] }>)?.choices;
+  const choices = (
+    parsed as Readonly<{ choices?: readonly Readonly<{ message?: Readonly<Record<string, unknown>> }>[] }>
+  )?.choices;
   const message = choices?.[0]?.message;
   const contentValue = message?.["content"];
   let content = typeof contentValue === "string" ? contentValue : "";
@@ -333,7 +350,9 @@ async function emitInlineContent(
 ): Promise<void> {
   state.buffer += text;
   for (;;) {
-    const tag = (state.thinking ? /<\/(think|thinking|reasoning)>/i : /<(think|thinking|reasoning)>/i).exec(state.buffer);
+    const tag = (state.thinking ? /<\/(think|thinking|reasoning)>/i : /<(think|thinking|reasoning)>/i).exec(
+      state.buffer,
+    );
     if (tag === null) {
       const safeLength = Math.max(0, state.buffer.length - "</reasoning>".length);
       if (safeLength === 0) return;
@@ -373,7 +392,8 @@ async function processUpstreamLine(
   } catch {
     return;
   }
-  const delta = (chunk as Readonly<{ choices?: readonly Readonly<{ delta?: Readonly<Record<string, unknown>> }>[] }>)?.choices?.[0]?.delta;
+  const delta = (chunk as Readonly<{ choices?: readonly Readonly<{ delta?: Readonly<Record<string, unknown>> }>[] }>)
+    ?.choices?.[0]?.delta;
   if (delta === undefined) return;
   const content = delta["content"];
   if (typeof content === "string" && content !== "") await emitInlineContent(state, onDelta, content);
@@ -421,21 +441,28 @@ export async function fetchUpstream<T>(
   consume: (upstream: DeepReadonly<Response>, tick: () => void) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
-  const abortWithTimeout = (): void => { controller.abort(new Error("request timed out")); };
+  const abortWithTimeout = (): void => {
+    controller.abort(new Error("request timed out"));
+  };
   const timeoutMs = explainTimeoutMs();
   let deadline = setTimeout(abortWithTimeout, timeoutMs);
   const tick = (): void => {
     clearTimeout(deadline);
     deadline = setTimeout(abortWithTimeout, timeoutMs);
   };
-  const onExternalAbort = (): void => { controller.abort(signal?.reason); };
+  const onExternalAbort = (): void => {
+    controller.abort(signal?.reason);
+  };
   signal?.addEventListener("abort", onExternalAbort, { once: true });
   try {
     let upstream: Readonly<Response>;
     try {
       upstream = await fetch(upstreamRequest(settings, prompt, stream), { signal: controller.signal });
     } catch (error: unknown) {
-      throw new Error(`Plan explainer endpoint unreachable: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      throw new Error(
+        `Plan explainer endpoint unreachable: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
     }
     tick();
     return await consume(upstream, tick);
@@ -446,7 +473,11 @@ export async function fetchUpstream<T>(
 }
 
 /** Standard JSON error envelope used by the explain routes. */
-export function explainError(status: number, title: string, detail: string): Readonly<{ status: number; body: unknown }> {
+export function explainError(
+  status: number,
+  title: string,
+  detail: string,
+): Readonly<{ status: number; body: unknown }> {
   return { status, body: { errors: [{ status: String(status), title, detail }] } };
 }
 

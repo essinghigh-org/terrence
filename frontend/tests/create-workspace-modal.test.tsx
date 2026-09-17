@@ -40,7 +40,7 @@ function installFetch(scenario: PoolsScenario, posted: unknown[]): void {
     }
     return json({ data: [] }, 404);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 }
 
 afterEach((): void => {
@@ -57,8 +57,12 @@ function renderModal(): ReturnType<typeof render> {
       <CreateWorkspaceModal
         orgName="acme"
         open={true}
-        onOpenChange={(): void => { /* assertions read fetch traffic, not the callback */ }}
-        onCreated={(): void => { /* assertions read fetch traffic, not the callback */ }}
+        onOpenChange={(): void => {
+          /* assertions read fetch traffic, not the callback */
+        }}
+        onCreated={(): void => {
+          /* assertions read fetch traffic, not the callback */
+        }}
       />
     </MemoryRouter>,
   );
@@ -76,7 +80,9 @@ test("inherits project execution settings by default", async () => {
   const view = renderModal();
   fireEvent.input(view.getByLabelText("Workspace name"), { target: { value: "infra" } });
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
-  await waitFor((): void => { expect(posted).toHaveLength(1); });
+  await waitFor((): void => {
+    expect(posted).toHaveLength(1);
+  });
   const body = posted[0] as { data: { attributes: Record<string, unknown> } };
   expect(body.data.attributes["execution-mode"]).toBeUndefined();
   expect(body.data.attributes["agent-pool-id"]).toBeUndefined();
@@ -124,7 +130,9 @@ test("submits the selected agent pool", async () => {
   fireEvent.change(await view.findByLabelText("Agent pool"), { target: { value: "pool-1" } });
   fireEvent.input(view.getByLabelText("Workspace name"), { target: { value: "infra" } });
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
-  await waitFor((): void => { expect(posted).toHaveLength(1); });
+  await waitFor((): void => {
+    expect(posted).toHaveLength(1);
+  });
   const body = posted[0] as { data: { attributes: Record<string, unknown> } };
   expect(body.data.attributes["execution-mode"]).toBe("agent");
   expect(body.data.attributes["agent-pool-id"]).toBe("pool-1");

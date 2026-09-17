@@ -70,7 +70,7 @@ describe("local execution lifecycle ownership", () => {
 
     const failureMessage = await trackedFailure.then(
       (): string => "",
-      (error: unknown): string => error instanceof Error ? error.message : String(error),
+      (error: unknown): string => (error instanceof Error ? error.message : String(error)),
     );
     expect(failureMessage).toBe("phase failed");
     expect(await drain).toBe(true);

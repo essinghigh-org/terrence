@@ -9,10 +9,7 @@ export type EncryptedVariableWrite = {
 };
 
 /** Encrypt a variable value for persistence when sensitive. */
-export async function variableValueForWrite(
-  sensitive: boolean,
-  plaintext: string,
-): Promise<EncryptedVariableWrite> {
+export async function variableValueForWrite(sensitive: boolean, plaintext: string): Promise<EncryptedVariableWrite> {
   if (!sensitive) return { value: plaintext, valueEncrypted: null };
   return { value: "", valueEncrypted: await encryptSecret(plaintext) };
 }

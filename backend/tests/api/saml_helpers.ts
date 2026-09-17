@@ -129,16 +129,15 @@ export function buildSignedSamlResponse(options: SamlResponseOptions = {}): stri
     signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
     canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
   });
-  const signatureXPath = signatureTarget === "response" ? "//*[local-name()='Response']" : "//*[local-name()='Assertion']";
-  const signatureLocationXPath = signatureTarget === "response"
-    ? "//*[local-name()='Response']/*[local-name()='Issuer']"
-    : "//*[local-name()='Assertion']/*[local-name()='Issuer']";
+  const signatureXPath =
+    signatureTarget === "response" ? "//*[local-name()='Response']" : "//*[local-name()='Assertion']";
+  const signatureLocationXPath =
+    signatureTarget === "response"
+      ? "//*[local-name()='Response']/*[local-name()='Issuer']"
+      : "//*[local-name()='Assertion']/*[local-name()='Issuer']";
   signed.addReference({
     xpath: signatureXPath,
-    transforms: [
-      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
-      "http://www.w3.org/2001/10/xml-exc-c14n#",
-    ],
+    transforms: ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/2001/10/xml-exc-c14n#"],
     digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
     uri: `#${signatureTarget === "response" ? responseId : assertionId}`,
   });
@@ -169,10 +168,7 @@ export function buildSignedLogoutRequest(
   });
   signed.addReference({
     xpath: "//*[local-name()='LogoutRequest']",
-    transforms: [
-      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
-      "http://www.w3.org/2001/10/xml-exc-c14n#",
-    ],
+    transforms: ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/2001/10/xml-exc-c14n#"],
     digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
     uri: `#${requestId}`,
   });
@@ -189,7 +185,11 @@ export function inflateAndDecode(value: string): string {
 }
 
 /** Build a form-encoded POST request to the ACS endpoint. */
-export function samlAcsRequest(samlResponse: string, relayState?: string, extraHeaders: Record<string, string> = {}): Request {
+export function samlAcsRequest(
+  samlResponse: string,
+  relayState?: string,
+  extraHeaders: Record<string, string> = {},
+): Request {
   const params = new URLSearchParams({ SAMLResponse: samlResponse });
   if (relayState !== undefined) params.set("RelayState", relayState);
   return new Request("https://terrence.test/users/saml/auth", {

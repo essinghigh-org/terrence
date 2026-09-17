@@ -41,15 +41,18 @@ describe("Team SCIM Group Mapping API", () => {
       name: "devs",
     });
 
-    await db.insert(scimSettings).values({
-      id: "scim",
-      enabled: true,
-      paused: false,
-      updatedAt: Date.now(),
-    }).onConflictDoUpdate({
-      target: scimSettings.id,
-      set: { enabled: true, paused: false, updatedAt: Date.now() },
-    });
+    await db
+      .insert(scimSettings)
+      .values({
+        id: "scim",
+        enabled: true,
+        paused: false,
+        updatedAt: Date.now(),
+      })
+      .onConflictDoUpdate({
+        target: scimSettings.id,
+        set: { enabled: true, paused: false, updatedAt: Date.now() },
+      });
 
     await db.insert(scimGroups).values({
       id: groupId,
@@ -77,7 +80,7 @@ describe("Team SCIM Group Mapping API", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(res.status).toBe(204);
@@ -88,7 +91,7 @@ describe("Team SCIM Group Mapping API", () => {
       new Request(`http://localhost/api/v2/admin/teams/${teamId}/scim-group-mapping`, {
         method: "GET",
         headers: { Authorization: `Bearer ${adminToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -101,7 +104,7 @@ describe("Team SCIM Group Mapping API", () => {
       new Request(`http://localhost/api/v2/admin/teams/${teamId}/scim-group-mapping`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${adminToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(204);

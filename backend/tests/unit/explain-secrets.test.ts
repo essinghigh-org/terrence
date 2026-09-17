@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  EXPLAIN_REDACTED_MARKER,
-  redactKnownSecrets,
-  sensitiveOutputSecrets,
-} from "../../src/lib/explain-secrets";
+import { EXPLAIN_REDACTED_MARKER, redactKnownSecrets, sensitiveOutputSecrets } from "../../src/lib/explain-secrets";
 import { explainTimeoutMs, EXPLAIN_TIMEOUT_MS } from "../../src/lib/run-explanations";
 
 // Issue #687: value-based scrubbing for explainer prompts and completions.
@@ -11,7 +7,9 @@ describe("redactKnownSecrets", () => {
   it("replaces every occurrence longest-first without touching other text", () => {
     const secrets = ["alpha-secret-value", "secret-value"];
     const result = redactKnownSecrets("a alpha-secret-value and secret-value and alpha-secret-value end", secrets);
-    expect(result.text).toBe(`a ${EXPLAIN_REDACTED_MARKER} and ${EXPLAIN_REDACTED_MARKER} and ${EXPLAIN_REDACTED_MARKER} end`);
+    expect(result.text).toBe(
+      `a ${EXPLAIN_REDACTED_MARKER} and ${EXPLAIN_REDACTED_MARKER} and ${EXPLAIN_REDACTED_MARKER} end`,
+    );
     expect(result.hits).toBe(3);
   });
 
@@ -46,7 +44,9 @@ describe("sensitiveOutputSecrets", () => {
   });
 
   it("stringifies sensitive composite outputs and rejects malformed payloads", () => {
-    const payload = JSON.stringify({ outputs: { config: { value: { user: "u", pass: "p4ssw0rd!" }, sensitive: true } } });
+    const payload = JSON.stringify({
+      outputs: { config: { value: { user: "u", pass: "p4ssw0rd!" }, sensitive: true } },
+    });
     const secrets = sensitiveOutputSecrets(payload);
     expect(secrets).toHaveLength(3);
     expect(secrets).toContain(JSON.stringify({ user: "u", pass: "p4ssw0rd!" }));

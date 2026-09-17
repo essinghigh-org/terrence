@@ -37,8 +37,14 @@ export async function inspectStorageHeadroom(
     const blockSize = stats.bsize;
     const availableBlocks = stats.bavail;
     const totalBlocks = stats.blocks;
-    if (![blockSize, availableBlocks, totalBlocks, minimumBytes].every(Number.isSafeInteger)
-      || blockSize <= 0 || availableBlocks < 0 || totalBlocks < 0 || minimumBytes < 0) return null;
+    if (
+      ![blockSize, availableBlocks, totalBlocks, minimumBytes].every(Number.isSafeInteger) ||
+      blockSize <= 0 ||
+      availableBlocks < 0 ||
+      totalBlocks < 0 ||
+      minimumBytes < 0
+    )
+      return null;
     return {
       availableBytes: Math.min(Number.MAX_SAFE_INTEGER, blockSize * availableBlocks),
       totalBytes: Math.min(Number.MAX_SAFE_INTEGER, blockSize * totalBlocks),

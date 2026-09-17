@@ -83,17 +83,17 @@ describe("formatDateTime", () => {
   });
 
   it("treats a bare calendar date as local midnight, not UTC-midnight drift", () => {
-      const script = `
+    const script = `
         const { formatDateTime } = await import(${JSON.stringify(UTILS_PATH)});
         const out = formatDateTime("2026-08-07");
         const local = new Date(2026, 7, 7, 0, 0, 0).toLocaleString(undefined, { hour12: false });
         const naive = new Date("2026-08-07").toLocaleString();
         console.log(JSON.stringify({ sameLocal: out === local, drifted: naive === local }));
       `;
-      const parsed = runWithTZ("America/Los_Angeles", script);
-      expect(parsed["sameLocal"]).toBe(true);
-      expect(parsed["drifted"]).toBe(false);
-    });
+    const parsed = runWithTZ("America/Los_Angeles", script);
+    expect(parsed["sameLocal"]).toBe(true);
+    expect(parsed["drifted"]).toBe(false);
+  });
 });
 
 describe("formatDateTimeExact", () => {

@@ -3,14 +3,10 @@
   "ignore": [],
   "ignoreDependencies": [],
   "ignoreExportsUsedInFile": true,
-  "tags": [
-    "-lintignore"
-  ],
+  "tags": ["-lintignore"],
   "workspaces": {
     ".": {
-      "entry": [
-        "scripts/*.ts"
-      ]
+      "entry": ["scripts/*.ts"]
     },
     "backend": {
       "entry": [
@@ -39,8 +35,5 @@
       ]
     }
   },
-  "ignoreBinaries": [
-    "rsvg-convert",
-    "magick"
-  ]
+  "ignoreBinaries": ["rsvg-convert", "magick"]
 }

@@ -35,16 +35,22 @@ export function LegacyUrlNotice(): React.JSX.Element | null {
   });
   if (legacyPath === null) return null;
   return (
-    <p role="status" className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+    <p
+      role="status"
+      className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+    >
       <span>
-        You followed a Terraform CLI link ({legacyPath}); it now lives under the /workspaces/ path. This is the same page.
+        You followed a Terraform CLI link ({legacyPath}); it now lives under the /workspaces/ path. This is the same
+        page.
       </span>
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
         aria-label="Dismiss redirect notice"
-        onClick={(): void => { setLegacyPath(null); }}
+        onClick={(): void => {
+          setLegacyPath(null);
+        }}
       >
         <X className="size-3.5" aria-hidden="true" />
       </Button>

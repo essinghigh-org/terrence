@@ -4,10 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { DeepReadonly } from "./types";
 import { extractValidatedModuleArchive, moduleRootPath } from "./registry-module-archive";
 
-const MODULE_TEST_DIR = resolve(
-  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
-  "module-tests",
-);
+const MODULE_TEST_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "module-tests");
 
 export type ModuleTestConfiguration = Readonly<{
   verbose: boolean;
@@ -34,19 +31,19 @@ export type ModuleTestResult = Readonly<{
 
 function safeRelativePath(value: string): boolean {
   const normalized = value.replaceAll("\\", "/");
-  return normalized !== ""
-    && !normalized.startsWith("/")
-    && !normalized.split("/").includes("..");
+  return normalized !== "" && !normalized.startsWith("/") && !normalized.split("/").includes("..");
 }
 
 type ParsedModuleTestVariables = Readonly<{ key: string; value: string }>[] | Readonly<{ error: string }>;
 
-type ModuleTestInputFields = Readonly<{
-  verbose: unknown;
-  rawFilters: unknown;
-  testDirectory: unknown;
-  rawVariables: unknown;
-}> | Readonly<{ error: string }>;
+type ModuleTestInputFields =
+  | Readonly<{
+      verbose: unknown;
+      rawFilters: unknown;
+      testDirectory: unknown;
+      rawVariables: unknown;
+    }>
+  | Readonly<{ error: string }>;
 
 function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariables {
   if (!Array.isArray(rawVariables)) return { error: "variables must be an array" };
@@ -59,11 +56,12 @@ function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariab
     if (typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       return { error: "variable keys must be valid Terraform identifiers" };
     }
-    const value = typeof rawValue === "string"
-      ? rawValue
-      : typeof rawValue === "number" || typeof rawValue === "boolean"
-        ? rawValue.toString()
-        : undefined;
+    const value =
+      typeof rawValue === "string"
+        ? rawValue
+        : typeof rawValue === "number" || typeof rawValue === "boolean"
+          ? rawValue.toString()
+          : undefined;
     if (value === undefined) return { error: `variable ${key} must have a string, number, or boolean value` };
     variables.push({ key, value });
   }
@@ -71,16 +69,15 @@ function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariab
 }
 
 function moduleTestInputFields(input: unknown): ModuleTestInputFields {
-  const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
+  const payload = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const rawData = payload["data"];
-  const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
+  const data = rawData !== null && typeof rawData === "object" ? (rawData as Record<string, unknown>) : {};
   if (data["type"] !== undefined && data["type"] !== "module-tests" && data["type"] !== "test-runs") {
     return { error: "data.type must be module-tests or test-runs" };
   }
   const rawAttributes = data["attributes"];
-  const attributes = rawAttributes !== null && typeof rawAttributes === "object"
-    ? rawAttributes as Record<string, unknown>
-    : {};
+  const attributes =
+    rawAttributes !== null && typeof rawAttributes === "object" ? (rawAttributes as Record<string, unknown>) : {};
   return {
     verbose: attributes["verbose"] ?? false,
     rawFilters: attributes["filters"] ?? [],
@@ -95,9 +92,9 @@ export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration
   const { verbose, rawFilters, testDirectory, rawVariables } = fields;
   if (typeof verbose !== "boolean") return { error: "verbose must be a boolean" };
   if (
-    !Array.isArray(rawFilters)
-    || rawFilters.length > 100
-    || rawFilters.some((filter: unknown): boolean => typeof filter !== "string" || !safeRelativePath(filter))
+    !Array.isArray(rawFilters) ||
+    rawFilters.length > 100 ||
+    rawFilters.some((filter: unknown): boolean => typeof filter !== "string" || !safeRelativePath(filter))
   ) {
     return { error: "filters must contain at most 100 safe relative paths" };
   }
@@ -152,7 +149,7 @@ export async function readModuleTestResult(versionId: string): Promise<ModuleTes
   const file = Bun.file(resultPath(versionId));
   if (!(await file.exists())) return undefined;
   try {
-    return await file.json() as ModuleTestResult;
+    return (await file.json()) as ModuleTestResult;
   } catch {
     return undefined;
   }
@@ -165,11 +162,24 @@ async function writeResult(versionId: string, result: ModuleTestResult): Promise
 function inheritedTestEnvironment(): Record<string, string> {
   return Object.fromEntries(
     [
-      "PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL",
-      "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-      "SSL_CERT_FILE", "SSL_CERT_DIR", "TF_CLI_CONFIG_FILE", "TF_PLUGIN_CACHE_DIR",
-    ]
-      .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key]]] : []),
+      "PATH",
+      "HOME",
+      "TMPDIR",
+      "USER",
+      "LANG",
+      "LC_ALL",
+      "SHELL",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "no_proxy",
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "TF_CLI_CONFIG_FILE",
+      "TF_PLUGIN_CACHE_DIR",
+    ].flatMap((key): [string, string][] => (typeof process.env[key] === "string" ? [[key, process.env[key]]] : [])),
   );
 }
 
@@ -186,7 +196,9 @@ async function executeTerraformTest(
   signal?: AbortSignal,
 ): Promise<TerraformTestProcessResult> {
   const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });
-  const abort = (): void => { processHandle.kill(); };
+  const abort = (): void => {
+    processHandle.kill();
+  };
   if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
   let exitCode: number;
   let stdout: string;
@@ -236,12 +248,10 @@ export async function runModuleTest(
     ];
     if (signal?.aborted) throw new Error("Module test canceled");
     const inherited = inheritedTestEnvironment();
-    const environment = { ...inherited, ...(await environmentFactory?.(staging) ?? {}) };
+    const environment = { ...inherited, ...((await environmentFactory?.(staging)) ?? {}) };
     const { exitCode, stdout, stderr } = await executeTerraformTest(args, root, environment, signal);
     if (signal?.aborted === true) throw new Error("Module test canceled");
-    const output = [stdout.trim(), stderr.trim()]
-      .filter((entry): boolean => entry !== "")
-      .join("\n");
+    const output = [stdout.trim(), stderr.trim()].filter((entry): boolean => entry !== "").join("\n");
     const counts = summary(output);
     result = {
       id: `mtest-${versionId}`,

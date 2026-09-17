@@ -25,7 +25,9 @@ export class PersistedJsonValidationError extends Error {
     detail: string,
     context: Readonly<{ rowId?: string; schemaVersion?: number }> = {},
   ) {
-    super(`Invalid persisted JSON in ${field}${context.rowId === undefined ? "" : ` for row ${context.rowId}`}: ${detail}`);
+    super(
+      `Invalid persisted JSON in ${field}${context.rowId === undefined ? "" : ` for row ${context.rowId}`}: ${detail}`,
+    );
     this.name = "PersistedJsonValidationError";
     this.code = code;
     this.field = field;
@@ -45,7 +47,7 @@ export type VersionedJsonEnvelope<T> = Readonly<{
 
 function objectRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Readonly<Record<string, unknown>>
+    ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 }
 
@@ -96,7 +98,7 @@ function readEnvelopeExtensions(
     Object.entries(record).filter(([key]) => !["schemaVersion", "data", "extensions"].includes(key)),
   );
   return {
-    ...(declaredExtensions as Readonly<Record<string, unknown>> | undefined ?? {}),
+    ...((declaredExtensions as Readonly<Record<string, unknown>> | undefined) ?? {}),
     ...envelopeExtensions,
   };
 }
@@ -122,7 +124,8 @@ export function readVersionedJson<T>(
   const record = objectRecord(raw);
   if (record !== undefined && Object.hasOwn(record, "schemaVersion")) {
     const schemaVersion = assertEnvelopeVersion(record, field, context);
-    if (!Object.hasOwn(record, "data")) validationError(field, "field", "versioned value is missing data", { ...context, schemaVersion });
+    if (!Object.hasOwn(record, "data"))
+      validationError(field, "field", "versioned value is missing data", { ...context, schemaVersion });
     return {
       value: adaptLegacy(record["data"], context),
       schemaVersion,
@@ -159,7 +162,11 @@ export function jsonExtract(column: DeepReadonly<SQL> | DeepReadonly<AnyColumn>,
  * json_object('k', v))` becomes PostgreSQL `jsonb_set(coalesce(col,'{}'),
  * '{k}', to_jsonb(v))`. The key is a single JSON path segment.
  */
-export function jsonSet(column: DeepReadonly<SQL> | DeepReadonly<AnyColumn>, key: string, value: DeepReadonly<SQL> | DeepReadonly<AnyColumn>): SQL {
+export function jsonSet(
+  column: DeepReadonly<SQL> | DeepReadonly<AnyColumn>,
+  key: string,
+  value: DeepReadonly<SQL> | DeepReadonly<AnyColumn>,
+): SQL {
   const safeKey = key.replace(/"/g, "");
   if (isPostgres) {
     const arrayLiteral = `{${safeKey}}`;

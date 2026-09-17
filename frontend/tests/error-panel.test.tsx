@@ -21,7 +21,9 @@ test("fires the retry handler when provided", () => {
     <ErrorPanel
       title="Could not load runs"
       message="The server timed out."
-      onRetry={(): void => { retried += 1; }}
+      onRetry={(): void => {
+        retried += 1;
+      }}
     />,
   );
   expect(view.getByText("Could not load runs")).toBeTruthy();

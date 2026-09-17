@@ -74,9 +74,7 @@ function isWorkspaceVisit(entry: unknown): entry is WorkspaceVisit {
   // SAFETY: only the checked fields are read; the object may carry arbitrary
   // extra fields written by older app versions or other tabs.
   const visit = entry as { orgName?: unknown; workspaceName?: unknown; visitedAt?: unknown };
-  return isString(visit.orgName)
-    && isString(visit.workspaceName)
-    && isNumber(visit.visitedAt);
+  return isString(visit.orgName) && isString(visit.workspaceName) && isNumber(visit.visitedAt);
 }
 
 function parseVisits(raw: string | null): WorkspaceVisit[] {

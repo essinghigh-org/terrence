@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 
 describe("native Terraform organization run queue", () => {
   const suffix = crypto.randomUUID();
@@ -27,9 +20,12 @@ describe("native Terraform organization run queue", () => {
     secondPending: `run-pending-b-${suffix}`,
   };
 
-  const request = (path: string) => app.handle(new Request(`http://terrence.test${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }));
+  const request = (path: string) =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: `queue-${suffix}`, passwordHash: "unused" });
@@ -75,15 +71,10 @@ describe("native Terraform organization run queue", () => {
   });
 
   it("returns the paginated active queue with client-readable positions", async () => {
-    const response = await request(
-      `/api/v2/organizations/${orgName}/runs/queue?page[number]=2&page[size]=2`,
-    );
+    const response = await request(`/api/v2/organizations/${orgName}/runs/queue?page[number]=2&page[size]=2`);
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.data.map((run: any) => run.id)).toEqual([
-      runIds.firstPending,
-      runIds.secondPending,
-    ]);
+    expect(body.data.map((run: any) => run.id)).toEqual([runIds.firstPending, runIds.secondPending]);
     expect(body.data.map((run: any) => run.attributes["position-in-queue"])).toEqual([3, 4]);
     expect(body.meta.pagination).toMatchObject({
       "current-page": 2,

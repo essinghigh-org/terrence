@@ -12,11 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import { db } from "../db";
 import { durableJobs, outboxEvents } from "../db/schema";
 import { newResourceId } from "./resource-id";
-import {
-  DURABLE_MAX_ATTEMPTS,
-  type DurableJob,
-  type DurableJobContext,
-} from "./durable-jobs";
+import { DURABLE_MAX_ATTEMPTS, type DurableJob, type DurableJobContext } from "./durable-jobs";
 import { PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, parsePersistedJobPayload } from "./validation";
 import type { DeepReadonly } from "./utils";
 
@@ -63,13 +59,11 @@ function jobForEvent(event: OutboxEvent, now: number): typeof durableJobs.$infer
 async function ensureDeliveryJob(database: Database, event: OutboxEvent, now = Date.now()): Promise<void> {
   if (event.status === "delivered" || event.status === "dead_letter") return;
   const existing = await database.query.durableJobs.findFirst({
-    where: and(
-      eq(durableJobs.kind, OUTBOX_DELIVERY_KIND),
-      eq(durableJobs.dedupeKey, event.id),
-    ),
+    where: and(eq(durableJobs.kind, OUTBOX_DELIVERY_KIND), eq(durableJobs.dedupeKey, event.id)),
   });
   if (existing !== undefined) return;
-  await database.insert(durableJobs)
+  await database
+    .insert(durableJobs)
     .values(jobForEvent(event, now))
     .onConflictDoNothing({ target: [durableJobs.kind, durableJobs.dedupeKey] });
 }
@@ -84,10 +78,7 @@ function samePayload(left: Readonly<Record<string, unknown>>, right: Readonly<Re
  * Repeating the same id is idempotent; a reused id with different contents is
  * rejected so an event identity can never silently change meaning.
  */
-export async function enqueueOutboxEventTx(
-  database: Database,
-  input: OutboxEventInput,
-): Promise<OutboxEvent> {
+export async function enqueueOutboxEventTx(database: Database, input: OutboxEventInput): Promise<OutboxEvent> {
   if (input.id.trim() === "") throw new Error("Outbox event id must be non-empty");
   if (input.topic.trim() === "") throw new Error("Outbox event topic must be non-empty");
   const now = input.createdAt ?? Date.now();
@@ -102,12 +93,14 @@ export async function enqueueOutboxEventTx(
     createdAt: now,
     updatedAt: now,
   };
-  parsePersistedJobPayload(OUTBOX_DELIVERY_KIND, durablePayload(input.id), PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, input.id);
-  const inserted = await database.insert(outboxEvents)
-    .values(row)
-    .onConflictDoNothing()
-    .returning();
-  const event = inserted[0] ?? await database.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, input.id) });
+  parsePersistedJobPayload(
+    OUTBOX_DELIVERY_KIND,
+    durablePayload(input.id),
+    PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION,
+    input.id,
+  );
+  const inserted = await database.insert(outboxEvents).values(row).onConflictDoNothing().returning();
+  const event = inserted[0] ?? (await database.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, input.id) }));
   if (event === undefined) throw new Error(`Outbox event ${input.id} could not be read after insert`);
   if (event.topic !== input.topic || !samePayload(event.payload, input.payload)) {
     throw new Error(`Outbox event id ${input.id} is already bound to a different payload`);
@@ -118,8 +111,9 @@ export async function enqueueOutboxEventTx(
 
 /** Insert an outbox event in its own transaction. */
 export async function enqueueOutboxEvent(input: OutboxEventInput): Promise<OutboxEvent> {
-  return db.transaction(async (transaction): Promise<OutboxEvent> =>
-    enqueueOutboxEventTx(transaction as unknown as Database, input));
+  return db.transaction(
+    async (transaction): Promise<OutboxEvent> => enqueueOutboxEventTx(transaction as unknown as Database, input),
+  );
 }
 
 function runNotificationPayload(event: OutboxEvent): Readonly<{
@@ -146,12 +140,10 @@ async function dispatchOutboxEvent(event: OutboxEvent): Promise<void> {
   // module, which itself owns the enqueue helper used by route/worker code.
   const { deliverRunNotifications } = await import("./notifications");
   const payload = runNotificationPayload(event);
-  const deliveries = await deliverRunNotifications(
-    payload.runId,
-    payload.trigger,
-    payload.status,
-    { eventId: event.id, skipDedup: true },
-  );
+  const deliveries = await deliverRunNotifications(payload.runId, payload.trigger, payload.status, {
+    eventId: event.id,
+    skipDedup: true,
+  });
   const failures = deliveries.filter((delivery): boolean => !delivery.successful);
   if (failures.length > 0) {
     const codes = [...new Set(failures.map((delivery): string => delivery.code))].sort().join(",");
@@ -164,12 +156,7 @@ export async function handleOutboxDeliveryJob(
   job: DeepReadonly<DurableJob>,
   _context?: DeepReadonly<DurableJobContext>,
 ): Promise<void> {
-  const body = parsePersistedJobPayload(
-    OUTBOX_DELIVERY_KIND,
-    job.payload,
-    job.payloadSchemaVersion,
-    job.id,
-  );
+  const body = parsePersistedJobPayload(OUTBOX_DELIVERY_KIND, job.payload, job.payloadSchemaVersion, job.id);
   const eventId = body["eventId"];
   if (typeof eventId !== "string" || eventId === "") throw new Error(`Outbox job ${job.id} is missing eventId`);
   const event = await db.query.outboxEvents.findFirst({ where: eq(outboxEvents.id, eventId) });
@@ -177,36 +164,39 @@ export async function handleOutboxDeliveryJob(
   if (event === undefined || event.status === "delivered" || event.status === "dead_letter") return;
 
   const now = Date.now();
-  await db.update(outboxEvents).set({
-    status: "processing",
-    attempts: job.attempts,
-    lastError: null,
-    updatedAt: now,
-  }).where(and(
-    eq(outboxEvents.id, event.id),
-    inArray(outboxEvents.status, ["pending", "processing"]),
-  ));
+  await db
+    .update(outboxEvents)
+    .set({
+      status: "processing",
+      attempts: job.attempts,
+      lastError: null,
+      updatedAt: now,
+    })
+    .where(and(eq(outboxEvents.id, event.id), inArray(outboxEvents.status, ["pending", "processing"])));
 
   try {
     await dispatchOutboxEvent(event);
-    await db.update(outboxEvents).set({
-      status: "delivered",
-      attempts: job.attempts,
-      lastError: null,
-      deliveredAt: Date.now(),
-      updatedAt: Date.now(),
-    }).where(and(
-      eq(outboxEvents.id, event.id),
-      inArray(outboxEvents.status, ["pending", "processing"]),
-    ));
+    await db
+      .update(outboxEvents)
+      .set({
+        status: "delivered",
+        attempts: job.attempts,
+        lastError: null,
+        deliveredAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+      .where(and(eq(outboxEvents.id, event.id), inArray(outboxEvents.status, ["pending", "processing"])));
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    await db.update(outboxEvents).set({
-      status: job.attempts >= DURABLE_MAX_ATTEMPTS ? "dead_letter" : "pending",
-      attempts: job.attempts,
-      lastError: message.slice(0, 1_024),
-      updatedAt: Date.now(),
-    }).where(eq(outboxEvents.id, event.id));
+    await db
+      .update(outboxEvents)
+      .set({
+        status: job.attempts >= DURABLE_MAX_ATTEMPTS ? "dead_letter" : "pending",
+        attempts: job.attempts,
+        lastError: message.slice(0, 1_024),
+        updatedAt: Date.now(),
+      })
+      .where(eq(outboxEvents.id, event.id));
     throw error;
   }
 }
@@ -222,10 +212,9 @@ export type OutboxMetrics = Readonly<{
 /** Queue/dead-letter gauges for operator visibility. */
 export async function collectOutboxMetrics(now = Date.now()): Promise<OutboxMetrics> {
   const [byStatus, oldestRows] = await Promise.all([
-    db.select({ status: outboxEvents.status, value: count() })
-      .from(outboxEvents)
-      .groupBy(outboxEvents.status),
-    db.select({ oldest: min(outboxEvents.createdAt) })
+    db.select({ status: outboxEvents.status, value: count() }).from(outboxEvents).groupBy(outboxEvents.status),
+    db
+      .select({ oldest: min(outboxEvents.createdAt) })
       .from(outboxEvents)
       .where(inArray(outboxEvents.status, ["pending", "processing"])),
   ]);
@@ -251,27 +240,30 @@ export async function retryDeadLetterOutboxEvent(eventId: string): Promise<boole
     });
     if (job === undefined) return false;
     const now = Date.now();
-    await database.update(outboxEvents).set({
-      status: "pending",
-      attempts: 0,
-      lastError: null,
-      deliveredAt: null,
-      updatedAt: now,
-    }).where(eq(outboxEvents.id, eventId));
-    await database.update(durableJobs).set({
-      status: "queued",
-      attempts: 0,
-      runAfter: now,
-      lockedBy: null,
-      lockToken: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      lastError: null,
-      updatedAt: now,
-    }).where(and(
-      eq(durableJobs.id, job.id),
-      inArray(durableJobs.status, ["failed", "canceled"]),
-    ));
+    await database
+      .update(outboxEvents)
+      .set({
+        status: "pending",
+        attempts: 0,
+        lastError: null,
+        deliveredAt: null,
+        updatedAt: now,
+      })
+      .where(eq(outboxEvents.id, eventId));
+    await database
+      .update(durableJobs)
+      .set({
+        status: "queued",
+        attempts: 0,
+        runAfter: now,
+        lockedBy: null,
+        lockToken: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        lastError: null,
+        updatedAt: now,
+      })
+      .where(and(eq(durableJobs.id, job.id), inArray(durableJobs.status, ["failed", "canceled"])));
     return true;
   });
 }

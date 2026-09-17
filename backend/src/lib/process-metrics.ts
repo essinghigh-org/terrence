@@ -65,27 +65,28 @@ export type PollerStats = Readonly<{
   lastOk: boolean | null;
 }>;
 
-export type ProcessSnapshot = ProcessSample & Readonly<{
-  /** Peak RSS seen by the OS scheduler (rusage maxrss, KiB -> bytes). */
-  maxRss: number;
-  uptimeSeconds: number;
-  userCpuSeconds: number;
-  systemCpuSeconds: number;
-  requests: Readonly<{ total: number; inFlight: number; errors5xx: number }>;
-  failures: Readonly<Record<string, number>>;
-  /** Request latency grouped by a fixed, low-cardinality journey label. */
-  journeys: Readonly<Record<PerformanceJourneyLabel, JourneyLatency>>;
-  /** Event-loop delay from the sampler's bounded histogram. */
-  eventLoopDelay: EventLoopDelayStats;
-  discovery: ReturnType<typeof discoveryStats>;
-  worker: Readonly<{
-    polls: number;
-    lastPollAt: number | null;
-    lastPollDurationMs: number | null;
-    lastPollOk: boolean | null;
-    pollers: Readonly<Record<string, PollerStats>>;
+export type ProcessSnapshot = ProcessSample &
+  Readonly<{
+    /** Peak RSS seen by the OS scheduler (rusage maxrss, KiB -> bytes). */
+    maxRss: number;
+    uptimeSeconds: number;
+    userCpuSeconds: number;
+    systemCpuSeconds: number;
+    requests: Readonly<{ total: number; inFlight: number; errors5xx: number }>;
+    failures: Readonly<Record<string, number>>;
+    /** Request latency grouped by a fixed, low-cardinality journey label. */
+    journeys: Readonly<Record<PerformanceJourneyLabel, JourneyLatency>>;
+    /** Event-loop delay from the sampler's bounded histogram. */
+    eventLoopDelay: EventLoopDelayStats;
+    discovery: ReturnType<typeof discoveryStats>;
+    worker: Readonly<{
+      polls: number;
+      lastPollAt: number | null;
+      lastPollDurationMs: number | null;
+      lastPollOk: boolean | null;
+      pollers: Readonly<Record<string, PollerStats>>;
+    }>;
   }>;
-}>;
 
 export type TrendStats = Readonly<{
   min: number;
@@ -169,11 +170,20 @@ function percentile(values: readonly number[], requested: number): number | null
 function journeyLabel(path: string): PerformanceJourneyLabel {
   const pathname = path.split("?", 1)[0] ?? path;
   if (/^\/api\/v2\/organizations\/[^/]+\/workspaces$/.test(pathname)) return "workspace-list";
-  if (/^\/api\/v2\/(?:runs\/[^/]+\/(?:plan(?:\/json-output|\/sanitized-plan)?|plan\/json-output)|plans\/[^/]+(?:\/json-output|\/json-output-redacted|\/sanitized-plan)?)$/.test(pathname)) return "plan-interaction";
-  if (/^\/api\/v2\/runs\/[^/]+\/(?:logs|plan\/log(?:\/[^/]+)?|apply\/log(?:\/[^/]+)?)$/.test(pathname)) return "log-retrieval";
+  if (
+    /^\/api\/v2\/(?:runs\/[^/]+\/(?:plan(?:\/json-output|\/sanitized-plan)?|plan\/json-output)|plans\/[^/]+(?:\/json-output|\/json-output-redacted|\/sanitized-plan)?)$/.test(
+      pathname,
+    )
+  )
+    return "plan-interaction";
+  if (/^\/api\/v2\/runs\/[^/]+\/(?:logs|plan\/log(?:\/[^/]+)?|apply\/log(?:\/[^/]+)?)$/.test(pathname))
+    return "log-retrieval";
   if (/^\/api\/v2\/workspaces\/[^/]+\/state-versions$/.test(pathname)) return "state-listing";
-  if (/^\/api\/v2\/organizations\/[^/]+\/runs\/queue$/.test(pathname)
-    || /^\/api\/v2\/runs\/[^/]+\/actions\/queue$/.test(pathname)) return "queue-start";
+  if (
+    /^\/api\/v2\/organizations\/[^/]+\/runs\/queue$/.test(pathname) ||
+    /^\/api\/v2\/runs\/[^/]+\/actions\/queue$/.test(pathname)
+  )
+    return "queue-start";
   return "other";
 }
 
@@ -196,16 +206,21 @@ export function recordRequestLatency(path: string, durationMs: number): void {
 }
 
 function journeyLatencySnapshot(): Readonly<Record<PerformanceJourneyLabel, JourneyLatency>> {
-  return Object.fromEntries(PERFORMANCE_JOURNEY_LABELS.map((label): [PerformanceJourneyLabel, JourneyLatency] => {
-    const samplesForJourney = journeySamples[label];
-    return [label, {
-      requests: journeyRequests[label],
-      sampleCount: samplesForJourney.length,
-      p50Ms: percentile(samplesForJourney, 50),
-      p95Ms: percentile(samplesForJourney, 95),
-      maxMs: samplesForJourney.length === 0 ? null : Math.max(...samplesForJourney),
-    }];
-  })) as Record<PerformanceJourneyLabel, JourneyLatency>;
+  return Object.fromEntries(
+    PERFORMANCE_JOURNEY_LABELS.map((label): [PerformanceJourneyLabel, JourneyLatency] => {
+      const samplesForJourney = journeySamples[label];
+      return [
+        label,
+        {
+          requests: journeyRequests[label],
+          sampleCount: samplesForJourney.length,
+          p50Ms: percentile(samplesForJourney, 50),
+          p95Ms: percentile(samplesForJourney, 95),
+          maxMs: samplesForJourney.length === 0 ? null : Math.max(...samplesForJourney),
+        },
+      ];
+    }),
+  ) as Record<PerformanceJourneyLabel, JourneyLatency>;
 }
 
 function eventLoopDelaySnapshot(): EventLoopDelayStats {
@@ -340,12 +355,14 @@ export function processHistory(): SampleWindow {
     samples,
     stats: {
       rss: trendStats(samples.map((sample): { at: number; value: number } => ({ at: sample.at, value: sample.rss }))),
-      heapUsed: trendStats(samples.map((sample): { at: number; value: number } => ({ at: sample.at, value: sample.heapUsed }))),
+      heapUsed: trendStats(
+        samples.map((sample): { at: number; value: number } => ({ at: sample.at, value: sample.heapUsed })),
+      ),
     },
   };
 }
 
-function trendStats(points: readonly (Readonly<{ at: number; value: number }>)[]): TrendStats {
+function trendStats(points: readonly Readonly<{ at: number; value: number }>[]): TrendStats {
   const values = points.map((point): number => point.value);
   const min = values.length > 0 ? Math.min(...values) : 0;
   const max = values.length > 0 ? Math.max(...values) : 0;

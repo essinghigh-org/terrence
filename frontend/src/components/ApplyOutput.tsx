@@ -1,14 +1,6 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan/apply JSON fields are snake_case. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  CheckCircle2,
-  ChevronRight,
-  Clock,
-  Copy,
-  FileCode,
-  XCircle,
-} from "lucide-react";
+import { Check, CheckCircle2, ChevronRight, Clock, Copy, FileCode, XCircle } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
 import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
@@ -86,12 +78,19 @@ type DerivedApplyOutput = Readonly<{
 }>;
 
 function finalExecState(op: Operation): ExecutionState {
-  return op === "create" ? "created" :
-    op === "update" ? "modified" :
-    op === "delete" ? "destroyed" :
-    op === "replace" ? "replaced" :
-    op === "import" ? "imported" :
-    op === "move" ? "moved" : "removed";
+  return op === "create"
+    ? "created"
+    : op === "update"
+      ? "modified"
+      : op === "delete"
+        ? "destroyed"
+        : op === "replace"
+          ? "replaced"
+          : op === "import"
+            ? "imported"
+            : op === "move"
+              ? "moved"
+              : "removed";
 }
 
 function seedExecMap(
@@ -123,9 +122,7 @@ function hookResourceAddr(json: JsonObject): string | undefined {
 function applyStartState(hook: JsonObject | undefined): ExecutionState {
   const rawAction = hook?.["action"];
   const act = isString(rawAction) ? rawAction : "";
-  return act === "create" ? "creating" :
-    act === "update" ? "modifying" :
-    act === "delete" ? "destroying" : "creating";
+  return act === "create" ? "creating" : act === "update" ? "modifying" : act === "delete" ? "destroying" : "creating";
 }
 
 function applyCompleteResult(hook: JsonObject | undefined): { state: ExecutionState; resourceId: string | undefined } {
@@ -134,15 +131,13 @@ function applyCompleteResult(hook: JsonObject | undefined): { state: ExecutionSt
   const rawIdValue = hook?.["id_value"];
   const idVal = isString(rawIdValue) ? rawIdValue : undefined;
   const st: ExecutionState =
-    act === "create" ? "created" :
-    act === "update" ? "modified" :
-    act === "delete" ? "destroyed" : "created";
+    act === "create" ? "created" : act === "update" ? "modified" : act === "delete" ? "destroyed" : "created";
   return { state: st, resourceId: idVal };
 }
 
 function applyJsonLineToMap(map: Map<string, ResourceExecutionInfo>, line: string): boolean {
   try {
-// SAFETY: the fixture object is read as a record; each field is typed below.
+    // SAFETY: the fixture object is read as a record; each field is typed below.
     const json = JSON.parse(line) as JsonObject;
     const addr = hookResourceAddr(json);
     if (addr === undefined || !map.has(addr)) return true;
@@ -164,7 +159,9 @@ function applyJsonLineToMap(map: Map<string, ResourceExecutionInfo>, line: strin
       map.set(addr, { state: "failed", error: "Apply errored" });
     }
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 function applyCreationLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
@@ -290,7 +287,10 @@ function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionIn
 
   if (["creating", "modifying", "destroying", "replacing", "importing", "moving", "removing"].includes(state)) {
     return (
-      <Badge variant="outline" className="gap-1.5 rounded-md border-primary/40 bg-primary/10 font-medium text-primary animate-pulse">
+      <Badge
+        variant="outline"
+        className="gap-1.5 rounded-md border-primary/40 bg-primary/10 font-medium text-primary animate-pulse"
+      >
         <Spinner className="size-3 text-primary" />
         <span className="capitalize">{state}…</span>
         {elapsed !== undefined && <span className="font-mono text-2xs text-primary">[{elapsed}]</span>}
@@ -300,7 +300,10 @@ function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionIn
 
   if (state === "failed") {
     return (
-      <Badge variant="outline" className="gap-1 rounded-md border-destructive/50 bg-destructive/10 font-semibold text-destructive">
+      <Badge
+        variant="outline"
+        className="gap-1 rounded-md border-destructive/50 bg-destructive/10 font-semibold text-destructive"
+      >
         <XCircle className="size-3 text-destructive" />
         Failed
       </Badge>
@@ -358,8 +361,13 @@ function ApplyResourceRow({
     >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open/resource:rotate-90" aria-hidden="true" />
-          <span className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}>
+          <ChevronRight
+            className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open/resource:rotate-90"
+            aria-hidden="true"
+          />
+          <span
+            className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}
+          >
             {"icon" in config ? (
               <config.icon className="size-3.5" aria-hidden="true" />
             ) : (
@@ -370,7 +378,12 @@ function ApplyResourceRow({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <ProviderIcon providerName={resource.provider_name} size={22} />
-              <code className="truncate font-mono text-xs font-semibold text-foreground" title={resource.provider_name ?? undefined}>{resource.address}</code>
+              <code
+                className="truncate font-mono text-xs font-semibold text-foreground"
+                title={resource.provider_name ?? undefined}
+              >
+                {resource.address}
+              </code>
               <button
                 type="button"
                 aria-label={`Copy ${resource.address} address`}
@@ -381,8 +394,6 @@ function ApplyResourceRow({
                 {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
               </button>
             </div>
-
-
           </div>
         </div>
 
@@ -424,31 +435,33 @@ export function ApplyOutput({
           setLoadState({ kind: "unavailable" });
           return;
         }
-// SAFETY: the run phase payload is plan JSON per the endpoint contract.
+        // SAFETY: the run phase payload is plan JSON per the endpoint contract.
         setLoadState({ kind: "ready", plan: data as PlanJson });
       } catch (reason: unknown) {
         if (cancelled) return;
         setLoadState({
           kind: "error",
-          message: reason instanceof ApiError && reason.status === 404
-            ? "Plan data is unavailable for apply output."
-            : "Failed to load apply output.",
+          message:
+            reason instanceof ApiError && reason.status === 404
+              ? "Plan data is unavailable for apply output."
+              : "Failed to load apply output.",
         });
       }
     };
 
     void load();
-    return (): void => { cancelled = true; };
+    return (): void => {
+      cancelled = true;
+    };
   }, [runId, retry]);
 
   const derived = useMemo((): DerivedApplyOutput | null => {
     if (loadState.kind !== "ready") return null;
     const planJson = loadState.plan;
-    const changedResources = (planJson.resource_changes ?? [])
-      .filter((resource): boolean => {
-        const op = operationForResource(resource);
-        return op !== "no-op" && op !== "read";
-      });
+    const changedResources = (planJson.resource_changes ?? []).filter((resource): boolean => {
+      const op = operationForResource(resource);
+      return op !== "no-op" && op !== "read";
+    });
     const applyFinished = applyStatus === "finished" || status === "applied";
     const applyFailed = ["errored", "failed", "unreachable"].includes(applyStatus);
     const execMap = parseApplyLogsToExecMap(applyLogs, changedResources, applyFinished, applyFailed);
@@ -467,9 +480,10 @@ export function ApplyOutput({
     const query = search.trim().toLocaleLowerCase();
     const filteredResources = changedResources.filter((resource): boolean => {
       const primaryOp = operationForResource(resource);
-      const matchesOp = selectedOps.has(primaryOp)
-        || (resource.previous_address !== undefined && selectedOps.has("move"))
-        || (resource.change.importing !== undefined && selectedOps.has("import"));
+      const matchesOp =
+        selectedOps.has(primaryOp) ||
+        (resource.previous_address !== undefined && selectedOps.has("move")) ||
+        (resource.change.importing !== undefined && selectedOps.has("import"));
       if (!matchesOp) return false;
       if (query === "") return true;
       return [
@@ -492,7 +506,10 @@ export function ApplyOutput({
 
   if (loadState.kind === "loading") {
     return (
-      <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
+      <div
+        role="status"
+        className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground"
+      >
         <Spinner className="size-4" />
         Loading structured apply output…
       </div>
@@ -526,13 +543,7 @@ export function ApplyOutput({
     );
   }
 
-  const {
-    planJson,
-    changedResources,
-    execMap,
-    opCounts,
-    filteredResources,
-  } = derived;
+  const { planJson, changedResources, execMap, opCounts, filteredResources } = derived;
 
   return (
     <section aria-label="Apply output" className="border-t border-border">
@@ -541,7 +552,10 @@ export function ApplyOutput({
           <FileCode className="size-4 text-muted-foreground/70" />
           <span className="text-xs font-medium text-foreground/85">Apply output</span>
           {applyStatus === "running" && (
-            <Badge variant="outline" className="gap-1 rounded border-primary/40 bg-primary/10 text-2xs text-primary animate-pulse">
+            <Badge
+              variant="outline"
+              className="gap-1 rounded border-primary/40 bg-primary/10 text-2xs text-primary animate-pulse"
+            >
               <Spinner className="size-3 text-primary" />
               Apply in progress
             </Badge>
@@ -550,7 +564,9 @@ export function ApplyOutput({
         <span className="text-xs text-muted-foreground">
           Terraform {planJson.terraform_version ?? "unknown"}
           {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
-          <span className="ml-1.5 text-muted-foreground">· {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}</span>
+          <span className="ml-1.5 text-muted-foreground">
+            · {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}
+          </span>
         </span>
       </div>
 
@@ -568,7 +584,9 @@ export function ApplyOutput({
               placeholder="Filter resources by address…"
               aria-label="Filter resources by address or type"
               className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm font-normal text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
-              onInput={(event): void => { setSearch(event.currentTarget.value); }}
+              onInput={(event): void => {
+                setSearch(event.currentTarget.value);
+              }}
             />
           </label>
           <OperationFilterDropdown
@@ -589,7 +607,10 @@ export function ApplyOutput({
           {changedResources.length === 0 ? "No resources to apply." : "No resources match these filters."}
         </p>
       ) : (
-        <div aria-label={`Apply resource list, ${filteredResources.length} items`} className="divide-y divide-border/60">
+        <div
+          aria-label={`Apply resource list, ${filteredResources.length} items`}
+          className="divide-y divide-border/60"
+        >
           {filteredResources.map((resource): React.JSX.Element => {
             const exec = execMap.get(resource.address) ?? { state: "pending" };
             return (

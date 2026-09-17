@@ -89,9 +89,12 @@ export type McpToolFailure = Readonly<{
 }>;
 
 export function isMcpToolFailure(value: unknown): value is McpToolFailure {
-  return value !== null && typeof value === "object"
-    && (value as { kind?: unknown }).kind === "mcp-tool-failure"
-    && typeof (value as { message?: unknown }).message === "string";
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    (value as { kind?: unknown }).kind === "mcp-tool-failure" &&
+    typeof (value as { message?: unknown }).message === "string"
+  );
 }
 
 /** Tool-level authorization failure, returned as a normal CallToolResult error. */

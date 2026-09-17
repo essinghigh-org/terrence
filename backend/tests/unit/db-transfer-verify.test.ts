@@ -21,7 +21,11 @@ type Rows = readonly (readonly unknown[])[];
 
 function makeDigestable(rows: Rows): {
   calls: { stream: number; sample: number; sampleLimit: number };
-  api: { count(n: string): Promise<number>; streamRows(n: string, c: unknown, b: number, onBatch: (r: Rows) => Promise<void> | void): Promise<void>; readSampleRows(n: string, c: unknown, o: unknown, limit: number): Promise<Rows> };
+  api: {
+    count(n: string): Promise<number>;
+    streamRows(n: string, c: unknown, b: number, onBatch: (r: Rows) => Promise<void> | void): Promise<void>;
+    readSampleRows(n: string, c: unknown, o: unknown, limit: number): Promise<Rows>;
+  };
 } {
   const calls = { stream: 0, sample: 0, sampleLimit: 0 };
   return {
@@ -79,7 +83,9 @@ describe("verifyTransfer coverage reporting", (): void => {
   function emptyStore(): TransferSource & TransferTarget {
     const noRows: Rows = [];
     return {
-      ping: async (): Promise<void> => { await Promise.resolve(); },
+      ping: async (): Promise<void> => {
+        await Promise.resolve();
+      },
       hasTable: async (): Promise<boolean> => true,
       count: async (): Promise<number> => 0,
       countWhere: async (): Promise<number> => 0,
@@ -88,16 +94,32 @@ describe("verifyTransfer coverage reporting", (): void => {
         await onBatch(noRows);
       },
       readSampleRows: async (): Promise<Rows> => noRows,
-      beginSnapshot: async (): Promise<void> => { await Promise.resolve(); },
-      endSnapshot: async (): Promise<void> => { await Promise.resolve(); },
+      beginSnapshot: async (): Promise<void> => {
+        await Promise.resolve();
+      },
+      endSnapshot: async (): Promise<void> => {
+        await Promise.resolve();
+      },
       listForeignKeys: async (): Promise<readonly { child: string; parent: string }[]> => [],
-      listUniqueIndexes: async (): Promise<readonly { name: string; table: string; columns: readonly string[] }[]> => [],
-      beginTable: async (): Promise<void> => { await Promise.resolve(); },
-      insertRows: async (): Promise<void> => { await Promise.resolve(); },
-      commitTable: async (): Promise<void> => { await Promise.resolve(); },
-      runForeignKeysCheck: async (): Promise<readonly { table: string; rowid: number | null; parent: string; fkid: number }[]> => [],
+      listUniqueIndexes: async (): Promise<
+        readonly { name: string; table: string; columns: readonly string[] }[]
+      > => [],
+      beginTable: async (): Promise<void> => {
+        await Promise.resolve();
+      },
+      insertRows: async (): Promise<void> => {
+        await Promise.resolve();
+      },
+      commitTable: async (): Promise<void> => {
+        await Promise.resolve();
+      },
+      runForeignKeysCheck: async (): Promise<
+        readonly { table: string; rowid: number | null; parent: string; fkid: number }[]
+      > => [],
       foreignKeysEnabled: async (): Promise<boolean> => false,
-      finishAndClose: async (): Promise<void> => { await Promise.resolve(); },
+      finishAndClose: async (): Promise<void> => {
+        await Promise.resolve();
+      },
     };
   }
 

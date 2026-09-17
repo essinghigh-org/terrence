@@ -53,7 +53,10 @@ export const orgTools: readonly McpTool[] = [
       });
       if (mems.length === 0) return [];
       const orgRows = await db.query.organizations.findMany({
-        where: inArray(organizations.id, mems.map((m): string => m.orgId)),
+        where: inArray(
+          organizations.id,
+          mems.map((m): string => m.orgId),
+        ),
         orderBy: [asc(organizations.name)],
         columns: { id: true, name: true },
       });
@@ -76,7 +79,16 @@ export const orgTools: readonly McpTool[] = [
         where: eq(organizations.name, orgName),
       });
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
-      if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId, "settings:read"))) {
+      if (
+        !(await checkOrgPermission(
+          session.userId ?? undefined,
+          org.id,
+          "member",
+          session.orgId,
+          session.teamId,
+          "settings:read",
+        ))
+      ) {
         return toolError("Not authorized to access this organization's settings");
       }
       return {

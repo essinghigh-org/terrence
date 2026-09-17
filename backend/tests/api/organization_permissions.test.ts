@@ -78,14 +78,16 @@ describe("granular organization permissions", () => {
   };
 
   const request = (path: string, auth: string, method = "GET", body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   const resource = (type: string, attributes: Record<string, unknown>): Record<string, unknown> => ({
     data: { type, attributes },
@@ -130,12 +132,14 @@ describe("granular organization permissions", () => {
       { id: workspaceId, orgId, projectId, name: `assigned-${suffix}` },
       { id: otherWorkspaceId, orgId, projectId, name: `unassigned-${suffix}` },
     ]);
-    await db.insert(teams).values(Object.entries(permissionByRole).map(([role, organizationAccess]) => ({
-      id: teamIds[role as Role],
-      orgId,
-      name: `permissions-${role}-${suffix}`,
-      organizationAccess,
-    })));
+    await db.insert(teams).values(
+      Object.entries(permissionByRole).map(([role, organizationAccess]) => ({
+        id: teamIds[role as Role],
+        orgId,
+        name: `permissions-${role}-${suffix}`,
+        organizationAccess,
+      })),
+    );
     await db.insert(teamWorkspaces).values([
       {
         id: `tw-permissions-none-${suffix}`,
@@ -210,20 +214,70 @@ describe("granular organization permissions", () => {
 
   it("denies management APIs to a team without organization permissions", async () => {
     const responses = await Promise.all([
-      request(`/api/v2/organizations/${orgName}/teams`, tokens.none, "POST", resource("teams", { name: "denied-team" })),
-      request(`/api/v2/organizations/${orgName}/organization-memberships`, tokens.none, "POST", resource("organization-memberships", { username: memberId })),
-      request(`/api/v2/organizations/${orgName}/projects`, tokens.none, "POST", resource("projects", { name: "denied-project" })),
-      request(`/api/v2/organizations/${orgName}/ssh-keys`, tokens.none, "POST", resource("ssh-keys", { name: "denied-key", value: "secret" })),
-      request(`/api/v2/organizations/${orgName}/policy-sets`, tokens.none, "POST", resource("policy-sets", { name: "denied-policies" })),
-      request(`/api/v2/organizations/${orgName}/run-tasks`, tokens.none, "POST", resource("run-tasks", { name: "denied-task", url: "https://example.test/task" })),
+      request(
+        `/api/v2/organizations/${orgName}/teams`,
+        tokens.none,
+        "POST",
+        resource("teams", { name: "denied-team" }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/organization-memberships`,
+        tokens.none,
+        "POST",
+        resource("organization-memberships", { username: memberId }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/projects`,
+        tokens.none,
+        "POST",
+        resource("projects", { name: "denied-project" }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/ssh-keys`,
+        tokens.none,
+        "POST",
+        resource("ssh-keys", { name: "denied-key", value: "secret" }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/policy-sets`,
+        tokens.none,
+        "POST",
+        resource("policy-sets", { name: "denied-policies" }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/run-tasks`,
+        tokens.none,
+        "POST",
+        resource("run-tasks", { name: "denied-task", url: "https://example.test/task" }),
+      ),
       request(`/api/v2/organizations/${orgName}/varsets`, tokens.none),
-      request(`/api/v2/organizations/${orgName}/varsets`, tokens.none, "POST", resource("varsets", { name: "denied-varset" })),
+      request(
+        `/api/v2/organizations/${orgName}/varsets`,
+        tokens.none,
+        "POST",
+        resource("varsets", { name: "denied-varset" }),
+      ),
       request("/api/v2/vars", tokens.none, "POST", workspaceVariable(`denied-variable-${suffix}`)),
       request(`/api/v2/workspaces/${workspaceId}/relationships/run-triggers`, tokens.none, "POST", { data: [] }),
       request(`/api/v2/organizations/${orgName}/agent-pools`, tokens.none),
-      request(`/api/v2/organizations/${orgName}/agent-pools`, tokens.none, "POST", resource("agent-pools", { name: "denied-pool" })),
-      request(`/api/v2/organizations/${orgName}/registry-providers`, tokens.none, "POST", resource("registry-providers", { name: "denied-provider", namespace: orgName })),
-      request(`/api/v2/organizations/${orgName}/registry-modules`, tokens.none, "POST", resource("registry-modules", { name: "denied-module", provider: "aws", namespace: orgName })),
+      request(
+        `/api/v2/organizations/${orgName}/agent-pools`,
+        tokens.none,
+        "POST",
+        resource("agent-pools", { name: "denied-pool" }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/registry-providers`,
+        tokens.none,
+        "POST",
+        resource("registry-providers", { name: "denied-provider", namespace: orgName }),
+      ),
+      request(
+        `/api/v2/organizations/${orgName}/registry-modules`,
+        tokens.none,
+        "POST",
+        resource("registry-modules", { name: "denied-module", provider: "aws", namespace: orgName }),
+      ),
       request(`/api/v2/policy-checks/${checkIds.global}/actions/override`, tokens.none, "POST"),
     ]);
     expect(responses.map(({ status }) => status)).toEqual(Array(15).fill(404));
@@ -259,7 +313,7 @@ describe("granular organization permissions", () => {
     const permissionsFor = async (auth: string): Promise<Permissions> => {
       const response = await request(`/api/v2/organizations/${orgName}`, auth);
       expect(response.status).toBe(200);
-      const document = await response.json() as {
+      const document = (await response.json()) as {
         data: { attributes: { permissions: Permissions } };
       };
       return document.data.attributes.permissions;
@@ -345,11 +399,10 @@ describe("granular organization permissions", () => {
       request(`/api/v2/organizations/${orgName}/oauth-clients`, tokens.manageWorkspaces),
       request(`/api/v2/oauth-clients/${oauthClientId}/oauth-tokens`, tokens.manageWorkspaces),
     ]);
-    expect([installationsResponse.status, clientsResponse.status, tokensResponse.status])
-      .toEqual([200, 200, 200]);
-    const installations = await installationsResponse.json() as { data: { id: string }[] };
-    const clients = await clientsResponse.json() as { data: { id: string }[] };
-    const listedTokens = await tokensResponse.json() as { data: { id: string }[] };
+    expect([installationsResponse.status, clientsResponse.status, tokensResponse.status]).toEqual([200, 200, 200]);
+    const installations = (await installationsResponse.json()) as { data: { id: string }[] };
+    const clients = (await clientsResponse.json()) as { data: { id: string }[] };
+    const listedTokens = (await tokensResponse.json()) as { data: { id: string }[] };
     expect(installations.data.map(({ id }): string => id)).toEqual([vcsInstallationId]);
     expect(clients.data.map(({ id }): string => id)).toEqual([oauthClientId]);
     expect(listedTokens.data.map(({ id }): string => id)).toEqual([oauthTokenId]);
@@ -361,10 +414,7 @@ describe("granular organization permissions", () => {
         "POST",
         resource("github-app-installations", { name: "denied", "installation-id": 303 }),
       ),
-      request(
-        `/api/v2/organizations/${orgName}/github-app/installations/setup`,
-        tokens.manageWorkspaces,
-      ),
+      request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, tokens.manageWorkspaces),
       request(
         `/api/v2/organizations/${orgName}/oauth-clients`,
         tokens.manageWorkspaces,
@@ -383,7 +433,7 @@ describe("granular organization permissions", () => {
     expect(restricted.map(({ status }): number => status)).toEqual(Array(6).fill(404));
     const readableClient = await request(`/api/v2/oauth-clients/${oauthClientId}`, tokens.manageWorkspaces);
     expect(readableClient.status).toBe(200);
-    expect((await readableClient.json() as { data: { id: string } }).data.id).toBe(oauthClientId);
+    expect(((await readableClient.json()) as { data: { id: string } }).data.id).toBe(oauthClientId);
 
     const sameOrg = await request(
       `/api/v2/organizations/${orgName}/workspaces`,
@@ -436,18 +486,23 @@ describe("granular organization permissions", () => {
       resource("organization-memberships", { username: memberId }),
     );
     expect(invite.status).toBe(201);
-    expect((await request(
-      `/api/v2/teams/${teamIds.none}/relationships/users`,
-      tokens.membership,
-      "POST",
-      { data: [{ id: memberId, type: "users" }] },
-    )).status).toBe(204);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/teams`,
-      tokens.membership,
-      "POST",
-      resource("teams", { name: `membership-cannot-create-${suffix}` }),
-    )).status).toBe(404);
+    expect(
+      (
+        await request(`/api/v2/teams/${teamIds.none}/relationships/users`, tokens.membership, "POST", {
+          data: [{ id: memberId, type: "users" }],
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/teams`,
+          tokens.membership,
+          "POST",
+          resource("teams", { name: `membership-cannot-create-${suffix}` }),
+        )
+      ).status,
+    ).toBe(404);
 
     const plainTeam = await request(
       `/api/v2/organizations/${orgName}/teams`,
@@ -456,22 +511,27 @@ describe("granular organization permissions", () => {
       resource("teams", { name: `managed-team-${suffix}` }),
     );
     expect(plainTeam.status).toBe(201);
-    const plainTeamId = (await plainTeam.json() as { data: { id: string } }).data.id;
-    expect((await request(
-      `/api/v2/teams/${plainTeamId}/relationships/users`,
-      tokens.teams,
-      "POST",
-      { data: [{ id: memberId, type: "users" }] },
-    )).status).toBe(204);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/teams`,
-      tokens.teams,
-      "POST",
-      resource("teams", {
-        name: `team-cannot-delegate-${suffix}`,
-        "organization-access": { "manage-policies": true },
-      }),
-    )).status).toBe(404);
+    const plainTeamId = ((await plainTeam.json()) as { data: { id: string } }).data.id;
+    expect(
+      (
+        await request(`/api/v2/teams/${plainTeamId}/relationships/users`, tokens.teams, "POST", {
+          data: [{ id: memberId, type: "users" }],
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/teams`,
+          tokens.teams,
+          "POST",
+          resource("teams", {
+            name: `team-cannot-delegate-${suffix}`,
+            "organization-access": { "manage-policies": true },
+          }),
+        )
+      ).status,
+    ).toBe(404);
 
     const delegatedTeam = await request(
       `/api/v2/organizations/${orgName}/teams`,
@@ -483,24 +543,32 @@ describe("granular organization permissions", () => {
       }),
     );
     expect(delegatedTeam.status).toBe(201);
-    expect((await request(
-      `/api/v2/teams/${plainTeamId}`,
-      tokens.organizationAccess,
-      "PATCH",
-      resource("teams", { "organization-access": { "manage-vcs-settings": true } }),
-    )).status).toBe(200);
+    expect(
+      (
+        await request(
+          `/api/v2/teams/${plainTeamId}`,
+          tokens.organizationAccess,
+          "PATCH",
+          resource("teams", { "organization-access": { "manage-vcs-settings": true } }),
+        )
+      ).status,
+    ).toBe(200);
   });
 
   it("applies documented project and workspace permission cascades", async () => {
     expect((await request(`/api/v2/organizations/${orgName}/projects`, tokens.readProjects)).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}`, tokens.readProjects)).status).toBe(200);
     expect((await request(`/api/v2/organizations/${orgName}/varsets`, tokens.readWorkspaces)).status).toBe(200);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/projects`,
-      tokens.readProjects,
-      "POST",
-      resource("projects", { name: `read-only-${suffix}` }),
-    )).status).toBe(404);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/projects`,
+          tokens.readProjects,
+          "POST",
+          resource("projects", { name: `read-only-${suffix}` }),
+        )
+      ).status,
+    ).toBe(404);
 
     const project = await request(
       `/api/v2/organizations/${orgName}/projects`,
@@ -509,42 +577,57 @@ describe("granular organization permissions", () => {
       resource("projects", { name: `managed-project-${suffix}` }),
     );
     expect(project.status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/workspaces`,
-      tokens.manageProjects,
-      "POST",
-      resource("workspaces", { name: `project-managed-workspace-${suffix}` }),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/workspaces`,
-      tokens.manageWorkspaces,
-      "POST",
-      resource("workspaces", { name: `workspace-managed-${suffix}` }),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/varsets`,
-      tokens.manageWorkspaces,
-      "POST",
-      resource("varsets", { name: `workspace-managed-varset-${suffix}` }),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/varsets`,
-      tokens.manageProjects,
-      "POST",
-      resource("varsets", { name: `project-managed-varset-${suffix}` }),
-    )).status).toBe(201);
-    expect((await request(
-      "/api/v2/vars",
-      tokens.manageWorkspaces,
-      "POST",
-      workspaceVariable(`managed-variable-${suffix}`),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/workspaces/${workspaceId}/relationships/run-triggers`,
-      tokens.manageWorkspaces,
-      "POST",
-      { data: [] },
-    )).status).toBe(204);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/workspaces`,
+          tokens.manageProjects,
+          "POST",
+          resource("workspaces", { name: `project-managed-workspace-${suffix}` }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/workspaces`,
+          tokens.manageWorkspaces,
+          "POST",
+          resource("workspaces", { name: `workspace-managed-${suffix}` }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/varsets`,
+          tokens.manageWorkspaces,
+          "POST",
+          resource("varsets", { name: `workspace-managed-varset-${suffix}` }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/varsets`,
+          tokens.manageProjects,
+          "POST",
+          resource("varsets", { name: `project-managed-varset-${suffix}` }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (await request("/api/v2/vars", tokens.manageWorkspaces, "POST", workspaceVariable(`managed-variable-${suffix}`)))
+        .status,
+    ).toBe(201);
+    expect(
+      (
+        await request(`/api/v2/workspaces/${workspaceId}/relationships/run-triggers`, tokens.manageWorkspaces, "POST", {
+          data: [],
+        })
+      ).status,
+    ).toBe(204);
     expect((await request(`/api/v2/projects/${projectId}`, tokens.manageWorkspaces)).status).toBe(404);
 
     expect((await request(`/api/v2/projects/${projectId}`, tokens.agentPools)).status).toBe(200);
@@ -559,12 +642,16 @@ describe("granular organization permissions", () => {
       resource("ssh-keys", { name: `managed-key-${suffix}`, value: "private-key" }),
     );
     expect(sshKey.status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/oauth-clients`,
-      tokens.vcs,
-      "POST",
-      resource("oauth-clients", { name: `managed-vcs-${suffix}`, "service-provider": "github" }),
-    )).status).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/oauth-clients`,
+          tokens.vcs,
+          "POST",
+          resource("oauth-clients", { name: `managed-vcs-${suffix}`, "service-provider": "github" }),
+        )
+      ).status,
+    ).toBe(201);
 
     const policySet = await request(
       `/api/v2/organizations/${orgName}/policy-sets`,
@@ -574,11 +661,9 @@ describe("granular organization permissions", () => {
     );
     expect(policySet.status).toBe(201);
     expect((await request(`/api/v2/workspaces/${otherWorkspaceId}/policy-sets`, tokens.policies)).status).toBe(200);
-    expect((await request(
-      `/api/v2/policy-checks/${checkIds.global}/actions/override`,
-      tokens.policies,
-      "POST",
-    )).status).toBe(404);
+    expect(
+      (await request(`/api/v2/policy-checks/${checkIds.global}/actions/override`, tokens.policies, "POST")).status,
+    ).toBe(404);
 
     const runTask = await request(
       `/api/v2/organizations/${orgName}/run-tasks`,
@@ -588,26 +673,20 @@ describe("granular organization permissions", () => {
     );
     expect(runTask.status).toBe(201);
 
-    expect((await request(
-      `/api/v2/policy-checks/${checkIds.global}/actions/override`,
-      tokens.overrides,
-      "POST",
-    )).status).toBe(200);
-    expect((await request(
-      `/api/v2/policy-checks/${checkIds.direct}/actions/override`,
-      tokens.none,
-      "POST",
-    )).status).toBe(404);
-    expect((await request(
-      `/api/v2/policy-checks/${checkIds.direct}/actions/override`,
-      tokens.delegateOverrides,
-      "POST",
-    )).status).toBe(200);
-    expect((await request(
-      `/api/v2/policy-checks/${checkIds.unassigned}/actions/override`,
-      tokens.delegateOverrides,
-      "POST",
-    )).status).toBe(404);
+    expect(
+      (await request(`/api/v2/policy-checks/${checkIds.global}/actions/override`, tokens.overrides, "POST")).status,
+    ).toBe(200);
+    expect(
+      (await request(`/api/v2/policy-checks/${checkIds.direct}/actions/override`, tokens.none, "POST")).status,
+    ).toBe(404);
+    expect(
+      (await request(`/api/v2/policy-checks/${checkIds.direct}/actions/override`, tokens.delegateOverrides, "POST"))
+        .status,
+    ).toBe(200);
+    expect(
+      (await request(`/api/v2/policy-checks/${checkIds.unassigned}/actions/override`, tokens.delegateOverrides, "POST"))
+        .status,
+    ).toBe(404);
   });
 
   it("requires an explicit authorized policy override before apply", async () => {
@@ -643,40 +722,57 @@ describe("granular organization permissions", () => {
   });
 
   it("covers agent-pool and registry permissions and preserves privileged principals", async () => {
-    expect((await request(
-      `/api/v2/organizations/${orgName}/agent-pools`,
-      tokens.agentPools,
-    )).status).toBe(200);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/agent-pools`,
-      tokens.agentPools,
-      "POST",
-      resource("agent-pools", { name: `managed-pool-${suffix}` }),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/registry-providers`,
-      tokens.providers,
-      "POST",
-      resource("registry-providers", { name: `managed-provider-${suffix}`, namespace: orgName }),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/registry-modules`,
-      tokens.modules,
-      "POST",
-      resource("registry-modules", { name: `managed-module-${suffix}`, provider: "aws", namespace: orgName }),
-    )).status).toBe(201);
+    expect((await request(`/api/v2/organizations/${orgName}/agent-pools`, tokens.agentPools)).status).toBe(200);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/agent-pools`,
+          tokens.agentPools,
+          "POST",
+          resource("agent-pools", { name: `managed-pool-${suffix}` }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/registry-providers`,
+          tokens.providers,
+          "POST",
+          resource("registry-providers", { name: `managed-provider-${suffix}`, namespace: orgName }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/registry-modules`,
+          tokens.modules,
+          "POST",
+          resource("registry-modules", { name: `managed-module-${suffix}`, provider: "aws", namespace: orgName }),
+        )
+      ).status,
+    ).toBe(201);
 
-    expect((await request(
-      `/api/v2/organizations/${orgName}/run-tasks`,
-      ownerToken,
-      "POST",
-      resource("run-tasks", { name: `owner-task-${suffix}`, url: "https://example.test/owner-task" }),
-    )).status).toBe(201);
-    expect((await request(
-      `/api/v2/organizations/${orgName}/projects`,
-      organizationToken,
-      "POST",
-      resource("projects", { name: `organization-project-${suffix}` }),
-    )).status).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/run-tasks`,
+          ownerToken,
+          "POST",
+          resource("run-tasks", { name: `owner-task-${suffix}`, url: "https://example.test/owner-task" }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/projects`,
+          organizationToken,
+          "POST",
+          resource("projects", { name: `organization-project-${suffix}` }),
+        )
+      ).status,
+    ).toBe(201);
   });
 });

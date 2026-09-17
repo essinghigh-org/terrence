@@ -41,10 +41,7 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
   });
   localStorage.removeItem("tfe_token");
   setAuthToken("manage-workspaces-only");
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/github-app/installations") {
       listAuthorizations.push(new Headers(init?.headers).get("Authorization"));
@@ -57,13 +54,13 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
       return json({ data: [] });
     }
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body as string);
       return json({ data: { id: "ws-1" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     // The modal's dead-end states link to organization settings.
@@ -99,10 +96,7 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
   await waitFor((): void => {
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
-  expect(listAuthorizations).toEqual([
-    "Bearer manage-workspaces-only",
-    "Bearer manage-workspaces-only",
-  ]);
+  expect(listAuthorizations).toEqual(["Bearer manage-workspaces-only", "Bearer manage-workspaces-only"]);
   expect(createBody).toEqual({
     data: {
       attributes: {
@@ -141,41 +135,42 @@ test("switches an existing workspace to a registered OAuth connection", async ()
       permissions: { "can-update": true },
     },
   };
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/github-app/installations") {
       return json({ data: [{ id: "ghain-1", attributes: { name: "Acme GitHub" } }] });
     }
     if (url === "/api/v2/organizations/acme/oauth-clients") {
       return json({
-        data: [{
-          id: "oc-1",
-          attributes: {
-            name: "Legacy GitHub",
-            "service-provider-display-name": "GitHub",
+        data: [
+          {
+            id: "oc-1",
+            attributes: {
+              name: "Legacy GitHub",
+              "service-provider-display-name": "GitHub",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/oauth-clients/oc-1/oauth-tokens") {
       return json({
-        data: [{
-          id: "ot-1",
-          attributes: { "service-provider-user": "alice" },
-        }],
+        data: [
+          {
+            id: "ot-1",
+            attributes: { "service-provider-user": "alice" },
+          },
+        ],
       });
     }
     if (url === "/api/v2/workspaces/ws-1" && init?.method === "PATCH") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       patchBody = JSON.parse(init.body as string);
       return json({ data: workspace });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/version-control"]}>
@@ -192,7 +187,9 @@ test("switches an existing workspace to a registered OAuth connection", async ()
     expect(view.getByRole("option", { name: "Legacy GitHub — GitHub (alice)" })).toBeTruthy();
   });
   expect((view.getByLabelText("VCS connection") as HTMLSelectElement).value).toBe("github-app:ghain-1");
-  expect(view.getByRole("checkbox", { name: "Include submodules when cloning" }).getAttribute("aria-checked")).toBe("true");
+  expect(view.getByRole("checkbox", { name: "Include submodules when cloning" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
   expect((view.getByLabelText("Git tag regular expression") as HTMLInputElement).value).toBe("^v\\d+$");
   expect(view.queryByLabelText(/installation id|oauth token id/i)).toBeNull();
 
@@ -207,10 +204,12 @@ test("switches an existing workspace to a registered OAuth connection", async ()
   await waitFor((): void => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-  const attributes = (patchBody as {
-    data: { attributes: JsonObject };
-  }).data.attributes;
+  // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const attributes = (
+    patchBody as {
+      data: { attributes: JsonObject };
+    }
+  ).data.attributes;
   expect(attributes["vcs-repo"]).toEqual({
     identifier: "acme/infrastructure",
     branch: "main",
@@ -223,19 +222,16 @@ test("switches an existing workspace to a registered OAuth connection", async ()
 
 test("keeps local workspace creation independent from VCS connections", async () => {
   let createBody: unknown;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body as string);
       return json({ data: { id: "ws-local" } }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
@@ -256,13 +252,19 @@ test("keeps local workspace creation independent from VCS connections", async ()
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
 
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-      requestUrl(input) === "/api/v2/organizations/acme/workspaces" && init?.method === "POST")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]): boolean =>
+          requestUrl(input) === "/api/v2/organizations/acme/workspaces" && init?.method === "POST",
+      ),
+    ).toBe(true);
   });
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-  const attributes = (createBody as {
-    data: { attributes: JsonObject };
-  }).data.attributes;
+  // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+  const attributes = (
+    createBody as {
+      data: { attributes: JsonObject };
+    }
+  ).data.attributes;
   expect(attributes["source"]).toBe("local");
   expect(Object.hasOwn(attributes, "vcs-repo")).toBe(false);
 });

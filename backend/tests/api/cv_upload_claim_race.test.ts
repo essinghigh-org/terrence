@@ -26,25 +26,29 @@ describe("configuration-version upload claim race", () => {
   const workspaceId = `ws-cvrace-${suffix}`;
 
   const request = (path: string, method = "GET", body?: BodyInit, headers: Record<string, string> = {}) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/octet-stream" }),
-        ...headers,
-      },
-      body: body ?? null,
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/octet-stream" }),
+          ...headers,
+        },
+        body: body ?? null,
+      }),
+    );
 
   const requestJson = (path: string, method: string, body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        "Content-Type": "application/vnd.api+json",
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   let cvId = "";
 
@@ -70,7 +74,8 @@ describe("configuration-version upload claim race", () => {
     await db.delete(users).where(eq(users.username, userId));
   });
 
-  const tarball = (tag: string): Uint8Array<ArrayBuffer> => validTarGzip(`fake-tar-gz-payload-${tag}-${"x".repeat(256)}`);
+  const tarball = (tag: string): Uint8Array<ArrayBuffer> =>
+    validTarGzip(`fake-tar-gz-payload-${tag}-${"x".repeat(256)}`);
 
   it("only one of two simultaneous uploads wins; the loser gets 409", async () => {
     const [a, b] = await Promise.all([
@@ -117,7 +122,8 @@ describe("configuration-version upload claim race", () => {
     expect(res.status).toBe(409);
 
     // Once the claim is expired, the upload succeeds.
-    await db.update(configurationVersions)
+    await db
+      .update(configurationVersions)
       .set({ uploadClaimExpiresAt: Date.now() - 1000 })
       .where(eq(configurationVersions.id, claimed!.id));
     const ok = await request(`/api/v2/configuration-versions/${claimed!.id}/upload`, "PUT", tarball("d"));

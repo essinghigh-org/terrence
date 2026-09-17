@@ -31,7 +31,7 @@ describe("index.html document metadata", (): void => {
 
   it("links the web app manifest and install icons", (): void => {
     expect(indexHtml).toContain('rel="manifest"');
-    expect(indexHtml).toContain('/manifest.webmanifest');
+    expect(indexHtml).toContain("/manifest.webmanifest");
     expect(indexHtml).toContain('sizes="192x192"');
     expect(indexHtml).toContain('sizes="512x512"');
     expect(indexHtml).toContain('rel="apple-touch-icon"');
@@ -51,10 +51,10 @@ describe("index.html document metadata", (): void => {
 
 describe("Web App Manifest", (): void => {
   it("is valid JSON with stand-alone display and the required icons", (): void => {
-// SAFETY: the fixture object is read as a record; each field is typed below.
+    // SAFETY: the fixture object is read as a record; each field is typed below.
     const parsed = JSON.parse(manifest) as JsonObject;
     expect(parsed["display"]).toBe("standalone");
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+    // SAFETY: the fixture matches the JSON:API envelope the component consumes.
     const icons = parsed["icons"] as { sizes?: string; purpose?: string }[];
     expect(icons.some((icon): boolean => icon.sizes === "192x192")).toBeTrue();
     expect(icons.some((icon): boolean => icon.sizes === "512x512" && icon.purpose === "any")).toBeTrue();

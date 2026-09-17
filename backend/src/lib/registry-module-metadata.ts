@@ -25,16 +25,15 @@ export type RegistryModuleSectionMetadata = Readonly<{
   resources: readonly Readonly<{ name: string; type: string; mode: "managed" | "data" }>[];
 }>;
 
-export type RegistryModuleMetadata = RegistryModuleSectionMetadata & Readonly<{
-  submodules: readonly RegistryModuleSectionMetadata[];
-  examples: readonly RegistryModuleSectionMetadata[];
-  diagnostics: readonly string[];
-}>;
+export type RegistryModuleMetadata = RegistryModuleSectionMetadata &
+  Readonly<{
+    submodules: readonly RegistryModuleSectionMetadata[];
+    examples: readonly RegistryModuleSectionMetadata[];
+    diagnostics: readonly string[];
+  }>;
 
 function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -87,7 +86,7 @@ async function readLimited(
 
 async function inspectorBinary(): Promise<string> {
   const configured = process.env["TERRAFORM_CONFIG_INSPECT_PATH"];
-  if (configured !== undefined && configured !== "" && await Bun.file(configured).exists()) return configured;
+  if (configured !== undefined && configured !== "" && (await Bun.file(configured).exists())) return configured;
   const bundled = join(import.meta.dir, "../../bin/terraform-config-inspect");
   if (await Bun.file(bundled).exists()) return bundled;
   const fromPath = Bun.which("terraform-config-inspect");
@@ -95,15 +94,21 @@ async function inspectorBinary(): Promise<string> {
   throw new Error("terraform-config-inspect is unavailable");
 }
 
-async function inspectJson(directory: string): Promise<Readonly<{ value: Record<string, unknown>; diagnostics: string[] }>> {
+async function inspectJson(
+  directory: string,
+): Promise<Readonly<{ value: Record<string, unknown>; diagnostics: string[] }>> {
   const binary = await inspectorBinary();
   const child = Bun.spawn([binary, "--json", directory], {
     stdout: "pipe",
     stderr: "pipe",
     signal: AbortSignal.timeout(INSPECT_TIMEOUT_MS),
   });
-  const stdoutPromise = readLimited(child.stdout, MAX_INSPECT_OUTPUT_BYTES, (): void => { child.kill(); });
-  const stderrPromise = readLimited(child.stderr, 64 * 1024, (): void => { child.kill(); });
+  const stdoutPromise = readLimited(child.stdout, MAX_INSPECT_OUTPUT_BYTES, (): void => {
+    child.kill();
+  });
+  const stderrPromise = readLimited(child.stderr, 64 * 1024, (): void => {
+    child.kill();
+  });
   const [exitCode, stdout, stderr] = await Promise.all([child.exited, stdoutPromise, stderrPromise]);
   let value: Record<string, unknown> = {};
   try {
@@ -120,7 +125,9 @@ async function inspectJson(directory: string): Promise<Readonly<{ value: Record<
 
 async function readReadme(directory: string): Promise<string> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const entry = entries.find((candidate): boolean => candidate.isFile() && /^readme(?:\.[^.]+)?$/i.test(candidate.name));
+  const entry = entries.find(
+    (candidate): boolean => candidate.isFile() && /^readme(?:\.[^.]+)?$/i.test(candidate.name),
+  );
   if (entry === undefined) return "";
   // Open by handle, then stat the SAME handle: a stat(path)+readFile(path)
   // pair lets the file be swapped between the size check and the read.
@@ -144,11 +151,16 @@ function descriptionFromReadme(readme: string): string | null {
   const paragraph = readme
     .split(/\n\s*\n/)
     .map((value): string => value.trim())
-    .find((value): boolean => value !== "" && !value.startsWith("#") && !value.startsWith("![") && !value.startsWith("[!"));
+    .find(
+      (value): boolean => value !== "" && !value.startsWith("#") && !value.startsWith("![") && !value.startsWith("[!"),
+    );
   return paragraph?.replace(/\s+/g, " ").slice(0, 500) ?? null;
 }
 
-async function inspectSection(directory: string, path: string): Promise<Readonly<{ section: RegistryModuleSectionMetadata; diagnostics: string[] }>> {
+async function inspectSection(
+  directory: string,
+  path: string,
+): Promise<Readonly<{ section: RegistryModuleSectionMetadata; diagnostics: string[] }>> {
   const [{ value, diagnostics }, scanned, readme] = await Promise.all([
     inspectJson(directory),
     scanTerraformModuleVariablesWithDiagnostics(directory),
@@ -192,17 +204,21 @@ async function inspectSection(directory: string, path: string): Promise<Readonly
       versionConstraint: constraint(module["version"]),
     };
   });
-  const resources = ([
-    ["managed", value["managed_resources"]],
-    ["data", value["data_resources"]],
-  ] as const).flatMap(([mode, raw]) => Object.entries(record(raw)).map(([address, item]) => {
-    const resource = record(item);
-    return {
-      name: stringOrNull(resource["name"]) ?? address,
-      type: stringOrNull(resource["type"]) ?? address.split(".")[0] ?? address,
-      mode,
-    };
-  }));
+  const resources = (
+    [
+      ["managed", value["managed_resources"]],
+      ["data", value["data_resources"]],
+    ] as const
+  ).flatMap(([mode, raw]) =>
+    Object.entries(record(raw)).map(([address, item]) => {
+      const resource = record(item);
+      return {
+        name: stringOrNull(resource["name"]) ?? address,
+        type: stringOrNull(resource["type"]) ?? address.split(".")[0] ?? address,
+        mode,
+      };
+    }),
+  );
   return {
     section: {
       path,
@@ -218,7 +234,10 @@ async function inspectSection(directory: string, path: string): Promise<Readonly
   };
 }
 
-async function conventionalSections(root: string, directoryName: "modules" | "examples"): Promise<Readonly<{ sections: RegistryModuleSectionMetadata[]; diagnostics: string[] }>> {
+async function conventionalSections(
+  root: string,
+  directoryName: "modules" | "examples",
+): Promise<Readonly<{ sections: RegistryModuleSectionMetadata[]; diagnostics: string[] }>> {
   const parent = join(root, directoryName);
   let entries;
   try {
@@ -227,14 +246,21 @@ async function conventionalSections(root: string, directoryName: "modules" | "ex
     return { sections: [], diagnostics: [] };
   }
   const directories = entries.filter((entry): boolean => entry.isDirectory()).slice(0, 100);
-  const inspected = await Promise.all(directories.map(async (entry) => {
-    const directory = join(parent, entry.name);
-    const files = await readdir(directory, { withFileTypes: true });
-    if (!files.some((file): boolean => file.isFile() && (file.name.endsWith(".tf") || file.name.endsWith(".tf.json")))) return undefined;
-    return inspectSection(directory, `${directoryName}/${entry.name}`);
-  }));
+  const inspected = await Promise.all(
+    directories.map(async (entry) => {
+      const directory = join(parent, entry.name);
+      const files = await readdir(directory, { withFileTypes: true });
+      if (
+        !files.some((file): boolean => file.isFile() && (file.name.endsWith(".tf") || file.name.endsWith(".tf.json")))
+      )
+        return undefined;
+      return inspectSection(directory, `${directoryName}/${entry.name}`);
+    }),
+  );
   return {
-    sections: inspected.flatMap((result): RegistryModuleSectionMetadata[] => result === undefined ? [] : [result.section]),
+    sections: inspected.flatMap((result): RegistryModuleSectionMetadata[] =>
+      result === undefined ? [] : [result.section],
+    ),
     diagnostics: inspected.flatMap((result): string[] => result?.diagnostics ?? []),
   };
 }

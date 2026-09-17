@@ -18,7 +18,13 @@
 // ---------------------------------------------------------------------------
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createPgSource, createSqliteTarget, transferDatabase, verifyTransfer, type VerifyOptions } from "./db-transfer";
+import {
+  createPgSource,
+  createSqliteTarget,
+  transferDatabase,
+  verifyTransfer,
+  type VerifyOptions,
+} from "./db-transfer";
 import type { TransferSource } from "./db-transfer";
 import type { DeepReadonly } from "./types";
 import type { TransferReport, VerificationReport } from "./db-transfer";
@@ -65,7 +71,7 @@ export type ExportFileInfo = {
   readonly name: string;
   readonly sizeBytes: number;
   readonly modifiedAt: number;
-}
+};
 
 /** List completed export files, newest first. */
 export function listExportFiles(storage: string = storageDir): ExportFileInfo[] {
@@ -124,12 +130,12 @@ export type DbExportOptions = {
   /** Verification hash bounds (sample size, full-digest row threshold). */
   readonly verify?: VerifyOptions;
   readonly storageDirOverride?: string;
-}
+};
 
 export type DbExportProgress = {
   readonly table: string;
   readonly rowsCopied: number;
-}
+};
 
 export type DbExportResult = {
   readonly fileName: string;
@@ -141,7 +147,7 @@ export type DbExportResult = {
   readonly activeRuns: number;
   readonly transfer: TransferReport;
   readonly verification: VerificationReport;
-}
+};
 
 /**
  * Run one Postgres -> SQLite export. Throws DbExportError for expected
@@ -149,17 +155,26 @@ export type DbExportResult = {
  * error is a real failure and the partial output file is removed.
  */
 function validateExportUrl(url: string): void {
-  if (!/^postgres(ql)?:\/\//i.test(url)) throw new DbExportError("invalid-url", "Source URL must be a postgres:// or postgresql:// connection URL");
+  if (!/^postgres(ql)?:\/\//i.test(url))
+    throw new DbExportError("invalid-url", "Source URL must be a postgres:// or postgresql:// connection URL");
 }
 
 function assertExportNotExists(storage: string, fileName: string): void {
-  if (listExportFiles(storage).some((f) => f.name === fileName)) throw new DbExportError("exists", `An export file named "${fileName}" already exists; choose a different name`);
+  if (listExportFiles(storage).some((f) => f.name === fileName))
+    throw new DbExportError("exists", `An export file named "${fileName}" already exists; choose a different name`);
 }
 
 function formatFailedTables(verification: DeepReadonly<VerificationReport>): string[] {
-  return verification.tables.filter((table): boolean => !table.countMatch || table.uniqueChecks.some((check): boolean => !check.match) || !table.sampleHash.match)
+  return verification.tables
+    .filter(
+      (table): boolean =>
+        !table.countMatch || table.uniqueChecks.some((check): boolean => !check.match) || !table.sampleHash.match,
+    )
     .map((table): string => {
-      const uniques = table.uniqueChecks.filter((check): boolean => !check.match).map((check): string => `${check.index}(${check.source}/${check.target})`).join(", ");
+      const uniques = table.uniqueChecks
+        .filter((check): boolean => !check.match)
+        .map((check): string => `${check.index}(${check.source}/${check.target})`)
+        .join(", ");
       return `${table.table}${table.countMatch ? "" : " count"}${!table.sampleHash.match ? " hash" : ""}${uniques === "" ? "" : ` unique[${uniques}]`}`;
     });
 }
@@ -167,7 +182,11 @@ function formatFailedTables(verification: DeepReadonly<VerificationReport>): str
 async function assertNoActiveRuns(source: Readonly<TransferSource>, force: boolean | undefined): Promise<number> {
   const placeholders = TERMINAL_RUN_STATUSES.map(() => "?").join(",");
   const activeRuns = await source.countWhere("runs", `status NOT IN (${placeholders})`, TERMINAL_RUN_STATUSES);
-  if (activeRuns > 0 && force !== true) throw new DbExportError("active-runs", `${activeRuns} run(s) are still active in the source database; wait for them to finish or force the export`);
+  if (activeRuns > 0 && force !== true)
+    throw new DbExportError(
+      "active-runs",
+      `${activeRuns} run(s) are still active in the source database; wait for them to finish or force the export`,
+    );
   return activeRuns;
 }
 
@@ -198,11 +217,16 @@ export async function runDbExport(
     // Keep the source snapshot open through verification so the row counts,
     // invariants and sample hashes are checked against the same point-in-time
     // view the copy came from; endSnapshot() releases it afterwards.
-    const transfer = await transferDatabase(
-      source,
-      target,
-      { keepSnapshotOpen: true, ...(onProgress === undefined ? {} : { onProgress: (progress) => { onProgress(progress); } }) },
-    );
+    const transfer = await transferDatabase(source, target, {
+      keepSnapshotOpen: true,
+      ...(onProgress === undefined
+        ? {}
+        : {
+            onProgress: (progress) => {
+              onProgress(progress);
+            },
+          }),
+    });
     const verification = await verifyTransfer(source, target, options.verify ?? {});
     await source.endSnapshot();
     if (!verification.allPassed) {

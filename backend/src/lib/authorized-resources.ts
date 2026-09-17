@@ -6,11 +6,7 @@
  * which prevents a plain readable row from silently minting a stronger URL.
  */
 import type { runs, workspaces } from "../db/schema";
-import {
-  findAuthorizedRun,
-  findAuthorizedWorkspace,
-  findRemoteStateReadableWorkspace,
-} from "./utils";
+import { findAuthorizedRun, findAuthorizedWorkspace, findRemoteStateReadableWorkspace } from "./utils";
 import type { WorkspacePermission } from "./authorization";
 import type { DeepReadonly } from "./types";
 
@@ -25,7 +21,9 @@ export type AuthorizedStateWorkspaceAccess = Readonly<{
   workspace: DeepReadonly<typeof workspaces.$inferSelect>;
   capability: StateCapabilitySet;
 }>;
-export type AuthorizedStateAccess = Readonly<{ workspaceId: string; capability: StateCapabilitySet }> | AuthorizedStateWorkspaceAccess;
+export type AuthorizedStateAccess =
+  | Readonly<{ workspaceId: string; capability: StateCapabilitySet }>
+  | AuthorizedStateWorkspaceAccess;
 
 /** Construct an ID-only state context for list serializers after an authorized scope query. */
 export function authorizedStateAccess(
@@ -42,8 +40,4 @@ export function authorizedRunCapability<Capability extends WorkspacePermission>(
   return { run, capability };
 }
 
-export {
-  findAuthorizedRun,
-  findAuthorizedWorkspace,
-  findRemoteStateReadableWorkspace,
-};
+export { findAuthorizedRun, findAuthorizedWorkspace, findRemoteStateReadableWorkspace };

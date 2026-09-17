@@ -44,8 +44,8 @@ test("derives VCS status from persisted connections and opens server-issued onbo
   setAuthToken("spa-token");
   const requests: { accept: string | null; authorization: string | null; url: string }[] = [];
   const deletedInstallations: string[] = [];
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     const headers = new Headers(init?.headers);
     requests.push({
@@ -56,17 +56,19 @@ test("derives VCS status from persisted connections and opens server-issued onbo
     if (url === "/api/v2/organizations/acme") return organization(true);
     if (url === "/api/v2/organizations/acme/github-app/installations") {
       return json({
-        data: [{
-          id: "ghain-1",
-          type: "github-app-installations",
-          attributes: {
-            name: "Acme GitHub",
-            "installation-id": 1234,
-            "icon-url": null,
-            "installation-type": "Organization",
-            "installation-url": "https://github.com/settings/installations/1234",
+        data: [
+          {
+            id: "ghain-1",
+            type: "github-app-installations",
+            attributes: {
+              name: "Acme GitHub",
+              "installation-id": 1234,
+              "icon-url": null,
+              "installation-type": "Organization",
+              "installation-url": "https://github.com/settings/installations/1234",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/organizations/acme/oauth-clients") {
@@ -116,11 +118,13 @@ test("derives VCS status from persisted connections and opens server-issued onbo
     }
     if (url === "/api/v2/oauth-clients/oc-connected/oauth-tokens") {
       return json({
-        data: [{
-          id: "ot-1",
-          type: "oauth-tokens",
-          attributes: { "service-provider-user": "octocat" },
-        }],
+        data: [
+          {
+            id: "ot-1",
+            type: "oauth-tokens",
+            attributes: { "service-provider-user": "octocat" },
+          },
+        ],
       });
     }
     if (url === "/api/v2/oauth-clients/oc-empty/oauth-tokens") return json({ data: [] });
@@ -154,7 +158,7 @@ test("derives VCS status from persisted connections and opens server-issued onbo
       return new Response(null, { status: 204 });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
   const destinations: string[] = [];
 
   const view = render(
@@ -162,7 +166,13 @@ test("derives VCS status from persisted connections and opens server-issued onbo
       <Routes>
         <Route
           path="/app/:orgName/settings/vcs"
-          element={<VcsIntegrations navigateExternal={(url): void => { destinations.push(url); }} />}
+          element={
+            <VcsIntegrations
+              navigateExternal={(url): void => {
+                destinations.push(url);
+              }}
+            />
+          }
         />
       </Routes>
     </MemoryRouter>,
@@ -184,7 +194,7 @@ test("derives VCS status from persisted connections and opens server-issued onbo
   const confirmation = await view.findByPlaceholderText("Acme GitHub");
   fireEvent.input(confirmation, { target: { value: "Acme GitHub" } });
   await waitFor((): void => {
-// SAFETY: the component renders this element type for the queried role/label.
+    // SAFETY: the component renders this element type for the queried role/label.
     expect((view.getByRole("button", { name: "Remove Integration" }) as HTMLButtonElement).disabled).toBe(false);
   });
   fireEvent.click(view.getByRole("button", { name: "Remove Integration" }));
@@ -216,8 +226,8 @@ test("derives VCS status from persisted connections and opens server-issued onbo
 
 test("creates an OAuth client and immediately starts its real authorization flow", async () => {
   setAuthToken("spa-token");
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme") return organization(true);
     if (url === "/api/v2/organizations/acme/github-app/installations") return json({ data: [] });
@@ -225,18 +235,21 @@ test("creates an OAuth client and immediately starts its real authorization flow
       return json({ data: [] });
     }
     if (url === "/api/v2/organizations/acme/oauth-clients" && init?.method === "POST") {
-      return json({
-        data: {
-          id: "oc-new",
-          type: "oauth-clients",
-          attributes: {
-            name: "GitHub",
-            "service-provider": "github",
-            "http-url": "https://github.com",
-            "connect-path": "/api/v2/oauth-clients/oc-new/connect",
+      return json(
+        {
+          data: {
+            id: "oc-new",
+            type: "oauth-clients",
+            attributes: {
+              name: "GitHub",
+              "service-provider": "github",
+              "http-url": "https://github.com",
+              "connect-path": "/api/v2/oauth-clients/oc-new/connect",
+            },
           },
         },
-      }, 201);
+        201,
+      );
     }
     if (url === "/api/v2/oauth-clients/oc-new/connect") {
       expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.api+json");
@@ -251,7 +264,7 @@ test("creates an OAuth client and immediately starts its real authorization flow
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
   const destinations: string[] = [];
 
   const view = render(
@@ -259,13 +272,21 @@ test("creates an OAuth client and immediately starts its real authorization flow
       <Routes>
         <Route
           path="/app/:orgName/settings/vcs"
-          element={<VcsIntegrations navigateExternal={(url): void => { destinations.push(url); }} />}
+          element={
+            <VcsIntegrations
+              navigateExternal={(url): void => {
+                destinations.push(url);
+              }}
+            />
+          }
         />
       </Routes>
     </MemoryRouter>,
   );
 
-  await view.findByText("No VCS Providers connected. Connect a VCS provider to trigger workspace runs from git commits.");
+  await view.findByText(
+    "No VCS Providers connected. Connect a VCS provider to trigger workspace runs from git commits.",
+  );
   fireEvent.click(view.getByRole("button", { name: "Add VCS Provider" }));
   fireEvent.change(view.getByLabelText("Name"), { target: { value: "GitHub" } });
   fireEvent.change(view.getByLabelText("OAuth Application Client ID"), { target: { value: "client-id" } });
@@ -278,14 +299,14 @@ test("creates an OAuth client and immediately starts its real authorization flow
 });
 
 test("uses provider-specific OAuth URL defaults", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme") return organization(true);
     if (url === "/api/v2/organizations/acme/github-app/installations") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings/vcs"]}>
@@ -295,7 +316,9 @@ test("uses provider-specific OAuth URL defaults", async () => {
     </MemoryRouter>,
   );
 
-  await view.findByText("No VCS Providers connected. Connect a VCS provider to trigger workspace runs from git commits.");
+  await view.findByText(
+    "No VCS Providers connected. Connect a VCS provider to trigger workspace runs from git commits.",
+  );
   fireEvent.click(view.getByRole("button", { name: "Add VCS Provider" }));
   const provider = view.getByLabelText("VCS Type") as HTMLSelectElement;
   const httpUrl = view.getByLabelText("HTTP URL") as HTMLInputElement;
@@ -323,7 +346,7 @@ test("fails closed when the organization does not grant VCS management", async (
     if (url === "/api/v2/organizations/acme") return organization(false);
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings/vcs"]}>
@@ -333,7 +356,9 @@ test("fails closed when the organization does not grant VCS management", async (
     </MemoryRouter>,
   );
 
-  expect(await view.findByText("You do not have permission to manage VCS settings for this organization.")).toBeTruthy();
+  expect(
+    await view.findByText("You do not have permission to manage VCS settings for this organization."),
+  ).toBeTruthy();
   expect(view.queryByRole("button", { name: "Install GitHub App" })).toBeNull();
   expect(view.queryByRole("button", { name: "Add VCS Provider" })).toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -346,11 +371,8 @@ test("ignores integration responses after switching organizations", async () => 
   });
   let acmeSignal: AbortSignal | null = null;
 
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme") return organization(true);
     if (url === "/api/v2/organizations/acme/github-app/installations") {
@@ -359,35 +381,39 @@ test("ignores integration responses after switching organizations", async () => 
     }
     if (url === "/api/v2/organizations/acme/oauth-clients") {
       return json({
-        data: [{
-          id: "oc-acme",
-          type: "oauth-clients",
-          attributes: {
-            name: "Acme GitHub",
-            "service-provider": "github",
-            "http-url": "https://github.com",
+        data: [
+          {
+            id: "oc-acme",
+            type: "oauth-clients",
+            attributes: {
+              name: "Acme GitHub",
+              "service-provider": "github",
+              "http-url": "https://github.com",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/organizations/platform") return organization(true, "platform");
     if (url === "/api/v2/organizations/platform/github-app/installations") return json({ data: [] });
     if (url === "/api/v2/organizations/platform/oauth-clients") {
       return json({
-        data: [{
-          id: "oc-platform",
-          type: "oauth-clients",
-          attributes: {
-            name: "Platform GitLab",
-            "service-provider": "gitlab",
-            "http-url": "https://gitlab.com",
+        data: [
+          {
+            id: "oc-platform",
+            type: "oauth-clients",
+            attributes: {
+              name: "Platform GitLab",
+              "service-provider": "gitlab",
+              "http-url": "https://gitlab.com",
+            },
           },
-        }],
+        ],
       });
     }
     if (url === "/api/v2/oauth-clients/oc-platform/oauth-tokens") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings/vcs"]}>

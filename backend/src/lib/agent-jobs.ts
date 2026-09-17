@@ -22,12 +22,7 @@ import {
 } from "../db/schema";
 import { queueRunNotification } from "./notifications";
 import { reportRunVcsStatus } from "./webhooks";
-import {
-  planJsonResourceCounts,
-  readPlanJsonArtifact,
-  writePlanJsonArtifact,
-  type PlanJson,
-} from "./plan-json";
+import { planJsonResourceCounts, readPlanJsonArtifact, writePlanJsonArtifact, type PlanJson } from "./plan-json";
 import type { DeepReadonly } from "./utils";
 import { insertStateVersionWithSerialTx } from "./state-serial";
 import { encryptStatePayload } from "./validation";
@@ -41,11 +36,8 @@ export const MAX_AGENT_RESULT_DEPTH = 8;
 export const MAX_AGENT_RESULT_KEYS = 500;
 
 export function parseAgentFencingToken(value: unknown): number | undefined {
-  const parsed = typeof value === "number"
-    ? value
-    : typeof value === "string" && /^\d+$/.test(value)
-      ? Number(value)
-      : Number.NaN;
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : Number.NaN;
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
@@ -121,7 +113,6 @@ export type AgentJobCompletion = Readonly<{
   result: Readonly<Record<string, unknown>>;
 }>;
 
-
 export type Agent = DeepReadonly<typeof agents.$inferSelect>;
 export type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
 type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
@@ -158,10 +149,7 @@ export function isAgentLiveForClaim(
  * below the timeout so a heartbeating agent can never be swept as stale. */
 function effectivePingWriteIntervalMs(): number {
   const timeout = configuredHeartbeatTimeoutMs();
-  return Math.min(
-    AGENT_PING_WRITE_INTERVAL_MS,
-    Math.max(MIN_PING_WRITE_INTERVAL_MS, Math.floor(timeout / 4)),
-  );
+  return Math.min(AGENT_PING_WRITE_INTERVAL_MS, Math.max(MIN_PING_WRITE_INTERVAL_MS, Math.floor(timeout / 4)));
 }
 // Agent-pool tokens mirror the user-token lastUsedAt throttle (auth.ts).
 const AGENT_TOKEN_LAST_USED_INTERVAL_MS = 60_000;
@@ -220,17 +208,18 @@ function timestampsWithStatus(
 }
 
 function notifyRunStatus(runId: string, status: string): void {
-  const trigger = status === "planning"
-    ? "run:planning"
-    : status === "applying"
-      ? "run:applying"
-      : status === "applied" || status === "planned_and_finished"
-        ? "run:completed"
-        : status === "errored"
-          ? "run:errored"
-          : ["planned", "planned_and_saved", "policy_soft_failed"].includes(status)
-            ? "run:needs_attention"
-            : undefined;
+  const trigger =
+    status === "planning"
+      ? "run:planning"
+      : status === "applying"
+        ? "run:applying"
+        : status === "applied" || status === "planned_and_finished"
+          ? "run:completed"
+          : status === "errored"
+            ? "run:errored"
+            : ["planned", "planned_and_saved", "policy_soft_failed"].includes(status)
+              ? "run:needs_attention"
+              : undefined;
   if (trigger !== undefined) queueRunNotification(runId, trigger, status);
   void reportRunVcsStatus(runId, status);
 }
@@ -251,21 +240,20 @@ async function getAgentPolicyEvaluation(
           where: eq(policySetProjects.projectId, workspace.projectId),
         }),
     database.query.policySets.findMany({
-      where: and(
-        eq(policySets.orgId, workspace.orgId),
-        eq(policySets.global, true),
-      ),
+      where: and(eq(policySets.orgId, workspace.orgId), eq(policySets.global, true)),
     }),
     database.query.policySetExclusions.findMany({
       where: eq(policySetExclusions.workspaceId, workspace.id),
     }),
   ]);
   const excludedIds = new Set(exclusions.map((exclusion): string => exclusion.policySetId));
-  const attachedIds = [...new Set([
-    ...attached.map((link): string => link.policySetId),
-    ...projectAttached.map((link): string => link.policySetId),
-    ...globalSets.map((policySet): string => policySet.id),
-  ])].filter((policySetId): boolean => !excludedIds.has(policySetId));
+  const attachedIds = [
+    ...new Set([
+      ...attached.map((link): string => link.policySetId),
+      ...projectAttached.map((link): string => link.policySetId),
+      ...globalSets.map((policySet): string => policySet.id),
+    ]),
+  ].filter((policySetId): boolean => !excludedIds.has(policySetId));
   if (attachedIds.length === 0) return null;
 
   const effectiveSets = await database.query.policySets.findMany({
@@ -294,24 +282,30 @@ async function getAgentPolicyEvaluation(
   for (const policySet of effectiveSets) {
     const setPolicies = effectivePolicies
       .filter((policy): boolean => policy.policySetId === policySet.id)
-      .map((policy): AgentPolicy => ({
-        id: policy.id,
-        name: policy.name,
-        description: policy.description,
-        enforcementLevel: policy.enforcementLevel === "advisory" ? "advisory" : "mandatory",
-        query: policy.query,
-        source: policy.source,
-      }));
+      .map(
+        (policy): AgentPolicy => ({
+          id: policy.id,
+          name: policy.name,
+          description: policy.description,
+          enforcementLevel: policy.enforcementLevel === "advisory" ? "advisory" : "mandatory",
+          query: policy.query,
+          source: policy.source,
+        }),
+      );
     if (setPolicies.length === 0) continue;
     // Sensitive parameters are stored encrypted (issue #577): resolve the
     // plaintext for the agent payload, which the agent passes to the engine.
     const setParameters = parameters.filter((parameter): boolean => parameter.policySetId === policySet.id);
-    const decryptedParameters = await Promise.all(setParameters.map(async (parameter): Promise<AgentPolicyParameter> => ({
-      key: parameter.key,
-      value: await variableValueForRead(parameter),
-      sensitive: parameter.sensitive === true,
-      hcl: parameter.hcl === true,
-    })));
+    const decryptedParameters = await Promise.all(
+      setParameters.map(
+        async (parameter): Promise<AgentPolicyParameter> => ({
+          key: parameter.key,
+          value: await variableValueForRead(parameter),
+          sensitive: parameter.sensitive === true,
+          hcl: parameter.hcl === true,
+        }),
+      ),
+    );
     policySetsWithPolicies.push({
       id: policySet.id,
       name: policySet.name,
@@ -339,11 +333,10 @@ function agentPolicyResults(
     const policyId = check["policy-id"];
     const status = check["status"];
     if (
-      typeof policyId !== "string"
-      || !["passed", "failed", "errored", "unreachable"].includes(
-        typeof status === "string" ? status : "",
-      )
-    ) continue;
+      typeof policyId !== "string" ||
+      !["passed", "failed", "errored", "unreachable"].includes(typeof status === "string" ? status : "")
+    )
+      continue;
     if (reported.has(policyId)) {
       duplicates.add(policyId);
       reported.delete(policyId);
@@ -353,9 +346,10 @@ function agentPolicyResults(
     const checkResult = check["result"];
     reported.set(policyId, {
       status: status as string,
-      result: typeof checkResult === "object" && checkResult !== null && !Array.isArray(checkResult)
-        ? checkResult as Record<string, unknown>
-        : {},
+      result:
+        typeof checkResult === "object" && checkResult !== null && !Array.isArray(checkResult)
+          ? (checkResult as Record<string, unknown>)
+          : {},
     });
   }
   return reported;
@@ -382,11 +376,10 @@ async function recordAgentPolicyChecks(
     for (const policy of policySet.policies) {
       const outcome = reported.get(policy.id);
       const checkStatus = outcome?.status ?? "errored";
-      const storedStatus = checkStatus === "failed"
-        && policy.enforcementLevel === "mandatory"
-        && policySet.overridable
-        ? "soft_failed"
-        : checkStatus;
+      const storedStatus =
+        checkStatus === "failed" && policy.enforcementLevel === "mandatory" && policySet.overridable
+          ? "soft_failed"
+          : checkStatus;
       await database.insert(policyChecks).values({
         id: newResourceId("pchk"),
         runId,
@@ -415,28 +408,29 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
   // row's current status and its returning() is checked, and a partially-
   // recovered job is simply picked up by the next poll (1.5s later).
   // ponytail: global sweep is fine for homelab; add heartbeat indexes only if agent volume makes it measurable.
-  const unavailableAgents = await db.select({ id: agents.id })
+  const unavailableAgents = await db
+    .select({ id: agents.id })
     .from(agents)
-    .where(or(
-      lt(agents.lastPingAt, cutoff),
-      inArray(agents.status, ["unknown", "exited", "errored"]),
-    ));
+    .where(or(lt(agents.lastPingAt, cutoff), inArray(agents.status, ["unknown", "exited", "errored"])));
   const unavailableAgentIds = unavailableAgents.map((agent): string => agent.id);
 
   if (unavailableAgentIds.length > 0) {
-    await db.update(agents).set({ status: "unknown" }).where(and(
-      inArray(agents.id, unavailableAgentIds),
-      inArray(agents.status, ["idle", "busy"]),
-      lt(agents.lastPingAt, cutoff),
-    ));
+    await db
+      .update(agents)
+      .set({ status: "unknown" })
+      .where(
+        and(
+          inArray(agents.id, unavailableAgentIds),
+          inArray(agents.status, ["idle", "busy"]),
+          lt(agents.lastPingAt, cutoff),
+        ),
+      );
   }
 
-  const unavailableClaim = unavailableAgentIds.length === 0
-    ? isNull(agentJobs.agentId)
-    : or(
-        isNull(agentJobs.agentId),
-        inArray(agentJobs.agentId, unavailableAgentIds),
-      );
+  const unavailableClaim =
+    unavailableAgentIds.length === 0
+      ? isNull(agentJobs.agentId)
+      : or(isNull(agentJobs.agentId), inArray(agentJobs.agentId, unavailableAgentIds));
   const staleJobs = await db.query.agentJobs.findMany({
     where: and(eq(agentJobs.status, "claimed"), unavailableClaim),
     orderBy: [asc(agentJobs.claimedAt)],
@@ -446,74 +440,82 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
 
   // Pre-fetch all affected runs in a single query to avoid N+1
   const staleRunIds = [...new Set(staleJobs.map((job): string => job.runId))];
-  const staleRuns = staleRunIds.length === 0
-    ? new Map<string, typeof runs.$inferSelect>()
-    : new Map(
-        (await db.query.runs.findMany({
-          where: inArray(runs.id, staleRunIds),
-        })).map((r): [string, typeof runs.$inferSelect] => [r.id, r]),
-      );
+  const staleRuns =
+    staleRunIds.length === 0
+      ? new Map<string, typeof runs.$inferSelect>()
+      : new Map(
+          (
+            await db.query.runs.findMany({
+              where: inArray(runs.id, staleRunIds),
+            })
+          ).map((r): [string, typeof runs.$inferSelect] => [r.id, r]),
+        );
 
   for (const job of staleJobs) {
     const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
     const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
-    const owner = job.agentId === null
-      ? isNull(agentJobs.agentId)
-      : eq(agentJobs.agentId, job.agentId);
+    const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
 
-    const updatedJobs = await db.update(agentJobs).set({
-      agentId: null,
-      status: "queued",
-      claimedAt: null,
-      completedAt: null,
-      errorMessage: null,
-      fencingToken: sql`${agentJobs.fencingToken} + 1`,
-    }).where(and(
-      eq(agentJobs.id, job.id),
-      eq(agentJobs.status, "claimed"),
-      owner,
-    )).returning({ id: agentJobs.id });
+    const updatedJobs = await db
+      .update(agentJobs)
+      .set({
+        agentId: null,
+        status: "queued",
+        claimedAt: null,
+        completedAt: null,
+        errorMessage: null,
+        fencingToken: sql`${agentJobs.fencingToken} + 1`,
+      })
+      .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed"), owner))
+      .returning({ id: agentJobs.id });
     if (updatedJobs.length === 0) {
       // An agent claimed or completed this job mid-sweep; leave the run alone.
       continue;
     }
 
     const run = staleRuns.get(job.runId);
-    const updatedRuns = run === undefined
-      ? []
-      : await db.update(runs).set({
-          agentId: null,
-          status: queuedRunStatus,
-          statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
-        }).where(and(
-          eq(runs.id, job.runId),
-          eq(runs.status, expectedRunStatus),
-        )).returning({ id: runs.id });
+    const updatedRuns =
+      run === undefined
+        ? []
+        : await db
+            .update(runs)
+            .set({
+              agentId: null,
+              status: queuedRunStatus,
+              statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
+            })
+            .where(and(eq(runs.id, job.runId), eq(runs.status, expectedRunStatus)))
+            .returning({ id: runs.id });
     if (run === undefined || updatedRuns.length === 0) {
       // The run is no longer waiting for this job; drop the requeued job so it
       // is not left orphaned, the claim path reconciles any in-flight claim.
-      await db.update(agentJobs).set({
-        status: "canceled",
-        completedAt: now,
-        errorMessage: "Run is no longer waiting for this job",
-      }).where(and(
-        eq(agentJobs.id, job.id),
-        eq(agentJobs.status, "queued"),
-      ));
+      await db
+        .update(agentJobs)
+        .set({
+          status: "canceled",
+          completedAt: now,
+          errorMessage: "Run is no longer waiting for this job",
+        })
+        .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "queued")));
       continue;
     }
     if (job.phase === "apply") {
-      await db.update(workspaces).set({
-        locked: false,
-        lockedReason: null,
-        lockOwnerType: null,
-        lockOwnerId: null,
-      }).where(and(
-        eq(workspaces.id, run.workspaceId),
-        eq(workspaces.locked, true),
-        eq(workspaces.lockOwnerType, "agent-run"),
-        eq(workspaces.lockOwnerId, run.id),
-      ));
+      await db
+        .update(workspaces)
+        .set({
+          locked: false,
+          lockedReason: null,
+          lockOwnerType: null,
+          lockOwnerId: null,
+        })
+        .where(
+          and(
+            eq(workspaces.id, run.workspaceId),
+            eq(workspaces.locked, true),
+            eq(workspaces.lockOwnerType, "agent-run"),
+            eq(workspaces.lockOwnerId, run.id),
+          ),
+        );
     }
     recoveredJobs.push({ jobId: job.id, runId: job.runId, runStatus: queuedRunStatus });
   }
@@ -569,14 +571,21 @@ async function releaseCanceledRunLocks(now = Date.now()): Promise<void> {
       where: and(eq(agentJobs.runId, run.id), eq(agentJobs.status, "canceled")),
       columns: { agentId: true },
     });
-    const agentIds = [...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null))];
+    const agentIds = [
+      ...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null)),
+    ];
     if (await hasLiveAgent(agentIds, cutoff)) continue;
-    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-      eq(workspaces.id, held.id),
-      eq(workspaces.locked, true),
-      eq(workspaces.lockOwnerType, "agent-run"),
-      eq(workspaces.lockOwnerId, run.id),
-    ));
+    await db
+      .update(workspaces)
+      .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+      .where(
+        and(
+          eq(workspaces.id, held.id),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ),
+      );
   }
 }
 
@@ -601,14 +610,13 @@ export async function isLiveRunLock(
     where: and(eq(agentJobs.runId, lockOwnerId), eq(agentJobs.status, "canceled")),
     columns: { agentId: true },
   });
-  const agentIds = [...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null))];
+  const agentIds = [
+    ...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null)),
+  ];
   return hasLiveAgent(agentIds, Date.now() - configuredHeartbeatTimeoutMs());
 }
 
-export async function authenticateAgent(
-  agentId: string,
-  authorization: string | null,
-): Promise<Agent | undefined> {
+export async function authenticateAgent(agentId: string, authorization: string | null): Promise<Agent | undefined> {
   if (authorization?.startsWith("Bearer agent-") !== true) return undefined;
   const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
   if (agent === undefined) return undefined;
@@ -635,14 +643,18 @@ export async function authenticateAgent(
   // window the agent is kept fresh in memory only. Status transitions out
   // of "unknown" always persist so a recovered agent is visible promptly.
   if (
-    agent.lastPingAt === null
-    || now - agent.lastPingAt >= effectivePingWriteIntervalMs()
-    || agent.status === "unknown"
+    agent.lastPingAt === null ||
+    now - agent.lastPingAt >= effectivePingWriteIntervalMs() ||
+    agent.status === "unknown"
   ) {
-    const rows = await db.update(agents).set({
-      lastPingAt: now,
-      status: sql<string>`CASE WHEN ${agents.status} = 'unknown' THEN 'idle' ELSE ${agents.status} END`,
-    }).where(eq(agents.id, agent.id)).returning();
+    const rows = await db
+      .update(agents)
+      .set({
+        lastPingAt: now,
+        status: sql<string>`CASE WHEN ${agents.status} = 'unknown' THEN 'idle' ELSE ${agents.status} END`,
+      })
+      .where(eq(agents.id, agent.id))
+      .returning();
     refreshedAgent = rows[0];
   }
   return refreshedAgent ?? { ...agent, lastPingAt: now };
@@ -673,9 +685,7 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
       : Promise.resolve(undefined),
   ]);
   if (workspace === undefined) return undefined;
-  const policyEvaluation = job.phase === "plan"
-    ? await getAgentPolicyEvaluation(db, workspace)
-    : null;
+  const policyEvaluation = job.phase === "plan" ? await getAgentPolicyEvaluation(db, workspace) : null;
   return {
     job,
     run,
@@ -723,28 +733,36 @@ async function findCandidateJob(
 
 async function tryClaimCandidate(candidate: AgentJobRow, agent: Agent): Promise<AgentJobRow | undefined> {
   const now = Date.now();
-  const claimed = await db.update(agentJobs).set({
-    agentId: agent.id,
-    status: "claimed",
-    claimedAt: now,
-    fencingToken: sql`${agentJobs.fencingToken} + 1`,
-  }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
+  const claimed = await db
+    .update(agentJobs)
+    .set({
+      agentId: agent.id,
+      status: "claimed",
+      claimedAt: now,
+      fencingToken: sql`${agentJobs.fencingToken} + 1`,
+    })
+    .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued")))
+    .returning();
   const claimedJob = claimed[0];
   if (claimedJob !== undefined) return claimedJob;
   return undefined;
 }
 
-async function validateCandidateRun(candidate: AgentJobRow): Promise<{ run: AgentRunRow; expectedRunStatus: string; nextRunStatus: string } | null> {
+async function validateCandidateRun(
+  candidate: AgentJobRow,
+): Promise<{ run: AgentRunRow; expectedRunStatus: string; nextRunStatus: string } | null> {
   const expectedRunStatus = candidate.phase === "plan" ? "plan_queued" : "apply_queued";
   const nextRunStatus = candidate.phase === "plan" ? "planning" : "applying";
   const run = await db.query.runs.findFirst({ where: eq(runs.id, candidate.runId) });
   if (run === undefined || run.status !== expectedRunStatus) {
-    await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+    await db
+      .update(agentJobs)
+      .set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" })
+      .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
     return null;
   }
   return { run, expectedRunStatus, nextRunStatus };
 }
-
 
 async function tryLockWorkspaceForApply(
   candidate: AgentJobRow,
@@ -753,30 +771,65 @@ async function tryLockWorkspaceForApply(
   skippedApplyJobIds: Set<string>,
 ): Promise<"locked" | "skipped" | "no-lock"> {
   if (candidate.phase !== "apply") return "no-lock";
-  const locked = await db.update(workspaces).set({ locked: true, lockedReason: `Run ${candidate.runId} is applying`, lockOwnerType: "agent-run", lockOwnerId: candidate.runId }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+  const locked = await db
+    .update(workspaces)
+    .set({
+      locked: true,
+      lockedReason: `Run ${candidate.runId} is applying`,
+      lockOwnerType: "agent-run",
+      lockOwnerId: candidate.runId,
+    })
+    .where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked))))
+    .returning({ id: workspaces.id });
   if (locked.length > 0) return "locked";
   skippedApplyJobIds.add(candidate.id);
-  await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+  await db
+    .update(agentJobs)
+    .set({ agentId: null, status: "queued", claimedAt: null })
+    .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
   return "skipped";
 }
 
-async function tryAssociateRun(candidate: AgentJobRow, run: AgentRunRow, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
+async function tryAssociateRun(
+  candidate: AgentJobRow,
+  run: AgentRunRow,
+  agent: Agent,
+  expectedRunStatus: string,
+  nextRunStatus: string,
+): Promise<{ id: string } | null> {
   const capabilities = agent.capabilities ?? LEGACY_AGENT_CAPABILITIES;
-  const associated = await db.update(runs).set({
-    agentPoolId: agent.agentPoolId,
-    agentId: agent.id,
-    agentVersion: agent.version,
-    agentProtocolVersion: agent.protocolVersion,
-    agentCapabilities: [...capabilities],
-    agentExecutionPolicy: effectiveAgentExecutionPolicy(agent, candidate.phase, candidate.iacBinary),
-    status: nextRunStatus,
-    statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
-  }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
+  const associated = await db
+    .update(runs)
+    .set({
+      agentPoolId: agent.agentPoolId,
+      agentId: agent.id,
+      agentVersion: agent.version,
+      agentProtocolVersion: agent.protocolVersion,
+      agentCapabilities: [...capabilities],
+      agentExecutionPolicy: effectiveAgentExecutionPolicy(agent, candidate.phase, candidate.iacBinary),
+      status: nextRunStatus,
+      statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+    })
+    .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)))
+    .returning({ id: runs.id });
   if (associated.length > 0) return associated[0] as { id: string };
   if (candidate.phase === "apply") {
-    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run"), eq(workspaces.lockOwnerId, run.id)));
+    await db
+      .update(workspaces)
+      .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+      .where(
+        and(
+          eq(workspaces.id, run.workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ),
+      );
   }
-  await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+  await db
+    .update(agentJobs)
+    .set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" })
+    .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
   return null;
 }
 
@@ -795,7 +848,9 @@ export async function claimAgentJob(
     if (candidate === undefined) return undefined;
     const claimedJob = await tryClaimCandidate(candidate, agent);
     if (claimedJob === undefined) {
-      const raced = await db.query.agentJobs.findFirst({ where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")) });
+      const raced = await db.query.agentJobs.findFirst({
+        where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")),
+      });
       return raced === undefined ? undefined : await claimedJobDetails(raced);
     }
     const validation = await validateCandidateRun(candidate);
@@ -818,22 +873,23 @@ export async function cancelAgentJobsForRun(runId: string): Promise<void> {
   // Claimed jobs are returned so the caller knows whether anything may still
   // be running remotely: the agent only learns of the cancel on its next
   // status poll.
-  const claimedJobs = await db.update(agentJobs).set({
-    status: "canceled",
-    completedAt: now,
-    errorMessage: "Run canceled",
-  }).where(and(
-    eq(agentJobs.runId, runId),
-    eq(agentJobs.status, "claimed"),
-  )).returning({ id: agentJobs.id });
-  await db.update(agentJobs).set({
-    status: "canceled",
-    completedAt: now,
-    errorMessage: "Run canceled",
-  }).where(and(
-    eq(agentJobs.runId, runId),
-    eq(agentJobs.status, "queued"),
-  ));
+  const claimedJobs = await db
+    .update(agentJobs)
+    .set({
+      status: "canceled",
+      completedAt: now,
+      errorMessage: "Run canceled",
+    })
+    .where(and(eq(agentJobs.runId, runId), eq(agentJobs.status, "claimed")))
+    .returning({ id: agentJobs.id });
+  await db
+    .update(agentJobs)
+    .set({
+      status: "canceled",
+      completedAt: now,
+      errorMessage: "Run canceled",
+    })
+    .where(and(eq(agentJobs.runId, runId), eq(agentJobs.status, "queued")));
   // Issue #617: a claimed job may still be running remotely. Releasing the
   // workspace lock now would hand a second apply the workspace while the
   // first agent may still write. Hold the lock until the agent acknowledges
@@ -841,11 +897,12 @@ export async function cancelAgentJobsForRun(runId: string): Promise<void> {
   // expires (the stale-job sweep releases it). Nothing claimed: nothing runs
   // remotely, so the lock can go immediately.
   if (claimedJobs.length === 0) {
-    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-      eq(workspaces.locked, true),
-      eq(workspaces.lockOwnerType, "agent-run"),
-      eq(workspaces.lockOwnerId, runId),
-    ));
+    await db
+      .update(workspaces)
+      .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+      .where(
+        and(eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run"), eq(workspaces.lockOwnerId, runId)),
+      );
   }
 }
 
@@ -865,12 +922,18 @@ export async function appendAgentJobLog(
 ): Promise<boolean> {
   return db.transaction(async (transaction): Promise<boolean> => {
     const database = transaction as unknown as Database;
-    const claimed = await database.update(agentJobs).set({ status: "claimed" }).where(and(
-      eq(agentJobs.id, jobId),
-      eq(agentJobs.agentId, agentId),
-      eq(agentJobs.fencingToken, fencingToken),
-      eq(agentJobs.status, "claimed"),
-    )).returning({ phase: agentJobs.phase, runId: agentJobs.runId });
+    const claimed = await database
+      .update(agentJobs)
+      .set({ status: "claimed" })
+      .where(
+        and(
+          eq(agentJobs.id, jobId),
+          eq(agentJobs.agentId, agentId),
+          eq(agentJobs.fencingToken, fencingToken),
+          eq(agentJobs.status, "claimed"),
+        ),
+      )
+      .returning({ phase: agentJobs.phase, runId: agentJobs.runId });
     const job = claimed[0];
     if (job === undefined) return false;
     await insertAgentJobLog(database, job, stripAnsiEscape(outputText), Date.now());
@@ -948,11 +1011,15 @@ export async function insertAgentApplyJobTx(
     requeueAttempts: 0,
   };
   await database.insert(agentJobs).values(job);
-  const updated = await database.update(runs).set({
-    agentPoolId,
-    status: "apply_queued",
-    statusTimestamps: timestampsWithStatus(statusTimestamps, "apply_queued"),
-  }).where(and(eq(runs.id, runId), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+  const updated = await database
+    .update(runs)
+    .set({
+      agentPoolId,
+      status: "apply_queued",
+      statusTimestamps: timestampsWithStatus(statusTimestamps, "apply_queued"),
+    })
+    .where(and(eq(runs.id, runId), eq(runs.status, "confirmed")))
+    .returning({ id: runs.id });
   if (updated.length === 0) throw new Error("Run changed while its agent apply job was queued");
   return job;
 }
@@ -987,35 +1054,49 @@ async function requeueInvalidCompletion(
 ): Promise<void> {
   const requeueAttempts = job.requeueAttempts + 1;
   const terminal = requeueAttempts >= MAX_INVALID_COMPLETION_REQUEUES;
-  const updatedJobs = await database.update(agentJobs).set({
-    status: terminal ? "canceled" : "queued",
-    agentId: null,
-    claimedAt: null,
-    completedAt: terminal ? Date.now() : null,
-    errorMessage: reason,
-    requeueAttempts,
-  }).where(and(
-    eq(agentJobs.id, job.id),
-    eq(agentJobs.agentId, agentId),
-    eq(agentJobs.fencingToken, job.fencingToken),
-    eq(agentJobs.status, "claimed"),
-  )).returning({ id: agentJobs.id });
+  const updatedJobs = await database
+    .update(agentJobs)
+    .set({
+      status: terminal ? "canceled" : "queued",
+      agentId: null,
+      claimedAt: null,
+      completedAt: terminal ? Date.now() : null,
+      errorMessage: reason,
+      requeueAttempts,
+    })
+    .where(
+      and(
+        eq(agentJobs.id, job.id),
+        eq(agentJobs.agentId, agentId),
+        eq(agentJobs.fencingToken, job.fencingToken),
+        eq(agentJobs.status, "claimed"),
+      ),
+    )
+    .returning({ id: agentJobs.id });
   if (updatedJobs.length === 0) return;
   const nextRunStatus = terminal ? "errored" : job.phase === "plan" ? "plan_queued" : "apply_queued";
   if (run !== undefined) {
-    await database.update(runs).set({
-      agentId: null,
-      status: nextRunStatus,
-      statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
-    }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+    await database
+      .update(runs)
+      .set({
+        agentId: null,
+        status: nextRunStatus,
+        statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+      })
+      .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
   }
   if (job.phase === "apply" && run !== undefined) {
-    await database.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-      eq(workspaces.id, run.workspaceId),
-      eq(workspaces.locked, true),
-      eq(workspaces.lockOwnerType, "agent-run"),
-      eq(workspaces.lockOwnerId, run.id),
-    ));
+    await database
+      .update(workspaces)
+      .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+      .where(
+        and(
+          eq(workspaces.id, run.workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ),
+      );
   }
   await database.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
 }
@@ -1031,7 +1112,11 @@ function invalidCompletionReason(
   if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
     return "plan-json is only valid for completed plan jobs";
   }
-  if (job.phase === "apply" && completion.status === "completed" && (completion.statePayload === null || completion.statePayload === undefined)) {
+  if (
+    job.phase === "apply" &&
+    completion.status === "completed" &&
+    (completion.statePayload === null || completion.statePayload === undefined)
+  ) {
     return "Completed apply job must return non-null statePayload";
   }
   return undefined;
@@ -1062,10 +1147,9 @@ async function prepareAgentCompletion(
   // Modern agent protocol uploads the plan JSON separately (PUT to the job's
   // plan-json URL) before completing; fall back to the stored artifact so
   // resource counts are still derived from the real plan.
-  const effectivePlanJson = completion.planJson ?? await readPlanJsonArtifact(run.id);
-  const structuredPlanCounts = job.phase === "plan" && effectivePlanJson !== undefined
-    ? planJsonResourceCounts(effectivePlanJson)
-    : undefined;
+  const effectivePlanJson = completion.planJson ?? (await readPlanJsonArtifact(run.id));
+  const structuredPlanCounts =
+    job.phase === "plan" && effectivePlanJson !== undefined ? planJsonResourceCounts(effectivePlanJson) : undefined;
   return { structuredPlanCounts, now: Date.now() };
 }
 
@@ -1082,17 +1166,23 @@ async function persistAgentJobCompletion(
     await insertAgentJobLog(database, job, `[agent error] ${completion.errorMessage}`, now);
   }
   const jobStatus = completion.status === "completed" ? "completed" : "errored";
-  const updatedJobs = await database.update(agentJobs).set({
-    status: jobStatus,
-    result: { ...completion.result },
-    errorMessage: completion.errorMessage,
-    completedAt: now,
-  }).where(and(
-    eq(agentJobs.id, job.id),
-    eq(agentJobs.agentId, agentId),
-    eq(agentJobs.fencingToken, job.fencingToken),
-    eq(agentJobs.status, "claimed"),
-  )).returning();
+  const updatedJobs = await database
+    .update(agentJobs)
+    .set({
+      status: jobStatus,
+      result: { ...completion.result },
+      errorMessage: completion.errorMessage,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(agentJobs.id, job.id),
+        eq(agentJobs.agentId, agentId),
+        eq(agentJobs.fencingToken, job.fencingToken),
+        eq(agentJobs.status, "claimed"),
+      ),
+    )
+    .returning();
   return updatedJobs[0];
 }
 
@@ -1147,13 +1237,7 @@ async function determineCompletionOutcome(
     where: eq(workspaces.id, run.workspaceId),
   });
   if (workspace === undefined) throw new Error("Agent workspace disappeared during completion");
-  const policyOutcome = await recordAgentPolicyChecks(
-    database,
-    workspace,
-    run.id,
-    completion.result,
-    now,
-  );
+  const policyOutcome = await recordAgentPolicyChecks(database, workspace, run.id, completion.result, now);
   const runStatus = resolvePlanStatus(policyOutcome, run);
   if (runStatus === "apply_queued" && applyGateReason !== null) {
     return { policyOutcome, runStatus: "planned" };
@@ -1201,28 +1285,30 @@ async function persistRunCompletion(
   if (!canTransitionRunStatus(run.status, runStatus)) {
     throw new Error(`Refusing illegal agent completion transition ${run.status} -> ${runStatus} for run ${run.id}`);
   }
-  const resourceValues = job.phase === "plan"
-    ? {
-        planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
-        planResourceChanges: structuredPlanCounts?.changes ?? completion.resourceChanges,
-        planResourceDestructions: structuredPlanCounts?.destructions ?? completion.resourceDestructions,
-        planResourceImports: structuredPlanCounts?.imports ?? completion.resourceImports,
-      }
-    : {
-        applyResourceAdditions: completion.resourceAdditions,
-        applyResourceChanges: completion.resourceChanges,
-        applyResourceDestructions: completion.resourceDestructions,
-        applyResourceImports: completion.resourceImports,
-      };
-  const updatedRuns = await database.update(runs).set({
-    status: runStatus,
-    statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
-    ...(job.phase === "apply" && completion.status === "completed" ? { appliedAt: now } : {}),
-    ...resourceValues,
-  }).where(and(
-    eq(runs.id, run.id),
-    eq(runs.status, expectedRunStatus),
-  )).returning({ id: runs.id });
+  const resourceValues =
+    job.phase === "plan"
+      ? {
+          planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
+          planResourceChanges: structuredPlanCounts?.changes ?? completion.resourceChanges,
+          planResourceDestructions: structuredPlanCounts?.destructions ?? completion.resourceDestructions,
+          planResourceImports: structuredPlanCounts?.imports ?? completion.resourceImports,
+        }
+      : {
+          applyResourceAdditions: completion.resourceAdditions,
+          applyResourceChanges: completion.resourceChanges,
+          applyResourceDestructions: completion.resourceDestructions,
+          applyResourceImports: completion.resourceImports,
+        };
+  const updatedRuns = await database
+    .update(runs)
+    .set({
+      status: runStatus,
+      statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
+      ...(job.phase === "apply" && completion.status === "completed" ? { appliedAt: now } : {}),
+      ...resourceValues,
+    })
+    .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)))
+    .returning({ id: runs.id });
   if (updatedRuns.length === 0) throw new Error("Run changed while its agent job was completing");
 }
 
@@ -1257,12 +1343,17 @@ async function releaseApplyWorkspaceLock(
   run: AgentRunRow,
 ): Promise<void> {
   if (job.phase !== "apply") return;
-  await database.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-    eq(workspaces.id, run.workspaceId),
-    eq(workspaces.locked, true),
-    eq(workspaces.lockOwnerType, "agent-run"),
-    eq(workspaces.lockOwnerId, run.id),
-  ));
+  await database
+    .update(workspaces)
+    .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+    .where(
+      and(
+        eq(workspaces.id, run.workspaceId),
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "agent-run"),
+        eq(workspaces.lockOwnerId, run.id),
+      ),
+    );
 }
 
 async function enqueueApplyAfterPlan(
@@ -1350,7 +1441,7 @@ async function completeAgentJobInTransaction(
   }
   const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
   const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
-  if (!await validateAgentCompletion(database, agentId, job, run, completion, expectedRunStatus)) return undefined;
+  if (!(await validateAgentCompletion(database, agentId, job, run, completion, expectedRunStatus))) return undefined;
   if (run === undefined) return undefined;
   const preparation = await prepareAgentCompletion(job, run, completion);
   const updatedJob = await persistAgentJobCompletion(database, agentId, job, completion, preparation.now);
@@ -1380,22 +1471,35 @@ export async function completeAgentJob(
   fencingToken: number,
   completion: AgentJobCompletion,
 ): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> {
-  const claimedJob = completion.status === "completed"
-    ? await db.query.agentJobs.findFirst({
-        where: and(
-          eq(agentJobs.id, jobId),
-          eq(agentJobs.agentId, agentId),
-          eq(agentJobs.fencingToken, fencingToken),
-          eq(agentJobs.status, "claimed"),
-        ),
-        columns: { phase: true },
-      })
-    : undefined;
-  const applyGateReason = claimedJob?.phase === "plan"
-    ? await import("./operations").then(async ({ applyGateBlockReason }): Promise<string | null> => applyGateBlockReason(new Date()))
-    : null;
-  const outcome = await db.transaction(async (transaction): Promise<CompletionResult | undefined> =>
-    completeAgentJobInTransaction(transaction as unknown as Database, agentId, jobId, fencingToken, completion, applyGateReason));
+  const claimedJob =
+    completion.status === "completed"
+      ? await db.query.agentJobs.findFirst({
+          where: and(
+            eq(agentJobs.id, jobId),
+            eq(agentJobs.agentId, agentId),
+            eq(agentJobs.fencingToken, fencingToken),
+            eq(agentJobs.status, "claimed"),
+          ),
+          columns: { phase: true },
+        })
+      : undefined;
+  const applyGateReason =
+    claimedJob?.phase === "plan"
+      ? await import("./operations").then(
+          async ({ applyGateBlockReason }): Promise<string | null> => applyGateBlockReason(new Date()),
+        )
+      : null;
+  const outcome = await db.transaction(
+    async (transaction): Promise<CompletionResult | undefined> =>
+      completeAgentJobInTransaction(
+        transaction as unknown as Database,
+        agentId,
+        jobId,
+        fencingToken,
+        completion,
+        applyGateReason,
+      ),
+  );
   if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
   return outcome;
 }

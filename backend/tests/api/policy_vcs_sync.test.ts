@@ -69,10 +69,7 @@ async function archiveWith(files: Readonly<Record<string, string>>, name: string
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [exitCode, stderr] = await Promise.all([
-    tar.exited,
-    new Response(tar.stderr).text(),
-  ]);
+  const [exitCode, stderr] = await Promise.all([tar.exited, new Response(tar.stderr).text()]);
   if (exitCode !== 0) throw new Error(`Unable to create test archive: ${stderr}`);
   return new Uint8Array(await readFile(archive));
 }
@@ -82,32 +79,26 @@ async function unsafeArchive(): Promise<Uint8Array> {
   await mkdir(source, { recursive: true });
   await writeFile(join(source, "safe.txt"), "unsafe member");
   const archive = join(testDirectory, "unsafe.tar.gz");
-  const tar = Bun.spawn([
-    "tar",
-    "-czf",
-    archive,
-    "--transform=s|safe.txt|../escaped.txt|",
-    "-C",
-    source,
-    "safe.txt",
-  ], { stdout: "pipe", stderr: "pipe" });
-  const [exitCode, stderr] = await Promise.all([
-    tar.exited,
-    new Response(tar.stderr).text(),
-  ]);
+  const tar = Bun.spawn(["tar", "-czf", archive, "--transform=s|safe.txt|../escaped.txt|", "-C", source, "safe.txt"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stderr] = await Promise.all([tar.exited, new Response(tar.stderr).text()]);
   if (exitCode !== 0) throw new Error(`Unable to create unsafe test archive: ${stderr}`);
   return new Uint8Array(await readFile(archive));
 }
 
 function apiRequest(path: string, method = "GET", body?: unknown): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${apiToken}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 function githubPayload(repo: string, sha: string, changed = "policy-sets/foo/deny.sentinel"): Record<string, unknown> {
@@ -139,14 +130,16 @@ function gitlabPayload(repo: string, sha: string, changed = "policy-sets/foo/den
       web_url: `https://gitlab.example/${repo}`,
       default_branch: "main",
     },
-    commits: [{
-      id: sha,
-      message: "Update policies",
-      url: `https://gitlab.example/${repo}/-/commit/${sha}`,
-      added: [],
-      modified: [changed],
-      removed: [],
-    }],
+    commits: [
+      {
+        id: sha,
+        message: "Update policies",
+        url: `https://gitlab.example/${repo}/-/commit/${sha}`,
+        added: [],
+        modified: [changed],
+        removed: [],
+      },
+    ],
   };
 }
 
@@ -158,22 +151,24 @@ function bitbucketPayload(repo: string, sha: string): Record<string, unknown> {
       links: { clone: [{ name: "https", href: `https://bitbucket.org/${repo}.git` }] },
     },
     push: {
-      changes: [{
-        new: {
-          type: "branch",
-          name: "main",
-          target: {
-            hash: sha,
-            message: "Update policies",
-            links: { html: { href: `https://bitbucket.org/${repo}/commits/${sha}` } },
+      changes: [
+        {
+          new: {
+            type: "branch",
+            name: "main",
+            target: {
+              hash: sha,
+              message: "Update policies",
+              links: { html: { href: `https://bitbucket.org/${repo}/commits/${sha}` } },
+            },
           },
         },
-      }],
+      ],
     },
   };
 }
 
-async function triggerProvider(provider: typeof providers[number]): Promise<void> {
+async function triggerProvider(provider: (typeof providers)[number]): Promise<void> {
   if (provider.name === "github") {
     await handleGithubWebhook("push", githubPayload(provider.repo, provider.sha));
   } else if (provider.name === "gitlab") {
@@ -191,26 +186,32 @@ describe("VCS-backed policy set synchronization", () => {
 
   beforeAll(async () => {
     [sentinelArchive, opaArchive, maliciousArchive] = await Promise.all([
-      archiveWith({
-        "policy-sets/foo/sentinel.hcl": `
+      archiveWith(
+        {
+          "policy-sets/foo/sentinel.hcl": `
           policy "deny-unapproved" {
             source = "./deny.sentinel"
             enforcement_level = "hard-mandatory"
             description = "Only approved changes"
           }
         `,
-        "policy-sets/foo/deny.sentinel": "main = rule { true }\n",
-      }, "sentinel"),
-      archiveWith({
-        "opa/policies.hcl": `
+          "policy-sets/foo/deny.sentinel": "main = rule { true }\n",
+        },
+        "sentinel",
+      ),
+      archiveWith(
+        {
+          "opa/policies.hcl": `
           policy "deny-public" {
             query = "data.terraform.deny_public.deny"
             enforcement_level = "mandatory"
             description = "No public resources"
           }
         `,
-        "opa/deny.rego": "package terraform.deny_public\n\ndeny := []\n",
-      }, "opa"),
+          "opa/deny.rego": "package terraform.deny_public\n\ndeny := []\n",
+        },
+        "opa",
+      ),
       unsafeArchive(),
     ]);
 
@@ -247,29 +248,35 @@ describe("VCS-backed policy set synchronization", () => {
         apiUrl: "https://other-github.example/api/v3",
       },
     ]);
-    await db.insert(oauthTokens).values(await Promise.all(providers.map(async (provider) => ({
-      id: provider.tokenId,
-      oauthClientId: `oc-policy-${provider.name}-${suffix}`,
-      token: await encryptSecret(`${provider.name}-policy-token`),
-    }))));
+    await db.insert(oauthTokens).values(
+      await Promise.all(
+        providers.map(async (provider) => ({
+          id: provider.tokenId,
+          oauthClientId: `oc-policy-${provider.name}-${suffix}`,
+          token: await encryptSecret(`${provider.name}-policy-token`),
+        })),
+      ),
+    );
     await db.insert(oauthTokens).values({
       id: otherHostTokenId,
       oauthClientId: otherHostClientId,
       token: await encryptSecret("other-host-policy-token"),
     });
-    await db.insert(policySets).values(providers.map((provider) => ({
-      id: policySetId(provider.name),
-      orgId,
-      name: `${provider.name} policies`,
-      kind: "sentinel",
-      policiesPath: "/policy-sets/foo",
-      policyUpdatePatterns: ["policy-sets/foo/**/*.sentinel", "policy-sets/foo/sentinel.hcl"],
-      vcsRepo: {
-        identifier: provider.repo,
-        branch: "main",
-        oauthTokenId: provider.tokenId,
-      },
-    })));
+    await db.insert(policySets).values(
+      providers.map((provider) => ({
+        id: policySetId(provider.name),
+        orgId,
+        name: `${provider.name} policies`,
+        kind: "sentinel",
+        policiesPath: "/policy-sets/foo",
+        policyUpdatePatterns: ["policy-sets/foo/**/*.sentinel", "policy-sets/foo/sentinel.hcl"],
+        vcsRepo: {
+          identifier: provider.repo,
+          branch: "main",
+          oauthTokenId: provider.tokenId,
+        },
+      })),
+    );
     await db.insert(policySets).values({
       id: otherHostPolicySetId,
       orgId,
@@ -283,13 +290,15 @@ describe("VCS-backed policy set synchronization", () => {
         oauthTokenId: otherHostTokenId,
       },
     });
-    await db.insert(policies).values(providers.map((provider) => ({
-      id: `pol-old-${provider.name}-${suffix}`,
-      policySetId: policySetId(provider.name),
-      name: "old-policy",
-      enforcementLevel: "advisory",
-      query: "main = true",
-    })));
+    await db.insert(policies).values(
+      providers.map((provider) => ({
+        id: `pol-old-${provider.name}-${suffix}`,
+        policySetId: policySetId(provider.name),
+        name: "old-policy",
+        enforcementLevel: "advisory",
+        query: "main = true",
+      })),
+    );
 
     const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
@@ -372,7 +381,10 @@ describe("VCS-backed policy set synchronization", () => {
         attributes: {
           name: "too-many-patterns",
           "vcs-repo": { identifier: "platform/too-many", "oauth-token-id": providers[0].tokenId },
-          "policy-update-patterns": Array.from({ length: 101 }, (_, index): string => `policy-${String(index)}.sentinel`),
+          "policy-update-patterns": Array.from(
+            { length: 101 },
+            (_, index): string => `policy-${String(index)}.sentinel`,
+          ),
         },
       },
     });
@@ -382,9 +394,13 @@ describe("VCS-backed policy set synchronization", () => {
       data: { attributes: { name: "path-without-vcs", "policies-path": "/policies" } },
     });
     expect(pathWithoutVcs.status).toBe(422);
-    expect((await apiRequest(`/api/v2/policy-sets/${id}/policies`, "POST", {
-      data: { attributes: { name: "manual", query: "main = true" } },
-    })).status).toBe(422);
+    expect(
+      (
+        await apiRequest(`/api/v2/policy-sets/${id}/policies`, "POST", {
+          data: { attributes: { name: "manual", query: "main = true" } },
+        })
+      ).status,
+    ).toBe(422);
   });
 
   test("synchronizes Sentinel policy rows through GitHub, GitLab, and Bitbucket webhooks", async () => {
@@ -417,9 +433,11 @@ describe("VCS-backed policy set synchronization", () => {
         sourcePath: "policy-sets/foo/deny.sentinel",
         policySetVersionId: version?.id,
       });
-      expect(fetches).toContainEqual(expect.objectContaining({
-        authorization: `Bearer ${provider.name}-policy-token`,
-      }));
+      expect(fetches).toContainEqual(
+        expect.objectContaining({
+          authorization: `Bearer ${provider.name}-policy-token`,
+        }),
+      );
     }
   });
 
@@ -479,10 +497,14 @@ describe("VCS-backed policy set synchronization", () => {
       query: "data.terraform.deny_public.deny",
     });
     expect(row?.source).toContain("package terraform.deny_public");
-    expect((await db.query.policySetVersions.findFirst({
-      where: eq(policySetVersions.policySetId, id),
-      orderBy: [desc(policySetVersions.createdAt)],
-    }))?.status).toBe("ready");
+    expect(
+      (
+        await db.query.policySetVersions.findFirst({
+          where: eq(policySetVersions.policySetId, id),
+          orderBy: [desc(policySetVersions.createdAt)],
+        })
+      )?.status,
+    ).toBe("ready");
   });
 
   test("records an errored version and leaves existing policies untouched for an unsafe archive", async () => {
@@ -519,6 +541,8 @@ describe("VCS-backed policy set synchronization", () => {
     expect(version?.error).toContain("unsafe path");
     expect(version?.statusTimestamps.erroredAt).toBeString();
     expect(version?.archivePath).toBeNull();
-    expect((await db.query.policies.findMany({ where: eq(policies.policySetId, id) })).map((row) => row.id)).toEqual([oldPolicyId]);
+    expect((await db.query.policies.findMany({ where: eq(policies.policySetId, id) })).map((row) => row.id)).toEqual([
+      oldPolicyId,
+    ]);
   });
 });

@@ -27,12 +27,34 @@ import {
 
 /** Statuses written by worker.ts updateRunStatus calls and routes/runs.ts actions. */
 const OBSERVED_IN_SOURCE = [
-  "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-  "queuing", "plan_queued", "planning", "planned", "cost_estimating", "cost_estimated",
-  "policy_checking", "policy_override", "policy_soft_failed", "policy_checked",
-  "post_plan_running", "post_plan_completed", "planned_and_saved", "planned_and_finished",
-  "confirmed", "apply_queued", "applying", "applied", "errored", "canceled", "discarded",
-  "force_canceled", "unreachable",
+  "pending",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "queuing",
+  "plan_queued",
+  "planning",
+  "planned",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_soft_failed",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
+  "planned_and_saved",
+  "planned_and_finished",
+  "confirmed",
+  "apply_queued",
+  "applying",
+  "applied",
+  "errored",
+  "canceled",
+  "discarded",
+  "force_canceled",
+  "unreachable",
 ];
 
 /** mulberry32 seeded PRNG (deterministic across runs and hosts). */
@@ -51,9 +73,7 @@ describe("run status state machine", () => {
   it("model conformance: predicate and table agree on every ordered pair", (): void => {
     for (const from of RUN_STATUSES) {
       for (const to of RUN_STATUSES) {
-        expect(canTransitionRunStatus(from, to), `${from} -> ${to}`).toBe(
-          nextRunStatuses(from).includes(to),
-        );
+        expect(canTransitionRunStatus(from, to), `${from} -> ${to}`).toBe(nextRunStatuses(from).includes(to));
       }
     }
   });
@@ -116,14 +136,29 @@ describe("run status state machine", () => {
 
   it("lifecycle legality: canonical reference format chain and operator actions are edge-legal", (): void => {
     const chain = [
-      "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-      "queuing", "plan_queued", "planning", "planned", "cost_estimating", "cost_estimated",
-      "policy_checking", "policy_checked", "post_plan_running", "post_plan_completed",
-      "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
+      "pending",
+      "fetching",
+      "fetching_completed",
+      "pre_plan_running",
+      "pre_plan_completed",
+      "queuing",
+      "plan_queued",
+      "planning",
+      "planned",
+      "cost_estimating",
+      "cost_estimated",
+      "policy_checking",
+      "policy_checked",
+      "post_plan_running",
+      "post_plan_completed",
+      "planned_and_saved",
+      "confirmed",
+      "apply_queued",
+      "applying",
+      "applied",
     ];
     for (let i = 0; i < chain.length - 1; i += 1) {
-      expect(canTransitionRunStatus(chain[i]!, chain[i + 1]!),
-        `${chain[i]} -> ${chain[i + 1]}`).toBe(true);
+      expect(canTransitionRunStatus(chain[i]!, chain[i + 1]!), `${chain[i]} -> ${chain[i + 1]}`).toBe(true);
     }
     // Auto-apply confirms directly from post-plan (planned_and_saved is for
     // saved-plan runs only) — this is how the worker proceeds to apply.
@@ -147,8 +182,7 @@ describe("run status state machine", () => {
         const targets = nextRunStatuses(current);
         if (targets.length === 0) break; // terminal
         const next = targets[Math.floor(rand() * targets.length)]!;
-        expect(canTransitionRunStatus(current, next), `walk ${w} step ${steps}: ${current} -> ${next}`)
-          .toBe(true);
+        expect(canTransitionRunStatus(current, next), `walk ${w} step ${steps}: ${current} -> ${next}`).toBe(true);
         current = next;
         steps += 1;
       }

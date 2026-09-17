@@ -25,7 +25,6 @@ export type AgentHealthSummary = Readonly<{
   failed: number;
 }>;
 
-
 /**
  * Turn the server's recorded status into a display state without claiming a
  * live connection. A status of `unknown` or a missing heartbeat is stale even
@@ -51,12 +50,24 @@ export function summarizeAgentHealth(agents: readonly AgentHealthRecord[]): Agen
   let failed = 0;
   for (const agent of agents) {
     switch (agentHealthState(agent)) {
-      case "idle": idle += 1; break;
-      case "busy": busy += 1; break;
-      case "draining": draining += 1; break;
-      case "stale": stale += 1; break;
-      case "offline": failed += 1; break;
-      case "unknown": failed += 1; break;
+      case "idle":
+        idle += 1;
+        break;
+      case "busy":
+        busy += 1;
+        break;
+      case "draining":
+        draining += 1;
+        break;
+      case "stale":
+        stale += 1;
+        break;
+      case "offline":
+        failed += 1;
+        break;
+      case "unknown":
+        failed += 1;
+        break;
     }
   }
   return {
@@ -72,12 +83,18 @@ export function summarizeAgentHealth(agents: readonly AgentHealthRecord[]): Agen
 
 export function agentStatusLabel(state: AgentHealthState): string {
   switch (state) {
-    case "idle": return "Idle";
-    case "busy": return "Busy";
-    case "draining": return "Draining";
-    case "stale": return "Heartbeat stale";
-    case "offline": return "Offline";
-    case "unknown": return "Unknown";
+    case "idle":
+      return "Idle";
+    case "busy":
+      return "Busy";
+    case "draining":
+      return "Draining";
+    case "stale":
+      return "Heartbeat stale";
+    case "offline":
+      return "Offline";
+    case "unknown":
+      return "Unknown";
   }
 }
 

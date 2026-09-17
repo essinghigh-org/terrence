@@ -47,28 +47,34 @@ function ComboboxDropdown({
           {emptyText}
         </li>
       )}
-      {filtered.map((option, index): React.JSX.Element => (
-        <li key={option.id}>
-          <button
-            type="button"
-            id={optionId(index)}
-            role="option"
-            aria-selected={index === highlighted}
-            onMouseEnter={(): void => { onHighlight(index); }}
-            onClick={(): void => { onCommit(option.id); }}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
-              index === highlighted ? "bg-accent text-accent-foreground" : "",
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
-            {option.hint !== undefined && (
-              <span className="shrink-0 truncate text-xs text-muted-foreground">{option.hint}</span>
-            )}
-            {option.id === value && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
-          </button>
-        </li>
-      ))}
+      {filtered.map(
+        (option, index): React.JSX.Element => (
+          <li key={option.id}>
+            <button
+              type="button"
+              id={optionId(index)}
+              role="option"
+              aria-selected={index === highlighted}
+              onMouseEnter={(): void => {
+                onHighlight(index);
+              }}
+              onClick={(): void => {
+                onCommit(option.id);
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
+                index === highlighted ? "bg-accent text-accent-foreground" : "",
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              {option.hint !== undefined && (
+                <span className="shrink-0 truncate text-xs text-muted-foreground">{option.hint}</span>
+              )}
+              {option.id === value && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
+            </button>
+          </li>
+        ),
+      )}
       {showCustom && (
         <li>
           <button
@@ -76,8 +82,12 @@ function ComboboxDropdown({
             id={optionId(filtered.length)}
             role="option"
             aria-selected={highlighted === filtered.length}
-            onMouseEnter={(): void => { onHighlight(filtered.length); }}
-            onClick={(): void => { onCommit(query.trim()); }}
+            onMouseEnter={(): void => {
+              onHighlight(filtered.length);
+            }}
+            onClick={(): void => {
+              onCommit(query.trim());
+            }}
             className={cn(
               "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm",
               highlighted === filtered.length ? "bg-accent text-accent-foreground" : "",
@@ -141,21 +151,24 @@ export function FuzzyCombobox({
     const q = query.trim().toLowerCase();
     if (q === "") return options.slice(0, 200);
     const scored = options
-      .map((option): Readonly<{ option: ComboboxOption; score: number }> => ({
-        option,
-        score: fuzzyScore(q, (option.label + " " + option.id).toLowerCase()),
-      }))
+      .map(
+        (option): Readonly<{ option: ComboboxOption; score: number }> => ({
+          option,
+          score: fuzzyScore(q, (option.label + " " + option.id).toLowerCase()),
+        }),
+      )
       .filter((entry): boolean => entry.score > 0)
       .sort((a, b): number => b.score - a.score);
     return scored.slice(0, 200).map((entry): ComboboxOption => entry.option);
   }, [options, query]);
 
-  const showCustom = allowCustom && query.trim() !== "" && !filtered.some((option): boolean => option.id === query.trim());
+  const showCustom =
+    allowCustom && query.trim() !== "" && !filtered.some((option): boolean => option.id === query.trim());
 
   useEffect((): (() => void) => {
     if (!open) return (): void => undefined;
     const onPointerDown = (event: MouseEvent): void => {
-// SAFETY: the click target is a DOM node; contains() accepts Node.
+      // SAFETY: the click target is a DOM node; contains() accepts Node.
       if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -225,7 +238,7 @@ export function FuzzyCombobox({
           aria-activedescendant={open && rowCount > 0 ? optionId(highlighted) : undefined}
           aria-describedby={ariaDescribedBy}
           autoComplete="off"
-          value={open ? query : selected?.label ?? value}
+          value={open ? query : (selected?.label ?? value)}
           placeholder={placeholder}
           onInput={(event): void => {
             setQuery(event.currentTarget.value);
@@ -258,7 +271,9 @@ export function FuzzyCombobox({
           value={value}
           showCustom={showCustom}
           query={query}
-          onHighlight={(index: number): void => { setHighlighted(index); }}
+          onHighlight={(index: number): void => {
+            setHighlighted(index);
+          }}
           onCommit={commit}
         />
       )}

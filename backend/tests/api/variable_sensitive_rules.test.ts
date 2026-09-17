@@ -34,20 +34,28 @@ describe("workspace variable sensitive rules (VAR-006)", () => {
   let userToken = "";
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${userToken}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: `user-varsec-${suffix}`, username, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
-    await db.insert(organizationMemberships).values({ id: `mem-varsec-${suffix}`, userId: `user-varsec-${suffix}`, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: tokenId, token: hashAuthenticationToken(`varsec-token-${suffix}`), userId: `user-varsec-${suffix}` });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: `mem-varsec-${suffix}`, userId: `user-varsec-${suffix}`, orgId, role: "owner" });
+    await db.insert(apiTokens).values({
+      id: tokenId,
+      token: hashAuthenticationToken(`varsec-token-${suffix}`),
+      userId: `user-varsec-${suffix}`,
+    });
     userToken = `varsec-token-${suffix}`;
     await db.insert(workspaces).values({ id: wsId, name: `varsec-ws-${suffix}`, orgId });
   });
@@ -161,7 +169,7 @@ describe("workspace variable sensitive rules (VAR-006)", () => {
     expect(createdPlain.status).toBe(201);
     const list = await request(`/api/v2/workspaces/${wsId}/vars`);
     expect(list.status).toBe(200);
-    const body = await list.json() as { data: { attributes: Record<string, unknown> }[] };
+    const body = (await list.json()) as { data: { attributes: Record<string, unknown> }[] };
     const byKey = new Map(body.data.map((v) => [v.attributes["key"] as string, v.attributes]));
     expect(byKey.get("listsecret")?.["value"]).toBeNull();
     expect(byKey.get("listsecret")?.["sensitive"]).toBe(true);

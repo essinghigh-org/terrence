@@ -23,16 +23,18 @@ describe("request body size guard", () => {
   }
 
   test("rejects a JSON API request whose Content-Length exceeds the limit with 413", async () => {
-    const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/vnd.api+json",
-        "Content-Length": String(API_BODY_LIMIT_BYTES + 1024),
-      },
-      body: oversizedBody(),
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Content-Length": String(API_BODY_LIMIT_BYTES + 1024),
+        },
+        body: oversizedBody(),
+      }),
+    );
     expect(response.status).toBe(413);
-    const body = await response.json() as { errors?: { title?: string }[] };
+    const body = (await response.json()) as { errors?: { title?: string }[] };
     expect(body.errors?.[0]?.title).toBe("Payload Too Large");
   });
 
@@ -44,13 +46,15 @@ describe("request body size guard", () => {
         controller.close();
       },
     });
-    const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: stream,
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: stream,
+      }),
+    );
     expect(response.status).toBe(413);
-    const body = await response.json() as { errors?: { title?: string }[] };
+    const body = (await response.json()) as { errors?: { title?: string }[] };
     expect(body.errors?.[0]?.title).toBe("Payload Too Large");
   });
 
@@ -64,34 +68,40 @@ describe("request body size guard", () => {
         controller.close();
       },
     });
-    const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: stream,
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: stream,
+      }),
+    );
     expect(response.status).toBe(413);
   });
 
   test("allows normal-sized JSON API bodies through the guard", async () => {
-    const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { username: "nobody", password: "wrong" } } }),
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { username: "nobody", password: "wrong" } } }),
+      }),
+    );
     // Not a size rejection: login semantics (401 for bad credentials), or at
     // minimum anything but 413.
     expect(response.status).not.toBe(413);
   });
 
   test("caps webhook bodies at the same limit", async () => {
-    const response = await app.handle(new Request("http://localhost/api/webhooks/github", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": String(API_BODY_LIMIT_BYTES + 1024),
-      },
-      body: oversizedBody(),
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/webhooks/github", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": String(API_BODY_LIMIT_BYTES + 1024),
+        },
+        body: oversizedBody(),
+      }),
+    );
     expect(response.status).toBe(413);
   });
 
@@ -99,43 +109,61 @@ describe("request body size guard", () => {
     // The upload route itself validates auth/existence; the size guard must
     // not intercept it (10 MiB is far beyond the JSON limit but below the
     // 100 MiB server cap, so the route's own checks decide the status).
-    const response = await app.handle(new Request("http://localhost/api/v2/configuration-versions/cv-guard-test/upload", {
-      method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: "x".repeat(10 * 1024 * 1024),
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/configuration-versions/cv-guard-test/upload", {
+        method: "PUT",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: "x".repeat(10 * 1024 * 1024),
+      }),
+    );
     expect(response.status).not.toBe(413);
   });
 
   test("does not apply the small limit to uploads with a JSON content type", async () => {
     // The UI state import posts raw state with application/vnd.api+json, so
     // the onParse JSON branch must exempt upload paths as well (issue #573).
-    const response = await app.handle(new Request("http://localhost/api/v2/workspaces/ws-guard-test/state-versions/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: "x".repeat(5 * 1024 * 1024),
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/workspaces/ws-guard-test/state-versions/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: "x".repeat(5 * 1024 * 1024),
+      }),
+    );
     expect(response.status).not.toBe(413);
   });
 
   test("does not apply the small limit to json-outputs-upload paths", async () => {
-    const response = await app.handle(new Request("http://localhost/api/v2/state-versions/sv-guard-test/json-outputs-upload", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: "x".repeat(5 * 1024 * 1024),
-    }));
+    const response = await app.handle(
+      new Request("http://localhost/api/v2/state-versions/sv-guard-test/json-outputs-upload", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "x".repeat(5 * 1024 * 1024),
+      }),
+    );
     expect(response.status).not.toBe(413);
   });
 });
-
 
 test("body-size errors retain the actual limit through parser wrapping", () => {
   for (const limit of [API_BODY_LIMIT_BYTES, 100 * 1024 * 1024]) {
     const error = new BodyTooLargeError(limit);
     for (const reported of [error, new Error("Parse failed", { cause: error })]) {
       const set = { status: 200, headers: {} };
-      expect(handleAppError({ code: "PARSE", error: reported, set, request: { url: "http://localhost/api/v2/state-versions/sv/upload" } })).toEqual({
-        errors: [{ status: "413", title: "Payload Too Large", detail: `Request body exceeds the ${limit} byte limit for this endpoint` }],
+      expect(
+        handleAppError({
+          code: "PARSE",
+          error: reported,
+          set,
+          request: { url: "http://localhost/api/v2/state-versions/sv/upload" },
+        }),
+      ).toEqual({
+        errors: [
+          {
+            status: "413",
+            title: "Payload Too Large",
+            detail: `Request body exceeds the ${limit} byte limit for this endpoint`,
+          },
+        ],
       });
       expect(set.status).toBe(413);
     }

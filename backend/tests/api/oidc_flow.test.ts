@@ -3,7 +3,12 @@ import type { KeyObject } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq, inArray, like } from "drizzle-orm";
 import { app } from "../../src/app";
-import { clearSsoChallenges, consumeSsoChallenge, purgeExpiredSsoChallenges, storeSsoChallenge } from "../../src/lib/sso-challenges";
+import {
+  clearSsoChallenges,
+  consumeSsoChallenge,
+  purgeExpiredSsoChallenges,
+  storeSsoChallenge,
+} from "../../src/lib/sso-challenges";
 import { invalidateSettingsCache } from "../../src/lib/settings";
 import { resetOidcCaches } from "../../src/routes/oidc";
 import { db } from "../../src/db";
@@ -20,9 +25,11 @@ function signJwt(
   dsaEncoding?: "ieee-p1363",
 ): string {
   const signingInput = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
-  const signature = sign("sha256", Buffer.from(signingInput), dsaEncoding === undefined
-    ? privateKey
-    : { key: privateKey, dsaEncoding });
+  const signature = sign(
+    "sha256",
+    Buffer.from(signingInput),
+    dsaEncoding === undefined ? privateKey : { key: privateKey, dsaEncoding },
+  );
   return `${signingInput}.${base64Url(signature)}`;
 }
 
@@ -65,7 +72,8 @@ describe("OIDC SSO flow", () => {
 
   const cookieValue = (response: Response, name: string): string => {
     const prefix = `${name}=`;
-    const pair = response.headers.getSetCookie()
+    const pair = response.headers
+      .getSetCookie()
       .map((value): string => value.split(";")[0] ?? "")
       .find((value): boolean => value.startsWith(prefix));
     return pair?.slice(prefix.length) ?? "";
@@ -107,13 +115,16 @@ describe("OIDC SSO flow", () => {
     const callbackUrl = idpResponse.headers.get("Location") ?? "";
     const callback = new URL(callbackUrl);
     const headers = { Cookie: cookie };
-    const response = callbackMethod === "POST"
-      ? await app.handle(new Request("http://terrence.test/users/oidc/callback", {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded" },
-        body: callback.searchParams.toString(),
-      }))
-      : await app.handle(new Request(callback.toString(), { headers }));
+    const response =
+      callbackMethod === "POST"
+        ? await app.handle(
+            new Request("http://terrence.test/users/oidc/callback", {
+              method: "POST",
+              headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded" },
+              body: callback.searchParams.toString(),
+            }),
+          )
+        : await app.handle(new Request(callback.toString(), { headers }));
     return { response, state: callback.searchParams.get("state") ?? "" };
   }
 
@@ -141,7 +152,9 @@ describe("OIDC SSO flow", () => {
             return Response.json({ keys: [{ ...ecPublicJwk, use: "sig", alg: "ES256" }] });
           }
           if (mockAlg.startsWith("HS")) {
-            return Response.json({ keys: mockPublishRsaJwks ? [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }] : [] });
+            return Response.json({
+              keys: mockPublishRsaJwks ? [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }] : [],
+            });
           }
           return Response.json({ keys: [{ ...publicJwk, kid: "test-key", use: "sig", alg: "RS256" }] });
         }
@@ -166,11 +179,13 @@ describe("OIDC SSO flow", () => {
           const verifierValue = form.get("code_verifier");
           const verifier = typeof verifierValue === "string" ? verifierValue : "";
           const authorizationHeader = innerRequest.headers.get("authorization") ?? "";
-          if (authorization === undefined
-            || form.get("client_id") !== "test-client"
-            || authorizationHeader !== `Basic ${Buffer.from("test-client:test-secret").toString("base64")}`
-            || authorization?.redirectUri !== (form.get("redirect_uri") ?? "")
-            || authorization.codeChallenge !== createHash("sha256").update(verifier).digest("base64url")) {
+          if (
+            authorization === undefined ||
+            form.get("client_id") !== "test-client" ||
+            authorizationHeader !== `Basic ${Buffer.from("test-client:test-secret").toString("base64")}` ||
+            authorization?.redirectUri !== (form.get("redirect_uri") ?? "") ||
+            authorization.codeChallenge !== createHash("sha256").update(verifier).digest("base64url")
+          ) {
             return Response.json({ error: "invalid_grant" }, { status: 400 });
           }
           authorizeParams.delete(state);
@@ -227,7 +242,9 @@ describe("OIDC SSO flow", () => {
       "signing-alg": null,
       "link-by-email": true,
     };
-    await db.insert(adminSettings).values({ id: "oidc", values: oidcValues, updatedAt: Date.now() })
+    await db
+      .insert(adminSettings)
+      .values({ id: "oidc", values: oidcValues, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values: oidcValues, updatedAt: Date.now() } });
     invalidateSettingsCache();
   });
@@ -247,7 +264,9 @@ describe("OIDC SSO flow", () => {
     if (originalOidc === undefined) {
       await db.delete(adminSettings).where(eq(adminSettings.id, "oidc"));
     } else {
-      await db.update(adminSettings).set({ values: originalOidc.values, updatedAt: Date.now() })
+      await db
+        .update(adminSettings)
+        .set({ values: originalOidc.values, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "oidc"));
     }
     invalidateSettingsCache();
@@ -282,10 +301,12 @@ describe("OIDC SSO flow", () => {
     expect(created?.email).toBe(`oidc-alice-${suffix}@example.com`);
 
     const refreshToken = cookieValue(response, "terrence_refresh");
-    const refreshResponse = await app.handle(new Request("http://terrence.test/api/v2/users/refresh", {
-      method: "POST",
-      headers: { Cookie: `terrence_refresh=${refreshToken}` },
-    }));
+    const refreshResponse = await app.handle(
+      new Request("http://terrence.test/api/v2/users/refresh", {
+        method: "POST",
+        headers: { Cookie: `terrence_refresh=${refreshToken}` },
+      }),
+    );
     expect(refreshResponse.status).toBe(200);
   });
 
@@ -383,7 +404,8 @@ describe("OIDC SSO flow", () => {
   test("accepts a cross-site form_post callback and clears the state cookie", async () => {
     const { response } = await completeFlow("POST");
     expect(response.status).toBe(200);
-    const stateCookie = response.headers.getSetCookie()
+    const stateCookie = response.headers
+      .getSetCookie()
       .find((value): boolean => value.startsWith("terrence_oidc_state="));
     expect(stateCookie).toContain("Max-Age=0");
   });
@@ -421,7 +443,9 @@ describe("OIDC SSO flow", () => {
     const originalValues = current?.values ?? {};
     // Configure the symmetric algorithm so the flow reaches HMAC verification
     // instead of the missing-configuration guard.
-    await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": "HS256" }, updatedAt: Date.now() })
+    await db
+      .update(adminSettings)
+      .set({ values: { ...originalValues, "signing-alg": "HS256" }, updatedAt: Date.now() })
       .where(eq(adminSettings.id, "oidc"));
     invalidateSettingsCache();
     try {
@@ -432,14 +456,18 @@ describe("OIDC SSO flow", () => {
       mockHmacSecret = "test-secret";
       mockSupportedAlgorithms = ["RS256", "HS384", "ES256"];
       mockPublishRsaJwks = false;
-      await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
+      await db
+        .update(adminSettings)
+        .set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "oidc"));
       invalidateSettingsCache();
     }
   });
 
   test("rejects a callback with an unknown state", async () => {
-    const response = await app.handle(new Request("http://terrence.test/users/oidc/callback?code=whatever&state=definitely-not-real"));
+    const response = await app.handle(
+      new Request("http://terrence.test/users/oidc/callback?code=whatever&state=definitely-not-real"),
+    );
     expect(response.status).toBe(400);
     expect(await response.text()).toMatch(/invalid|expired/);
   });
@@ -453,15 +481,16 @@ describe("OIDC SSO flow", () => {
     expect(state).not.toBe("");
     const stateCookie = cookieValue(authResponse, "terrence_oidc_state");
 
-    const missingCookie = await app.handle(new Request(
-      `http://terrence.test/users/oidc/callback?code=whatever&state=${state}`,
-    ));
+    const missingCookie = await app.handle(
+      new Request(`http://terrence.test/users/oidc/callback?code=whatever&state=${state}`),
+    );
     expect(missingCookie.status).toBe(400);
 
-    const mismatchedCookie = await app.handle(new Request(
-      `http://terrence.test/users/oidc/callback?code=whatever&state=${state}`,
-      { headers: { Cookie: `terrence_oidc_state=${stateCookie}mismatch` } },
-    ));
+    const mismatchedCookie = await app.handle(
+      new Request(`http://terrence.test/users/oidc/callback?code=whatever&state=${state}`, {
+        headers: { Cookie: `terrence_oidc_state=${stateCookie}mismatch` },
+      }),
+    );
     expect(mismatchedCookie.status).toBe(400);
     // The guard fires before the challenge is consumed: an attacker with the
     // state but not the cookie cannot drain the flow.
@@ -511,10 +540,12 @@ describe("OIDC SSO flow", () => {
     const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
     const state = new URL(authResponse.headers.get("Location") ?? "").searchParams.get("state") ?? "";
     const stateCookie = `terrence_oidc_state=${cookieValue(authResponse, "terrence_oidc_state")}`;
-    const response = await app.handle(new Request(
-      `http://terrence.test/users/oidc/callback?error=access_denied&error_description=User+cancelled&state=${state}`,
-      { headers: { Cookie: stateCookie } },
-    ));
+    const response = await app.handle(
+      new Request(
+        `http://terrence.test/users/oidc/callback?error=access_denied&error_description=User+cancelled&state=${state}`,
+        { headers: { Cookie: stateCookie } },
+      ),
+    );
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("refused");
   });
@@ -526,7 +557,9 @@ describe("OIDC SSO flow", () => {
     mockAlg = "HS384";
     const current = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "oidc") });
     const originalValues = current?.values ?? {};
-    await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": "HS384" }, updatedAt: Date.now() })
+    await db
+      .update(adminSettings)
+      .set({ values: { ...originalValues, "signing-alg": "HS384" }, updatedAt: Date.now() })
       .where(eq(adminSettings.id, "oidc"));
     invalidateSettingsCache();
     try {
@@ -534,7 +567,9 @@ describe("OIDC SSO flow", () => {
       expect(response.status).toBe(200);
     } finally {
       mockAlg = "RS256";
-      await db.update(adminSettings).set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
+      await db
+        .update(adminSettings)
+        .set({ values: { ...originalValues, "signing-alg": null }, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "oidc"));
       invalidateSettingsCache();
     }

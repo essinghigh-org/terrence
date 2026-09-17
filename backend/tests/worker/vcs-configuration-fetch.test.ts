@@ -2,7 +2,14 @@ import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { db } from "../../src/db";
-import { organizations, workspaces, configurationVersions, runs, logs, githubAppInstallations } from "../../src/db/schema";
+import {
+  organizations,
+  workspaces,
+  configurationVersions,
+  runs,
+  logs,
+  githubAppInstallations,
+} from "../../src/db/schema";
 import { eq, and } from "drizzle-orm";
 import { executeRun } from "../../src/worker";
 
@@ -26,9 +33,13 @@ function uniqueId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-async function seedVcsFixtures(): Promise<Readonly<{ orgId: string; workspaceId: string; cvId: string; runId: string }>> {
+async function seedVcsFixtures(): Promise<
+  Readonly<{ orgId: string; workspaceId: string; cvId: string; runId: string }>
+> {
   const orgId = uniqueId("org");
-  await db.insert(organizations).values({ id: orgId, name: `vcs-fetch-org-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+  await db
+    .insert(organizations)
+    .values({ id: orgId, name: `vcs-fetch-org-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   const installationId = uniqueId("ghain");
   await db.insert(githubAppInstallations).values({
     id: installationId,
@@ -124,7 +135,8 @@ test("a run claimed while the VCS tarball is still pending waits for the archive
   // and the CV transitions to uploaded.
   const archivePath = join(process.env["TEST_DIR"] ?? "/tmp", `vcs-config-${Date.now()}.tar.gz`);
   await makeTarball(archivePath);
-  await db.update(configurationVersions)
+  await db
+    .update(configurationVersions)
     .set({ status: "uploaded", archivePath })
     .where(eq(configurationVersions.id, cvId));
 

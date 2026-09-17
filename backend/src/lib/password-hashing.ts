@@ -46,7 +46,8 @@ export async function verifyAndUpgradePassword(
   if (!needsPasswordHashUpgrade(passwordHash)) return true;
 
   const upgradedHash = await hashPassword(password);
-  await db.update(users)
+  await db
+    .update(users)
     .set({ passwordHash: upgradedHash })
     .where(and(eq(users.id, userId), eq(users.passwordHash, passwordHash)));
   return true;

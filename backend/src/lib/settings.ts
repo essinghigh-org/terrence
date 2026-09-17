@@ -10,20 +10,97 @@ import { decryptSecret, encryptSecret, isEncryptedSecret } from "./secrets";
 export type Settings = Record<string, unknown>;
 
 const settingDefaults: Record<string, Settings> = {
-  general: { "local-auth-enabled": true, "local-signup-enabled": null, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false, "trusted-client-ip-headers": [] },
+  general: {
+    "local-auth-enabled": true,
+    "local-signup-enabled": null,
+    "limit-user-organization-creation": false,
+    "api-rate-limiting-enabled": false,
+    "api-rate-limit": 30,
+    "plan-timeout": 3600,
+    "apply-timeout": 3600,
+    "send-passing-statuses-for-untriggered-speculative-plans": false,
+    "allow-speculative-plans-on-pull-requests-from-forks": false,
+    "default-remote-state-access": false,
+    "trusted-client-ip-headers": [],
+  },
   retention: { "delete-older-than-n-days": null },
-  cost: { enabled: false, "infracost-api-key": null, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
-  smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain", encryption: "starttls" },
+  cost: {
+    enabled: false,
+    "infracost-api-key": null,
+    "aws-access-key-id": null,
+    "aws-secret-key": null,
+    "gcp-credentials": null,
+    "azure-client-id": null,
+    "azure-client-secret": null,
+    "azure-subscription-id": null,
+    "azure-tenant-id": null,
+  },
+  smtp: {
+    enabled: false,
+    host: null,
+    port: 25,
+    username: null,
+    password: null,
+    "sender-email": null,
+    auth: "plain",
+    encryption: "starttls",
+  },
   twilio: { enabled: false, "account-sid": null, "auth-token": null, "from-number": null },
   customization: { "support-email-address": null, "login-help": null, footer: null },
   saml: { "link-by-email": false },
-  oidc: { enabled: false, issuer: null, "client-id": null, "client-secret": null, scopes: "openid profile email", "pkce-method": null, "signing-alg": null, "link-by-email": false },
-  ldap: { enabled: false, host: null, port: 636, encryption: "ldaps", "bind-dn": null, "bind-password": null, "base-dn": null, "user-filter": "(uid={{username}})", "attr-username": "uid", "attr-email": "mail", "attr-display-name": "cn", "link-by-email": false },
-  site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
+  oidc: {
+    enabled: false,
+    issuer: null,
+    "client-id": null,
+    "client-secret": null,
+    scopes: "openid profile email",
+    "pkce-method": null,
+    "signing-alg": null,
+    "link-by-email": false,
+  },
+  ldap: {
+    enabled: false,
+    host: null,
+    port: 636,
+    encryption: "ldaps",
+    "bind-dn": null,
+    "bind-password": null,
+    "base-dn": null,
+    "user-filter": "(uid={{username}})",
+    "attr-username": "uid",
+    "attr-email": "mail",
+    "attr-display-name": "cn",
+    "link-by-email": false,
+  },
+  site: {
+    "cost-estimation-enabled": false,
+    "sentinel-enabled": true,
+    "opa-enabled": true,
+    "agent-enabled": false,
+    "module-registry-enabled": true,
+    "provider-registry-enabled": true,
+    "max-run-timeout": 43200,
+    "default-terraform-version": "latest",
+  },
   "approval-webhook": { enabled: false, url: null, secret: null },
   "maintenance-windows": { enabled: false, windows: [] },
-  logging: { enabled: null, "log-level": null, "syslog-level": null, "syslog-targets": null, "syslog-hostname": null, "syslog-app": null, "syslog-format": null },
-  "plan-explainer": { enabled: false, provider: null, "base-url": null, "api-key": null, model: null, "reasoning-effort": null },
+  logging: {
+    enabled: null,
+    "log-level": null,
+    "syslog-level": null,
+    "syslog-targets": null,
+    "syslog-hostname": null,
+    "syslog-app": null,
+    "syslog-format": null,
+  },
+  "plan-explainer": {
+    enabled: false,
+    provider: null,
+    "base-url": null,
+    "api-key": null,
+    model: null,
+    "reasoning-effort": null,
+  },
 };
 
 const encryptedSettingKeys: Readonly<Record<string, readonly string[]>> = {
@@ -42,22 +119,24 @@ function secretKeysForGroup(group: string): ReadonlySet<string> {
 
 async function decryptSettingsValues(group: string, storedValues: Readonly<Settings>): Promise<Settings> {
   const secretKeys = secretKeysForGroup(group);
-  const entries = await Promise.all(Object.entries(storedValues).map(async ([key, value]): Promise<[string, unknown]> => {
-    if (!secretKeys.has(key) || typeof value !== "string") return [key, value];
-    const encrypted = isEncryptedSecret(value);
-    const decrypted = await decryptSecret(value);
-    // GCP credentials are accepted as a JSON object by the admin API. Objects
-    // written before encryption remain objects; encrypted object values are
-    // serialized as JSON and restored to that same runtime shape here.
-    if (group === "cost" && key === "gcp-credentials" && encrypted) {
-      try {
-        return [key, JSON.parse(decrypted) as unknown];
-      } catch {
-        // Preserve an encrypted non-JSON string for backwards compatibility.
+  const entries = await Promise.all(
+    Object.entries(storedValues).map(async ([key, value]): Promise<[string, unknown]> => {
+      if (!secretKeys.has(key) || typeof value !== "string") return [key, value];
+      const encrypted = isEncryptedSecret(value);
+      const decrypted = await decryptSecret(value);
+      // GCP credentials are accepted as a JSON object by the admin API. Objects
+      // written before encryption remain objects; encrypted object values are
+      // serialized as JSON and restored to that same runtime shape here.
+      if (group === "cost" && key === "gcp-credentials" && encrypted) {
+        try {
+          return [key, JSON.parse(decrypted) as unknown];
+        } catch {
+          // Preserve an encrypted non-JSON string for backwards compatibility.
+        }
       }
-    }
-    return [key, decrypted];
-  }));
+      return [key, decrypted];
+    }),
+  );
   return Object.fromEntries(entries);
 }
 
@@ -79,7 +158,12 @@ export async function encryptSettingsValues(group: string, values: Readonly<Sett
 const SETTINGS_CACHE_TTL_MS = 1_000;
 const settingsCache = new Map<string, { values: Settings; fetchedAt: number }>();
 
-function effectiveSettings(group: string, defaults: Readonly<Settings>, values: Readonly<Settings>, validate = true): Settings {
+function effectiveSettings(
+  group: string,
+  defaults: Readonly<Settings>,
+  values: Readonly<Settings>,
+  validate = true,
+): Settings {
   const merged = { ...defaults, ...values };
   // Older SMTP rows have no encryption key. Keep port 465's established
   // implicit-TLS behavior while making every other legacy configuration
@@ -94,8 +178,7 @@ function effectiveSettings(group: string, defaults: Readonly<Settings>, values: 
 async function readPersistedSettings(group: string): Promise<Settings> {
   // Initialization writes an empty map: unset keys keep inheriting the
   // current defaults, so future default changes apply without a rewrite.
-  await db.insert(adminSettings).values({ id: group, values: {}, updatedAt: Date.now() })
-    .onConflictDoNothing();
+  await db.insert(adminSettings).values({ id: group, values: {}, updatedAt: Date.now() }).onConflictDoNothing();
   const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
   return decryptSettingsValues(group, row?.values ?? {});
 }
@@ -140,10 +223,18 @@ export function normalizePlanExplainerBaseUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.trim() === "") return null;
   try {
     const url = new URL(value.trim());
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.hostname === ""
-      || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") return null;
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.hostname === "" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    )
+      return null;
     let pathname = url.pathname.replace(/\/+$/, "");
-    if (pathname.endsWith("/chat/completions")) pathname = pathname.slice(0, -"/chat/completions".length).replace(/\/+$/, "");
+    if (pathname.endsWith("/chat/completions"))
+      pathname = pathname.slice(0, -"/chat/completions".length).replace(/\/+$/, "");
     url.pathname = pathname;
     return url.toString().replace(/\/$/, "");
   } catch {
@@ -153,9 +244,10 @@ export function normalizePlanExplainerBaseUrl(value: unknown): string | null {
 
 /** Resolve a configured override or the selected provider's models.dev URL. */
 export async function resolvePlanExplainerSettings(settings: Readonly<Settings>): Promise<Settings | null> {
-  if (settings["enabled"] !== true || typeof settings["model"] !== "string" || settings["model"].trim() === "") return null;
-  let baseUrl = normalizePlanExplainerBaseUrl(settings["base-url"])
-    ?? normalizePlanExplainerBaseUrl(settings["endpoint-url"]);
+  if (settings["enabled"] !== true || typeof settings["model"] !== "string" || settings["model"].trim() === "")
+    return null;
+  let baseUrl =
+    normalizePlanExplainerBaseUrl(settings["base-url"]) ?? normalizePlanExplainerBaseUrl(settings["endpoint-url"]);
   const provider = typeof settings["provider"] === "string" ? settings["provider"].trim() : "";
   if (baseUrl === null && provider !== "" && provider !== CUSTOM_PROVIDER_ID) {
     baseUrl = (await getCatalogProviderModels(provider))?.baseUrl ?? null;
@@ -179,10 +271,7 @@ export async function planExplainerUsable(settings: Readonly<Settings>): Promise
  * feature is disabled or misconfigured. Keys must be stable kebab-case.
  */
 export async function getSiteCapabilities(): Promise<Readonly<Record<string, boolean>>> {
-  const [explainer, cost] = await Promise.all([
-    getSettings("plan-explainer"),
-    getSettings("cost"),
-  ]);
+  const [explainer, cost] = await Promise.all([getSettings("plan-explainer"), getSettings("cost")]);
   return {
     agents: true,
     "audit-logging": true,
@@ -222,9 +311,11 @@ export async function localSignupEnabled(): Promise<boolean> {
 
 /** Validate persisted configuration before accepting requests or starting workers. */
 export async function validatePersistedConfiguration(): Promise<void> {
-  await Promise.all(Object.keys(settingsContract).map(async (group): Promise<void> => {
-    await getSettingsFresh(group);
-  }));
+  await Promise.all(
+    Object.keys(settingsContract).map(async (group): Promise<void> => {
+      await getSettingsFresh(group);
+    }),
+  );
 }
 
 export type PersistedConfigurationEntry = Readonly<{
@@ -244,7 +335,10 @@ const loggingEnvironmentNames = {
   "syslog-format": "TERRENCE_SYSLOG_FORMAT",
 } as const;
 
-function inheritedLoggingValue(key: string, values: Readonly<Settings>): Readonly<{ value: unknown; originName: string | null }> {
+function inheritedLoggingValue(
+  key: string,
+  values: Readonly<Settings>,
+): Readonly<{ value: unknown; originName: string | null }> {
   if (key === "enabled") {
     const storedTargets = values["syslog-targets"];
     return Array.isArray(storedTargets)
@@ -256,30 +350,37 @@ function inheritedLoggingValue(key: string, values: Readonly<Settings>): Readonl
 }
 
 export async function persistedConfigurationReport(): Promise<readonly PersistedConfigurationEntry[]> {
-  const origins = new Map(runtimeConfigurationReport().map((entry): [string, "environment" | "default"] => [entry.name, entry.origin]));
-  const groups = await Promise.all(Object.keys(settingsContract).map(async (group): Promise<PersistedConfigurationEntry[]> => {
-    const stored = await readPersistedSettings(group);
-    const values = effectiveSettings(group, settingDefaults[group] ?? {}, stored);
-    return Object.entries(values).map(([key, value]): PersistedConfigurationEntry => {
-      let origin: PersistedConfigurationEntry["origin"] = Object.hasOwn(stored, key) ? "persisted" : "default";
-      let effectiveValue = value;
-      if (group === "general" && key === "local-signup-enabled" && value === null) {
-        origin = origins.get("TERRENCE_ENABLE_LOCAL_SIGNUP") ?? "default";
-        effectiveValue = envFlag("TERRENCE_ENABLE_LOCAL_SIGNUP");
-      }
-      if (group === "logging" && value === null) {
-        const inherited = inheritedLoggingValue(key, values);
-        origin = inherited.originName === null ? "persisted" : origins.get(inherited.originName) ?? "default";
-        effectiveValue = inherited.value;
-      }
-      return {
-        name: `${group}.${key}`,
-        value: configurationReportValue(group, key, effectiveValue),
-        origin,
-        restartRequired: origin === "environment",
-        takesEffect: origin === "environment" ? "Environment changes require a process restart" : "Next settings read; cache lifetime is at most one second",
-      };
-    });
-  }));
+  const origins = new Map(
+    runtimeConfigurationReport().map((entry): [string, "environment" | "default"] => [entry.name, entry.origin]),
+  );
+  const groups = await Promise.all(
+    Object.keys(settingsContract).map(async (group): Promise<PersistedConfigurationEntry[]> => {
+      const stored = await readPersistedSettings(group);
+      const values = effectiveSettings(group, settingDefaults[group] ?? {}, stored);
+      return Object.entries(values).map(([key, value]): PersistedConfigurationEntry => {
+        let origin: PersistedConfigurationEntry["origin"] = Object.hasOwn(stored, key) ? "persisted" : "default";
+        let effectiveValue = value;
+        if (group === "general" && key === "local-signup-enabled" && value === null) {
+          origin = origins.get("TERRENCE_ENABLE_LOCAL_SIGNUP") ?? "default";
+          effectiveValue = envFlag("TERRENCE_ENABLE_LOCAL_SIGNUP");
+        }
+        if (group === "logging" && value === null) {
+          const inherited = inheritedLoggingValue(key, values);
+          origin = inherited.originName === null ? "persisted" : (origins.get(inherited.originName) ?? "default");
+          effectiveValue = inherited.value;
+        }
+        return {
+          name: `${group}.${key}`,
+          value: configurationReportValue(group, key, effectiveValue),
+          origin,
+          restartRequired: origin === "environment",
+          takesEffect:
+            origin === "environment"
+              ? "Environment changes require a process restart"
+              : "Next settings read; cache lifetime is at most one second",
+        };
+      });
+    }),
+  );
   return groups.flat();
 }

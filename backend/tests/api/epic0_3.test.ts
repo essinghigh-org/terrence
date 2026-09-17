@@ -57,7 +57,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     const res = await app.handle(
       new Request("http://localhost/api/v2/account/details", {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -84,7 +84,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     const res = await app.handle(
       new Request("http://localhost/api/v2/users?filter[username]=alice", {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -119,7 +119,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
             attributes: { email: "newemail@epic.local" },
           },
         }),
-      })
+      }),
     );
     expect(patchRes.status).toBe(200);
     const patchBody = await patchRes.json();
@@ -129,7 +129,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
       new Request(`http://localhost/api/v2/users/${userId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(delRes.status).toBe(204);
 
@@ -139,15 +139,19 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     expect((checkUser as unknown as { deletedAt?: number | null })?.deletedAt).toBeDefined();
     expect((checkUser as unknown as { deletedAt?: number | null })?.deletedAt).not.toBeNull();
     // Deleted users must no longer authenticate / be fetchable
-    const getAfterDelete = await app.handle(new Request(`http://localhost/api/v2/users/${userId}`, { headers: { Authorization: `Bearer ${userToken}` } }));
+    const getAfterDelete = await app.handle(
+      new Request(`http://localhost/api/v2/users/${userId}`, { headers: { Authorization: `Bearer ${userToken}` } }),
+    );
     expect([401, 404].includes(getAfterDelete.status)).toBeTrue();
   });
 
   it("refuses self-deletion when the account is the sole active organization owner", async () => {
-    const response = await app.handle(new Request(`http://localhost/api/v2/users/${userId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const response = await app.handle(
+      new Request(`http://localhost/api/v2/users/${userId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     expect(response.status).toBe(422);
     const retained = await db.query.users.findFirst({ where: eq(users.id, userId) });
     expect(retained?.deletedAt).toBeNull();
@@ -173,7 +177,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
             },
           },
         }),
-      })
+      }),
     );
     expect(inviteRes.status).toBe(201);
     const inviteBody = await inviteRes.json();
@@ -185,7 +189,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     const listRes = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}/organization-memberships?include=user`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(listRes.status).toBe(200);
     const listBody = await listRes.json();
@@ -197,7 +201,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     const showRes = await app.handle(
       new Request(`http://localhost/api/v2/organization-memberships/${memId}?include=user`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(showRes.status).toBe(200);
     const showBody = await showRes.json();
@@ -208,7 +212,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
       new Request(`http://localhost/api/v2/organization-memberships/${memId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(deleteRes.status).toBe(204);
   });
@@ -227,7 +231,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
             attributes: { name: "DevOps Team" },
           },
         }),
-      })
+      }),
     );
     expect(teamRes.status).toBe(201);
     const teamBody = await teamRes.json();
@@ -249,7 +253,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
             },
           },
         }),
-      })
+      }),
     );
     expect(tokenRes.status).toBe(201);
     const tokenBody = await tokenRes.json();
@@ -260,7 +264,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     const pingRes = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}/teams`, {
         headers: { Authorization: `Bearer ${teamSecret}` },
-      })
+      }),
     );
     expect(pingRes.status).toBe(200);
 
@@ -277,7 +281,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
             attributes: { email: "bob@epic.local" },
           },
         }),
-      })
+      }),
     );
     const memId = (await inviteRes.json()).data.id;
 
@@ -291,7 +295,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
         body: JSON.stringify({
           data: [{ id: memId, type: "organization-memberships" }],
         }),
-      })
+      }),
     );
     expect(relRes.status).toBe(204);
   });
@@ -316,7 +320,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     const res = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}`, {
         headers: { Authorization: `Bearer ${strangerToken}` },
-      })
+      }),
     );
     expect(res.status).toBe(404);
     const body = await res.json();

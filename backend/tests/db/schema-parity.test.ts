@@ -17,7 +17,9 @@ const EXTRA = Symbol.for("drizzle:ExtraConfigBuilder");
 type Col = { name: string; columnType: string; notNull: boolean; primary: boolean; isUnique?: boolean };
 type ExtraRow = { config?: { name?: string; unique?: boolean; columns?: Col[] } };
 
-const REQUIRED_INDEXES: Readonly<Record<string, readonly { name: string; unique: boolean; columns: readonly string[] }[]>> = {
+const REQUIRED_INDEXES: Readonly<
+  Record<string, readonly { name: string; unique: boolean; columns: readonly string[] }[]>
+> = {
   agents: [{ name: "agents_last_ping_at_status_idx", unique: false, columns: ["last_ping_at", "status"] }],
   auditLogs: [
     { name: "audit_logs_created_at_idx", unique: false, columns: ["created_at"] },
@@ -25,7 +27,9 @@ const REQUIRED_INDEXES: Readonly<Record<string, readonly { name: string; unique:
     { name: "audit_logs_resource_idx", unique: false, columns: ["resource_type", "resource_id", "created_at", "id"] },
   ],
   runComments: [{ name: "run_comments_run_created_idx", unique: false, columns: ["run_id", "created_at", "id"] }],
-  workspaceVariables: [{ name: "workspace_variables_workspace_key_idx", unique: true, columns: ["workspace_id", "category", "key"] }],
+  workspaceVariables: [
+    { name: "workspace_variables_workspace_key_idx", unique: true, columns: ["workspace_id", "category", "key"] },
+  ],
 };
 
 function dbName(table: object): string {
@@ -34,7 +38,12 @@ function dbName(table: object): string {
 
 function columnFingerprint(table: object): Readonly<Record<string, Col>> {
   const out: Record<string, Col> = {};
-  for (const column of Object.values((table as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<string, Col & { hasDefault?: boolean; default?: unknown; hasDefaultFn?: boolean; defaultFn?: unknown }>)) {
+  for (const column of Object.values(
+    (table as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<
+      string,
+      Col & { hasDefault?: boolean; default?: unknown; hasDefaultFn?: boolean; defaultFn?: unknown }
+    >,
+  )) {
     out[column.name] = {
       name: column.name,
       columnType: column.columnType,
@@ -42,8 +51,12 @@ function columnFingerprint(table: object): Readonly<Record<string, Col>> {
       primary: column.primary,
       ...(column.isUnique === true ? { isUnique: true } : {}),
       // Include default/defaultFn where present so drift in defaults is caught
-      ...((column as unknown as Record<string, unknown>)["hasDefault"] === true ? { hasDefault: true as const, default: (column as unknown as Record<string, unknown>)["default"] } : {}),
-      ...((column as unknown as Record<string, unknown>)["hasDefaultFn"] === true ? { hasDefaultFn: true as const } : {}),
+      ...((column as unknown as Record<string, unknown>)["hasDefault"] === true
+        ? { hasDefault: true as const, default: (column as unknown as Record<string, unknown>)["default"] }
+        : {}),
+      ...((column as unknown as Record<string, unknown>)["hasDefaultFn"] === true
+        ? { hasDefaultFn: true as const }
+        : {}),
     } as Col;
   }
   return out;
@@ -54,8 +67,10 @@ function indexFingerprint(table: object): readonly { name: string; unique: boole
   if (extra === undefined) return [];
   const rows = extra(table) as ExtraRow[];
   return rows
-    .filter((row): row is ExtraRow & { config: { name: string; unique?: boolean; columns?: Col[] } } =>
-      row.config !== undefined && typeof row.config.name === "string")
+    .filter(
+      (row): row is ExtraRow & { config: { name: string; unique?: boolean; columns?: Col[] } } =>
+        row.config !== undefined && typeof row.config.name === "string",
+    )
     .map((row) => ({
       name: row.config.name as string,
       unique: row.config.unique === true,
@@ -73,7 +88,12 @@ describe("pg schema parity", () => {
     const runtimeNames = new Set(Object.keys(runtime));
     const staticNames = new Set(
       Object.entries(staticPg)
-        .filter(([, value]) => value !== null && typeof value === "object" && (value as unknown as Record<PropertyKey, unknown>)[COLUMNS] !== undefined)
+        .filter(
+          ([, value]) =>
+            value !== null &&
+            typeof value === "object" &&
+            (value as unknown as Record<PropertyKey, unknown>)[COLUMNS] !== undefined,
+        )
         .map(([name]) => dbName(staticPg[name as keyof typeof staticPg] as object)),
     );
     expect([...runtimeNames].sort()).toEqual([...staticNames].sort());
@@ -82,7 +102,12 @@ describe("pg schema parity", () => {
   test("columns are identical per table", () => {
     const runtime = buildPgSchema(sqliteSchema);
     for (const [exportName, sqliteTable] of Object.entries(sqliteSchema)) {
-      if (sqliteTable === null || typeof sqliteTable !== "object" || (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined) continue;
+      if (
+        sqliteTable === null ||
+        typeof sqliteTable !== "object" ||
+        (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined
+      )
+        continue;
       const name = dbName(sqliteTable as object);
       const runtimeTable = runtime[name];
       const staticTable = staticPg[exportName as keyof typeof staticPg];
@@ -105,13 +130,24 @@ describe("pg schema parity", () => {
   test("indexes are identical per table", () => {
     const runtime = buildPgSchema(sqliteSchema);
     for (const [exportName, sqliteTable] of Object.entries(sqliteSchema)) {
-      if (sqliteTable === null || typeof sqliteTable !== "object" || (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined) continue;
+      if (
+        sqliteTable === null ||
+        typeof sqliteTable !== "object" ||
+        (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined
+      )
+        continue;
       const name = dbName(sqliteTable as object);
       const runtimeTable = runtime[name];
       const staticTable = staticPg[exportName as keyof typeof staticPg];
-      const runtimeFp = indexFingerprint(runtimeTable as object).map(({ name: n, unique, columns }) => ({ name: n, unique, columnCount: columns.length }));
+      const runtimeFp = indexFingerprint(runtimeTable as object).map(({ name: n, unique, columns }) => ({
+        name: n,
+        unique,
+        columnCount: columns.length,
+      }));
       const staticFp = indexFingerprint(staticTable as object);
-      expect(runtimeFp).toEqual(staticFp.map(({ name: n, unique, columns }) => ({ name: n, unique, columnCount: columns.length })));
+      expect(runtimeFp).toEqual(
+        staticFp.map(({ name: n, unique, columns }) => ({ name: n, unique, columnCount: columns.length })),
+      );
       const sqliteFp = indexFingerprint(sqliteTable as object);
       expect(staticFp).toEqual(sqliteFp);
       // Strengthen: also ensure unique flag and column names are not silently weakened
@@ -127,7 +163,10 @@ describe("pg schema parity", () => {
       expect(table, `canonical schema missing ${exportName}`).toBeDefined();
       const actual = indexFingerprint(table as object);
       for (const expected of expectedIndexes) {
-        expect(actual, `missing index ${expected.name}`).toContainEqual({ ...expected, columns: [...expected.columns] });
+        expect(actual, `missing index ${expected.name}`).toContainEqual({
+          ...expected,
+          columns: [...expected.columns],
+        });
       }
     }
   });
@@ -135,7 +174,12 @@ describe("pg schema parity", () => {
   test("foreign key counts agree between both mirrors and the sqlite schema", () => {
     const runtime = buildPgSchema(sqliteSchema);
     for (const [exportName, sqliteTable] of Object.entries(sqliteSchema)) {
-      if (sqliteTable === null || typeof sqliteTable !== "object" || (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined) continue;
+      if (
+        sqliteTable === null ||
+        typeof sqliteTable !== "object" ||
+        (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined
+      )
+        continue;
       const name = dbName(sqliteTable as object);
       const sqliteFks = sqliteTableConfig(sqliteTable as SQLiteTable).foreignKeys;
       const runtimeFks = pgTableConfig(runtime[name] as PgTable).foreignKeys;
@@ -143,18 +187,27 @@ describe("pg schema parity", () => {
       expect(runtimeFks.length, `runtime FK count mismatch on ${name}`).toBe(sqliteFks.length);
       expect(staticFks.length, `static FK count mismatch on ${name}`).toBe(sqliteFks.length);
       const fkDetails = (fks: unknown[]): readonly object[] =>
-        fks.map((value) => {
-          const fk = value as { onDelete?: string; onUpdate?: string; reference(): { columns: Col[]; foreignColumns: Col[]; foreignTable: object } };
-          const reference = fk.reference();
-          expect(reference.foreignTable, `${name}: missing target for ${reference.columns.map((column) => column.name).join(",")}`).toBeDefined();
-          return {
-            onDelete: fk.onDelete ?? "no action",
-            onUpdate: fk.onUpdate ?? "no action",
-            columns: reference.columns.map((column) => column.name),
-            foreignColumns: reference.foreignColumns.map((column) => column.name),
-            foreignTable: dbName(reference.foreignTable),
-          };
-        }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+        fks
+          .map((value) => {
+            const fk = value as {
+              onDelete?: string;
+              onUpdate?: string;
+              reference(): { columns: Col[]; foreignColumns: Col[]; foreignTable: object };
+            };
+            const reference = fk.reference();
+            expect(
+              reference.foreignTable,
+              `${name}: missing target for ${reference.columns.map((column) => column.name).join(",")}`,
+            ).toBeDefined();
+            return {
+              onDelete: fk.onDelete ?? "no action",
+              onUpdate: fk.onUpdate ?? "no action",
+              columns: reference.columns.map((column) => column.name),
+              foreignColumns: reference.foreignColumns.map((column) => column.name),
+              foreignTable: dbName(reference.foreignTable),
+            };
+          })
+          .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
       expect(fkDetails(runtimeFks), `runtime FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
       expect(fkDetails(staticFks), `static FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
     }

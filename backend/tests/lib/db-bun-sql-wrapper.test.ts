@@ -92,7 +92,9 @@ describe("Bun.SQL Drizzle wrapper & metrics instrumentation", () => {
 
   it("keeps export work bounded and removes an aborted waiter", async () => {
     let finish!: () => void;
-    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     const running = withDbQueryBudget("export", async (): Promise<void> => gate);
     await Promise.resolve();
 

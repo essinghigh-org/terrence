@@ -17,14 +17,22 @@ import {
 } from "../../src/lib/workload-identity";
 import { workloadIdentityRoutes } from "../../src/routes/workload-identity";
 
-
 async function ensureTestRun(runId: string): Promise<void> {
   const orgId = "org-1";
   const workspaceId = "workspace-1";
   // Insert org if not exists
-  await db.insert(organizations).values({ id: orgId, name: "example", email: "test@example.com" }).onConflictDoNothing();
-  await db.insert(workspaces).values({ id: workspaceId, name: "network", orgId, autoApply: false }).onConflictDoNothing();
-  await db.insert(runs).values({ id: runId, workspaceId, status: "pending", createdAt: Date.now() }).onConflictDoNothing();
+  await db
+    .insert(organizations)
+    .values({ id: orgId, name: "example", email: "test@example.com" })
+    .onConflictDoNothing();
+  await db
+    .insert(workspaces)
+    .values({ id: workspaceId, name: "network", orgId, autoApply: false })
+    .onConflictDoNothing();
+  await db
+    .insert(runs)
+    .values({ id: runId, workspaceId, status: "pending", createdAt: Date.now() })
+    .onConflictDoNothing();
 }
 
 afterEach(async (): Promise<void> => {
@@ -61,24 +69,28 @@ describe("workload identity", () => {
     try {
       const runId = `run-${crypto.randomUUID()}`;
       await ensureTestRun(runId);
-      const result = await workspaceIdentityEnvironment({
-        organizationId: "org-1",
-        organizationName: "example",
-        projectId: "project-1",
-        projectName: "default",
-        workspaceId: "workspace-1",
-        workspaceName: "network",
-        runId,
-        phase: "plan",
-        ttlSeconds: 600,
-      }, [
-        { key: "TFC_WORKLOAD_IDENTITY_AUDIENCE", value: "custom.one", category: "env" },
-        { key: "TFC_WORKLOAD_IDENTITY_AUDIENCE_SECOND", value: "custom.two", category: "env" },
-        { key: "TFC_HCP_PROVIDER_AUTH", value: "true", category: "env" },
-        { key: "TFC_HCP_RUN_PROVIDER_RESOURCE_NAME", value: "iam/project/pool/provider", category: "env" },
-        { key: "TFC_KUBERNETES_PROVIDER_AUTH", value: "true", category: "env" },
-        { key: "TFC_KUBERNETES_WORKLOAD_IDENTITY_AUDIENCE", value: "kubernetes", category: "env" },
-      ], directory);
+      const result = await workspaceIdentityEnvironment(
+        {
+          organizationId: "org-1",
+          organizationName: "example",
+          projectId: "project-1",
+          projectName: "default",
+          workspaceId: "workspace-1",
+          workspaceName: "network",
+          runId,
+          phase: "plan",
+          ttlSeconds: 600,
+        },
+        [
+          { key: "TFC_WORKLOAD_IDENTITY_AUDIENCE", value: "custom.one", category: "env" },
+          { key: "TFC_WORKLOAD_IDENTITY_AUDIENCE_SECOND", value: "custom.two", category: "env" },
+          { key: "TFC_HCP_PROVIDER_AUTH", value: "true", category: "env" },
+          { key: "TFC_HCP_RUN_PROVIDER_RESOURCE_NAME", value: "iam/project/pool/provider", category: "env" },
+          { key: "TFC_KUBERNETES_PROVIDER_AUTH", value: "true", category: "env" },
+          { key: "TFC_KUBERNETES_WORKLOAD_IDENTITY_AUDIENCE", value: "kubernetes", category: "env" },
+        ],
+        directory,
+      );
       expect(result.tokens).toHaveLength(4);
       expect(result.environment["TFC_WORKLOAD_IDENTITY_TOKEN"]).toBeString();
       expect(result.environment["TFC_WORKLOAD_IDENTITY_TOKEN_SECOND"]).toBeString();
@@ -97,8 +109,10 @@ describe("workload identity", () => {
   });
 
   test("publishes standard discovery metadata and retains retired keys for live tokens", async () => {
-    const discovery = await workloadIdentityRoutes.handle(new Request("http://localhost/.well-known/openid-configuration"));
-    const document = await discovery.json() as Record<string, unknown>;
+    const discovery = await workloadIdentityRoutes.handle(
+      new Request("http://localhost/.well-known/openid-configuration"),
+    );
+    const document = (await discovery.json()) as Record<string, unknown>;
     expect(document["id_token_signing_alg_values_supported"]).toEqual(["RS256"]);
     expect(document["subject_types_supported"]).toEqual(["public"]);
     expect(document["response_types_supported"]).toEqual(["id_token"]);
@@ -119,13 +133,20 @@ describe("workload identity", () => {
     });
     await rotateWorkloadIdentityKey();
     await trimWorkloadIdentityKeys();
-    const retired = await db.query.workloadIdentityKeys.findFirst({ where: eq(workloadIdentityKeys.keyId, issued.keyId) });
+    const retired = await db.query.workloadIdentityKeys.findFirst({
+      where: eq(workloadIdentityKeys.keyId, issued.keyId),
+    });
     expect(retired?.revokedAt).toBeNull();
     expect((await verifyWorkloadIdentityToken(issued.token, "aws.workload.identity"))["jti"]).toBe(issued.jti);
 
-    await db.update(workloadIdentityTokens).set({ expiresAt: Date.now() - 1 }).where(eq(workloadIdentityTokens.jti, issued.jti));
+    await db
+      .update(workloadIdentityTokens)
+      .set({ expiresAt: Date.now() - 1 })
+      .where(eq(workloadIdentityTokens.jti, issued.jti));
     await trimWorkloadIdentityKeys();
-    const expired = await db.query.workloadIdentityKeys.findFirst({ where: eq(workloadIdentityKeys.keyId, issued.keyId) });
+    const expired = await db.query.workloadIdentityKeys.findFirst({
+      where: eq(workloadIdentityKeys.keyId, issued.keyId),
+    });
     expect(expired?.revokedAt).not.toBeNull();
   });
 });

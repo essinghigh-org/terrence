@@ -43,7 +43,11 @@ export function inlineMarkdown(text: string): ReactNode {
   return parts.map((part: string, partIndex: number): ReactNode => {
     const key = partKeys[partIndex];
     if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={key} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">{part.slice(1, -1)}</code>;
+      return (
+        <code key={key} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">
+          {part.slice(1, -1)}
+        </code>
+      );
     }
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={key}>{part.slice(2, -2)}</strong>;
     if (part.startsWith("*") && part.endsWith("*")) return <em key={key}>{part.slice(1, -1)}</em>;
@@ -58,9 +62,19 @@ export function inlineMarkdown(text: string): ReactNode {
       const trimmed = href.trimStart();
       const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.exec(trimmed);
       const safe = scheme === null || /^(https?:|mailto:)/i.test(trimmed);
-      return safe
-        ? <a key={key} href={href} className="text-primary underline underline-offset-2" target={trimmed.startsWith("http") ? "_blank" : undefined} rel={trimmed.startsWith("http") ? "noreferrer" : undefined}>{link[1]}</a>
-        : link[1];
+      return safe ? (
+        <a
+          key={key}
+          href={href}
+          className="text-primary underline underline-offset-2"
+          target={trimmed.startsWith("http") ? "_blank" : undefined}
+          rel={trimmed.startsWith("http") ? "noreferrer" : undefined}
+        >
+          {link[1]}
+        </a>
+      ) : (
+        link[1]
+      );
     }
     return part;
   });
@@ -71,13 +85,18 @@ function isTableSeparator(line: string): boolean {
 }
 
 function splitTableRow(line: string): string[] {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell): string => cell.trim());
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell): string => cell.trim());
 }
 
 function readHeading(line: string): { level: 1 | 2 | 3 | 4 | 5 | 6; text: string } | null {
   const heading = /^(#{1,6})\s+(.+)$/.exec(line);
   if (heading === null) return null;
-// SAFETY: the markdown heading level is capped at 6 by the parsing regex above.
+  // SAFETY: the markdown heading level is capped at 6 by the parsing regex above.
   return { level: (heading[1] ?? "").length as 1 | 2 | 3 | 4 | 5 | 6, text: heading[2] ?? "" };
 }
 
@@ -110,7 +129,10 @@ function readTableRows(lines: readonly string[], startIndex: number): { rows: st
   return { rows, nextIndex: index };
 }
 
-function readListBlock(lines: readonly string[], startIndex: number): { ordered: boolean; items: { text: string; children: string[] }[]; nextIndex: number } {
+function readListBlock(
+  lines: readonly string[],
+  startIndex: number,
+): { ordered: boolean; items: { text: string; children: string[] }[]; nextIndex: number } {
   const firstLine = lines[startIndex] ?? "";
   const ordered = /^\s*\d+\.\s+/.test(firstLine);
   const firstItem = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(firstLine);
@@ -155,12 +177,15 @@ function readParagraph(lines: readonly string[], startIndex: number): { text: st
   let index = startIndex;
   while (index < lines.length) {
     const current = lines[index] ?? "";
-    if (current.trim() === ""
-      || current.trim().startsWith("```")
-      || /^(#{1,6})\s+.+$/.test(current)
-      || /^\s*(?:[-*+]|\d+\.)\s+/.test(current)
-      || current.startsWith("> ")
-      || (current.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? ""))) break;
+    if (
+      current.trim() === "" ||
+      current.trim().startsWith("```") ||
+      /^(#{1,6})\s+.+$/.test(current) ||
+      /^\s*(?:[-*+]|\d+\.)\s+/.test(current) ||
+      current.startsWith("> ") ||
+      (current.trim().startsWith("|") && isTableSeparator(lines[index + 1] ?? ""))
+    )
+      break;
     paragraph.push(current);
     index += 1;
   }
@@ -179,9 +204,12 @@ export function parseMarkdown(markdown: string): MarkdownBlock[] {
     throw new MarkdownParseError("input-too-large", `Markdown input exceeds ${MARKDOWN_PARSER_LIMITS.maxLines} lines`);
   }
   const blocks: MarkdownBlock[] = [];
-  for (let index = 0; index < lines.length;) {
+  for (let index = 0; index < lines.length; ) {
     if (blocks.length >= MARKDOWN_PARSER_LIMITS.maxBlocks) {
-      throw new MarkdownParseError("output-too-large", `Markdown output exceeds ${MARKDOWN_PARSER_LIMITS.maxBlocks} blocks`);
+      throw new MarkdownParseError(
+        "output-too-large",
+        `Markdown output exceeds ${MARKDOWN_PARSER_LIMITS.maxBlocks} blocks`,
+      );
     }
     const line = lines[index] ?? "";
     if (line.trim() === "") {
@@ -233,17 +261,33 @@ function renderListItems(items: readonly { text: string; children: string[] }[],
     return (
       <li key={itemKeys[itemIndex]}>
         {inlineMarkdown(item.text)}
-        {item.children.length > 0 && (
-          ordered
-            ? <ol className="mt-1 list-decimal space-y-1 pl-5">{item.children.map((child, childIndex): JSX.Element => <li key={childKeys[childIndex]}>{inlineMarkdown(child)}</li>)}</ol>
-            : <ul className="mt-1 list-disc space-y-1 pl-5">{item.children.map((child, childIndex): JSX.Element => <li key={childKeys[childIndex]}>{inlineMarkdown(child)}</li>)}</ul>
-        )}
+        {item.children.length > 0 &&
+          (ordered ? (
+            <ol className="mt-1 list-decimal space-y-1 pl-5">
+              {item.children.map(
+                (child, childIndex): JSX.Element => (
+                  <li key={childKeys[childIndex]}>{inlineMarkdown(child)}</li>
+                ),
+              )}
+            </ol>
+          ) : (
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {item.children.map(
+                (child, childIndex): JSX.Element => (
+                  <li key={childKeys[childIndex]}>{inlineMarkdown(child)}</li>
+                ),
+              )}
+            </ul>
+          ))}
       </li>
     );
   });
 }
 
-export function MarkdownContent({ markdown, className }: Readonly<{ markdown: string; className?: string }>): JSX.Element {
+export function MarkdownContent({
+  markdown,
+  className,
+}: Readonly<{ markdown: string; className?: string }>): JSX.Element {
   let blocks: MarkdownBlock[];
   try {
     blocks = parseMarkdown(markdown);
@@ -261,17 +305,52 @@ export function MarkdownContent({ markdown, className }: Readonly<{ markdown: st
             "font-semibold tracking-tight",
             block.level === 1 ? "text-xl" : block.level === 2 ? "text-lg" : block.level === 3 ? "text-base" : "text-sm",
           );
-          if (block.level === 1) return <h1 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h1>;
-          if (block.level === 2) return <h2 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h2>;
-          if (block.level === 3) return <h3 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h3>;
-          if (block.level === 4) return <h4 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h4>;
-          if (block.level === 5) return <h5 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h5>;
-          return <h6 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h6>;
+          if (block.level === 1)
+            return (
+              <h1 key={key} className={headingClassName}>
+                {inlineMarkdown(block.text)}
+              </h1>
+            );
+          if (block.level === 2)
+            return (
+              <h2 key={key} className={headingClassName}>
+                {inlineMarkdown(block.text)}
+              </h2>
+            );
+          if (block.level === 3)
+            return (
+              <h3 key={key} className={headingClassName}>
+                {inlineMarkdown(block.text)}
+              </h3>
+            );
+          if (block.level === 4)
+            return (
+              <h4 key={key} className={headingClassName}>
+                {inlineMarkdown(block.text)}
+              </h4>
+            );
+          if (block.level === 5)
+            return (
+              <h5 key={key} className={headingClassName}>
+                {inlineMarkdown(block.text)}
+              </h5>
+            );
+          return (
+            <h6 key={key} className={headingClassName}>
+              {inlineMarkdown(block.text)}
+            </h6>
+          );
         }
         if (block.kind === "list") {
-          return block.ordered
-            ? <ol key={key} className="list-decimal space-y-1 pl-5">{renderListItems(block.items, true)}</ol>
-            : <ul key={key} className="list-disc space-y-1 pl-5">{renderListItems(block.items, false)}</ul>;
+          return block.ordered ? (
+            <ol key={key} className="list-decimal space-y-1 pl-5">
+              {renderListItems(block.items, true)}
+            </ol>
+          ) : (
+            <ul key={key} className="list-disc space-y-1 pl-5">
+              {renderListItems(block.items, false)}
+            </ul>
+          );
         }
         if (block.kind === "table") {
           const headerKeys = semanticKeys(block.headers, (header): string => `header:${header}`);
@@ -281,9 +360,13 @@ export function MarkdownContent({ markdown, className }: Readonly<{ markdown: st
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    {block.headers.map((header, headerIndex): JSX.Element => (
-                      <th key={headerKeys[headerIndex]} className="px-3 py-2 text-left font-semibold">{inlineMarkdown(header)}</th>
-                    ))}
+                    {block.headers.map(
+                      (header, headerIndex): JSX.Element => (
+                        <th key={headerKeys[headerIndex]} className="px-3 py-2 text-left font-semibold">
+                          {inlineMarkdown(header)}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -291,9 +374,13 @@ export function MarkdownContent({ markdown, className }: Readonly<{ markdown: st
                     const cellKeys = semanticKeys(row, (cell): string => `cell:${cell}`);
                     return (
                       <tr key={rowKeys[rowIndex]} className="border-b last:border-b-0">
-                        {row.map((cell, cellIndex): JSX.Element => (
-                          <td key={cellKeys[cellIndex]} className="px-3 py-2 align-top text-muted-foreground">{inlineMarkdown(cell)}</td>
-                        ))}
+                        {row.map(
+                          (cell, cellIndex): JSX.Element => (
+                            <td key={cellKeys[cellIndex]} className="px-3 py-2 align-top text-muted-foreground">
+                              {inlineMarkdown(cell)}
+                            </td>
+                          ),
+                        )}
                       </tr>
                     );
                   })}
@@ -302,8 +389,21 @@ export function MarkdownContent({ markdown, className }: Readonly<{ markdown: st
             </div>
           );
         }
-        if (block.kind === "code") return <pre key={key} className="overflow-x-auto rounded-md bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground"><code>{block.text}</code></pre>;
-        if (block.kind === "quote") return <blockquote key={key} className="border-l-2 border-primary/40 pl-4 italic text-muted-foreground">{inlineMarkdown(block.text)}</blockquote>;
+        if (block.kind === "code")
+          return (
+            <pre
+              key={key}
+              className="overflow-x-auto rounded-md bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground"
+            >
+              <code>{block.text}</code>
+            </pre>
+          );
+        if (block.kind === "quote")
+          return (
+            <blockquote key={key} className="border-l-2 border-primary/40 pl-4 italic text-muted-foreground">
+              {inlineMarkdown(block.text)}
+            </blockquote>
+          );
         return <p key={key}>{inlineMarkdown(block.text)}</p>;
       })}
     </div>

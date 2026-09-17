@@ -31,10 +31,7 @@ export function secureRequest(request: RequestInfo | undefined, server?: unknown
  * operation-specific deadline. A disconnect never aborts shared background
  * work by itself; callers use this only while the request owns the operation.
  */
-export function requestOperationContext(
-  request: RequestInfo | undefined,
-  deadlineMs?: number,
-): OperationContext {
+export function requestOperationContext(request: RequestInfo | undefined, deadlineMs?: number): OperationContext {
   return createOperationContext({
     ...(request?.signal === undefined ? {} : { signal: request.signal }),
     ...(deadlineMs === undefined ? {} : { deadlineMs }),

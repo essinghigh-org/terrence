@@ -76,22 +76,13 @@ export function Callout({
       className={cn("rounded-lg border p-4 text-sm", TONE_CLASSES[tone], className)}
     >
       <div className="flex items-start gap-3">
-        <ToneIcon
-          className={cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone])}
-          aria-hidden="true"
-        />
+        <ToneIcon className={cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone])} aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          {title !== undefined && (
-            <p className={cn("font-semibold", TITLE_CLASSES[tone])}>{title}</p>
-          )}
+          {title !== undefined && <p className={cn("font-semibold", TITLE_CLASSES[tone])}>{title}</p>}
           {children !== undefined && (
-            <div className={cn("max-w-prose text-muted-foreground", title === undefined ? "" : "mt-1")}>
-              {children}
-            </div>
+            <div className={cn("max-w-prose text-muted-foreground", title === undefined ? "" : "mt-1")}>{children}</div>
           )}
-          {actions !== undefined && (
-            <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>
-          )}
+          {actions !== undefined && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
         </div>
       </div>
     </section>

@@ -40,13 +40,15 @@ function parseCookie(response: Response, name: string): string | undefined {
 }
 
 async function browserRefreshCookie(): Promise<string> {
-  const login = await app.handle(new Request("http://localhost/api/v2/users/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/vnd.api+json" },
-    body: JSON.stringify({
-      data: { attributes: { username, password, "browser-session": true } },
+  const login = await app.handle(
+    new Request("http://localhost/api/v2/users/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({
+        data: { attributes: { username, password, "browser-session": true } },
+      }),
     }),
-  }));
+  );
   expect(login.status).toBe(200);
   const refreshCookie = login.headers.get("Set-Cookie");
   expect(refreshCookie).not.toBeNull();
@@ -58,9 +60,9 @@ async function browserRefreshCookie(): Promise<string> {
  *  it via /oauth/authorization/complete. */
 async function fullHandshake() {
   const params = await authorizationParameters();
-  const begin = await oauthApp.handle(new Request(
-    `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
-  ));
+  const begin = await oauthApp.handle(
+    new Request(`http://localhost/oauth/authorization?${new URLSearchParams(params)}`),
+  );
   expect(begin.status).toBe(302);
   const oauthState = parseCookie(begin, "terraform_oauth_state");
   expect(oauthState).toBeDefined();
@@ -69,10 +71,11 @@ async function fullHandshake() {
   const refreshCookie = await browserRefreshCookie();
   const cookies = `terraform_oauth_state=${oauthState}; ${refreshCookie}`;
 
-  const complete = await oauthApp.handle(new Request(
-    `http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`,
-    { headers: { Cookie: cookies } },
-  ));
+  const complete = await oauthApp.handle(
+    new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
+      headers: { Cookie: cookies },
+    }),
+  );
   return { begin, complete, oauthState: oauthState! };
 }
 
@@ -108,9 +111,9 @@ describe("Terraform login OAuth", () => {
       "http://127.0.0.1:10010/login",
       `state"><script>alert(1)</script>`,
     );
-    const response = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization?${new URLSearchParams(parameters)}`,
-    ));
+    const response = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization?${new URLSearchParams(parameters)}`),
+    );
 
     expect(response.status).toBe(302);
     const location = response.headers.get("Location") ?? "";
@@ -133,9 +136,9 @@ describe("Terraform login OAuth", () => {
       "http://localhost:10000/other",
     ]) {
       const parameters = await authorizationParameters(redirectUri);
-      const response = await oauthApp.handle(new Request(
-        `http://localhost/oauth/authorization?${new URLSearchParams(parameters)}`,
-      ));
+      const response = await oauthApp.handle(
+        new Request(`http://localhost/oauth/authorization?${new URLSearchParams(parameters)}`),
+      );
       expect(response.status).toBe(400);
     }
   });
@@ -145,36 +148,36 @@ describe("Terraform login OAuth", () => {
 
     const missingChallengeParams = { ...baseParams } as Record<string, string>;
     delete missingChallengeParams["code_challenge"];
-    const missingRes = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization?${new URLSearchParams(missingChallengeParams)}`,
-    ));
+    const missingRes = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization?${new URLSearchParams(missingChallengeParams)}`),
+    );
     expect(missingRes.status).toBe(400);
 
     const plainMethodParams = { ...baseParams, code_challenge_method: "plain" };
-    const plainRes = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization?${new URLSearchParams(plainMethodParams)}`,
-    ));
+    const plainRes = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization?${new URLSearchParams(plainMethodParams)}`),
+    );
     expect(plainRes.status).toBe(400);
   });
 
   it("rejects a mismatched oauth_state at completion", async () => {
     const params = await authorizationParameters();
-    const begin = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
-    ));
+    const begin = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization?${new URLSearchParams(params)}`),
+    );
     const oauthState = parseCookie(begin, "terraform_oauth_state");
     expect(oauthState).toBeDefined();
 
     // No session cookie at all -> the handshake cannot be verified.
-    const noCookie = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`,
-    ));
+    const noCookie = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`),
+    );
     expect(noCookie.status).toBe(400);
 
     // Wrong state value -> hard error.
-    const wrong = await oauthApp.handle(new Request(
-      "http://localhost/oauth/authorization/complete?oauth_state=not-the-right-value",
-    ));
+    const wrong = await oauthApp.handle(
+      new Request("http://localhost/oauth/authorization/complete?oauth_state=not-the-right-value"),
+    );
     expect(wrong.status).toBe(400);
   });
 
@@ -187,28 +190,33 @@ describe("Terraform login OAuth", () => {
     expect(callback.searchParams.get("state")).toBe("test-state");
     const code = callback.searchParams.get("code")!;
 
-    const tokenRequest = () => oauthApp.handle(new Request("http://localhost/oauth/token", {
-      method: "POST",
-      headers: {
-        "Authorization": `Basic ${btoa("terraform-cli:")}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        code,
-        code_verifier: verifier,
-        grant_type: "authorization_code",
-        redirect_uri: "http://localhost:10000/login",
-      }),
-    }));
+    const tokenRequest = () =>
+      oauthApp.handle(
+        new Request("http://localhost/oauth/token", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${btoa("terraform-cli:")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            code,
+            code_verifier: verifier,
+            grant_type: "authorization_code",
+            redirect_uri: "http://localhost:10000/login",
+          }),
+        }),
+      );
 
     const tokenResponse = await tokenRequest();
     expect(tokenResponse.status).toBe(200);
     const token = await tokenResponse.json();
     expect(token.token_type).toBe("bearer");
     expect(token.access_token).toStartWith("user-");
-    expect(await db.query.apiTokens.findFirst({
-      where: eq(apiTokens.token, hashAuthenticationToken(token.access_token)),
-    })).toMatchObject({
+    expect(
+      await db.query.apiTokens.findFirst({
+        where: eq(apiTokens.token, hashAuthenticationToken(token.access_token)),
+      }),
+    ).toMatchObject({
       userId,
       description: "Terraform CLI login",
     });
@@ -226,19 +234,21 @@ describe("Terraform login OAuth", () => {
     await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
 
     try {
-      const tokenResponse = await oauthApp.handle(new Request("http://localhost/oauth/token", {
-        method: "POST",
-        headers: {
-          "Authorization": `Basic ${btoa("terraform-cli:")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          code,
-          code_verifier: verifier,
-          grant_type: "authorization_code",
-          redirect_uri: "http://localhost:10000/login",
+      const tokenResponse = await oauthApp.handle(
+        new Request("http://localhost/oauth/token", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${btoa("terraform-cli:")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            code,
+            code_verifier: verifier,
+            grant_type: "authorization_code",
+            redirect_uri: "http://localhost:10000/login",
+          }),
         }),
-      }));
+      );
       expect(tokenResponse.status).toBe(400);
       expect(await tokenResponse.json()).toEqual({ error: "invalid_grant" });
       expect((await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, userId) })).length).toBe(before.length);
@@ -251,15 +261,14 @@ describe("Terraform login OAuth", () => {
     const params = await authorizationParameters();
     const refreshCookie = await browserRefreshCookie();
 
-    const response = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
-      {
+    const response = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization?${new URLSearchParams(params)}`, {
         headers: {
           Cookie: refreshCookie,
           "Sec-Fetch-Site": "cross-site",
         },
-      },
-    ));
+      }),
+    );
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toStartWith("/login?oauth_state=");
   });
@@ -267,10 +276,11 @@ describe("Terraform login OAuth", () => {
   it("does not auto-approve OAuth without browser provenance", async () => {
     const params = await authorizationParameters();
     const refreshCookie = await browserRefreshCookie();
-    const response = await oauthApp.handle(new Request(
-      `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
-      { headers: { Cookie: refreshCookie } },
-    ));
+    const response = await oauthApp.handle(
+      new Request(`http://localhost/oauth/authorization?${new URLSearchParams(params)}`, {
+        headers: { Cookie: refreshCookie },
+      }),
+    );
 
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toStartWith("/login?oauth_state=");
@@ -279,17 +289,20 @@ describe("Terraform login OAuth", () => {
   it("consumes a code after a failed PKCE verification", async () => {
     const { complete } = await fullHandshake();
     const code = new URL(complete.headers.get("Location")!).searchParams.get("code")!;
-    const exchange = (codeVerifier: string) => oauthApp.handle(new Request("http://localhost/oauth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: "terraform-cli",
-        code,
-        code_verifier: codeVerifier,
-        grant_type: "authorization_code",
-        redirect_uri: "http://localhost:10000/login",
-      }),
-    }));
+    const exchange = (codeVerifier: string) =>
+      oauthApp.handle(
+        new Request("http://localhost/oauth/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: "terraform-cli",
+            code,
+            code_verifier: codeVerifier,
+            grant_type: "authorization_code",
+            redirect_uri: "http://localhost:10000/login",
+          }),
+        }),
+      );
 
     expect((await exchange("wrong-verifier-that-is-long-enough-012345678901")).status).toBe(400);
     const retry = await exchange(verifier);
@@ -320,19 +333,21 @@ describe("Terraform login OAuth", () => {
     await db.update(users).set({ isProvisional: true }).where(eq(users.id, userId));
 
     try {
-      const tokenResponse = await oauthApp.handle(new Request("http://localhost/oauth/token", {
-        method: "POST",
-        headers: {
-          "Authorization": `Basic ${btoa("terraform-cli:")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          code,
-          code_verifier: verifier,
-          grant_type: "authorization_code",
-          redirect_uri: "http://localhost:10000/login",
+      const tokenResponse = await oauthApp.handle(
+        new Request("http://localhost/oauth/token", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${btoa("terraform-cli:")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            code,
+            code_verifier: verifier,
+            grant_type: "authorization_code",
+            redirect_uri: "http://localhost:10000/login",
+          }),
         }),
-      }));
+      );
       expect(tokenResponse.status).toBe(400);
       expect(await tokenResponse.json()).toEqual({ error: "invalid_grant" });
     } finally {

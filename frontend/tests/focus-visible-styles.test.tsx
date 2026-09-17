@@ -54,7 +54,7 @@ test("run list sort headers carry a visible focus style", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -123,9 +123,7 @@ function buildRunDetailMock(): ReturnType<typeof mock> {
     }
     if (url === "/api/v2/runs/run-focus/logs") {
       return json({
-        data: [
-          { attributes: { phase: "plan", "output-text": "PLAN_FOCUS_LINE" } },
-        ],
+        data: [{ attributes: { phase: "plan", "output-text": "PLAN_FOCUS_LINE" } }],
       });
     }
     if (url === "/api/v2/runs/run-focus/plan") {
@@ -166,7 +164,7 @@ function buildRunDetailMock(): ReturnType<typeof mock> {
 }
 
 function renderRunDetail(): ReturnType<typeof render> {
-  globalThis.fetch = (buildRunDetailMock()) as unknown as typeof fetch;
+  globalThis.fetch = buildRunDetailMock() as unknown as typeof fetch;
   return render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-focus"]}>
       <Routes>
@@ -186,11 +184,13 @@ test("run detail wrap toggle and plan error retry carry visible focus styles", a
     expect(view.getByText("Could not load plan output")).toBeTruthy();
   });
 
-// SAFETY: the component renders this element type for the queried role/label.
-  const wrapToggle = within(view.getByRole("toolbar", { name: "Plan log controls" })).getByRole("button", { name: /Wrap/ }) as HTMLButtonElement;
+  // SAFETY: the component renders this element type for the queried role/label.
+  const wrapToggle = within(view.getByRole("toolbar", { name: "Plan log controls" })).getByRole("button", {
+    name: /Wrap/,
+  }) as HTMLButtonElement;
   expect(wrapToggle.className).toContain("focus-visible:ring-2");
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const retry = view.getByRole("button", { name: "Try again" }) as HTMLButtonElement;
   expect(retry.className).toContain("focus-visible:ring-2");
   expect(retry.className).toContain("focus-visible:outline-none");

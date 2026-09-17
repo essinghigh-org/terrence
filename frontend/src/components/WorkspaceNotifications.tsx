@@ -2,14 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -33,14 +26,7 @@ import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
 
 type DestinationType = "generic" | "slack" | "discord" | "microsoft-teams" | "email";
@@ -51,7 +37,8 @@ type NotificationConfiguration = {
     name: string;
     "destination-type": DestinationType;
     url: string;
-    "email-addresses"?: string[];    "last-delivery"?: {
+    "email-addresses"?: string[];
+    "last-delivery"?: {
       "sent-at": string;
       successful: boolean;
       code: string;
@@ -64,12 +51,14 @@ type NotificationConfiguration = {
 };
 
 type ProjectWorkspace = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
-type NotificationProps = Readonly<{
-  mode?: "notifications" | "webhooks";
-} & (
-  | { workspaceId: string; projectId?: never; projectWorkspaces?: never }
-  | { projectId: string; projectWorkspaces: readonly ProjectWorkspace[]; workspaceId?: never }
-)>;
+type NotificationProps = Readonly<
+  {
+    mode?: "notifications" | "webhooks";
+  } & (
+    | { workspaceId: string; projectId?: never; projectWorkspaces?: never }
+    | { projectId: string; projectWorkspaces: readonly ProjectWorkspace[]; workspaceId?: never }
+  )
+>;
 
 const triggerOptions = [
   ["run:created", "Run created"],
@@ -85,8 +74,7 @@ const triggerOptions = [
   ["workspace:auto_destroy_run_results", "Auto-destroy results"],
 ] as const;
 
-const messageFrom = (error: unknown, fallback: string): string =>
-  error instanceof Error ? error.message : fallback;
+const messageFrom = (error: unknown, fallback: string): string => (error instanceof Error ? error.message : fallback);
 
 async function loadExclusionIds(
   configurationId: string,
@@ -95,7 +83,9 @@ async function loadExclusionIds(
   onError: (message: string) => void,
 ): Promise<void> {
   try {
-    const response = await fetchApi<{ data?: { id: string }[] }>(`/notification-configurations/${configurationId}/relationships/workspaces`);
+    const response = await fetchApi<{ data?: { id: string }[] }>(
+      `/notification-configurations/${configurationId}/relationships/workspaces`,
+    );
     // Only apply when this editor session is still the active one (the
     // user may have opened a different configuration or closed the
     // editor since this request started).
@@ -109,7 +99,10 @@ async function loadExclusionIds(
 }
 
 function parseEmailAddresses(emailAddresses: string): string[] {
-  return emailAddresses.split(",").map((item: string): string => item.trim()).filter((item: string): boolean => item !== "");
+  return emailAddresses
+    .split(",")
+    .map((item: string): string => item.trim())
+    .filter((item: string): boolean => item !== "");
 }
 
 function notificationValidationError(
@@ -120,9 +113,7 @@ function notificationValidationError(
 ): string | null {
   const isEmail = destinationType === "email";
   if (name.trim() === "" || (!isEmail && url.trim() === "") || (isEmail && addressCount === 0)) {
-    return isEmail
-      ? "Name and at least one email address are required."
-      : "Name and webhook URL are required.";
+    return isEmail ? "Name and at least one email address are required." : "Name and webhook URL are required.";
   }
   return null;
 }
@@ -165,9 +156,7 @@ async function persistNotificationConfiguration(
 ): Promise<NotificationConfiguration> {
   // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
   const response = await fetchApi<{ data: NotificationConfiguration }>(
-    editing == null
-      ? scopeEndpoint
-      : `/notification-configurations/${editing.id}`,
+    editing == null ? scopeEndpoint : `/notification-configurations/${editing.id}`,
     {
       method: editing == null ? "POST" : "PATCH",
       body: JSON.stringify({
@@ -202,8 +191,9 @@ async function syncExclusionUpdates(
 }
 
 async function reloadExclusionIds(relationshipPath: string): Promise<Set<string>> {
-  const fresh = await fetchApi<{ data?: { id: string }[] }>(relationshipPath)
-    .catch((): { data?: { id: string }[] } => ({}));
+  const fresh = await fetchApi<{ data?: { id: string }[] }>(relationshipPath).catch(
+    (): { data?: { id: string }[] } => ({}),
+  );
   return new Set((fresh.data ?? []).map((workspace): string => workspace.id));
 }
 
@@ -242,44 +232,68 @@ function ConfigurationTable({
               </TableCell>
             </TableRow>
           )}
-          {!loading && configurations.map((configuration: NotificationConfiguration): React.JSX.Element => (
-            <TableRow key={configuration.id}>
-              <TableCell className="font-medium">{configuration.attributes.name}</TableCell>
-              <TableCell>{configuration.attributes["destination-type"]}{((): React.JSX.Element | null => {
-                const last = configuration.attributes["last-delivery"];
-                if (last === undefined || last === null || last.successful) return null;
-                const detail = "Last delivery failed (" + last.code + ")" + (last.error === null || last.error === "" ? "" : ": " + last.error);
-                return (<p className="mt-1 text-xs text-destructive" title={"Sent at " + last["sent-at"]}>{detail}</p>);
-              })()}</TableCell>
-              <TableCell>{configuration.attributes.triggers.length}</TableCell>
-              <TableCell>
-                <Badge variant={configuration.attributes.enabled ? "secondary" : "outline"}>
-                  {configuration.attributes.enabled ? "Enabled" : "Disabled"}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <div className="flex justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={(): void => { onVerify(configuration); }}
-                  >
-                    Verify
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={(): void => { onEdit(configuration); }}>
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={(): void => { onDelete(configuration); }}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
+          {!loading &&
+            configurations.map(
+              (configuration: NotificationConfiguration): React.JSX.Element => (
+                <TableRow key={configuration.id}>
+                  <TableCell className="font-medium">{configuration.attributes.name}</TableCell>
+                  <TableCell>
+                    {configuration.attributes["destination-type"]}
+                    {((): React.JSX.Element | null => {
+                      const last = configuration.attributes["last-delivery"];
+                      if (last === undefined || last === null || last.successful) return null;
+                      const detail =
+                        "Last delivery failed (" +
+                        last.code +
+                        ")" +
+                        (last.error === null || last.error === "" ? "" : ": " + last.error);
+                      return (
+                        <p className="mt-1 text-xs text-destructive" title={"Sent at " + last["sent-at"]}>
+                          {detail}
+                        </p>
+                      );
+                    })()}
+                  </TableCell>
+                  <TableCell>{configuration.attributes.triggers.length}</TableCell>
+                  <TableCell>
+                    <Badge variant={configuration.attributes.enabled ? "secondary" : "outline"}>
+                      {configuration.attributes.enabled ? "Enabled" : "Disabled"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(): void => {
+                          onVerify(configuration);
+                        }}
+                      >
+                        Verify
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(): void => {
+                          onEdit(configuration);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={(): void => {
+                          onDelete(configuration);
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ),
+            )}
           {!loading && configurations.length === 0 && (
             <TableRow>
               <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
@@ -352,12 +366,16 @@ function NotificationEditorDialog({
     <Dialog open={editorOpen} onOpenChange={onEditorOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{editing == null
-            ? (isWebhookMode ? "Add webhook" : "Add notification")
-            : (isWebhookMode ? "Edit webhook" : "Edit notification")}</DialogTitle>
-          <DialogDescription>
-            Choose a webhook destination and the events it should receive.
-          </DialogDescription>
+          <DialogTitle>
+            {editing == null
+              ? isWebhookMode
+                ? "Add webhook"
+                : "Add notification"
+              : isWebhookMode
+                ? "Edit webhook"
+                : "Edit notification"}
+          </DialogTitle>
+          <DialogDescription>Choose a webhook destination and the events it should receive.</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} noValidate>
           <FieldGroup>
@@ -369,8 +387,12 @@ function NotificationEditorDialog({
                 autoComplete="off"
                 spellCheck={false}
                 value={name}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onNameChange(event.target.value); }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onNameChange(event.currentTarget.value); }}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onNameChange(event.target.value);
+                }}
+                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                  onNameChange(event.currentTarget.value);
+                }}
                 aria-invalid={editorError !== "" && name.trim() === ""}
                 autoFocus
               />
@@ -381,13 +403,11 @@ function NotificationEditorDialog({
                 id="notification-destination"
                 name="destination-type"
                 value={destinationType}
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
+                // SAFETY: the select options are generated from the same union; the change event carries one of them.
                 onValueChange={(value: string): void => {
-
                   // SAFETY: the change event carries one of the union values the UI renders from the same options.
 
                   onDestinationTypeChange(value as DestinationType);
-
                 }}
               >
                 <SelectItem value="generic">Generic webhook</SelectItem>
@@ -412,7 +432,9 @@ function NotificationEditorDialog({
               <Checkbox
                 id="notification-enabled"
                 checked={enabled}
-                onCheckedChange={(checked: boolean): void => { onEnabledChange(checked); }}
+                onCheckedChange={(checked: boolean): void => {
+                  onEnabledChange(checked);
+                }}
               />
               <FieldContent>
                 <FieldLabel htmlFor="notification-enabled">Enabled</FieldLabel>
@@ -422,16 +444,20 @@ function NotificationEditorDialog({
             <FieldSet>
               <FieldLegend variant="label">Triggers</FieldLegend>
               <FieldGroup className="grid gap-3 sm:grid-cols-2">
-                {triggerOptions.map(([trigger, label]): React.JSX.Element => (
-                  <Field key={trigger} orientation="horizontal">
-                    <Checkbox
-                      id={`notification-trigger-${trigger}`}
-                      checked={triggers.includes(trigger)}
-                      onCheckedChange={(checked: boolean): void => { onToggleTrigger(trigger, checked); }}
-                    />
-                    <FieldLabel htmlFor={`notification-trigger-${trigger}`}>{label}</FieldLabel>
-                  </Field>
-                ))}
+                {triggerOptions.map(
+                  ([trigger, label]): React.JSX.Element => (
+                    <Field key={trigger} orientation="horizontal">
+                      <Checkbox
+                        id={`notification-trigger-${trigger}`}
+                        checked={triggers.includes(trigger)}
+                        onCheckedChange={(checked: boolean): void => {
+                          onToggleTrigger(trigger, checked);
+                        }}
+                      />
+                      <FieldLabel htmlFor={`notification-trigger-${trigger}`}>{label}</FieldLabel>
+                    </Field>
+                  ),
+                )}
               </FieldGroup>
             </FieldSet>
             {projectId !== null && projectWorkspaces.length > 0 && (
@@ -439,16 +465,22 @@ function NotificationEditorDialog({
                 <FieldLegend variant="label">Excluded workspaces</FieldLegend>
                 <FieldDescription>Do not deliver this project notification for selected workspaces.</FieldDescription>
                 <FieldGroup className="grid gap-3 sm:grid-cols-2">
-                  {projectWorkspaces.map((workspace): React.JSX.Element => (
-                    <Field key={workspace.id} orientation="horizontal">
-                      <Checkbox
-                        id={`notification-excluded-${workspace.id}`}
-                        checked={excludedWorkspaceIds.includes(workspace.id)}
-                        onCheckedChange={(checked: boolean): void => { onToggleExcluded(workspace.id, checked); }}
-                      />
-                      <FieldLabel htmlFor={`notification-excluded-${workspace.id}`}>{workspace.attributes.name}</FieldLabel>
-                    </Field>
-                  ))}
+                  {projectWorkspaces.map(
+                    (workspace): React.JSX.Element => (
+                      <Field key={workspace.id} orientation="horizontal">
+                        <Checkbox
+                          id={`notification-excluded-${workspace.id}`}
+                          checked={excludedWorkspaceIds.includes(workspace.id)}
+                          onCheckedChange={(checked: boolean): void => {
+                            onToggleExcluded(workspace.id, checked);
+                          }}
+                        />
+                        <FieldLabel htmlFor={`notification-excluded-${workspace.id}`}>
+                          {workspace.attributes.name}
+                        </FieldLabel>
+                      </Field>
+                    ),
+                  )}
                 </FieldGroup>
               </FieldSet>
             )}
@@ -459,7 +491,7 @@ function NotificationEditorDialog({
               </Button>
               <Button type="submit" disabled={saving}>
                 {saving && <Spinner data-icon="inline-start" />}
-                {saving ? "Saving" : (isWebhookMode ? "Save webhook" : "Save notification")}
+                {saving ? "Saving" : isWebhookMode ? "Save webhook" : "Save notification"}
               </Button>
             </DialogFooter>
           </FieldGroup>
@@ -485,14 +517,16 @@ function DeleteNotificationDialog({
       open={pendingDelete !== null}
       onOpenChange={onOpenChange}
       title={isWebhookMode ? "Delete webhook?" : "Delete notification?"}
-      description={pendingDelete === null ? undefined : (
-        <>
-          <strong>{pendingDelete.attributes.name}</strong> will stop receiving{" "}
-          {pendingDelete.attributes.triggers.length} trigger
-          {pendingDelete.attributes.triggers.length === 1 ? "" : "s"}. Events after deletion
-          are not delivered anywhere.
-        </>
-      )}
+      description={
+        pendingDelete === null ? undefined : (
+          <>
+            <strong>{pendingDelete.attributes.name}</strong> will stop receiving{" "}
+            {pendingDelete.attributes.triggers.length} trigger
+            {pendingDelete.attributes.triggers.length === 1 ? "" : "s"}. Events after deletion are not delivered
+            anywhere.
+          </>
+        )
+      }
       confirmText={isWebhookMode ? "Delete webhook" : "Delete notification"}
       confirmVariant="destructive"
       onConfirm={onConfirm}
@@ -518,10 +552,7 @@ function editorScalarState(configuration: NotificationConfiguration | undefined)
   };
 }
 
-function editorTriggerDefaults(
-  configuration: NotificationConfiguration | undefined,
-  isWebhookMode: boolean,
-): string[] {
+function editorTriggerDefaults(configuration: NotificationConfiguration | undefined, isWebhookMode: boolean): string[] {
   const configured = configuration?.attributes.triggers;
   if (configured !== undefined) return [...configured];
   return isWebhookMode ? ["run:completed", "run:errored"] : [];
@@ -559,8 +590,12 @@ function NotificationDestinationFields({
             autoComplete="off"
             type="email"
             value={emailAddresses}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onEmailAddressesChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onEmailAddressesChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onEmailAddressesChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onEmailAddressesChange(event.currentTarget.value);
+            }}
             aria-invalid={editorError !== "" && emailAddresses.trim() === ""}
             placeholder="team@example.com, oncall@example.com"
           />
@@ -575,8 +610,12 @@ function NotificationDestinationFields({
             autoComplete="url"
             type="url"
             value={url}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onUrlChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onUrlChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onUrlChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onUrlChange(event.currentTarget.value);
+            }}
             aria-invalid={editorError !== "" && url.trim() === ""}
             placeholder="https://example.com/webhook"
           />
@@ -590,8 +629,12 @@ function NotificationDestinationFields({
             name="webhook-token"
             type="password"
             value={token}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { onTokenChange(event.target.value); }}
-            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onTokenChange(event.currentTarget.value); }}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+              onTokenChange(event.target.value);
+            }}
+            onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+              onTokenChange(event.currentTarget.value);
+            }}
             autoComplete="new-password"
           />
           <FieldDescription>
@@ -605,11 +648,12 @@ function NotificationDestinationFields({
 
 export function WorkspaceNotifications(props: NotificationProps): React.JSX.Element {
   const mode = props.mode ?? "notifications";
-  const projectId = "projectId" in props ? props.projectId ?? null : null;
-  const projectWorkspaces = "projectWorkspaces" in props ? props.projectWorkspaces ?? [] : [];
-  const scopeEndpoint = "workspaceId" in props
-    ? `/workspaces/${props.workspaceId}/notification-configurations`
-    : `/projects/${props.projectId}/notification-configurations`;
+  const projectId = "projectId" in props ? (props.projectId ?? null) : null;
+  const projectWorkspaces = "projectWorkspaces" in props ? (props.projectWorkspaces ?? []) : [];
+  const scopeEndpoint =
+    "workspaceId" in props
+      ? `/workspaces/${props.workspaceId}/notification-configurations`
+      : `/projects/${props.projectId}/notification-configurations`;
   const isWebhookMode = mode === "webhooks";
   const [configurations, setConfigurations] = useState<NotificationConfiguration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -643,7 +687,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
     fetchApi<{ data?: NotificationConfiguration[] }>(scopeEndpoint)
       .then((response): void => {
         if (!active) return;
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
+        // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const data = response.data;
         setConfigurations(Array.isArray(data) ? data : []);
       })
@@ -744,17 +788,24 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
           const freshIds = await reloadExclusionIds(relationshipPath);
           setExcludedWorkspaceIds(freshIds);
           setOriginalExcludedWorkspaceIds(new Set(freshIds));
-          setEditorError(messageFrom(error, "Configuration saved, but workspace exclusions could not be fully applied. Review the exclusion list and retry."));
+          setEditorError(
+            messageFrom(
+              error,
+              "Configuration saved, but workspace exclusions could not be fully applied. Review the exclusion list and retry.",
+            ),
+          );
           return;
         }
         setOriginalExcludedWorkspaceIds(new Set(excludedWorkspaceIds));
       }
       setConfigurations((current: NotificationConfiguration[]): NotificationConfiguration[] => {
-        const next = editing == null
-          ? [...current, saved]
-          : current.map((configuration: NotificationConfiguration): NotificationConfiguration =>
-              configuration.id === saved.id ? saved : configuration,
-            );
+        const next =
+          editing == null
+            ? [...current, saved]
+            : current.map(
+                (configuration: NotificationConfiguration): NotificationConfiguration =>
+                  configuration.id === saved.id ? saved : configuration,
+              );
         return next.sort((left: NotificationConfiguration, right: NotificationConfiguration): number =>
           left.attributes.name.localeCompare(right.attributes.name),
         );
@@ -822,15 +873,27 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
               : "Send run, assessment, and automatic-destroy events to a webhook destination."}
           </CardDescription>
           <CardAction>
-            <Button onClick={(): void => { openEditor(); }}>
+            <Button
+              onClick={(): void => {
+                openEditor();
+              }}
+            >
               <Plus data-icon="inline-start" />
               {isWebhookMode ? "Add webhook" : "Add notification"}
             </Button>
           </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {pageError !== "" && <p role="alert" className="text-sm text-destructive">{pageError}</p>}
-          {notice !== "" && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
+          {pageError !== "" && (
+            <p role="alert" className="text-sm text-destructive">
+              {pageError}
+            </p>
+          )}
+          {notice !== "" && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {notice}
+            </p>
+          )}
           <ConfigurationTable
             configurations={configurations}
             loading={loading}
@@ -868,7 +931,9 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
         editorError={editorError}
         saving={saving}
         onSubmit={saveConfiguration}
-        onCancel={(): void => { setEditorOpen(false); }}
+        onCancel={(): void => {
+          setEditorOpen(false);
+        }}
       />
       <DeleteNotificationDialog
         pendingDelete={pendingDelete}

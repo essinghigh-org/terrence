@@ -4,108 +4,132 @@
 // generation. The runtime mirror (db/pg-convert.ts) is the app's pg
 // schema; tests/db/schema-parity.test.ts asserts the two never drift.
 import { sql } from "drizzle-orm";
-import {
-  bigint,
-  boolean,
-  foreignKey,
-  index,
-  jsonb,
-  pgTable,
-  primaryKey,
-  text,
-  uniqueIndex,
-} from "drizzle-orm/pg-core";
+import { bigint, boolean, foreignKey, index, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
 import * as sqliteSchema from "./schema-sqlite";
 
-export const actionInvocations = pgTable("action_invocations", {
+export const actionInvocations = pgTable(
+  "action_invocations",
+  {
     id: text("id").notNull().primaryKey(),
-    actionId: text("action_id").notNull().references(() => actions.id, { onDelete: "cascade" }),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    actionId: text("action_id")
+      .notNull()
+      .references(() => actions.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
     stackId: text("stack_id").references(() => stacks.id, { onDelete: "set null" }),
     deploymentId: text("deployment_id"),
     status: text("status").notNull().default("pending"),
     output: jsonb("output"),
     errorMessage: text("error_message"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actionInvocations.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actionInvocations.updatedAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.actionInvocations.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.actionInvocations.updatedAt.defaultFn!()),
     completedAt: bigint("completed_at", { mode: "number" }),
-}, (table) => [
+  },
+  (table) => [
     index("action_invocations_org_idx").on(table.orgId),
     index("action_invocations_run_idx").on(table.runId),
     index("action_invocations_stack_idx").on(table.stackId),
     index("action_invocations_action_idx").on(table.actionId),
-  ]);
+  ],
+);
 
-export const actions = pgTable("actions", {
+export const actions = pgTable(
+  "actions",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     actionType: text("action_type").notNull().default("custom"),
     status: text("status").notNull().default("active"),
     configuration: jsonb("configuration").notNull().default({}),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actions.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actions.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("actions_org_name_idx").on(table.orgId, table.name),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.actions.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.actions.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("actions_org_name_idx").on(table.orgId, table.name)],
+);
 
 export const adminGeneralSettings = pgTable("admin_general_settings", {
-    id: text("id").notNull().primaryKey(),
-    limitUserOrganizationCreation: boolean("limit_user_organization_creation").notNull().default(true),
-    apiRateLimitingEnabled: boolean("api_rate_limiting_enabled").notNull().default(true),
-    apiRateLimit: bigint("api_rate_limit", { mode: "number" }).notNull().default(30),
-    planTimeout: text("plan_timeout").notNull().default("2h"),
-    applyTimeout: text("apply_timeout").notNull().default("24h"),
-    sendPassingStatusesForUntriggeredSpeculativePlans: boolean("send_passing_statuses").notNull().default(false),
-    allowSpeculativePlansOnPullRequestsFromForks: boolean("allow_speculative_plans_forks").notNull().default(false),
-    defaultRemoteStateAccess: boolean("default_remote_state_access").notNull().default(true),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.adminGeneralSettings.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  limitUserOrganizationCreation: boolean("limit_user_organization_creation").notNull().default(true),
+  apiRateLimitingEnabled: boolean("api_rate_limiting_enabled").notNull().default(true),
+  apiRateLimit: bigint("api_rate_limit", { mode: "number" }).notNull().default(30),
+  planTimeout: text("plan_timeout").notNull().default("2h"),
+  applyTimeout: text("apply_timeout").notNull().default("24h"),
+  sendPassingStatusesForUntriggeredSpeculativePlans: boolean("send_passing_statuses").notNull().default(false),
+  allowSpeculativePlansOnPullRequestsFromForks: boolean("allow_speculative_plans_forks").notNull().default(false),
+  defaultRemoteStateAccess: boolean("default_remote_state_access").notNull().default(true),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.adminGeneralSettings.updatedAt.defaultFn!()),
 });
 
 export const adminOpaVersions = pgTable("admin_opa_versions", {
-    id: text("id").notNull().primaryKey(),
-    version: text("version").notNull().unique(),
-    url: text("url"),
-    sha: text("sha"),
-    deprecated: boolean("deprecated").default(false),
-    enabled: boolean("enabled").default(true),
-    isDefault: boolean("is_default").default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.adminOpaVersions.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  version: text("version").notNull().unique(),
+  url: text("url"),
+  sha: text("sha"),
+  deprecated: boolean("deprecated").default(false),
+  enabled: boolean("enabled").default(true),
+  isDefault: boolean("is_default").default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.adminOpaVersions.createdAt.defaultFn!()),
 });
 
 export const adminSentinelVersions = pgTable("admin_sentinel_versions", {
-    id: text("id").notNull().primaryKey(),
-    version: text("version").notNull().unique(),
-    url: text("url"),
-    sha: text("sha"),
-    deprecated: boolean("deprecated").default(false),
-    enabled: boolean("enabled").default(true),
-    isDefault: boolean("is_default").default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.adminSentinelVersions.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  version: text("version").notNull().unique(),
+  url: text("url"),
+  sha: text("sha"),
+  deprecated: boolean("deprecated").default(false),
+  enabled: boolean("enabled").default(true),
+  isDefault: boolean("is_default").default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.adminSentinelVersions.createdAt.defaultFn!()),
 });
 
 export const adminSettings = pgTable("admin_settings", {
-    id: text("id").notNull().primaryKey(),
-    values: jsonb("values").notNull(),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.adminSettings.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  values: jsonb("values").notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.adminSettings.updatedAt.defaultFn!()),
 });
 
 export const adminTerraformVersions = pgTable("admin_terraform_versions", {
-    id: text("id").notNull().primaryKey(),
-    version: text("version").notNull().unique(),
-    url: text("url"),
-    sha: text("sha"),
-    deprecated: boolean("deprecated").default(false),
-    enabled: boolean("enabled").default(true),
-    isDefault: boolean("is_default").default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.adminTerraformVersions.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  version: text("version").notNull().unique(),
+  url: text("url"),
+  sha: text("sha"),
+  deprecated: boolean("deprecated").default(false),
+  enabled: boolean("enabled").default(true),
+  isDefault: boolean("is_default").default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.adminTerraformVersions.createdAt.defaultFn!()),
 });
 
-export const agentForwardedRequests = pgTable("agent_forwarded_requests", {
+export const agentForwardedRequests = pgTable(
+  "agent_forwarded_requests",
+  {
     id: text("id").notNull().primaryKey(),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     method: text("method").notNull(),
     url: text("url").notNull(),
@@ -118,15 +142,25 @@ export const agentForwardedRequests = pgTable("agent_forwarded_requests", {
     errorMessage: text("error_message"),
     claimedAt: bigint("claimed_at", { mode: "number" }),
     completedAt: bigint("completed_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentForwardedRequests.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.agentForwardedRequests.createdAt.defaultFn!()),
+  },
+  (table) => [
     index("agent_forwarded_requests_pool_status_created_idx").on(table.agentPoolId, table.status, table.createdAt),
-  ]);
+  ],
+);
 
-export const agentJobs = pgTable("agent_jobs", {
+export const agentJobs = pgTable(
+  "agent_jobs",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     phase: text("phase").notNull(),
     iacBinary: text("iac_binary").notNull().default("terraform"),
@@ -137,78 +171,142 @@ export const agentJobs = pgTable("agent_jobs", {
     fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
     claimedAt: bigint("claimed_at", { mode: "number" }),
     completedAt: bigint("completed_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentJobs.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.agentJobs.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("agent_jobs_run_phase_idx").on(table.runId, table.phase),
     index("agent_jobs_pool_status_created_idx").on(table.agentPoolId, table.status, table.createdAt),
     index("agent_jobs_status_claimed_idx").on(table.status, table.claimedAt),
-  ]);
+  ],
+);
 
-export const agentPoolAllowedProjects = pgTable("agent_pool_allowed_projects", {
+export const agentPoolAllowedProjects = pgTable(
+  "agent_pool_allowed_projects",
+  {
     id: text("id").notNull().primaryKey(),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("agent_pool_allowed_projects_pool_project_idx").on(table.agentPoolId, table.projectId),
-  ]);
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("agent_pool_allowed_projects_pool_project_idx").on(table.agentPoolId, table.projectId)],
+);
 
-export const agentPoolAllowedWorkspaces = pgTable("agent_pool_allowed_workspaces", {
+export const agentPoolAllowedWorkspaces = pgTable(
+  "agent_pool_allowed_workspaces",
+  {
     id: text("id").notNull().primaryKey(),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("agent_pool_allowed_workspaces_pool_workspace_idx").on(table.agentPoolId, table.workspaceId),
-  ]);
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("agent_pool_allowed_workspaces_pool_workspace_idx").on(table.agentPoolId, table.workspaceId)],
+);
 
-export const agentPoolExcludedWorkspaces = pgTable("agent_pool_excluded_workspaces", {
+export const agentPoolExcludedWorkspaces = pgTable(
+  "agent_pool_excluded_workspaces",
+  {
     id: text("id").notNull().primaryKey(),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-}, (table) => [
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+  },
+  (table) => [
     uniqueIndex("agent_pool_excluded_workspaces_pool_workspace_idx").on(table.agentPoolId, table.workspaceId),
-  ]);
+  ],
+);
 
 export const agentPoolTokens = pgTable("agent_pool_tokens", {
-    id: text("id").notNull().primaryKey(),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
-    token: text("token").notNull().unique(),
-    description: text("description"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentPoolTokens.createdAt.defaultFn!()),
-    lastUsedAt: bigint("last_used_at", { mode: "number" }),
-    expiresAt: bigint("expires_at", { mode: "number" }),
-    revokedAt: bigint("revoked_at", { mode: "number" }),
+  id: text("id").notNull().primaryKey(),
+  agentPoolId: text("agent_pool_id")
+    .notNull()
+    .references(() => agentPools.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  description: text("description"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.agentPoolTokens.createdAt.defaultFn!()),
+  lastUsedAt: bigint("last_used_at", { mode: "number" }),
+  expiresAt: bigint("expires_at", { mode: "number" }),
+  revokedAt: bigint("revoked_at", { mode: "number" }),
 });
 
 export const agentPools = pgTable("agent_pools", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    organizationScoped: boolean("organization_scoped").default(true),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentPools.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  organizationScoped: boolean("organization_scoped").default(true),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.agentPools.createdAt.defaultFn!()),
 });
 
-export const agents = pgTable("agents", {
+export const agents = pgTable(
+  "agents",
+  {
     id: text("id").notNull().primaryKey(),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     status: text("status").notNull().default("idle"),
     ipAddress: text("ip_address"),
     version: text("version"),
     protocolVersion: text("protocol_version").notNull().default("1"),
-    capabilities: jsonb("capabilities").notNull().default(["operation.plan","operation.apply","operation.policy","operation.assessment","operation.stack","operation.source-bundle","operation.test","artifact.configuration","artifact.filesystem","artifact.log","artifact.plan-json","artifact.state-json","artifact.atomic-upload","lease.heartbeat","lease.fencing","cancellation","state.publication"]),
-    artifactFormats: jsonb("artifact_formats").notNull().default(["tar.gz","json","text"]),
+    capabilities: jsonb("capabilities")
+      .notNull()
+      .default([
+        "operation.plan",
+        "operation.apply",
+        "operation.policy",
+        "operation.assessment",
+        "operation.stack",
+        "operation.source-bundle",
+        "operation.test",
+        "artifact.configuration",
+        "artifact.filesystem",
+        "artifact.log",
+        "artifact.plan-json",
+        "artifact.state-json",
+        "artifact.atomic-upload",
+        "lease.heartbeat",
+        "lease.fencing",
+        "cancellation",
+        "state.publication",
+      ]),
+    artifactFormats: jsonb("artifact_formats").notNull().default(["tar.gz", "json", "text"]),
     architecture: text("architecture"),
     iacBinaries: jsonb("iac_binaries").notNull().default(["terraform"]),
-    accept: text("accept").notNull().default("plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test"),
+    accept: text("accept")
+      .notNull()
+      .default(
+        "plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test",
+      ),
     requestForwarding: boolean("request_forwarding").notNull().default(false),
     hyok: boolean("hyok").notNull().default(false),
     lastPingAt: bigint("last_ping_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agents.createdAt.defaultFn!()),
-}, (table) => [
-    index("agents_last_ping_at_status_idx").on(table.lastPingAt, table.status),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.agents.createdAt.defaultFn!()),
+  },
+  (table) => [index("agents_last_ping_at_status_idx").on(table.lastPingAt, table.status)],
+);
 
-export const apiIdempotencyKeys = pgTable("api_idempotency_keys", {
+export const apiIdempotencyKeys = pgTable(
+  "api_idempotency_keys",
+  {
     id: text("id").notNull().primaryKey(),
     scope: text("scope").notNull(),
     key: text("key").notNull(),
@@ -219,33 +317,43 @@ export const apiIdempotencyKeys = pgTable("api_idempotency_keys", {
     status: text("status").notNull().default("pending"),
     responseStatus: bigint("response_status", { mode: "number" }),
     responseBody: jsonb("response_body"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.apiIdempotencyKeys.createdAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.apiIdempotencyKeys.createdAt.defaultFn!()),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     completedAt: bigint("completed_at", { mode: "number" }),
-}, (table) => [
+  },
+  (table) => [
     uniqueIndex("api_idempotency_scope_key_idx").on(table.scope, table.key),
     index("api_idempotency_expires_idx").on(table.expiresAt),
-  ]);
+  ],
+);
 
 export const apiTokens = pgTable("api_tokens", {
-    id: text("id").notNull().primaryKey(),
-    token: text("token").notNull().unique(),
-    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
-    orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
-    teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
-    refreshFamilyId: text("refresh_family_id"),
-    description: text("description"),
-    scopes: text("scopes"),
-    tokenType: text("token_type").notNull().default(""),
-    legacy: boolean("legacy").notNull().default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.apiTokens.createdAt.defaultFn!()),
-    lastUsedAt: bigint("last_used_at", { mode: "number" }),
-    expiresAt: bigint("expires_at", { mode: "number" }),
+  id: text("id").notNull().primaryKey(),
+  token: text("token").notNull().unique(),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
+  refreshFamilyId: text("refresh_family_id"),
+  description: text("description"),
+  scopes: text("scopes"),
+  tokenType: text("token_type").notNull().default(""),
+  legacy: boolean("legacy").notNull().default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.apiTokens.createdAt.defaultFn!()),
+  lastUsedAt: bigint("last_used_at", { mode: "number" }),
+  expiresAt: bigint("expires_at", { mode: "number" }),
 });
 
-export const assessmentCheckResults = pgTable("check_results", {
+export const assessmentCheckResults = pgTable(
+  "check_results",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     assessmentResultId: text("assessment_result_id").references(() => assessmentResults.id, { onDelete: "cascade" }),
     runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
     address: text("address").notNull(),
@@ -253,15 +361,23 @@ export const assessmentCheckResults = pgTable("check_results", {
     status: text("status").notNull(),
     message: text("message"),
     detail: jsonb("detail"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.assessmentCheckResults.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.assessmentCheckResults.createdAt.defaultFn!()),
+  },
+  (table) => [
     index("check_results_assessment_idx").on(table.assessmentResultId),
     index("check_results_run_idx").on(table.runId),
-  ]);
+  ],
+);
 
-export const assessmentResults = pgTable("assessment_results", {
+export const assessmentResults = pgTable(
+  "assessment_results",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("pending"),
     succeeded: boolean("succeeded"),
     drifted: boolean("drifted"),
@@ -277,13 +393,17 @@ export const assessmentResults = pgTable("assessment_results", {
     jsonSchema: jsonb("json_schema"),
     artifactSchemaVersion: bigint("artifact_schema_version", { mode: "number" }).notNull().default(0),
     logOutput: text("log_output"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.assessmentResults.createdAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.assessmentResults.createdAt.defaultFn!()),
     completedAt: bigint("completed_at", { mode: "number" }),
-}, (table) => [
-    index("assessment_results_workspace_created_idx").on(table.workspaceId, table.createdAt),
-  ]);
+  },
+  (table) => [index("assessment_results_workspace_created_idx").on(table.workspaceId, table.createdAt)],
+);
 
-export const auditLogs = pgTable("audit_logs", {
+export const auditLogs = pgTable(
+  "audit_logs",
+  {
     id: text("id").notNull().primaryKey(),
     orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
@@ -291,42 +411,66 @@ export const auditLogs = pgTable("audit_logs", {
     resourceType: text("resource_type").notNull(),
     resourceId: text("resource_id"),
     details: jsonb("details"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.auditLogs.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.auditLogs.createdAt.defaultFn!()),
+  },
+  (table) => [
     index("audit_logs_created_at_idx").on(table.createdAt),
     index("audit_logs_org_created_at_idx").on(table.orgId, table.createdAt),
     index("audit_logs_resource_idx").on(table.resourceType, table.resourceId, table.createdAt, table.id),
-  ]);
+  ],
+);
 
-export const cidrRangeListAgentPools = pgTable("cidr_range_list_agent_pools", {
+export const cidrRangeListAgentPools = pgTable(
+  "cidr_range_list_agent_pools",
+  {
     id: text("id").notNull().primaryKey(),
-    cidrRangeListId: text("cidr_range_list_id").notNull().references(() => cidrRangeLists.id, { onDelete: "cascade" }),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("cidr_range_list_agent_pools_idx").on(table.cidrRangeListId, table.agentPoolId),
-  ]);
+    cidrRangeListId: text("cidr_range_list_id")
+      .notNull()
+      .references(() => cidrRangeLists.id, { onDelete: "cascade" }),
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("cidr_range_list_agent_pools_idx").on(table.cidrRangeListId, table.agentPoolId)],
+);
 
 export const cidrRangeLists = pgTable("cidr_range_lists", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    description: text("description"),
-    enforcementScope: text("enforcement_scope").notNull().default("organization"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.cidrRangeLists.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.cidrRangeLists.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  enforcementScope: text("enforcement_scope").notNull().default("organization"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.cidrRangeLists.createdAt.defaultFn!()),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.cidrRangeLists.updatedAt.defaultFn!()),
 });
 
 export const cidrRanges = pgTable("cidr_ranges", {
-    id: text("id").notNull().primaryKey(),
-    cidrRangeListId: text("cidr_range_list_id").notNull().references(() => cidrRangeLists.id, { onDelete: "cascade" }),
-    value: text("value").notNull(),
-    description: text("description"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.cidrRanges.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  cidrRangeListId: text("cidr_range_list_id")
+    .notNull()
+    .references(() => cidrRangeLists.id, { onDelete: "cascade" }),
+  value: text("value").notNull(),
+  description: text("description"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.cidrRanges.createdAt.defaultFn!()),
 });
 
-export const configurationVersions = pgTable("configuration_versions", {
+export const configurationVersions = pgTable(
+  "configuration_versions",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("pending"),
     autoQueueRuns: boolean("auto_queue_runs").notNull().default(true),
     archivePath: text("archive_path"),
@@ -341,36 +485,53 @@ export const configurationVersions = pgTable("configuration_versions", {
     error: text("error"),
     errorMessage: text("error_message"),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.configurationVersions.createdAt.defaultFn!()),
-}, (table) => [
-    index("configuration_versions_workspace_created_idx").on(table.workspaceId, table.createdAt),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.configurationVersions.createdAt.defaultFn!()),
+  },
+  (table) => [index("configuration_versions_workspace_created_idx").on(table.workspaceId, table.createdAt)],
+);
 
-export const controlPlaneNodes = pgTable("control_plane_nodes", {
+export const controlPlaneNodes = pgTable(
+  "control_plane_nodes",
+  {
     id: text("id").notNull().primaryKey(),
     hostname: text("hostname").notNull(),
     address: text("address"),
     version: text("version"),
     status: text("status").notNull().default("active"),
     readinessChecks: jsonb("readiness_checks").notNull().default([]),
-    registeredAt: bigint("registered_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.controlPlaneNodes.registeredAt.defaultFn!()),
-    lastHeartbeatAt: bigint("last_heartbeat_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.controlPlaneNodes.lastHeartbeatAt.defaultFn!()),
-}, (table) => [
+    registeredAt: bigint("registered_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.controlPlaneNodes.registeredAt.defaultFn!()),
+    lastHeartbeatAt: bigint("last_heartbeat_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.controlPlaneNodes.lastHeartbeatAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("control_plane_nodes_hostname_idx").on(table.hostname),
     index("control_plane_nodes_heartbeat_idx").on(table.status, table.lastHeartbeatAt),
-  ]);
+  ],
+);
 
 export const dataRetentionPolicies = pgTable("data_retention_policies", {
-    id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().unique().references(() => workspaces.id, { onDelete: "cascade" }),
-    stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
-    deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
-    autoDestroyAt: text("auto_destroy_at"),
-    autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.dataRetentionPolicies.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .unique()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
+  deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
+  autoDestroyAt: text("auto_destroy_at"),
+  autoDestroyActivityDuration: text("auto_destroy_activity_duration"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.dataRetentionPolicies.createdAt.defaultFn!()),
 });
 
-export const durableJobs = pgTable("durable_jobs", {
+export const durableJobs = pgTable(
+  "durable_jobs",
+  {
     id: text("id").notNull().primaryKey(),
     kind: text("kind").notNull(),
     dedupeKey: text("dedupe_key"),
@@ -378,90 +539,159 @@ export const durableJobs = pgTable("durable_jobs", {
     payload: jsonb("payload").notNull().default({}),
     payloadSchemaVersion: bigint("payload_schema_version", { mode: "number" }).notNull().default(0),
     attempts: bigint("attempts", { mode: "number" }).notNull().default(0),
-    runAfter: bigint("run_after", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.durableJobs.runAfter.defaultFn!()),
+    runAfter: bigint("run_after", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.durableJobs.runAfter.defaultFn!()),
     lockedBy: text("locked_by"),
     lockToken: text("lock_token"),
     leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }),
     heartbeatAt: bigint("heartbeat_at", { mode: "number" }),
     lastError: text("last_error"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.durableJobs.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.durableJobs.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.durableJobs.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.durableJobs.updatedAt.defaultFn!()),
+  },
+  (table) => [
     index("durable_jobs_kind_status_run_after_idx").on(table.kind, table.status, table.runAfter),
     uniqueIndex("durable_jobs_kind_dedupe_idx").on(table.kind, table.dedupeKey),
     index("durable_jobs_lease_idx").on(table.status, table.leaseExpiresAt),
-  ]);
+  ],
+);
 
-export const emailVerificationTokens = pgTable("email_verification_tokens", {
+export const emailVerificationTokens = pgTable(
+  "email_verification_tokens",
+  {
     id: text("id").notNull().primaryKey(),
-    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.emailVerificationTokens.createdAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.emailVerificationTokens.createdAt.defaultFn!()),
     usedAt: bigint("used_at", { mode: "number" }),
-}, (table) => [
-    index("email_verification_tokens_user_idx").on(table.userId),
-  ]);
+  },
+  (table) => [index("email_verification_tokens_user_idx").on(table.userId)],
+);
 
-export const explorerBulkActionRecords = pgTable("change_requests", {
+export const explorerBulkActionRecords = pgTable(
+  "change_requests",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     subject: text("subject").notNull(),
     message: text("message").notNull(),
     status: text("status").notNull().default("pending"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),
     resolvedAt: bigint("resolved_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.updatedAt.defaultFn!()),
-}, (table) => [
-    index("change_requests_workspace_created_idx").on(table.workspaceId, table.createdAt),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.explorerBulkActionRecords.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.explorerBulkActionRecords.updatedAt.defaultFn!()),
+  },
+  (table) => [index("change_requests_workspace_created_idx").on(table.workspaceId, table.createdAt)],
+);
 
-export const explorerCatalogItems = pgTable("explorer_catalog_items", {
+export const explorerCatalogItems = pgTable(
+  "explorer_catalog_items",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     name: text("name").notNull(),
     source: text("source").notNull(),
     version: text("version").notNull(),
     workspaceCount: bigint("workspace_count", { mode: "number" }).notNull().default(0),
     workspaces: text("workspaces").notNull().default(""),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerCatalogItems.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("explorer_catalog_org_kind_key_idx").on(table.orgId, table.kind, table.name, table.source, table.version),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.explorerCatalogItems.updatedAt.defaultFn!()),
+  },
+  (table) => [
+    uniqueIndex("explorer_catalog_org_kind_key_idx").on(
+      table.orgId,
+      table.kind,
+      table.name,
+      table.source,
+      table.version,
+    ),
     index("explorer_catalog_org_kind_idx").on(table.orgId, table.kind, table.name),
-  ]);
+  ],
+);
 
-export const explorerCatalogMemberships = pgTable("explorer_catalog_memberships", {
+export const explorerCatalogMemberships = pgTable(
+  "explorer_catalog_memberships",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     workspaceName: text("workspace_name").notNull(),
     kind: text("kind").notNull(),
     name: text("name").notNull(),
     source: text("source").notNull(),
     version: text("version").notNull(),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerCatalogMemberships.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("explorer_catalog_membership_workspace_key_idx").on(table.workspaceId, table.kind, table.name, table.source, table.version),
-    index("explorer_catalog_membership_org_key_idx").on(table.orgId, table.kind, table.name, table.source, table.version),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.explorerCatalogMemberships.updatedAt.defaultFn!()),
+  },
+  (table) => [
+    uniqueIndex("explorer_catalog_membership_workspace_key_idx").on(
+      table.workspaceId,
+      table.kind,
+      table.name,
+      table.source,
+      table.version,
+    ),
+    index("explorer_catalog_membership_org_key_idx").on(
+      table.orgId,
+      table.kind,
+      table.name,
+      table.source,
+      table.version,
+    ),
     index("explorer_catalog_membership_workspace_idx").on(table.workspaceId),
-  ]);
+  ],
+);
 
 export const explorerSavedQueries = pgTable("explorer_saved_queries", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    queryType: text("query_type").notNull(),
-    query: jsonb("query").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerSavedQueries.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  queryType: text("query_type").notNull(),
+  query: jsonb("query").notNull(),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.explorerSavedQueries.createdAt.defaultFn!()),
 });
 
-export const explorerWorkspaceInventory = pgTable("explorer_workspace_inventory", {
-    workspaceId: text("workspace_id").notNull().primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+export const explorerWorkspaceInventory = pgTable(
+  "explorer_workspace_inventory",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .primaryKey()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     workspaceName: text("workspace_name").notNull(),
     workspaceCreatedAt: bigint("workspace_created_at", { mode: "number" }).notNull(),
     workspaceUpdatedAt: bigint("workspace_updated_at", { mode: "number" }).notNull(),
@@ -492,124 +722,182 @@ export const explorerWorkspaceInventory = pgTable("explorer_workspace_inventory"
     moduleCount: bigint("module_count", { mode: "number" }).notNull().default(0),
     stateVersionTerraformVersion: text("state_version_terraform_version"),
     stateSerial: bigint("state_serial", { mode: "number" }),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerWorkspaceInventory.updatedAt.defaultFn!()),
-}, (table) => [
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.explorerWorkspaceInventory.updatedAt.defaultFn!()),
+  },
+  (table) => [
     index("explorer_inventory_org_name_idx").on(table.orgId, table.workspaceName),
     index("explorer_inventory_org_updated_idx").on(table.orgId, table.workspaceUpdatedAt),
-  ]);
+  ],
+);
 
-export const githubAppInstallations = pgTable("github_app_installations", {
+export const githubAppInstallations = pgTable(
+  "github_app_installations",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     installationId: bigint("installation_id", { mode: "number" }).notNull(),
     iconUrl: text("icon_url"),
     installationType: text("installation_type").default("Organization"),
     installationUrl: text("installation_url"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.githubAppInstallations.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("github_app_installations_org_installation_idx").on(table.orgId, table.installationId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.githubAppInstallations.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("github_app_installations_org_installation_idx").on(table.orgId, table.installationId)],
+);
 
 export const githubWebhookDeliveries = pgTable("github_webhook_deliveries", {
-    id: text("id").notNull().primaryKey(),
-    status: text("status").notNull().default("processing"),
-    receivedAt: bigint("received_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.githubWebhookDeliveries.receivedAt.defaultFn!()),
-    processedAt: bigint("processed_at", { mode: "number" }),
+  id: text("id").notNull().primaryKey(),
+  status: text("status").notNull().default("processing"),
+  receivedAt: bigint("received_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.githubWebhookDeliveries.receivedAt.defaultFn!()),
+  processedAt: bigint("processed_at", { mode: "number" }),
 });
 
 export const hyokConfigurations = pgTable("hyok_configurations", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    kekId: text("kek_id").notNull(),
-    kmsOptions: jsonb("kms_options"),
-    agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
-    oidcConfigId: text("oidc_config_id").notNull(),
-    oidcConfigType: text("oidc_config_type").notNull(),
-    isPrimary: boolean("is_primary").default(false),
-    status: text("status").notNull().default("ok"),
-    error: text("error"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.hyokConfigurations.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.hyokConfigurations.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  kekId: text("kek_id").notNull(),
+  kmsOptions: jsonb("kms_options"),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
+  oidcConfigId: text("oidc_config_id").notNull(),
+  oidcConfigType: text("oidc_config_type").notNull(),
+  isPrimary: boolean("is_primary").default(false),
+  status: text("status").notNull().default("ok"),
+  error: text("error"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.hyokConfigurations.createdAt.defaultFn!()),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.hyokConfigurations.updatedAt.defaultFn!()),
 });
 
 export const hyokCustomerKeyVersions = pgTable("hyok_customer_key_versions", {
-    id: text("id").notNull().primaryKey(),
-    hyokConfigId: text("hyok_config_id").notNull().references(() => hyokConfigurations.id, { onDelete: "cascade" }),
-    keyVersion: text("key_version").notNull(),
-    encryptedDek: text("encrypted_dek").notNull(),
-    customerKeyName: text("customer_key_name").notNull(),
-    status: text("status").notNull().default("active"),
-    workspacesSecured: bigint("workspaces_secured", { mode: "number" }).notNull().default(0),
-    error: text("error"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.hyokCustomerKeyVersions.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  hyokConfigId: text("hyok_config_id")
+    .notNull()
+    .references(() => hyokConfigurations.id, { onDelete: "cascade" }),
+  keyVersion: text("key_version").notNull(),
+  encryptedDek: text("encrypted_dek").notNull(),
+  customerKeyName: text("customer_key_name").notNull(),
+  status: text("status").notNull().default("active"),
+  workspacesSecured: bigint("workspaces_secured", { mode: "number" }).notNull().default(0),
+  error: text("error"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.hyokCustomerKeyVersions.createdAt.defaultFn!()),
 });
 
-export const identityLinks = pgTable("identity_links", {
+export const identityLinks = pgTable(
+  "identity_links",
+  {
     id: text("id").notNull().primaryKey(),
-    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     externalId: text("external_id").notNull(),
     emailAtLinkTime: text("email_at_link_time"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.identityLinks.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.identityLinks.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("identity_links_provider_external_idx").on(table.provider, table.externalId),
     index("identity_links_user_idx").on(table.userId),
-  ]);
+  ],
+);
 
-export const locks = pgTable("locks", {
+export const locks = pgTable(
+  "locks",
+  {
     name: text("name").notNull().primaryKey(),
     owner: text("owner").notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-}, (table) => [
-    index("locks_expires_idx").on(table.expiresAt),
-  ]);
+  },
+  (table) => [index("locks_expires_idx").on(table.expiresAt)],
+);
 
-export const logs = pgTable("logs", {
+export const logs = pgTable(
+  "logs",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     phase: text("phase").notNull(),
     outputText: text("output_text").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
-}, (table) => [
-    index("logs_run_phase_idx").on(table.runId, table.phase),
-  ]);
+  },
+  (table) => [index("logs_run_phase_idx").on(table.runId, table.phase)],
+);
 
-export const moduleTestConfigurationVersions = pgTable("module_test_configuration_versions", {
+export const moduleTestConfigurationVersions = pgTable(
+  "module_test_configuration_versions",
+  {
     id: text("id").notNull().primaryKey(),
-    moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+    moduleId: text("module_id")
+      .notNull()
+      .references(() => registryModules.id, { onDelete: "cascade" }),
     archivePath: text("archive_path"),
     status: text("status").notNull().default("pending"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.moduleTestConfigurationVersions.createdAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.moduleTestConfigurationVersions.createdAt.defaultFn!()),
     uploadedAt: bigint("uploaded_at", { mode: "number" }),
-}, (table) => [
-    index("module_test_configuration_versions_module_created_idx").on(table.moduleId, table.createdAt),
-  ]);
+  },
+  (table) => [index("module_test_configuration_versions_module_created_idx").on(table.moduleId, table.createdAt)],
+);
 
 export const moduleTestConfigurations = pgTable("module_test_configurations", {
-    id: text("id").notNull().primaryKey(),
-    moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
-    oidcEnabled: boolean("oidc_enabled").notNull().default(false),
-    oidcProvider: text("oidc_provider"),
-    oidcConfiguration: jsonb("oidc_configuration"),
-    oidcProviderUrl: text("oidc_provider_url"),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.moduleTestConfigurations.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  moduleId: text("module_id")
+    .notNull()
+    .references(() => registryModules.id, { onDelete: "cascade" }),
+  oidcEnabled: boolean("oidc_enabled").notNull().default(false),
+  oidcProvider: text("oidc_provider"),
+  oidcConfiguration: jsonb("oidc_configuration"),
+  oidcProviderUrl: text("oidc_provider_url"),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.moduleTestConfigurations.updatedAt.defaultFn!()),
 });
 
 export const moduleTestResults = pgTable("module_test_results", {
-    id: text("id").notNull().primaryKey(),
-    versionId: text("version_id").notNull().references(() => registryModuleVersions.id, { onDelete: "cascade" }),
-    status: text("status").notNull().default("pending"),
-    output: text("output"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.moduleTestResults.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  versionId: text("version_id")
+    .notNull()
+    .references(() => registryModuleVersions.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"),
+  output: text("output"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.moduleTestResults.createdAt.defaultFn!()),
 });
 
-export const moduleTestRuns = pgTable("module_test_runs", {
+export const moduleTestRuns = pgTable(
+  "module_test_runs",
+  {
     id: text("id").notNull().primaryKey(),
-    moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
-    versionId: text("version_id").notNull().references(() => registryModuleVersions.id, { onDelete: "cascade" }),
-    configurationVersionId: text("configuration_version_id").references(() => moduleTestConfigurationVersions.id, { onDelete: "set null" }),
+    moduleId: text("module_id")
+      .notNull()
+      .references(() => registryModules.id, { onDelete: "cascade" }),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => registryModuleVersions.id, { onDelete: "cascade" }),
+    configurationVersionId: text("configuration_version_id").references(() => moduleTestConfigurationVersions.id, {
+      onDelete: "set null",
+    }),
     status: text("status").notNull().default("pending"),
     testStatus: text("test_status"),
     testsPassed: bigint("tests_passed", { mode: "number" }),
@@ -633,178 +921,279 @@ export const moduleTestRuns = pgTable("module_test_runs", {
     executionResultPath: text("execution_result_path"),
     executionTokenIds: jsonb("execution_token_ids").notNull().default([]),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.moduleTestRuns.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.moduleTestRuns.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.moduleTestRuns.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.moduleTestRuns.updatedAt.defaultFn!()),
+  },
+  (table) => [
     index("module_test_runs_module_created_idx").on(table.moduleId, table.createdAt),
     index("module_test_runs_version_created_idx").on(table.versionId, table.createdAt),
-  ]);
+  ],
+);
 
-export const noCodeModules = pgTable("no_code_modules", {
+export const noCodeModules = pgTable(
+  "no_code_modules",
+  {
     id: text("id").notNull().primaryKey(),
-    moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
-    versionId: text("version_id").notNull().references(() => registryModuleVersions.id, { onDelete: "cascade" }),
+    moduleId: text("module_id")
+      .notNull()
+      .references(() => registryModules.id, { onDelete: "cascade" }),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => registryModuleVersions.id, { onDelete: "cascade" }),
     enabled: boolean("enabled").notNull().default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.noCodeModules.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.noCodeModules.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("no_code_modules_module_idx").on(table.moduleId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.noCodeModules.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.noCodeModules.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("no_code_modules_module_idx").on(table.moduleId)],
+);
 
-export const noCodeVariableOptions = pgTable("no_code_variable_options", {
+export const noCodeVariableOptions = pgTable(
+  "no_code_variable_options",
+  {
     id: text("id").notNull().primaryKey(),
-    noCodeModuleId: text("no_code_module_id").notNull().references(() => noCodeModules.id, { onDelete: "cascade" }),
+    noCodeModuleId: text("no_code_module_id")
+      .notNull()
+      .references(() => noCodeModules.id, { onDelete: "cascade" }),
     variableName: text("variable_name").notNull(),
     variableType: text("variable_type").notNull(),
     options: jsonb("options").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.noCodeVariableOptions.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.noCodeVariableOptions.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("no_code_variable_options_module_name_idx").on(table.noCodeModuleId, table.variableName),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.noCodeVariableOptions.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.noCodeVariableOptions.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("no_code_variable_options_module_name_idx").on(table.noCodeModuleId, table.variableName)],
+);
 
-export const noCodeWorkspaceConfigurations = pgTable("no_code_workspace_configurations", {
+export const noCodeWorkspaceConfigurations = pgTable(
+  "no_code_workspace_configurations",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     noCodeModuleId: text("no_code_module_id").references(() => noCodeModules.id, { onDelete: "set null" }),
     moduleId: text("module_id").references(() => registryModules.id, { onDelete: "set null" }),
     moduleVersionId: text("module_version_id").references(() => registryModuleVersions.id, { onDelete: "set null" }),
-    configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, { onDelete: "set null" }),
+    configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, {
+      onDelete: "set null",
+    }),
     moduleSource: text("module_source").notNull(),
     moduleVersion: text("module_version").notNull(),
     inputs: jsonb("inputs").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.noCodeWorkspaceConfigurations.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.noCodeWorkspaceConfigurations.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("no_code_workspace_configurations_workspace_idx").on(table.workspaceId),
     index("no_code_workspace_configurations_module_idx").on(table.noCodeModuleId),
-  ]);
+  ],
+);
 
-export const notificationConfigurationWorkspaceExclusions = pgTable("notification_configuration_workspace_exclusions", {
+export const notificationConfigurationWorkspaceExclusions = pgTable(
+  "notification_configuration_workspace_exclusions",
+  {
     id: text("id").notNull().primaryKey(),
-    notificationConfigurationId: text("notification_configuration_id").notNull().references(() => notificationConfigurations.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.notificationConfigurationWorkspaceExclusions.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("notification_configuration_workspace_exclusions_idx").on(table.notificationConfigurationId, table.workspaceId),
-  ]);
+    notificationConfigurationId: text("notification_configuration_id")
+      .notNull()
+      .references(() => notificationConfigurations.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.notificationConfigurationWorkspaceExclusions.createdAt.defaultFn!()),
+  },
+  (table) => [
+    uniqueIndex("notification_configuration_workspace_exclusions_idx").on(
+      table.notificationConfigurationId,
+      table.workspaceId,
+    ),
+  ],
+);
 
 export const notificationConfigurations = pgTable("notification_configurations", {
-    id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
-    teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
-    projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    destinationType: text("destination_type").notNull(),
-    url: text("url").notNull(),
-    emailAddresses: jsonb("email_addresses"),
-    emailAllMembers: boolean("email_all_members").notNull().default(false),
-    emailUserIds: jsonb("email_user_ids"),
-    triggers: jsonb("triggers").notNull(),
-    enabled: boolean("enabled").default(false),
-    token: text("token"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.notificationConfigurations.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
+  projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  destinationType: text("destination_type").notNull(),
+  url: text("url").notNull(),
+  emailAddresses: jsonb("email_addresses"),
+  emailAllMembers: boolean("email_all_members").notNull().default(false),
+  emailUserIds: jsonb("email_user_ids"),
+  triggers: jsonb("triggers").notNull(),
+  enabled: boolean("enabled").default(false),
+  token: text("token"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.notificationConfigurations.createdAt.defaultFn!()),
 });
 
-export const notificationDeliveryState = pgTable("notification_delivery_state", {
+export const notificationDeliveryState = pgTable(
+  "notification_delivery_state",
+  {
     id: text("id").notNull().primaryKey(),
     kind: text("kind").notNull(),
     stateKey: text("state_key").notNull(),
     value: bigint("value", { mode: "number" }).notNull().default(0),
     windowStart: bigint("window_start", { mode: "number" }),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.notificationDeliveryState.updatedAt.defaultFn!()),
-}, (table) => [
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.notificationDeliveryState.updatedAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("notification_delivery_state_kind_key_idx").on(table.kind, table.stateKey),
     index("notification_delivery_state_updated_idx").on(table.updatedAt),
-  ]);
+  ],
+);
 
 export const notificationWorkspaceCounters = pgTable("notification_workspace_counters", {
-    workspaceId: text("workspace_id").notNull().primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),
-    configurationCount: bigint("configuration_count", { mode: "number" }).notNull().default(0),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.notificationWorkspaceCounters.updatedAt.defaultFn!()),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  configurationCount: bigint("configuration_count", { mode: "number" }).notNull().default(0),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.notificationWorkspaceCounters.updatedAt.defaultFn!()),
 });
 
-export const oauthClientProjects = pgTable("oauth_client_projects", {
+export const oauthClientProjects = pgTable(
+  "oauth_client_projects",
+  {
     id: text("id").notNull().primaryKey(),
-    oauthClientId: text("oauth_client_id").notNull().references(() => oauthClients.id, { onDelete: "cascade" }),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("oauth_client_projects_idx").on(table.oauthClientId, table.projectId),
-  ]);
+    oauthClientId: text("oauth_client_id")
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("oauth_client_projects_idx").on(table.oauthClientId, table.projectId)],
+);
 
 export const oauthClients = pgTable("oauth_clients", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
-    name: text("name").notNull(),
-    serviceProvider: text("service_provider").notNull().default("github"),
-    apiUrl: text("api_url"),
-    httpUrl: text("http_url"),
-    key: text("key"),
-    secret: text("secret"),
-    rsaPublicKey: text("rsa_public_key"),
-    organizationScoped: boolean("organization_scoped").default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.oauthClients.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  serviceProvider: text("service_provider").notNull().default("github"),
+  apiUrl: text("api_url"),
+  httpUrl: text("http_url"),
+  key: text("key"),
+  secret: text("secret"),
+  rsaPublicKey: text("rsa_public_key"),
+  organizationScoped: boolean("organization_scoped").default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.oauthClients.createdAt.defaultFn!()),
 });
 
 export const oauthDeviceCodes = pgTable("oauth_device_codes", {
-    deviceCode: text("device_code").notNull().primaryKey(),
-    userCode: text("user_code").notNull().unique(),
-    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
-    status: text("status").notNull().default("pending"),
-    token: text("token"),
-    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.oauthDeviceCodes.createdAt.defaultFn!()),
+  deviceCode: text("device_code").notNull().primaryKey(),
+  userCode: text("user_code").notNull().unique(),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"),
+  token: text("token"),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.oauthDeviceCodes.createdAt.defaultFn!()),
 });
 
-export const oauthHandshakeStates = pgTable("oauth_handshake_states", {
+export const oauthHandshakeStates = pgTable(
+  "oauth_handshake_states",
+  {
     id: text("id").notNull().primaryKey(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     payload: jsonb("payload").notNull(),
-}, (table) => [
-    index("oauth_handshake_states_expires_idx").on(table.expiresAt),
-  ]);
+  },
+  (table) => [index("oauth_handshake_states_expires_idx").on(table.expiresAt)],
+);
 
 export const oauthTokens = pgTable("oauth_tokens", {
-    id: text("id").notNull().primaryKey(),
-    oauthClientId: text("oauth_client_id").notNull().references(() => oauthClients.id, { onDelete: "cascade" }),
-    serviceProviderUser: text("service_provider_user"),
-    token: text("token").notNull(),
-    sshKey: text("ssh_key"),
-    hasSshKey: boolean("has_ssh_key").default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.oauthTokens.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  oauthClientId: text("oauth_client_id")
+    .notNull()
+    .references(() => oauthClients.id, { onDelete: "cascade" }),
+  serviceProviderUser: text("service_provider_user"),
+  token: text("token").notNull(),
+  sshKey: text("ssh_key"),
+  hasSshKey: boolean("has_ssh_key").default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.oauthTokens.createdAt.defaultFn!()),
 });
 
 export const oidcConfigs = pgTable("oidc_configs", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    configType: text("config_type").notNull(),
-    config: jsonb("config").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.oidcConfigs.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.oidcConfigs.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  configType: text("config_type").notNull(),
+  config: jsonb("config").notNull(),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.oidcConfigs.createdAt.defaultFn!()),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.oidcConfigs.updatedAt.defaultFn!()),
 });
 
-export const orgTokenTTLPolicies = pgTable("org_token_ttl_policies", {
+export const orgTokenTTLPolicies = pgTable(
+  "org_token_ttl_policies",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     tokenType: text("token_type").notNull(),
     maxTtlMs: bigint("max_ttl_ms", { mode: "number" }).notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.orgTokenTTLPolicies.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.orgTokenTTLPolicies.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("org_token_ttl_policies_org_type_idx").on(table.orgId, table.tokenType),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.orgTokenTTLPolicies.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.orgTokenTTLPolicies.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("org_token_ttl_policies_org_type_idx").on(table.orgId, table.tokenType)],
+);
 
 export const organizationDataRetentionPolicies = pgTable("organization_data_retention_policies", {
-    id: text("id").notNull().primaryKey(),
-    organizationId: text("organization_id").notNull().unique().references(() => organizations.id, { onDelete: "cascade" }),
-    stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
-    deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationDataRetentionPolicies.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .unique()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
+  deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.organizationDataRetentionPolicies.createdAt.defaultFn!()),
 });
 
-export const organizationInvitations = pgTable("organization_invitations", {
+export const organizationInvitations = pgTable(
+  "organization_invitations",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
     emailNormalized: text("email_normalized").notNull(),
     role: text("role").notNull().default("member"),
@@ -814,76 +1203,110 @@ export const organizationInvitations = pgTable("organization_invitations", {
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     acceptedBy: text("accepted_by").references(() => users.id, { onDelete: "set null" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationInvitations.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationInvitations.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.organizationInvitations.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.organizationInvitations.updatedAt.defaultFn!()),
+  },
+  (table) => [
     index("organization_invitations_org_idx").on(table.orgId),
     index("organization_invitations_email_normalized_idx").on(table.emailNormalized),
-    uniqueIndex("organization_invitations_org_email_pending_idx").on(table.orgId, table.emailNormalized).where(sql`${table.status} = 'pending'`),
-  ]);
+    uniqueIndex("organization_invitations_org_email_pending_idx")
+      .on(table.orgId, table.emailNormalized)
+      .where(sql`${table.status} = 'pending'`),
+  ],
+);
 
-export const organizationMembershipRoles = pgTable("organization_membership_roles", {
-    membershipId: text("membership_id").notNull().references(() => organizationMemberships.id, { onDelete: "cascade" }),
-    roleId: text("role_id").notNull().references(() => organizationRoles.id, { onDelete: "cascade" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationMembershipRoles.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("organization_membership_roles_membership_role_idx").on(table.membershipId, table.roleId),
-  ]);
+export const organizationMembershipRoles = pgTable(
+  "organization_membership_roles",
+  {
+    membershipId: text("membership_id")
+      .notNull()
+      .references(() => organizationMemberships.id, { onDelete: "cascade" }),
+    roleId: text("role_id")
+      .notNull()
+      .references(() => organizationRoles.id, { onDelete: "cascade" }),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.organizationMembershipRoles.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("organization_membership_roles_membership_role_idx").on(table.membershipId, table.roleId)],
+);
 
-export const organizationMemberships = pgTable("organization_memberships", {
+export const organizationMemberships = pgTable(
+  "organization_memberships",
+  {
     id: text("id").notNull().primaryKey(),
-    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     role: text("role").notNull().default("member"),
     status: text("status").notNull().default("active"),
     ssoSource: text("sso_source"),
-}, (table) => [
+  },
+  (table) => [
     uniqueIndex("organization_memberships_org_user_idx").on(table.orgId, table.userId),
     index("organization_memberships_user_idx").on(table.userId),
-  ]);
+  ],
+);
 
-export const organizationRoles = pgTable("organization_roles", {
+export const organizationRoles = pgTable(
+  "organization_roles",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     permissions: jsonb("permissions").notNull().default({}),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationRoles.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationRoles.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("organization_roles_org_name_idx").on(table.orgId, table.name),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.organizationRoles.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.organizationRoles.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("organization_roles_org_name_idx").on(table.orgId, table.name)],
+);
 
 export const organizations = pgTable("organizations", {
-    id: text("id").notNull().primaryKey(),
-    name: text("name").notNull().unique(),
-    email: text("email"),
-    defaultIacBinary: text("default_iac_binary").default("terraform"),
-    defaultTerraformVersion: text("default_terraform_version").default("latest"),
-    costEstimationEnabled: boolean("cost_estimation_enabled").notNull().default(false),
-    sessionTimeout: bigint("session_timeout", { mode: "number" }),
-    sessionRemember: boolean("session_remember"),
-    collaboratorAuthPolicy: text("collaborator_auth_policy").notNull().default("password"),
-    userTokensEnabled: boolean("user_tokens_enabled").notNull().default(true),
-    defaultAgentPoolId: text("default_agent_pool_id"),
-    assessmentsEnforced: boolean("assessments_enforced").notNull().default(false),
-    globalModuleSharing: boolean("global_module_sharing").notNull().default(false),
-    globalProviderSharing: boolean("global_provider_sharing").notNull().default(false),
-    accessBetaTools: boolean("access_beta_tools").notNull().default(false),
-    workspaceLimit: bigint("workspace_limit", { mode: "number" }),
-    samlEnabled: boolean("saml_enabled").notNull().default(false),
-    ownersTeamSamlRoleId: text("owners_team_saml_role_id"),
-    allowForceDeleteWorkspaces: boolean("allow_force_delete_workspaces").notNull().default(true),
-    stacksEnabled: boolean("stacks_enabled").notNull().default(false),
-    showPreReleases: boolean("show_pre_releases").notNull().default(false),
-    defaultExecutionMode: text("default_execution_mode").default("remote"),
-    aggregatedCommitStatusEnabled: boolean("aggregated_commit_status_enabled").notNull().default(true),
-    sendPassingStatusesForUntriggeredSpeculativePlans: boolean("send_passing_statuses").notNull().default(false),
-    moduleTestTokenTtl: bigint("module_test_token_ttl", { mode: "number" }).notNull().default(600),
-    requireHardIsolation: boolean("require_hard_isolation").notNull().default(false),
+  id: text("id").notNull().primaryKey(),
+  name: text("name").notNull().unique(),
+  email: text("email"),
+  defaultIacBinary: text("default_iac_binary").default("terraform"),
+  defaultTerraformVersion: text("default_terraform_version").default("latest"),
+  costEstimationEnabled: boolean("cost_estimation_enabled").notNull().default(false),
+  sessionTimeout: bigint("session_timeout", { mode: "number" }),
+  sessionRemember: boolean("session_remember"),
+  collaboratorAuthPolicy: text("collaborator_auth_policy").notNull().default("password"),
+  userTokensEnabled: boolean("user_tokens_enabled").notNull().default(true),
+  defaultAgentPoolId: text("default_agent_pool_id"),
+  assessmentsEnforced: boolean("assessments_enforced").notNull().default(false),
+  globalModuleSharing: boolean("global_module_sharing").notNull().default(false),
+  globalProviderSharing: boolean("global_provider_sharing").notNull().default(false),
+  accessBetaTools: boolean("access_beta_tools").notNull().default(false),
+  workspaceLimit: bigint("workspace_limit", { mode: "number" }),
+  samlEnabled: boolean("saml_enabled").notNull().default(false),
+  ownersTeamSamlRoleId: text("owners_team_saml_role_id"),
+  allowForceDeleteWorkspaces: boolean("allow_force_delete_workspaces").notNull().default(true),
+  stacksEnabled: boolean("stacks_enabled").notNull().default(false),
+  showPreReleases: boolean("show_pre_releases").notNull().default(false),
+  defaultExecutionMode: text("default_execution_mode").default("remote"),
+  aggregatedCommitStatusEnabled: boolean("aggregated_commit_status_enabled").notNull().default(true),
+  sendPassingStatusesForUntriggeredSpeculativePlans: boolean("send_passing_statuses").notNull().default(false),
+  moduleTestTokenTtl: bigint("module_test_token_ttl", { mode: "number" }).notNull().default(600),
+  requireHardIsolation: boolean("require_hard_isolation").notNull().default(false),
 });
 
-export const outboxEvents = pgTable("outbox_events", {
+export const outboxEvents = pgTable(
+  "outbox_events",
+  {
     id: text("id").notNull().primaryKey(),
     topic: text("topic").notNull(),
     payload: jsonb("payload").notNull().default({}),
@@ -891,51 +1314,69 @@ export const outboxEvents = pgTable("outbox_events", {
     attempts: bigint("attempts", { mode: "number" }).notNull().default(0),
     lastError: text("last_error"),
     deliveredAt: bigint("delivered_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.outboxEvents.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.outboxEvents.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.outboxEvents.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.outboxEvents.updatedAt.defaultFn!()),
+  },
+  (table) => [
     index("outbox_events_status_updated_idx").on(table.status, table.updatedAt),
     index("outbox_events_topic_status_idx").on(table.topic, table.status),
-  ]);
+  ],
+);
 
 export const planExports = pgTable("plan_exports", {
-    id: text("id").notNull().primaryKey(),
-    planId: text("plan_id").notNull(),
-    dataType: text("data_type").notNull().default("sentinel-mock-bundle-v0"),
-    status: text("status").notNull().default("queued"),
-    downloadUrl: text("download_url"),
-    expiresAt: bigint("expires_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.planExports.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  planId: text("plan_id").notNull(),
+  dataType: text("data_type").notNull().default("sentinel-mock-bundle-v0"),
+  status: text("status").notNull().default("queued"),
+  downloadUrl: text("download_url"),
+  expiresAt: bigint("expires_at", { mode: "number" }),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.planExports.createdAt.defaultFn!()),
 });
 
 export const policies = pgTable("policies", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
-    policySetId: text("policy_set_id").references(() => policySets.id, { onDelete: "cascade" }),
-    policySetVersionId: text("policy_set_version_id").references(() => policySetVersions.id, { onDelete: "set null" }),
-    name: text("name").notNull(),
-    description: text("description"),
-    kind: text("kind").notNull().default("sentinel"),
-    enforcementLevel: text("enforcement_level").notNull().default("soft-mandatory"),
-    query: text("query"),
-    source: text("source"),
-    sourcePath: text("source_path"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policies.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+  policySetId: text("policy_set_id").references(() => policySets.id, { onDelete: "cascade" }),
+  policySetVersionId: text("policy_set_version_id").references(() => policySetVersions.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  kind: text("kind").notNull().default("sentinel"),
+  enforcementLevel: text("enforcement_level").notNull().default("soft-mandatory"),
+  query: text("query"),
+  source: text("source"),
+  sourcePath: text("source_path"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.policies.createdAt.defaultFn!()),
 });
 
-export const policyChecks = pgTable("policy_checks", {
+export const policyChecks = pgTable(
+  "policy_checks",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     policyId: text("policy_id").references(() => policies.id, { onDelete: "set null" }),
     policySetId: text("policy_set_id").references(() => policySets.id, { onDelete: "set null" }),
     status: text("status").notNull().default("pending"),
     result: jsonb("result"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policyChecks.createdAt.defaultFn!()),
-}, (table) => [
-    index("policy_checks_run_idx").on(table.runId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.policyChecks.createdAt.defaultFn!()),
+  },
+  (table) => [index("policy_checks_run_idx").on(table.runId)],
+);
 
-export const policyEvaluations = pgTable("policy_evaluations", {
+export const policyEvaluations = pgTable(
+  "policy_evaluations",
+  {
     id: text("id").notNull().primaryKey(),
     taskStageId: text("task_stage_id").references(() => taskStages.id, { onDelete: "cascade" }),
     runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
@@ -945,73 +1386,107 @@ export const policyEvaluations = pgTable("policy_evaluations", {
     resultCount: jsonb("result_count"),
     statusTimestamps: jsonb("status_timestamps"),
     statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policyEvaluations.createdAt.defaultFn!()),
-}, (table) => [
-    index("policy_evaluations_run_idx").on(table.runId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.policyEvaluations.createdAt.defaultFn!()),
+  },
+  (table) => [index("policy_evaluations_run_idx").on(table.runId)],
+);
 
-export const policySetExclusions = pgTable("policy_set_exclusions", {
+export const policySetExclusions = pgTable(
+  "policy_set_exclusions",
+  {
     id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("policy_set_exclusions_idx").on(table.policySetId, table.workspaceId),
-  ]);
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("policy_set_exclusions_idx").on(table.policySetId, table.workspaceId)],
+);
 
 export const policySetOutcomes = pgTable("policy_set_outcomes", {
-    id: text("id").notNull().primaryKey(),
-    policyEvaluationId: text("policy_evaluation_id").notNull().references(() => policyEvaluations.id, { onDelete: "cascade" }),
-    policySetName: text("policy_set_name"),
-    policyName: text("policy_name"),
-    enforcementLevel: text("enforcement_level").notNull().default("advisory"),
-    status: text("status").notNull().default("passed"),
-    query: text("query"),
-    description: text("description"),
-    error: text("error"),
-    overridable: boolean("overridable").default(false),
-    resultCount: jsonb("result_count"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policySetOutcomes.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  policyEvaluationId: text("policy_evaluation_id")
+    .notNull()
+    .references(() => policyEvaluations.id, { onDelete: "cascade" }),
+  policySetName: text("policy_set_name"),
+  policyName: text("policy_name"),
+  enforcementLevel: text("enforcement_level").notNull().default("advisory"),
+  status: text("status").notNull().default("passed"),
+  query: text("query"),
+  description: text("description"),
+  error: text("error"),
+  overridable: boolean("overridable").default(false),
+  resultCount: jsonb("result_count"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.policySetOutcomes.createdAt.defaultFn!()),
 });
 
 export const policySetParameters = pgTable("policy_set_parameters", {
-    id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
-    key: text("key").notNull(),
-    value: text("value").notNull(),
-    valueEncrypted: text("value_encrypted"),
-    sensitive: boolean("sensitive").default(false),
-    hcl: boolean("hcl").default(false),
+  id: text("id").notNull().primaryKey(),
+  policySetId: text("policy_set_id")
+    .notNull()
+    .references(() => policySets.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  value: text("value").notNull(),
+  valueEncrypted: text("value_encrypted"),
+  sensitive: boolean("sensitive").default(false),
+  hcl: boolean("hcl").default(false),
 });
 
-export const policySetProjectExclusions = pgTable("policy_set_project_exclusions", {
+export const policySetProjectExclusions = pgTable(
+  "policy_set_project_exclusions",
+  {
     id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("policy_set_project_exclusions_idx").on(table.policySetId, table.projectId),
-  ]);
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("policy_set_project_exclusions_idx").on(table.policySetId, table.projectId)],
+);
 
-export const policySetProjects = pgTable("policy_set_projects", {
+export const policySetProjects = pgTable(
+  "policy_set_projects",
+  {
     id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("policy_set_projects_idx").on(table.policySetId, table.projectId),
-  ]);
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("policy_set_projects_idx").on(table.policySetId, table.projectId)],
+);
 
-export const policySetTagSelectors = pgTable("policy_set_tag_selectors", {
+export const policySetTagSelectors = pgTable(
+  "policy_set_tag_selectors",
+  {
     id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value"),
     isExclude: boolean("is_exclude").notNull().default(false),
-}, (table) => [
-    index("policy_set_tag_selectors_pset_idx").on(table.policySetId),
-  ]);
+  },
+  (table) => [index("policy_set_tag_selectors_pset_idx").on(table.policySetId)],
+);
 
-export const policySetVersions = pgTable("policy_set_versions", {
+export const policySetVersions = pgTable(
+  "policy_set_versions",
+  {
     id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
     source: text("source").notNull().default("tfe-api"),
     status: text("status").notNull().default("pending"),
     statusTimestamps: jsonb("status_timestamps").notNull().default({}),
@@ -1019,48 +1494,70 @@ export const policySetVersions = pgTable("policy_set_versions", {
     ingressAttributes: jsonb("ingress_attributes"),
     error: text("error"),
     archivePath: text("archive_path"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policySetVersions.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policySetVersions.updatedAt.defaultFn!()),
-}, (table) => [
-    index("policy_set_versions_set_created_idx").on(table.policySetId, table.createdAt),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.policySetVersions.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.policySetVersions.updatedAt.defaultFn!()),
+  },
+  (table) => [index("policy_set_versions_set_created_idx").on(table.policySetId, table.createdAt)],
+);
 
-export const policySetWorkspaces = pgTable("policy_set_workspaces", {
+export const policySetWorkspaces = pgTable(
+  "policy_set_workspaces",
+  {
     id: text("id").notNull().primaryKey(),
-    policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("policy_set_workspaces_idx").on(table.policySetId, table.workspaceId),
-  ]);
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("policy_set_workspaces_idx").on(table.policySetId, table.workspaceId)],
+);
 
 export const policySets = pgTable("policy_sets", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    description: text("description"),
-    kind: text("kind").notNull().default("sentinel"),
-    global: boolean("global").default(false),
-    overridable: boolean("overridable").default(false),
-    agentEnabled: boolean("agent_enabled").default(false),
-    policyToolVersion: text("policy_tool_version"),
-    policiesPath: text("policies_path"),
-    vcsRepo: jsonb("vcs_repo"),
-    policyUpdatePatterns: jsonb("policy_update_patterns").notNull().default([]),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policySets.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  kind: text("kind").notNull().default("sentinel"),
+  global: boolean("global").default(false),
+  overridable: boolean("overridable").default(false),
+  agentEnabled: boolean("agent_enabled").default(false),
+  policyToolVersion: text("policy_tool_version"),
+  policiesPath: text("policies_path"),
+  vcsRepo: jsonb("vcs_repo"),
+  policyUpdatePatterns: jsonb("policy_update_patterns").notNull().default([]),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.policySets.createdAt.defaultFn!()),
 });
 
-export const projectTags = pgTable("project_tags", {
+export const projectTags = pgTable(
+  "project_tags",
+  {
     id: text("id").notNull().primaryKey(),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value"),
-}, (table) => [
-    uniqueIndex("project_tags_project_key_idx").on(table.projectId, table.key),
-  ]);
+  },
+  (table) => [uniqueIndex("project_tags_project_key_idx").on(table.projectId, table.key)],
+);
 
-export const projects = pgTable("projects", {
+export const projects = pgTable(
+  "projects",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     defaultExecutionMode: text("default_execution_mode").default("remote"),
@@ -1069,57 +1566,81 @@ export const projects = pgTable("projects", {
     defaultAgentPoolId: text("default_agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
     isDefault: boolean("is_default").notNull().default(false),
     allowedExecutionModes: text("allowed_execution_modes"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.projects.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.projects.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("projects_org_name_idx").on(table.orgId, table.name),
     uniqueIndex("projects_org_default_idx").on(table.orgId).where(sql`${table.isDefault} = true`),
     uniqueIndex("projects_id_org_idx").on(table.id, table.orgId),
-  ]);
+  ],
+);
 
-export const providerSets = pgTable("provider_sets", {
+export const providerSets = pgTable(
+  "provider_sets",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     providerSource: text("provider_source").notNull(),
     configurationHcl: text("configuration_hcl"),
     global: boolean("global").default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.providerSets.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("provider_sets_org_name_idx").on(table.orgId, table.name),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.providerSets.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("provider_sets_org_name_idx").on(table.orgId, table.name)],
+);
 
-export const rateLimitBuckets = pgTable("rate_limit_buckets", {
+export const rateLimitBuckets = pgTable(
+  "rate_limit_buckets",
+  {
     bucket: text("bucket").notNull().primaryKey(),
     windowStart: bigint("window_start", { mode: "number" }).notNull(),
     count: bigint("count", { mode: "number" }).notNull().default(1),
-}, (table) => [
-    index("rate_limit_buckets_window_idx").on(table.windowStart),
-  ]);
+  },
+  (table) => [index("rate_limit_buckets_window_idx").on(table.windowStart)],
+);
 
-export const refreshSessions = pgTable("refresh_sessions", {
+export const refreshSessions = pgTable(
+  "refresh_sessions",
+  {
     id: text("id").notNull().primaryKey(),
     familyId: text("family_id").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
-    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     accessTokenId: text("access_token_id").notNull(),
     ipAddress: text("ip_address"),
     userAgent: text("user_agent"),
     rotatedAt: bigint("rotated_at", { mode: "number" }),
     revokedAt: bigint("revoked_at", { mode: "number" }),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.refreshSessions.createdAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.refreshSessions.createdAt.defaultFn!()),
     mfaVerified: boolean("mfa_verified").notNull().default(false),
     successorHash: text("successor_hash"),
     rotatedAtMs: bigint("rotated_at_ms", { mode: "number" }),
-}, (table) => [
+  },
+  (table) => [
     index("refresh_sessions_family_idx").on(table.familyId),
     index("refresh_sessions_user_idx").on(table.userId),
-  ]);
+  ],
+);
 
-export const registryComponents = pgTable("registry_components", {
+export const registryComponents = pgTable(
+  "registry_components",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     namespace: text("namespace").notNull().default("hashicorp"),
     description: text("description"),
@@ -1128,15 +1649,23 @@ export const registryComponents = pgTable("registry_components", {
     version: text("version").notNull().default("0.1.0"),
     status: text("status").notNull().default("pending"),
     publishedAt: bigint("published_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryComponents.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.registryComponents.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_components_org_ns_name_idx").on(table.orgId, table.namespace, table.name),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryComponents.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() =>
+      sqliteSchema.registryComponents.updatedAt.defaultFn!(),
+    ),
+  },
+  (table) => [uniqueIndex("registry_components_org_ns_name_idx").on(table.orgId, table.namespace, table.name)],
+);
 
-export const registryGpgKeys = pgTable("registry_gpg_keys", {
+export const registryGpgKeys = pgTable(
+  "registry_gpg_keys",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     namespace: text("namespace").notNull(),
     keyId: text("key_id").notNull(),
     fingerprint: text("fingerprint").notNull(),
@@ -1144,15 +1673,23 @@ export const registryGpgKeys = pgTable("registry_gpg_keys", {
     source: text("source").notNull().default(""),
     sourceUrl: text("source_url"),
     trustSignature: text("trust_signature").notNull().default(""),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryGpgKeys.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryGpgKeys.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_gpg_keys_namespace_key_idx").on(table.namespace, table.keyId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryGpgKeys.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryGpgKeys.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("registry_gpg_keys_namespace_key_idx").on(table.namespace, table.keyId)],
+);
 
-export const registryModuleVersions = pgTable("registry_module_versions", {
+export const registryModuleVersions = pgTable(
+  "registry_module_versions",
+  {
     id: text("id").notNull().primaryKey(),
-    moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+    moduleId: text("module_id")
+      .notNull()
+      .references(() => registryModules.id, { onDelete: "cascade" }),
     version: text("version").notNull(),
     status: text("status").notNull().default("pending"),
     archivePath: text("archive_path"),
@@ -1167,15 +1704,23 @@ export const registryModuleVersions = pgTable("registry_module_versions", {
     metadata: jsonb("metadata"),
     ingestError: text("ingest_error"),
     publishedAt: bigint("published_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryModuleVersions.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.registryModuleVersions.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_module_versions_mod_ver_idx").on(table.moduleId, table.version),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryModuleVersions.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() =>
+      sqliteSchema.registryModuleVersions.updatedAt.defaultFn!(),
+    ),
+  },
+  (table) => [uniqueIndex("registry_module_versions_mod_ver_idx").on(table.moduleId, table.version)],
+);
 
-export const registryModules = pgTable("registry_modules", {
+export const registryModules = pgTable(
+  "registry_modules",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     namespace: text("namespace").notNull(),
     name: text("name").notNull(),
     provider: text("provider").notNull(),
@@ -1194,174 +1739,272 @@ export const registryModules = pgTable("registry_modules", {
     lastSuccessfulSyncAt: bigint("last_successful_sync_at", { mode: "number" }),
     lastSyncAttemptAt: bigint("last_sync_attempt_at", { mode: "number" }),
     lastSyncError: text("last_sync_error"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryModules.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.registryModules.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_modules_ns_name_provider_idx").on(table.namespace, table.name, table.provider),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryModules.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() =>
+      sqliteSchema.registryModules.updatedAt.defaultFn!(),
+    ),
+  },
+  (table) => [uniqueIndex("registry_modules_ns_name_provider_idx").on(table.namespace, table.name, table.provider)],
+);
 
-export const registryPartnerships = pgTable("registry_partnerships", {
+export const registryPartnerships = pgTable(
+  "registry_partnerships",
+  {
     id: text("id").notNull().primaryKey(),
-    producerOrgId: text("producer_org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    consumerOrgId: text("consumer_org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    producerOrgId: text("producer_org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    consumerOrgId: text("consumer_org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     modules: boolean("modules").notNull().default(false),
     providers: boolean("providers").notNull().default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryPartnerships.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_partnerships_producer_consumer_idx").on(table.producerOrgId, table.consumerOrgId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryPartnerships.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("registry_partnerships_producer_consumer_idx").on(table.producerOrgId, table.consumerOrgId)],
+);
 
-export const registryProviderPlatforms = pgTable("registry_provider_platforms", {
+export const registryProviderPlatforms = pgTable(
+  "registry_provider_platforms",
+  {
     id: text("id").notNull().primaryKey(),
-    versionId: text("version_id").notNull().references(() => registryProviderVersions.id, { onDelete: "cascade" }),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => registryProviderVersions.id, { onDelete: "cascade" }),
     os: text("os").notNull(),
     arch: text("arch").notNull(),
     filename: text("filename").notNull(),
     downloadUrl: text("download_url").notNull(),
     shasum: text("shasum").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryProviderPlatforms.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_provider_platforms_ver_os_arch_idx").on(table.versionId, table.os, table.arch),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryProviderPlatforms.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("registry_provider_platforms_ver_os_arch_idx").on(table.versionId, table.os, table.arch)],
+);
 
-export const registryProviderVersions = pgTable("registry_provider_versions", {
+export const registryProviderVersions = pgTable(
+  "registry_provider_versions",
+  {
     id: text("id").notNull().primaryKey(),
-    providerId: text("provider_id").notNull().references(() => registryProviders.id, { onDelete: "cascade" }),
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => registryProviders.id, { onDelete: "cascade" }),
     version: text("version").notNull(),
     protocols: jsonb("protocols").default(["5.0"]),
     keyId: text("key_id"),
     shasumsUrl: text("shasums_url"),
     shasumsSignatureUrl: text("shasums_signature_url"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryProviderVersions.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_provider_versions_prov_ver_idx").on(table.providerId, table.version),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryProviderVersions.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("registry_provider_versions_prov_ver_idx").on(table.providerId, table.version)],
+);
 
-export const registryProviders = pgTable("registry_providers", {
+export const registryProviders = pgTable(
+  "registry_providers",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     namespace: text("namespace").notNull(),
     type: text("type").notNull(),
     registryName: text("registry_name").notNull().default("private"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryProviders.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("registry_providers_ns_type_idx").on(table.namespace, table.type),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.registryProviders.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("registry_providers_ns_type_idx").on(table.namespace, table.type)],
+);
 
-export const registrySyncLeases = pgTable("registry_sync_leases", {
+export const registrySyncLeases = pgTable(
+  "registry_sync_leases",
+  {
     key: text("key").notNull().primaryKey(),
     owner: text("owner").notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-}, (table) => [
-    index("registry_sync_leases_expires_idx").on(table.expiresAt),
-  ]);
+  },
+  (table) => [index("registry_sync_leases_expires_idx").on(table.expiresAt)],
+);
 
-export const remoteStateConsumers = pgTable("remote_state_consumers", {
+export const remoteStateConsumers = pgTable(
+  "remote_state_consumers",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    consumerWorkspaceId: text("consumer_workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("remote_state_consumers_ws_consumer_idx").on(table.workspaceId, table.consumerWorkspaceId),
-  ]);
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    consumerWorkspaceId: text("consumer_workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("remote_state_consumers_ws_consumer_idx").on(table.workspaceId, table.consumerWorkspaceId)],
+);
 
-export const reservedTagKeys = pgTable("reserved_tag_keys", {
+export const reservedTagKeys = pgTable(
+  "reserved_tag_keys",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     disableOverrides: boolean("disable_overrides").notNull().default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.reservedTagKeys.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.reservedTagKeys.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("reserved_tag_keys_org_key_idx").on(table.orgId, table.key),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.reservedTagKeys.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.reservedTagKeys.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("reserved_tag_keys_org_key_idx").on(table.orgId, table.key)],
+);
 
-export const runComments = pgTable("run_comments", {
+export const runComments = pgTable(
+  "run_comments",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
     body: text("body").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runComments.createdAt.defaultFn!()),
-}, (table) => [
-    index("run_comments_run_created_idx").on(table.runId, table.createdAt, table.id),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.runComments.createdAt.defaultFn!()),
+  },
+  (table) => [index("run_comments_run_created_idx").on(table.runId, table.createdAt, table.id)],
+);
 
-export const runExplanations = pgTable("run_explanations", {
+export const runExplanations = pgTable(
+  "run_explanations",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     model: text("model").notNull(),
     content: text("content").notNull(),
     thinking: text("thinking"),
     cacheKey: text("input_hash").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runExplanations.createdAt.defaultFn!()),
-}, (table) => [
-    index("run_explanations_run_kind_idx").on(table.runId, table.kind),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.runExplanations.createdAt.defaultFn!()),
+  },
+  (table) => [index("run_explanations_run_kind_idx").on(table.runId, table.kind)],
+);
 
-export const runProvenanceCapsules = pgTable("run_provenance_capsules", {
+export const runProvenanceCapsules = pgTable(
+  "run_provenance_capsules",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     schemaVersion: bigint("schema_version", { mode: "number" }).notNull().default(1),
     publicManifest: jsonb("public_manifest").notNull(),
     manifestSha256: text("manifest_sha256").notNull(),
     executionMaterial: text("execution_material").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runProvenanceCapsules.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("run_provenance_capsules_run_idx").on(table.runId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.runProvenanceCapsules.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("run_provenance_capsules_run_idx").on(table.runId)],
+);
 
-export const runTaskResults = pgTable("run_task_results", {
+export const runTaskResults = pgTable(
+  "run_task_results",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-    runTaskId: text("run_task_id").notNull().references(() => runTasks.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    runTaskId: text("run_task_id")
+      .notNull()
+      .references(() => runTasks.id, { onDelete: "cascade" }),
     taskStageId: text("task_stage_id").references(() => taskStages.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("passed"),
     message: text("message"),
     url: text("url"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runTaskResults.createdAt.defaultFn!()),
-}, (table) => [
-    index("run_task_results_run_idx").on(table.runId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.runTaskResults.createdAt.defaultFn!()),
+  },
+  (table) => [index("run_task_results_run_idx").on(table.runId)],
+);
 
 export const runTasks = pgTable("run_tasks", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    description: text("description"),
-    url: text("url").notNull(),
-    category: text("category").default("general"),
-    enabled: boolean("enabled").default(true),
-    hmacKey: text("hmac_key"),
-    globalConfiguration: jsonb("global_configuration"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runTasks.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  url: text("url").notNull(),
+  category: text("category").default("general"),
+  enabled: boolean("enabled").default(true),
+  hmacKey: text("hmac_key"),
+  globalConfiguration: jsonb("global_configuration"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.runTasks.createdAt.defaultFn!()),
 });
 
-export const runTokens = pgTable("run_tokens", {
+export const runTokens = pgTable(
+  "run_tokens",
+  {
     id: text("id").notNull().primaryKey(),
     tokenHash: text("token_hash").notNull().unique(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     revokedAt: bigint("revoked_at", { mode: "number" }),
-}, (table) => [
-    index("run_tokens_run_id_idx").on(table.runId),
-  ]);
+  },
+  (table) => [index("run_tokens_run_id_idx").on(table.runId)],
+);
 
-export const runTriggers = pgTable("run_triggers", {
+export const runTriggers = pgTable(
+  "run_triggers",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    sourceWorkspaceId: text("source_workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runTriggers.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("run_triggers_ws_src_idx").on(table.workspaceId, table.sourceWorkspaceId),
-  ]);
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    sourceWorkspaceId: text("source_workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.runTriggers.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("run_triggers_ws_src_idx").on(table.workspaceId, table.sourceWorkspaceId)],
+);
 
-export const runs = pgTable("runs", {
+export const runs = pgTable(
+  "runs",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, { onDelete: "set null" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    configurationVersionId: text("configuration_version_id").references(() => configurationVersions.id, {
+      onDelete: "set null",
+    }),
     agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     status: text("status").notNull().default("pending"),
@@ -1404,114 +2047,170 @@ export const runs = pgTable("runs", {
     scheduledAt: bigint("scheduled_at", { mode: "number" }),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
-}, (table) => [
+  },
+  (table) => [
     index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
     index("runs_status_created_idx").on(table.status, table.createdAt),
     index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
     index("runs_configuration_version_idx").on(table.configurationVersionId),
-  ]);
+  ],
+);
 
 export const samlSettings = pgTable("saml_settings", {
-    id: text("id").notNull().primaryKey(),
-    enabled: boolean("enabled").notNull().default(false),
-    debug: boolean("debug").notNull().default(false),
-    oldIdpCert: text("old_idp_cert"),
-    idpCert: text("idp_cert"),
-    idpEntityId: text("idp_entity_id"),
-    sloEndpointUrl: text("slo_endpoint_url"),
-    ssoEndpointUrl: text("sso_endpoint_url"),
-    attrUsername: text("attr_username").notNull().default("Username"),
-    attrEmail: text("attr_email").notNull().default("email"),
-    attrGroups: text("attr_groups").notNull().default("MemberOf"),
-    attrSiteAdmin: text("attr_site_admin").notNull().default("SiteAdmin"),
-    siteAdminRole: text("site_admin_role").notNull().default("site-admins"),
-    ssoApiTokenSessionTimeout: bigint("sso_api_token_session_timeout", { mode: "number" }).notNull().default(1209600),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.samlSettings.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  debug: boolean("debug").notNull().default(false),
+  oldIdpCert: text("old_idp_cert"),
+  idpCert: text("idp_cert"),
+  idpEntityId: text("idp_entity_id"),
+  sloEndpointUrl: text("slo_endpoint_url"),
+  ssoEndpointUrl: text("sso_endpoint_url"),
+  attrUsername: text("attr_username").notNull().default("Username"),
+  attrEmail: text("attr_email").notNull().default("email"),
+  attrGroups: text("attr_groups").notNull().default("MemberOf"),
+  attrSiteAdmin: text("attr_site_admin").notNull().default("SiteAdmin"),
+  siteAdminRole: text("site_admin_role").notNull().default("site-admins"),
+  ssoApiTokenSessionTimeout: bigint("sso_api_token_session_timeout", { mode: "number" }).notNull().default(1209600),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.samlSettings.updatedAt.defaultFn!()),
 });
 
-export const scimGroupMemberships = pgTable("scim_group_memberships", {
+export const scimGroupMemberships = pgTable(
+  "scim_group_memberships",
+  {
     id: text("id").notNull().primaryKey(),
-    groupId: text("group_id").notNull().references(() => scimGroups.id, { onDelete: "cascade" }),
-    scimUserId: text("scim_user_id").notNull().references(() => scimUserIdentities.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("scim_group_memberships_group_user_idx").on(table.groupId, table.scimUserId),
-  ]);
+    groupId: text("group_id")
+      .notNull()
+      .references(() => scimGroups.id, { onDelete: "cascade" }),
+    scimUserId: text("scim_user_id")
+      .notNull()
+      .references(() => scimUserIdentities.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("scim_group_memberships_group_user_idx").on(table.groupId, table.scimUserId)],
+);
 
-export const scimGroups = pgTable("scim_groups", {
+export const scimGroups = pgTable(
+  "scim_groups",
+  {
     id: text("id").notNull().primaryKey(),
     name: text("name").notNull(),
     externalId: text("external_id"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.scimGroups.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.scimGroups.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.scimGroups.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.scimGroups.updatedAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("scim_groups_name_idx").on(table.name),
     uniqueIndex("scim_groups_external_id_idx").on(table.externalId),
-  ]);
+  ],
+);
 
 export const scimSettings = pgTable("scim_settings", {
-    id: text("id").notNull().primaryKey(),
-    enabled: boolean("enabled").notNull().default(false),
-    paused: boolean("paused").notNull().default(false),
-    siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => scimGroups.id, { onDelete: "set null" }),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.scimSettings.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  paused: boolean("paused").notNull().default(false),
+  siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => scimGroups.id, { onDelete: "set null" }),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.scimSettings.updatedAt.defaultFn!()),
 });
 
 export const scimTokens = pgTable("scim_tokens", {
-    id: text("id").notNull().primaryKey(),
-    tokenHash: text("token_hash").notNull().unique(),
-    description: text("description"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.scimTokens.createdAt.defaultFn!()),
-    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-    lastUsedAt: bigint("last_used_at", { mode: "number" }),
+  id: text("id").notNull().primaryKey(),
+  tokenHash: text("token_hash").notNull().unique(),
+  description: text("description"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.scimTokens.createdAt.defaultFn!()),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  lastUsedAt: bigint("last_used_at", { mode: "number" }),
 });
 
-export const scimUserIdentities = pgTable("scim_user_identities", {
+export const scimUserIdentities = pgTable(
+  "scim_user_identities",
+  {
     id: text("id").notNull().primaryKey(),
-    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     username: text("username").notNull(),
     externalId: text("external_id"),
-    createdAt: bigint("created_at", { mode: "number" }).$defaultFn(() => sqliteSchema.scimUserIdentities.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.scimUserIdentities.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" }).$defaultFn(() =>
+      sqliteSchema.scimUserIdentities.createdAt.defaultFn!(),
+    ),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.scimUserIdentities.updatedAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("scim_user_identities_user_idx").on(table.userId),
     uniqueIndex("scim_user_identities_username_idx").on(table.username),
     uniqueIndex("scim_user_identities_external_id_idx").on(table.externalId),
-  ]);
+  ],
+);
 
 export const siteDataRetentionPolicies = pgTable("site_data_retention_policies", {
-    id: text("id").notNull().primaryKey(),
-    stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
-    deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.siteDataRetentionPolicies.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.siteDataRetentionPolicies.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  stateVersionsCount: bigint("state_versions_count", { mode: "number" }),
+  deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.siteDataRetentionPolicies.createdAt.defaultFn!()),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.siteDataRetentionPolicies.updatedAt.defaultFn!()),
 });
 
-export const sshKeys = pgTable("ssh_keys", {
+export const sshKeys = pgTable(
+  "ssh_keys",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     value: text("value").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.sshKeys.createdAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("ssh_keys_org_name_idx").on(table.orgId, table.name),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.sshKeys.createdAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("ssh_keys_org_name_idx").on(table.orgId, table.name)],
+);
 
-export const ssoChallenges = pgTable("sso_challenges", {
+export const ssoChallenges = pgTable(
+  "sso_challenges",
+  {
     id: text("id").notNull().primaryKey(),
     kind: text("kind").notNull(),
     payload: jsonb("payload").notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-}, (table) => [
+  },
+  (table) => [
     index("sso_challenges_kind_expires_idx").on(table.kind, table.expiresAt),
     index("sso_challenges_expires_idx").on(table.expiresAt),
-  ]);
+  ],
+);
 
-export const stackAgentJobs = pgTable("stack_agent_jobs", {
+export const stackAgentJobs = pgTable(
+  "stack_agent_jobs",
+  {
     id: text("id").notNull().primaryKey(),
-    stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
-    deploymentRunId: text("deployment_run_id").notNull().references(() => stackRecords.id, { onDelete: "cascade" }),
-    stepId: text("step_id").notNull().references(() => stackRecords.id, { onDelete: "cascade" }),
-    agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
+    stackId: text("stack_id")
+      .notNull()
+      .references(() => stacks.id, { onDelete: "cascade" }),
+    deploymentRunId: text("deployment_run_id")
+      .notNull()
+      .references(() => stackRecords.id, { onDelete: "cascade" }),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => stackRecords.id, { onDelete: "cascade" }),
+    agentPoolId: text("agent_pool_id")
+      .notNull()
+      .references(() => agentPools.id, { onDelete: "cascade" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     phase: text("phase").notNull(),
     iacBinary: text("iac_binary").notNull().default("terraform"),
@@ -1522,91 +2221,141 @@ export const stackAgentJobs = pgTable("stack_agent_jobs", {
     errorMessage: text("error_message"),
     claimedAt: bigint("claimed_at", { mode: "number" }),
     completedAt: bigint("completed_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackAgentJobs.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackAgentJobs.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stackAgentJobs.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stackAgentJobs.updatedAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("stack_agent_jobs_step_phase_idx").on(table.stepId, table.phase),
     index("stack_agent_jobs_pool_status_created_idx").on(table.agentPoolId, table.status, table.createdAt),
     index("stack_agent_jobs_run_status_idx").on(table.deploymentRunId, table.status),
-  ]);
+  ],
+);
 
-export const stackRecords = pgTable("stack_records", {
+export const stackRecords = pgTable(
+  "stack_records",
+  {
     id: text("id").notNull().primaryKey(),
-    stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
+    stackId: text("stack_id")
+      .notNull()
+      .references(() => stacks.id, { onDelete: "cascade" }),
     parentId: text("parent_id"),
     recordType: text("record_type").notNull(),
     name: text("name"),
     status: text("status").notNull().default("pending"),
     payload: jsonb("payload").notNull().default({}),
     payloadSchemaVersion: bigint("payload_schema_version", { mode: "number" }).notNull().default(0),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackRecords.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackRecords.updatedAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stackRecords.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stackRecords.updatedAt.defaultFn!()),
+  },
+  (table) => [
     index("stack_records_stack_type_idx").on(table.stackId, table.recordType),
     index("stack_records_parent_type_idx").on(table.parentId, table.recordType),
-    foreignKey({ columns: [table.parentId], foreignColumns: [table.id], name: "stack_records_parent_id_fk" }).onDelete("set null"),
-  ]);
+    foreignKey({ columns: [table.parentId], foreignColumns: [table.id], name: "stack_records_parent_id_fk" }).onDelete(
+      "set null",
+    ),
+  ],
+);
 
-export const stackStateLocks = pgTable("stack_state_locks", {
+export const stackStateLocks = pgTable(
+  "stack_state_locks",
+  {
     id: text("id").notNull().primaryKey(),
-    stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
+    stackId: text("stack_id")
+      .notNull()
+      .references(() => stacks.id, { onDelete: "cascade" }),
     deployment: text("deployment").notNull(),
     runId: text("run_id"),
     fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
     acquiredAt: bigint("acquired_at", { mode: "number" }),
     leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }),
     releasedAt: bigint("released_at", { mode: "number" }),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackStateLocks.updatedAt.defaultFn!()),
-}, (table) => [
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stackStateLocks.updatedAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("stack_state_locks_stack_deployment_idx").on(table.stackId, table.deployment),
     index("stack_state_locks_run_idx").on(table.runId),
-  ]);
+  ],
+);
 
-export const stackVariableSets = pgTable("stack_variable_sets", {
-    stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
-    variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
-}, (table) => [
-    primaryKey({ columns: [table.stackId, table.variableSetId] }),
-  ]);
+export const stackVariableSets = pgTable(
+  "stack_variable_sets",
+  {
+    stackId: text("stack_id")
+      .notNull()
+      .references(() => stacks.id, { onDelete: "cascade" }),
+    variableSetId: text("variable_set_id")
+      .notNull()
+      .references(() => variableSets.id, { onDelete: "cascade" }),
+  },
+  (table) => [primaryKey({ columns: [table.stackId, table.variableSetId] })],
+);
 
 export const stacks = pgTable("stacks", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
-    agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
-    executionMode: text("execution_mode").notNull().default("remote"),
-    name: text("name").notNull(),
-    description: text("description"),
-    speculativeEnabled: boolean("speculative_enabled").notNull().default(false),
-    workingDirectory: text("working_directory"),
-    triggerPatterns: jsonb("trigger_patterns").notNull().default([]),
-    triggerDisabled: boolean("trigger_disabled").notNull().default(false),
-    debuggingMode: boolean("debugging_mode").notNull().default(false),
-    vcsIdentifier: text("vcs_identifier"),
-    vcsServiceProvider: text("vcs_service_provider"),
-    vcsBranch: text("vcs_branch"),
-    vcsTagsRegex: text("vcs_tags_regex"),
-    vcsDisplayIdentifier: text("vcs_display_identifier"),
-    vcsRepositoryHttpUrl: text("vcs_repository_http_url"),
-    vcsSparseCheckoutPattern: text("vcs_sparse_checkout_pattern"),
-    vcsOAuthTokenId: text("vcs_oauth_token_id"),
-    vcsGhaInstallationId: text("vcs_gha_installation_id"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stacks.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stacks.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+  agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
+  executionMode: text("execution_mode").notNull().default("remote"),
+  name: text("name").notNull(),
+  description: text("description"),
+  speculativeEnabled: boolean("speculative_enabled").notNull().default(false),
+  workingDirectory: text("working_directory"),
+  triggerPatterns: jsonb("trigger_patterns").notNull().default([]),
+  triggerDisabled: boolean("trigger_disabled").notNull().default(false),
+  debuggingMode: boolean("debugging_mode").notNull().default(false),
+  vcsIdentifier: text("vcs_identifier"),
+  vcsServiceProvider: text("vcs_service_provider"),
+  vcsBranch: text("vcs_branch"),
+  vcsTagsRegex: text("vcs_tags_regex"),
+  vcsDisplayIdentifier: text("vcs_display_identifier"),
+  vcsRepositoryHttpUrl: text("vcs_repository_http_url"),
+  vcsSparseCheckoutPattern: text("vcs_sparse_checkout_pattern"),
+  vcsOAuthTokenId: text("vcs_oauth_token_id"),
+  vcsGhaInstallationId: text("vcs_gha_installation_id"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.stacks.createdAt.defaultFn!()),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.stacks.updatedAt.defaultFn!()),
 });
 
-export const stateOutputIndex = pgTable("state_output_index", {
+export const stateOutputIndex = pgTable(
+  "state_output_index",
+  {
     outputId: text("output_id").notNull().primaryKey(),
-    stateVersionId: text("state_version_id").notNull().references(() => stateVersions.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    stateVersionId: text("state_version_id")
+      .notNull()
+      .references(() => stateVersions.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stateOutputIndex.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stateOutputIndex.createdAt.defaultFn!()),
+  },
+  (table) => [
     index("state_output_index_workspace_idx").on(table.workspaceId),
     index("state_output_index_state_idx").on(table.stateVersionId),
-  ]);
+  ],
+);
 
-export const stateVersions = pgTable("state_versions", {
+export const stateVersions = pgTable(
+  "state_versions",
+  {
     id: text("id").notNull().primaryKey(),
     workspaceId: text("workspace_id").notNull(),
     serial: bigint("serial", { mode: "number" }).notNull(),
@@ -1627,91 +2376,160 @@ export const stateVersions = pgTable("state_versions", {
     terraformVersion: text("terraform_version"),
     intermediate: boolean("intermediate").notNull().default(false),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stateVersions.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.stateVersions.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
     index("state_versions_run_idx").on(table.runId),
-    foreignKey({ columns: [table.workspaceId], foreignColumns: [workspaces.id], name: "state_versions_workspace_fk" }).onDelete("cascade"),
-    foreignKey({ columns: [table.createdBy], foreignColumns: [users.id], name: "state_versions_created_by_users_id_fk" }).onDelete("set null"),
-  ]);
+    foreignKey({
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+      name: "state_versions_workspace_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.createdBy],
+      foreignColumns: [users.id],
+      name: "state_versions_created_by_users_id_fk",
+    }).onDelete("set null"),
+  ],
+);
 
 export const supportBundleRequests = pgTable("support_bundle_requests", {
-    id: text("id").notNull().primaryKey(),
-    status: text("status").notNull().default("pending"),
-    downloadUrl: text("download_url"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.supportBundleRequests.createdAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  status: text("status").notNull().default("pending"),
+  downloadUrl: text("download_url"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.supportBundleRequests.createdAt.defaultFn!()),
 });
 
 export const systemApiTokens = pgTable("system_api_tokens", {
-    id: text("id").notNull().primaryKey(),
-    tokenHash: text("token_hash").notNull().unique(),
-    description: text("description").notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.systemApiTokens.createdAt.defaultFn!()),
-    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-    lastUsedAt: bigint("last_used_at", { mode: "number" }),
-    revokedAt: bigint("revoked_at", { mode: "number" }),
+  id: text("id").notNull().primaryKey(),
+  tokenHash: text("token_hash").notNull().unique(),
+  description: text("description").notNull(),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.systemApiTokens.createdAt.defaultFn!()),
+  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  lastUsedAt: bigint("last_used_at", { mode: "number" }),
+  revokedAt: bigint("revoked_at", { mode: "number" }),
 });
 
-export const taskStages = pgTable("task_stages", {
+export const taskStages = pgTable(
+  "task_stages",
+  {
     id: text("id").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     stage: text("stage").notNull(),
     status: text("status").notNull().default("pending"),
     statusTimestamps: jsonb("status_timestamps"),
     statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.taskStages.createdAt.defaultFn!()),
-}, (table) => [
-    index("task_stages_run_idx").on(table.runId),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.taskStages.createdAt.defaultFn!()),
+  },
+  (table) => [index("task_stages_run_idx").on(table.runId)],
+);
 
-export const teamMemberships = pgTable("team_memberships", {
+export const teamMemberships = pgTable(
+  "team_memberships",
+  {
     id: text("id").notNull().primaryKey(),
-    teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
-    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.teamMemberships.createdAt.defaultFn!()),
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.teamMemberships.createdAt.defaultFn!()),
     ssoSource: text("sso_source"),
-}, (table) => [
+  },
+  (table) => [
     uniqueIndex("team_memberships_team_user_idx").on(table.teamId, table.userId),
     index("team_memberships_user_idx").on(table.userId),
-  ]);
+  ],
+);
 
-export const teamProjects = pgTable("team_projects", {
+export const teamProjects = pgTable(
+  "team_projects",
+  {
     id: text("id").notNull().primaryKey(),
-    teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     organizationId: text("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
     access: text("access").notNull().default("read"),
     projectAccess: jsonb("project_access"),
     workspaceAccess: jsonb("workspace_access"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.teamProjects.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.teamProjects.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("team_projects_team_project_idx").on(table.teamId, table.projectId),
-    foreignKey({ columns: [table.teamId, table.organizationId], foreignColumns: [teams.id, teams.orgId], name: "team_projects_team_org_fk" }),
-    foreignKey({ columns: [table.projectId, table.organizationId], foreignColumns: [projects.id, projects.orgId], name: "team_projects_project_org_fk" }),
-  ]);
+    foreignKey({
+      columns: [table.teamId, table.organizationId],
+      foreignColumns: [teams.id, teams.orgId],
+      name: "team_projects_team_org_fk",
+    }),
+    foreignKey({
+      columns: [table.projectId, table.organizationId],
+      foreignColumns: [projects.id, projects.orgId],
+      name: "team_projects_project_org_fk",
+    }),
+  ],
+);
 
-export const teamScimGroupMappings = pgTable("team_scim_group_mappings", {
-    teamId: text("team_id").notNull().primaryKey().references(() => teams.id, { onDelete: "cascade" }),
-    scimGroupId: text("scim_group_id").notNull().references(() => scimGroups.id, { onDelete: "cascade" }),
+export const teamScimGroupMappings = pgTable(
+  "team_scim_group_mappings",
+  {
+    teamId: text("team_id")
+      .notNull()
+      .primaryKey()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    scimGroupId: text("scim_group_id")
+      .notNull()
+      .references(() => scimGroups.id, { onDelete: "cascade" }),
     syncPaused: boolean("sync_paused").notNull().default(false),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.teamScimGroupMappings.updatedAt.defaultFn!()),
-}, (table) => [
-    index("team_scim_group_mappings_group_idx").on(table.scimGroupId),
-  ]);
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.teamScimGroupMappings.updatedAt.defaultFn!()),
+  },
+  (table) => [index("team_scim_group_mappings_group_idx").on(table.scimGroupId)],
+);
 
-export const teamWorkspaces = pgTable("team_workspaces", {
+export const teamWorkspaces = pgTable(
+  "team_workspaces",
+  {
     id: text("id").notNull().primaryKey(),
-    teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     access: text("access").notNull().default("write"),
     permissions: jsonb("permissions"),
-}, (table) => [
-    uniqueIndex("team_workspaces_team_workspace_idx").on(table.teamId, table.workspaceId),
-  ]);
+  },
+  (table) => [uniqueIndex("team_workspaces_team_workspace_idx").on(table.teamId, table.workspaceId)],
+);
 
-export const teams = pgTable("teams", {
+export const teams = pgTable(
+  "teams",
+  {
     id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     visibility: text("visibility").notNull().default("organization"),
@@ -1719,37 +2537,56 @@ export const teams = pgTable("teams", {
     organizationAccess: jsonb("organization_access").notNull().default({}),
     allowMemberTokenManagement: boolean("allow_member_token_management").default(false),
     policyOverrideDelegationExpiresAt: bigint("policy_override_delegation_expires_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.teams.createdAt.defaultFn!()),
-}, (table) => [
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.teams.createdAt.defaultFn!()),
+  },
+  (table) => [
     uniqueIndex("teams_org_name_idx").on(table.orgId, table.name),
     uniqueIndex("teams_id_org_idx").on(table.id, table.orgId),
-  ]);
+  ],
+);
 
-export const testVariables = pgTable("test_variables", {
+export const testVariables = pgTable(
+  "test_variables",
+  {
     id: text("id").notNull().primaryKey(),
-    moduleId: text("module_id").notNull().references(() => registryModules.id, { onDelete: "cascade" }),
+    moduleId: text("module_id")
+      .notNull()
+      .references(() => registryModules.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
     sensitive: boolean("sensitive").notNull().default(false),
     hcl: boolean("hcl").notNull().default(false),
     category: text("category").notNull().default("terraform"),
     description: text("description"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.testVariables.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.testVariables.updatedAt.defaultFn!()),
-}, (table) => [
-    uniqueIndex("test_variables_module_key_idx").on(table.moduleId, table.key),
-  ]);
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.testVariables.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.testVariables.updatedAt.defaultFn!()),
+  },
+  (table) => [uniqueIndex("test_variables_module_key_idx").on(table.moduleId, table.key)],
+);
 
 export const user2FA = pgTable("user_2fa", {
-    userId: text("user_id").notNull().primaryKey().references(() => users.id, { onDelete: "cascade" }),
-    secret: text("secret").notNull(),
-    secretEncrypted: text("secret_encrypted"),
-    lastAcceptedCounter: bigint("last_accepted_counter", { mode: "number" }),
-    enabled: boolean("enabled").notNull().default(false),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.user2FA.createdAt.defaultFn!()),
+  userId: text("user_id")
+    .notNull()
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  secret: text("secret").notNull(),
+  secretEncrypted: text("secret_encrypted"),
+  lastAcceptedCounter: bigint("last_accepted_counter", { mode: "number" }),
+  enabled: boolean("enabled").notNull().default(false),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.user2FA.createdAt.defaultFn!()),
 });
 
-export const users = pgTable("users", {
+export const users = pgTable(
+  "users",
+  {
     id: text("id").notNull().primaryKey(),
     username: text("username").notNull().unique(),
     email: text("email").unique(),
@@ -1770,21 +2607,31 @@ export const users = pgTable("users", {
     deletedEmailHash: text("deleted_email_hash"),
     emailVerifiedAt: bigint("email_verified_at", { mode: "number" }),
     scimSiteAdmin: boolean("scim_site_admin").notNull().default(false),
-}, (table) => [
-    uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
-  ]);
+  },
+  (table) => [uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject)],
+);
 
-export const variableSetProjects = pgTable("variable_set_projects", {
+export const variableSetProjects = pgTable(
+  "variable_set_projects",
+  {
     id: text("id").notNull().primaryKey(),
-    variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
-    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("variable_set_projects_idx").on(table.variableSetId, table.projectId),
-  ]);
+    variableSetId: text("variable_set_id")
+      .notNull()
+      .references(() => variableSets.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("variable_set_projects_idx").on(table.variableSetId, table.projectId)],
+);
 
-export const variableSetVariables = pgTable("variable_set_variables", {
+export const variableSetVariables = pgTable(
+  "variable_set_variables",
+  {
     id: text("id").notNull().primaryKey(),
-    variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
+    variableSetId: text("variable_set_id")
+      .notNull()
+      .references(() => variableSets.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
     valueEncrypted: text("value_encrypted"),
@@ -1792,102 +2639,138 @@ export const variableSetVariables = pgTable("variable_set_variables", {
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),
     description: text("description"),
-}, (table) => [
-    uniqueIndex("variable_set_variables_idx").on(table.variableSetId, table.key),
-  ]);
+  },
+  (table) => [uniqueIndex("variable_set_variables_idx").on(table.variableSetId, table.key)],
+);
 
-export const variableSetWorkspaces = pgTable("variable_set_workspaces", {
+export const variableSetWorkspaces = pgTable(
+  "variable_set_workspaces",
+  {
     id: text("id").notNull().primaryKey(),
-    variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-}, (table) => [
-    uniqueIndex("variable_set_workspaces_idx").on(table.variableSetId, table.workspaceId),
-  ]);
+    variableSetId: text("variable_set_id")
+      .notNull()
+      .references(() => variableSets.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+  },
+  (table) => [uniqueIndex("variable_set_workspaces_idx").on(table.variableSetId, table.workspaceId)],
+);
 
 export const variableSets = pgTable("variable_sets", {
-    id: text("id").notNull().primaryKey(),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    parentProjectId: text("parent_project_id").references(() => projects.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    description: text("description"),
-    global: boolean("global").default(false),
-    priority: boolean("priority").default(false),
+  id: text("id").notNull().primaryKey(),
+  orgId: text("org_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  parentProjectId: text("parent_project_id").references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  global: boolean("global").default(false),
+  priority: boolean("priority").default(false),
 });
 
 export const workloadIdentityKeys = pgTable("workload_identity_keys", {
-    id: text("id").notNull().primaryKey(),
-    keyId: text("key_id").notNull().unique(),
-    encryptedPrivateKey: text("encrypted_private_key").notNull(),
-    publicJwk: jsonb("public_jwk").notNull(),
-    status: text("status").notNull().default("active"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.workloadIdentityKeys.createdAt.defaultFn!()),
-    retiredAt: bigint("retired_at", { mode: "number" }),
-    revokedAt: bigint("revoked_at", { mode: "number" }),
+  id: text("id").notNull().primaryKey(),
+  keyId: text("key_id").notNull().unique(),
+  encryptedPrivateKey: text("encrypted_private_key").notNull(),
+  publicJwk: jsonb("public_jwk").notNull(),
+  status: text("status").notNull().default("active"),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.workloadIdentityKeys.createdAt.defaultFn!()),
+  retiredAt: bigint("retired_at", { mode: "number" }),
+  revokedAt: bigint("revoked_at", { mode: "number" }),
 });
 
 export const workloadIdentityLeases = pgTable("workload_identity_leases", {
-    id: text("id").notNull().primaryKey(),
-    owner: text("owner"),
-    leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }),
-    fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.workloadIdentityLeases.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  owner: text("owner"),
+  leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }),
+  fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.workloadIdentityLeases.updatedAt.defaultFn!()),
 });
 
-export const workloadIdentityTokens = pgTable("workload_identity_tokens", {
+export const workloadIdentityTokens = pgTable(
+  "workload_identity_tokens",
+  {
     jti: text("jti").notNull().primaryKey(),
-    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
     keyId: text("key_id").notNull(),
     audience: text("audience").notNull(),
     subject: text("subject").notNull(),
     issuedAt: bigint("issued_at", { mode: "number" }).notNull(),
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     revokedAt: bigint("revoked_at", { mode: "number" }),
-}, (table) => [
+  },
+  (table) => [
     index("workload_identity_tokens_run_idx").on(table.runId, table.expiresAt),
     index("workload_identity_tokens_expiry_idx").on(table.expiresAt, table.revokedAt),
-  ]);
+  ],
+);
 
-export const workspaceRunTasks = pgTable("workspace_run_tasks", {
+export const workspaceRunTasks = pgTable(
+  "workspace_run_tasks",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    runTaskId: text("run_task_id").notNull().references(() => runTasks.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runTaskId: text("run_task_id")
+      .notNull()
+      .references(() => runTasks.id, { onDelete: "cascade" }),
     stage: text("stage").notNull().default("post_plan"),
     enforcementLevel: text("enforcement_level").notNull().default("advisory"),
-}, (table) => [
-    uniqueIndex("workspace_run_tasks_idx").on(table.workspaceId, table.runTaskId),
-  ]);
+  },
+  (table) => [uniqueIndex("workspace_run_tasks_idx").on(table.workspaceId, table.runTaskId)],
+);
 
-export const workspaceTags = pgTable("workspace_tags", {
+export const workspaceTags = pgTable(
+  "workspace_tags",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value"),
-}, (table) => [
-    uniqueIndex("workspace_tags_workspace_key_idx").on(table.workspaceId, table.key),
-  ]);
+  },
+  (table) => [uniqueIndex("workspace_tags_workspace_key_idx").on(table.workspaceId, table.key)],
+);
 
 export const workspaceTransfers = pgTable("workspace_transfers", {
-    id: text("id").notNull().primaryKey(),
-    sourceWorkspaceId: text("source_workspace_id").references(() => workspaces.id, { onDelete: "set null" }),
-    destinationOrgId: text("destination_org_id").references(() => organizations.id, { onDelete: "set null" }),
-    destinationProjectId: text("destination_project_id").references(() => projects.id, { onDelete: "set null" }),
-    approvalMode: text("approval_mode").notNull().default("auto"),
-    cleanupOnFailure: boolean("cleanup_on_failure").default(true),
-    historyCutoff: text("history_cutoff"),
-    policySetMode: text("policy_set_mode").notNull().default("move"),
-    variableMode: text("variable_mode").notNull().default("move"),
-    workspacePrefix: text("workspace_prefix"),
-    workspaceSuffix: text("workspace_suffix"),
-    status: text("status").notNull().default("pending"),
-    pauseReason: text("pause_reason"),
-    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.workspaceTransfers.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.workspaceTransfers.updatedAt.defaultFn!()),
+  id: text("id").notNull().primaryKey(),
+  sourceWorkspaceId: text("source_workspace_id").references(() => workspaces.id, { onDelete: "set null" }),
+  destinationOrgId: text("destination_org_id").references(() => organizations.id, { onDelete: "set null" }),
+  destinationProjectId: text("destination_project_id").references(() => projects.id, { onDelete: "set null" }),
+  approvalMode: text("approval_mode").notNull().default("auto"),
+  cleanupOnFailure: boolean("cleanup_on_failure").default(true),
+  historyCutoff: text("history_cutoff"),
+  policySetMode: text("policy_set_mode").notNull().default("move"),
+  variableMode: text("variable_mode").notNull().default("move"),
+  workspacePrefix: text("workspace_prefix"),
+  workspaceSuffix: text("workspace_suffix"),
+  status: text("status").notNull().default("pending"),
+  pauseReason: text("pause_reason"),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.workspaceTransfers.createdAt.defaultFn!()),
+  updatedAt: bigint("updated_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema.workspaceTransfers.updatedAt.defaultFn!()),
 });
 
-export const workspaceVariables = pgTable("workspace_variables", {
+export const workspaceVariables = pgTable(
+  "workspace_variables",
+  {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
     valueEncrypted: text("value_encrypted"),
@@ -1895,15 +2778,19 @@ export const workspaceVariables = pgTable("workspace_variables", {
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),
     description: text("description"),
-}, (table) => [
-    uniqueIndex("workspace_variables_workspace_key_idx").on(table.workspaceId, table.category, table.key),
-  ]);
+  },
+  (table) => [uniqueIndex("workspace_variables_workspace_key_idx").on(table.workspaceId, table.category, table.key)],
+);
 
-export const workspaces = pgTable("workspaces", {
+export const workspaces = pgTable(
+  "workspaces",
+  {
     id: text("id").notNull().primaryKey(),
     name: text("name").notNull(),
     description: text("description"),
-    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     sshKeyId: text("ssh_key_id").references(() => sshKeys.id, { onDelete: "set null" }),
     iacBinary: text("iac_binary"),
@@ -1939,8 +2826,12 @@ export const workspaces = pgTable("workspaces", {
     ownedByType: text("owned_by_type"),
     ownedById: text("owned_by_id"),
     contactEmail: text("contact_email"),
-    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.workspaces.updatedAt.defaultFn!()),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.workspaces.createdAt.defaultFn!()),
-}, (table) => [
-    index("workspaces_org_idx").on(table.orgId),
-  ]);
+    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() =>
+      sqliteSchema.workspaces.updatedAt.defaultFn!(),
+    ),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema.workspaces.createdAt.defaultFn!()),
+  },
+  (table) => [index("workspaces_org_idx").on(table.orgId)],
+);

@@ -29,22 +29,34 @@ afterEach((): void => {
 });
 
 test("run duration sums execution phases and ignores input-state metadata", () => {
-  expect(runExecutionDurationMilliseconds({
-    "planning-at": "2026-08-24T20:40:00.000Z",
-    "planned-at": "2026-08-24T20:46:26.000Z",
-    "input-state-serial": "1346",
-    "confirmed-at": "2026-08-24T20:54:00.000Z",
-    "applying-at": "2026-08-24T20:54:30.000Z",
-    "applied-at": "2026-08-24T20:55:32.000Z",
-  }, false, Date.parse("2026-08-24T20:55:32.000Z"))).toBe(6 * 60_000 + 26_000 + 62_000);
+  expect(
+    runExecutionDurationMilliseconds(
+      {
+        "planning-at": "2026-08-24T20:40:00.000Z",
+        "planned-at": "2026-08-24T20:46:26.000Z",
+        "input-state-serial": "1346",
+        "confirmed-at": "2026-08-24T20:54:00.000Z",
+        "applying-at": "2026-08-24T20:54:30.000Z",
+        "applied-at": "2026-08-24T20:55:32.000Z",
+      },
+      false,
+      Date.parse("2026-08-24T20:55:32.000Z"),
+    ),
+  ).toBe(6 * 60_000 + 26_000 + 62_000);
 });
 
 test("legacy applied runs with planning markers show the full duration", () => {
-  expect(runExecutionDurationMilliseconds({
-    "planning-at": "2026-08-24T20:40:00.000Z",
-    "planned-at": "2026-08-24T20:46:26.000Z",
-    "applied-at": "2026-08-24T20:55:32.000Z",
-  }, false, Date.parse("2026-08-24T20:55:32.000Z"))).toBe(15 * 60_000 + 32_000);
+  expect(
+    runExecutionDurationMilliseconds(
+      {
+        "planning-at": "2026-08-24T20:40:00.000Z",
+        "planned-at": "2026-08-24T20:46:26.000Z",
+        "applied-at": "2026-08-24T20:55:32.000Z",
+      },
+      false,
+      Date.parse("2026-08-24T20:55:32.000Z"),
+    ),
+  ).toBe(15 * 60_000 + 32_000);
 });
 
 test("collapsible plan warnings appear at top of plan with diagnostic details", async () => {
@@ -114,15 +126,12 @@ test("collapsible plan warnings appear at top of plan with diagnostic details", 
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-warn"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -212,15 +221,12 @@ test("when apply is running, apply disabled reasons are NOT shown", async () => 
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-applying"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );

@@ -28,22 +28,22 @@ describe("SSH Keys & Notification Configurations API contract", () => {
   const projectId = `prj-notif-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
     await db.insert(projects).values([{ id: projectId, orgId, name: `project-${suffix}` }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId, projectId }]);
@@ -207,7 +207,10 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       createdIds.push(ncId);
 
       // Preview the payload: no POST should reach the destination.
-      const previewRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify?preview=true`, "POST");
+      const previewRes = await request(
+        `/api/v2/notification-configurations/${ncId}/actions/verify?preview=true`,
+        "POST",
+      );
       expect(previewRes.status).toBe(200);
       const previewBody = await previewRes.json();
       expect(previewBody.meta.status).toBe("preview");
@@ -262,7 +265,9 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       const body = await response.json();
       ncId = body.data.id as string;
 
-      const stored = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, ncId) });
+      const stored = await db.query.notificationConfigurations.findFirst({
+        where: eq(notificationConfigurations.id, ncId),
+      });
       expect(stored?.enabled).toBe(true);
       expect(stored?.url).toBe(unreachableUrl);
     } finally {
@@ -335,9 +340,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       expect(payloads).toHaveLength(2);
       expect(payloads.every((payload) => payload["payload_version"] === 1)).toBeTrue();
       expect(payloads.every((payload) => payload["run_id"] === runId)).toBeTrue();
-      expect(new Set(payloads.map((payload) => payload["notification_configuration_id"]))).toEqual(
-        new Set(createdIds),
-      );
+      expect(new Set(payloads.map((payload) => payload["notification_configuration_id"]))).toEqual(new Set(createdIds));
     } finally {
       await db.delete(runs).where(eq(runs.id, runId));
       for (const id of createdIds) {
@@ -389,7 +392,8 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     } finally {
       process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = previous;
       await db.delete(runs).where(eq(runs.id, ssrfsRunId));
-      if (configId !== "") await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, configId));
+      if (configId !== "")
+        await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, configId));
     }
   });
 });

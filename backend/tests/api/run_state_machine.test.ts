@@ -332,7 +332,9 @@ describe("the reference format API v2 - Cost estimate stub fields", () => {
     });
     const finishedAttributes = finished["attributes"] as Record<string, unknown>;
     expect(finishedAttributes["status"]).toBe("finished");
-    expect((finishedAttributes["status-timestamps"] as Record<string, unknown>)["finished-at"]).toBe("2026-01-01T00:00:01.000Z");
+    expect((finishedAttributes["status-timestamps"] as Record<string, unknown>)["finished-at"]).toBe(
+      "2026-01-01T00:00:01.000Z",
+    );
   });
 
   it("GET /api/v2/cost-estimates/:ce_id returns all required stub fields", async () => {
@@ -354,21 +356,17 @@ describe("the reference format API v2 - Cost estimate stub fields", () => {
 
 describe("the reference format API v2 - OAuth client service-provider-display-name", () => {
   it("POST oauth-client returns service-provider-display-name for github", async () => {
-    const res = await req(
-      `/api/v2/organizations/${orgName}/oauth-clients`,
-      "POST",
-      {
-        data: {
-          type: "oauth-clients",
-          attributes: {
-            name: `gh-client-${suffix}`,
-            "service-provider": "github",
-            "http-url": "https://github.com",
-            "api-url": "https://api.github.com",
-          },
+    const res = await req(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
+      data: {
+        type: "oauth-clients",
+        attributes: {
+          name: `gh-client-${suffix}`,
+          "service-provider": "github",
+          "http-url": "https://github.com",
+          "api-url": "https://api.github.com",
         },
       },
-    );
+    });
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.data.attributes["service-provider"]).toBe("github");
@@ -376,16 +374,12 @@ describe("the reference format API v2 - OAuth client service-provider-display-na
   });
 
   it("GET oauth-client by id returns service-provider-display-name for gitlab", async () => {
-    const createRes = await req(
-      `/api/v2/organizations/${orgName}/oauth-clients`,
-      "POST",
-      {
-        data: {
-          type: "oauth-clients",
-          attributes: { name: `gl-client-${suffix}`, "service-provider": "gitlab" },
-        },
+    const createRes = await req(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
+      data: {
+        type: "oauth-clients",
+        attributes: { name: `gl-client-${suffix}`, "service-provider": "gitlab" },
       },
-    );
+    });
     const createBody = await createRes.json();
     const clientId = createBody.data?.id;
     expect(clientId).toBeTruthy();
@@ -408,16 +402,12 @@ describe("the reference format API v2 - OAuth client service-provider-display-na
   });
 
   it("PATCH oauth-client returns updated service-provider-display-name", async () => {
-    const createRes = await req(
-      `/api/v2/organizations/${orgName}/oauth-clients`,
-      "POST",
-      {
-        data: {
-          type: "oauth-clients",
-          attributes: { name: `patch-oc-${suffix}`, "service-provider": "github" },
-        },
+    const createRes = await req(`/api/v2/organizations/${orgName}/oauth-clients`, "POST", {
+      data: {
+        type: "oauth-clients",
+        attributes: { name: `patch-oc-${suffix}`, "service-provider": "github" },
       },
-    );
+    });
     const createBody = await createRes.json();
     const clientId = createBody.data?.id;
 

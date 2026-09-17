@@ -12,7 +12,7 @@ export type BenchScenario = {
   readonly token?: (ctx: BenchContext) => string;
   readonly body?: (ctx: BenchContext, iteration: number) => unknown;
   readonly expectedStatus?: number;
-}
+};
 
 export function tokenFor(ctx: BenchContext, token?: (c: BenchContext) => string): string {
   return token === undefined ? ctx.memberToken : token(ctx);
@@ -301,7 +301,9 @@ export function buildScenarios(): BenchScenario[] {
         data: {
           type: "runs",
           attributes: { message: "bench run" },
-          relationships: { "configuration-version": { data: { type: "configuration-versions", id: ctx.configurationVersionId } } },
+          relationships: {
+            "configuration-version": { data: { type: "configuration-versions", id: ctx.configurationVersionId } },
+          },
         },
       }),
       expectedStatus: 201,

@@ -67,14 +67,7 @@ export type WizardPhase =
 
 export type StepStatus = "pending" | "running" | "passed" | "failed" | "skipped";
 
-export type WizardStepKey =
-  | "compatibility"
-  | "maintenance"
-  | "drain"
-  | "checkpoint"
-  | "schema"
-  | "copy"
-  | "verify";
+export type WizardStepKey = "compatibility" | "maintenance" | "drain" | "checkpoint" | "schema" | "copy" | "verify";
 
 export type WizardStep = Readonly<{
   key: WizardStepKey;
@@ -165,9 +158,18 @@ export function wizardFilePath(storageDirOverride?: string): string {
 const MIN_POSTGRES_VERSION = 12;
 const DRAIN_POLL_MS = 3_000;
 const ACTIVE_RUN_STATUSES = new Set([
-  "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-  "planning", "cost_estimating", "cost_estimated", "policy_checking",
-  "policy_override", "policy_checked", "post_plan_running", "post_plan_completed",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "planning",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
   "applying",
 ]);
 
@@ -205,18 +207,19 @@ function parseWizardState(raw: unknown): WizardState | null {
   const record = raw as Record<string, unknown>;
   if (typeof record["id"] !== "string" || typeof record["phase"] !== "string") return null;
   const steps = Array.isArray(record["steps"])
-    ? (record["steps"] as readonly unknown[]).filter((step): boolean => step !== null && typeof step === "object")
-      .map((step): WizardStep => {
-        const s = step as Record<string, unknown>;
-        return {
-          key: s["key"] as WizardStepKey,
-          status: s["status"] as StepStatus,
-          startedAt: typeof s["startedAt"] === "string" ? s["startedAt"] : null,
-          finishedAt: typeof s["finishedAt"] === "string" ? s["finishedAt"] : null,
-          detail: typeof s["detail"] === "string" ? s["detail"] : null,
-          error: typeof s["error"] === "string" ? s["error"] : null,
-        };
-      })
+    ? (record["steps"] as readonly unknown[])
+        .filter((step): boolean => step !== null && typeof step === "object")
+        .map((step): WizardStep => {
+          const s = step as Record<string, unknown>;
+          return {
+            key: s["key"] as WizardStepKey,
+            status: s["status"] as StepStatus,
+            startedAt: typeof s["startedAt"] === "string" ? s["startedAt"] : null,
+            finishedAt: typeof s["finishedAt"] === "string" ? s["finishedAt"] : null,
+            detail: typeof s["detail"] === "string" ? s["detail"] : null,
+            error: typeof s["error"] === "string" ? s["error"] : null,
+          };
+        })
     : [];
   return {
     id: record["id"],
@@ -272,7 +275,7 @@ export function freshSteps(): WizardStep[] {
 type MigrationSql = {
   readonly unsafe: <T = unknown>(query: string, values?: readonly unknown[]) => Promise<T[]>;
   readonly end: (options?: { readonly timeout?: number }) => Promise<void>;
-}
+};
 
 export async function openPostgres(url: string): Promise<MigrationSql> {
   return new Bun.SQL({ url, max: 1 });
@@ -298,7 +301,11 @@ export async function testConnection(url: string): Promise<ConnectionTestResult>
     };
   } finally {
     if (sql !== null) {
-      try { await sql.end(); } catch { /* best effort */ }
+      try {
+        await sql.end();
+      } catch {
+        /* best effort */
+      }
     }
   }
 }
@@ -419,7 +426,11 @@ export async function checkCompatibility(url: string): Promise<CompatibilityResu
     };
   } finally {
     if (sql !== null) {
-      try { await sql.end(); } catch { /* best effort */ }
+      try {
+        await sql.end();
+      } catch {
+        /* best effort */
+      }
     }
   }
 }
@@ -470,9 +481,10 @@ function copyMode(declaredType: string, drizzleMode: DrizzleColumnMode | undefin
 }
 
 function buildTablePlan(table: TableDef, modes: Readonly<ReadonlyMap<string, DrizzleColumnMode>>): TablePlan {
-  const pkColumns = table.compositePk !== null && table.compositePk.length > 0
-    ? table.compositePk
-    : table.columns.filter((column): boolean => column.primaryKey).map((column): string => column.name);
+  const pkColumns =
+    table.compositePk !== null && table.compositePk.length > 0
+      ? table.compositePk
+      : table.columns.filter((column): boolean => column.primaryKey).map((column): string => column.name);
   const copy: CopyTable = {
     name: table.name,
     columns: table.columns.map((column): { name: string; mode: ColumnStorageMode } => ({
@@ -481,8 +493,9 @@ function buildTablePlan(table: TableDef, modes: Readonly<ReadonlyMap<string, Dri
     })),
     pkColumns,
   };
-  const fkCount = table.columns.reduce((acc, column): number => acc + (column.references === null ? 0 : 1), 0)
-    + table.tableForeignKeys.length;
+  const fkCount =
+    table.columns.reduce((acc, column): number => acc + (column.references === null ? 0 : 1), 0) +
+    table.tableForeignKeys.length;
   const fkNames = Array.from({ length: fkCount }, (_, index): string => `fk_${table.name}_${index}`);
   return { def: table, copy, fkNames };
 }
@@ -503,7 +516,7 @@ function assertNoUnparsedColumns(table: TableDef): void {
     if (column.name.startsWith("__unparsed_")) {
       throw new WizardError(
         `Cannot migrate table "${table.name}": its CREATE TABLE statement contains a column definition the wizard could not parse. ` +
-        "The source database was not modified; report this table's schema to the maintainers.",
+          "The source database was not modified; report this table's schema to the maintainers.",
       );
     }
   }
@@ -528,9 +541,18 @@ export function wizardStatus(): WizardState | null {
   if (state === null) return null;
   const midFlight = state.phase === "draining" || state.phase === "copying" || state.phase === "verifying";
   if (midFlight && runningJob === null) {
-    const steps = state.steps.map((step): WizardStep =>
-      step.status === "running" ? { ...step, status: "failed" as const, error: "Interrupted by process restart" } : step);
-    return saveWizardState({ ...state, phase: "interrupted", steps, error: "The migration was interrupted by a process restart." });
+    const steps = state.steps.map(
+      (step): WizardStep =>
+        step.status === "running"
+          ? { ...step, status: "failed" as const, error: "Interrupted by process restart" }
+          : step,
+    );
+    return saveWizardState({
+      ...state,
+      phase: "interrupted",
+      steps,
+      error: "The migration was interrupted by a process restart.",
+    });
   }
   return state;
 }
@@ -540,10 +562,14 @@ export function startMigration(url: string): WizardState {
   if (runningJob !== null) throw new WizardError("A migration is already running.");
   const existing = loadWizardState();
   if (existing !== null && existing.phase === "switched") {
-    throw new WizardError("The backend has already been switched; the wizard cannot run again until the process restarts.");
+    throw new WizardError(
+      "The backend has already been switched; the wizard cannot run again until the process restarts.",
+    );
   }
   if (existing !== null && existing.targetUrl !== url) {
-    throw new WizardError("A different target was used by the previous attempt. Abort it first, or reuse the same connection URL.");
+    throw new WizardError(
+      "A different target was used by the previous attempt. Abort it first, or reuse the same connection URL.",
+    );
   }
   const state: WizardState = saveWizardState({
     id: existing?.id ?? newResourceId("mig"),
@@ -589,15 +615,25 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       const startedAt = new Date().toISOString();
       state = saveWizardState({
         ...state,
-        steps: state.steps.map((step, i): WizardStep =>
-          i === index ? { ...step, status: "running", startedAt, error: null } : step),
+        steps: state.steps.map(
+          (step, i): WizardStep => (i === index ? { ...step, status: "running", startedAt, error: null } : step),
+        ),
       });
       try {
-        await fn({ state, target, source, setState: (next): void => { state = next; } });
+        await fn({
+          state,
+          target,
+          source,
+          setState: (next): void => {
+            state = next;
+          },
+        });
         state = saveWizardState({
           ...state,
-          steps: state.steps.map((step, i): WizardStep =>
-            i === index ? { ...step, status: "passed", finishedAt: new Date().toISOString() } : step),
+          steps: state.steps.map(
+            (step, i): WizardStep =>
+              i === index ? { ...step, status: "passed", finishedAt: new Date().toISOString() } : step,
+          ),
         });
       } catch (error: unknown) {
         if (error instanceof WizardAbortError) throw error;
@@ -606,8 +642,10 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           ...state,
           phase: "failed",
           error: message,
-          steps: state.steps.map((step, i): WizardStep =>
-            i === index ? { ...step, status: "failed", finishedAt: new Date().toISOString(), error: message } : step),
+          steps: state.steps.map(
+            (step, i): WizardStep =>
+              i === index ? { ...step, status: "failed", finishedAt: new Date().toISOString(), error: message } : step,
+          ),
         });
         throw error;
       }
@@ -619,20 +657,27 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       // check would wrongly block resumption. Every other compatibility check
       // still runs; only the emptiness requirement is lifted.
       const prior = loadWizardState();
-      const schemaAlreadyPassed = prior !== null
-        && prior.targetUrl === initial.targetUrl
-        && prior.steps.some((step): boolean => step.key === "schema" && step.status === "passed");
+      const schemaAlreadyPassed =
+        prior !== null &&
+        prior.targetUrl === initial.targetUrl &&
+        prior.steps.some((step): boolean => step.key === "schema" && step.status === "passed");
       if (schemaAlreadyPassed) {
         ctx.setState({
           ...ctx.state,
-          steps: ctx.state.steps.map((step): WizardStep =>
-            step.key === "compatibility" ? { ...step, status: "passed", detail: "Resuming: target schema already built by the previous attempt" } : step),
+          steps: ctx.state.steps.map(
+            (step): WizardStep =>
+              step.key === "compatibility"
+                ? { ...step, status: "passed", detail: "Resuming: target schema already built by the previous attempt" }
+                : step,
+          ),
         });
         return;
       }
       const compat = await checkCompatibility(initial.targetUrl);
       if (!compat.ok) {
-        const failed = compat.checks.filter((check): boolean => !check.ok).map((check): string => `${check.name}: ${check.detail}`);
+        const failed = compat.checks
+          .filter((check): boolean => !check.ok)
+          .map((check): string => `${check.name}: ${check.detail}`);
         throw new WizardError(`Target compatibility check failed: ${failed.join("; ")}`);
       }
       ctx.setState({ ...ctx.state });
@@ -664,9 +709,13 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         artifactReferences: [],
         triggersSkipped: schema.triggers.length,
         defaultsDropped: schema.tables.flatMap((table): string[] =>
-          table.columns.filter((column): boolean => column.defaultDropped)
-            .map((column): string => `${table.name}.${column.name}`)),
-        checksSkipped: schema.tables.filter((table): boolean => table.tableChecksSkipped > 0).map((table): string => table.name),
+          table.columns
+            .filter((column): boolean => column.defaultDropped)
+            .map((column): string => `${table.name}.${column.name}`),
+        ),
+        checksSkipped: schema.tables
+          .filter((table): boolean => table.tableChecksSkipped > 0)
+          .map((table): string => table.name),
         indexesSkipped: [],
         fkViolations: [],
         journalMatch: false,
@@ -730,7 +779,12 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
                   lastProgressPersist = now;
                   ctx.setState({
                     ...ctx.state,
-                    copyProgress: { table: tableName, rows: batch.rowsCopied, totalTables: plans.length, doneTables: done },
+                    copyProgress: {
+                      table: tableName,
+                      rows: batch.rowsCopied,
+                      totalTables: plans.length,
+                      doneTables: done,
+                    },
                   });
                 }
               },
@@ -743,14 +797,24 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           ctx.setState({
             ...ctx.state,
             copyProgress: { table: tableName, rows: 0, totalTables: plans.length, doneTables: done },
-            steps: ctx.state.steps.map((step): WizardStep =>
-              step.key === "copy" ? { ...step, detail: `Copied ${done}/${plans.length} tables (${Math.round((Date.now() - startedAt) / 1000)}s on ${tableName})` } : step),
+            steps: ctx.state.steps.map(
+              (step): WizardStep =>
+                step.key === "copy"
+                  ? {
+                      ...step,
+                      detail: `Copied ${done}/${plans.length} tables (${Math.round((Date.now() - startedAt) / 1000)}s on ${tableName})`,
+                    }
+                  : step,
+            ),
           });
         }
       } finally {
         await target.unsafe("SET session_replication_role = origin");
       }
-      await syncIdentitySequences(target, plans.map((plan): CopyTable => plan.copy)).catch((error: unknown): never => {
+      await syncIdentitySequences(
+        target,
+        plans.map((plan): CopyTable => plan.copy),
+      ).catch((error: unknown): never => {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Identity sequence sync failed: ${message}`);
       });
@@ -787,8 +851,12 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       const verification: TableVerifyResult[] = [];
       const fkNames = new Map(plans.map((plan): [string, readonly string[]] => [plan.def.name, plan.fkNames]));
       for (const plan of plans) {
-        const sourceCount = (sourceSnapshot.query(`SELECT COUNT(*) AS n FROM "${plan.def.name}"`).get() as { n: number }).n;
-        const targetCountRow = await target.unsafe<PostgresCountRow>(`SELECT count(*)::bigint AS n FROM "${plan.def.name}"`);
+        const sourceCount = (
+          sourceSnapshot.query(`SELECT COUNT(*) AS n FROM "${plan.def.name}"`).get() as { n: number }
+        ).n;
+        const targetCountRow = await target.unsafe<PostgresCountRow>(
+          `SELECT count(*)::bigint AS n FROM "${plan.def.name}"`,
+        );
         const targetCount = Number(targetCountRow[0]?.n ?? 0);
         let digestMatch: boolean | null = null;
         let digestSkipped: string | null = null;
@@ -811,20 +879,28 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           digestSkipped,
         });
       }
-      const violations = await validateForeignKeys(target, plans.map((plan): CopyTable => plan.copy), fkNames);
+      const violations = await validateForeignKeys(
+        target,
+        plans.map((plan): CopyTable => plan.copy),
+        fkNames,
+      );
       const journalMatch = await verifyJournal(target);
       const artifactReferences = await verifyArtifactReferences(sourceSnapshot);
       report = { ...report, fkViolations: violations, journalMatch, artifactReferences };
       ctx.setState({ ...ctx.state, report });
       if (artifactReferences.some((check) => check.unavailable > 0)) {
-        throw new WizardError("Artifact verification failed: restore the referenced files in shared storage before resuming migration. The database was not switched.");
+        throw new WizardError(
+          "Artifact verification failed: restore the referenced files in shared storage before resuming migration. The database was not switched.",
+        );
       }
       const mismatches = verification.filter((row): boolean => !row.countMatch || row.digestMatch === false);
       if (mismatches.length > 0 || violations.length > 0 || !journalMatch) {
-        const mismatchDetails = mismatches.map((m): string => `${m.table} (src=${m.sourceCount}, dst=${m.targetCount}, digest=${m.digestMatch})`).join("; ");
+        const mismatchDetails = mismatches
+          .map((m): string => `${m.table} (src=${m.sourceCount}, dst=${m.targetCount}, digest=${m.digestMatch})`)
+          .join("; ");
         throw new WizardError(
           `Verification failed: ${mismatches.length} table(s) with count/digest mismatch (${mismatchDetails}), ${violations.length} FK violation(s), journal ${journalMatch ? "ok" : "mismatch"}. ` +
-          "The source database was not modified; the target can be wiped and the migration resumed.",
+            "The source database was not modified; the target can be wiped and the migration resumed.",
         );
       }
       // Durable migration manifest (per the wizard spec): one JSON file per
@@ -858,8 +934,9 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
     // Step failures are persisted by `run`; make sure the phase reflects it.
     exitMaintenance();
     const current = loadWizardState();
-    const midFlight = current !== null
-      && (current.phase === "draining" || current.phase === "copying" || current.phase === "verifying");
+    const midFlight =
+      current !== null &&
+      (current.phase === "draining" || current.phase === "copying" || current.phase === "verifying");
     if (midFlight) {
       saveWizardState({
         ...current,
@@ -870,7 +947,11 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
   } finally {
     exitMaintenance();
     if (source !== null) closeSourceSnapshot(source);
-    try { await target.end(); } catch { /* best effort */ }
+    try {
+      await target.end();
+    } catch {
+      /* best effort */
+    }
     runningJob = null;
     cancelRequested = false;
   }
@@ -888,8 +969,16 @@ function openSourceSnapshot(): Database {
 }
 
 function closeSourceSnapshot(client: Readonly<Database>): void {
-  try { client.run("ROLLBACK"); } catch { /* best effort */ }
-  try { client.close(); } catch { /* best effort */ }
+  try {
+    client.run("ROLLBACK");
+  } catch {
+    /* best effort */
+  }
+  try {
+    client.close();
+  } catch {
+    /* best effort */
+  }
 }
 
 async function checkpointWithRetries(): Promise<void> {
@@ -900,7 +989,9 @@ async function checkpointWithRetries(): Promise<void> {
       return;
     } catch (error: unknown) {
       if (attempt === attempts) throw error;
-      await new Promise((resolvePromise): void => { setTimeout(resolvePromise, 2_000); });
+      await new Promise((resolvePromise): void => {
+        setTimeout(resolvePromise, 2_000);
+      });
     }
   }
 }
@@ -909,8 +1000,9 @@ async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
   if (envFlag("MIGRATION_SKIP_DRAIN")) {
     ctx.setState({
       ...ctx.state,
-      steps: ctx.state.steps.map((step): WizardStep =>
-        step.key === "drain" ? { ...step, detail: "No active runs remain" } : step),
+      steps: ctx.state.steps.map(
+        (step): WizardStep => (step.key === "drain" ? { ...step, detail: "No active runs remain" } : step),
+      ),
     });
     return;
   }
@@ -919,7 +1011,10 @@ async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
   for (;;) {
     if (cancelRequested) throw new WizardAbortError();
     const [activeRuns, claimedAgentJobs, runningAssessments] = await Promise.all([
-      db.select({ n: count() }).from(runs).where(inArray(runs.status, [...ACTIVE_RUN_STATUSES])),
+      db
+        .select({ n: count() })
+        .from(runs)
+        .where(inArray(runs.status, [...ACTIVE_RUN_STATUSES])),
       db.select({ n: count() }).from(agentJobs).where(eq(agentJobs.status, "claimed")),
       db.select({ n: count() }).from(assessmentResults).where(eq(assessmentResults.status, "running")),
     ]);
@@ -929,25 +1024,33 @@ async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
     if (active === 0 && claimed === 0 && assessments === 0) {
       ctx.setState({
         ...ctx.state,
-        steps: ctx.state.steps.map((step): WizardStep =>
-          step.key === "drain" ? { ...step, detail: "No active runs remain" } : step),
+        steps: ctx.state.steps.map(
+          (step): WizardStep => (step.key === "drain" ? { ...step, detail: "No active runs remain" } : step),
+        ),
       });
       return;
     }
     ctx.setState({
       ...ctx.state,
-      steps: ctx.state.steps.map((step): WizardStep =>
-        step.key === "drain"
-          ? { ...step, detail: `Waiting: ${active} run(s), ${claimed} agent job(s), ${assessments} assessment(s) in progress` }
-          : step),
+      steps: ctx.state.steps.map(
+        (step): WizardStep =>
+          step.key === "drain"
+            ? {
+                ...step,
+                detail: `Waiting: ${active} run(s), ${claimed} agent job(s), ${assessments} assessment(s) in progress`,
+              }
+            : step,
+      ),
     });
     if (Date.now() > deadline) {
       throw new WizardError(
         `Drain timed out after ${Math.round(timeoutMs / 60_000)} minutes: ${active} run(s), ${claimed} agent job(s), ${assessments} assessment(s) still active. ` +
-        "The source database was not modified. Cancel the runs, then resume the migration.",
+          "The source database was not modified. Cancel the runs, then resume the migration.",
       );
     }
-    await new Promise((resolvePromise): void => { setTimeout(resolvePromise, DRAIN_POLL_MS); });
+    await new Promise((resolvePromise): void => {
+      setTimeout(resolvePromise, DRAIN_POLL_MS);
+    });
   }
 }
 
@@ -988,11 +1091,13 @@ async function seedMigrationJournal(target: MigrationSql): Promise<void> {
 async function verifyJournal(target: MigrationSql): Promise<boolean> {
   const expectedRows = postgresMigrationJournalRows();
   const targetRows = await target.unsafe<Readonly<{ hash: string; createdAt: number | string | bigint }>>(
-    "SELECT hash, created_at::bigint AS \"createdAt\" FROM drizzle.__drizzle_migrations ORDER BY id",
+    'SELECT hash, created_at::bigint AS "createdAt" FROM drizzle.__drizzle_migrations ORDER BY id',
   );
   if (expectedRows.length !== targetRows.length) return false;
-  return expectedRows.every((row, index): boolean =>
-    row.hash === targetRows[index]?.hash && row.createdAt === Number(targetRows[index]?.createdAt ?? 0));
+  return expectedRows.every(
+    (row, index): boolean =>
+      row.hash === targetRows[index]?.hash && row.createdAt === Number(targetRows[index]?.createdAt ?? 0),
+  );
 }
 
 function emptyReport(): MigrationReport {
@@ -1008,7 +1113,11 @@ function emptyReport(): MigrationReport {
 }
 
 /** Write the durable migration manifest: migration-<yyyy-mm-dd>.json. */
-function writeMigrationManifest(state: WizardState, verification: readonly TableVerifyResult[], artifactReferences: readonly ArtifactReferenceCheck[]): void {
+function writeMigrationManifest(
+  state: WizardState,
+  verification: readonly TableVerifyResult[],
+  artifactReferences: readonly ArtifactReferenceCheck[],
+): void {
   const manifest = {
     source: "sqlite",
     destination: "postgres",

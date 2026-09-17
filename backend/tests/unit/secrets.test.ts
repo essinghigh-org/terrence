@@ -48,7 +48,11 @@ describe("loadEncryptionKey ENOENT handling", () => {
 describe("isEncryptedSecret", () => {
   it("identifies encrypted secrets", async () => {
     const mod = await import("../../src/lib/secrets");
-    expect(mod.isEncryptedSecret(`enc:v1:${Buffer.alloc(12).toString("base64")}:${Buffer.alloc(16).toString("base64")}:data`)).toBe(true);
+    expect(
+      mod.isEncryptedSecret(
+        `enc:v1:${Buffer.alloc(12).toString("base64")}:${Buffer.alloc(16).toString("base64")}:data`,
+      ),
+    ).toBe(true);
   });
 
   it("returns false for plain values", async () => {

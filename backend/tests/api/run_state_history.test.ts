@@ -65,16 +65,16 @@ describe("workspace run history and state metadata", () => {
   };
   const statePayload = JSON.stringify(state);
 
-  const request = (path: string, authenticated = true) => app.handle(new Request(
-    `http://terrence.test${path}`,
-    { headers: authenticated ? { Authorization: `Bearer ${token}` } : {} },
-  ));
-  const runHistory = (query: Record<string, string>) => request(
-    `/api/v2/workspaces/${workspaceId}/runs?${new URLSearchParams(query)}`,
-  );
-  const organizationRunHistory = (query: Record<string, string>) => request(
-    `/api/v2/organizations/${orgName}/runs?${new URLSearchParams(query)}`,
-  );
+  const request = (path: string, authenticated = true) =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: authenticated ? { Authorization: `Bearer ${token}` } : {},
+      }),
+    );
+  const runHistory = (query: Record<string, string>) =>
+    request(`/api/v2/workspaces/${workspaceId}/runs?${new URLSearchParams(query)}`);
+  const organizationRunHistory = (query: Record<string, string>) =>
+    request(`/api/v2/organizations/${orgName}/runs?${new URLSearchParams(query)}`);
 
   beforeAll(async () => {
     await db.insert(users).values({
@@ -181,7 +181,10 @@ describe("workspace run history and state metadata", () => {
       [{ "filter[source]": "tfe-ui" }, []],
       [{ "filter[status_group]": "non_final" }, [runIds.planned, runIds.destroy]],
       [{ "filter[status_group]": "discardable" }, [runIds.planned]],
-      [{ "filter[timeframe]": String(currentYear) }, [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative]],
+      [
+        { "filter[timeframe]": String(currentYear) },
+        [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative],
+      ],
       [{ "filter[timeframe]": "year" }, [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative]],
       [{ "search[basic]": "search-needle" }, [runIds.planned]],
       [{ "search[basic]": "errored" }, [runIds.old]],
@@ -217,7 +220,10 @@ describe("workspace run history and state metadata", () => {
   it("applies filters to the organization run query before pagination and count", async () => {
     const cases: [Record<string, string>, string[]][] = [
       [{ "filter[status]": "applied" }, [runIds.applied, otherWorkspaceRunId]],
-      [{ "filter[workspace][name]": "history" }, [runIds.planned, runIds.destroy, runIds.applied, runIds.old, runIds.speculative]],
+      [
+        { "filter[workspace][name]": "history" },
+        [runIds.planned, runIds.destroy, runIds.applied, runIds.old, runIds.speculative],
+      ],
       [{ "search[name]": "other" }, [otherWorkspaceRunId]],
       [{ "filter[workspace_names]": "other" }, [otherWorkspaceRunId]],
     ];
@@ -262,13 +268,22 @@ describe("workspace run history and state metadata", () => {
   });
 
   it.skipIf(process.env["STATE_SUMMARY_LOAD"] !== "1")("keeps large-state history responses bounded", async () => {
-    const payload = JSON.stringify({ ...state, resources: [{ ...state.resources[0], instances: [{ attributes: { padding: "x".repeat(5 * 1024 * 1024) } }] }] });
+    const payload = JSON.stringify({
+      ...state,
+      resources: [{ ...state.resources[0], instances: [{ attributes: { padding: "x".repeat(5 * 1024 * 1024) } }] }],
+    });
     const summary = buildStateSummary(payload);
     const ids = Array.from({ length: 20 }, (_, index) => `large-${index}-${suffix}`);
     try {
       for (const [index, id] of ids.entries()) {
-        await db.insert(stateVersions).values({ id, workspaceId: otherWorkspaceId, serial: index + 1, statePayload: payload,
-          stateSummary: JSON.stringify(summary), uploadSha256: summary.digest });
+        await db.insert(stateVersions).values({
+          id,
+          workspaceId: otherWorkspaceId,
+          serial: index + 1,
+          statePayload: payload,
+          stateSummary: JSON.stringify(summary),
+          uploadSha256: summary.digest,
+        });
       }
       Bun.gc(true);
       const before = process.memoryUsage();
@@ -281,8 +296,16 @@ describe("workspace run history and state metadata", () => {
       expect(JSON.parse(text).data).toHaveLength(20);
       expect(text.length).toBeLessThan(100_000);
       expect(text).not.toContain("padding");
-      console.log("STATE_SUMMARY_LOAD", JSON.stringify({ storedBytes: Buffer.byteLength(payload) * ids.length,
-        responseBytes: Buffer.byteLength(text), elapsedMs, heapDelta: after.heapUsed - before.heapUsed, rssDelta: after.rss - before.rss }));
+      console.log(
+        "STATE_SUMMARY_LOAD",
+        JSON.stringify({
+          storedBytes: Buffer.byteLength(payload) * ids.length,
+          responseBytes: Buffer.byteLength(text),
+          elapsedMs,
+          heapDelta: after.heapUsed - before.heapUsed,
+          rssDelta: after.rss - before.rss,
+        }),
+      );
     } finally {
       for (const id of ids) await db.delete(stateVersions).where(eq(stateVersions.id, id));
     }
@@ -291,12 +314,16 @@ describe("workspace run history and state metadata", () => {
   it("reports missing and stale summaries without falling back to state payloads", async () => {
     const ids = [`legacy-${suffix}`, `stale-${suffix}`];
     const summary = buildStateSummary(statePayload);
-    await db.insert(stateVersions).values(ids.map((id, index) => ({
-      id, workspaceId: otherWorkspaceId, serial: index + 1,
-      statePayload,
-      stateSummary: index === 0 ? null : JSON.stringify({ ...summary, version: 99 }),
-      uploadSha256: summary.digest,
-    })));
+    await db.insert(stateVersions).values(
+      ids.map((id, index) => ({
+        id,
+        workspaceId: otherWorkspaceId,
+        serial: index + 1,
+        statePayload,
+        stateSummary: index === 0 ? null : JSON.stringify({ ...summary, version: 99 }),
+        uploadSha256: summary.digest,
+      })),
+    );
     try {
       for (const path of [
         `/api/v2/workspaces/${otherWorkspaceId}/state-versions`,
@@ -309,7 +336,10 @@ describe("workspace run history and state metadata", () => {
           const item = body.data.find((entry: { id: string }) => entry.id === id);
           expect(item.attributes).toMatchObject({
             "summary-status": index === 0 ? "unindexed" : "outdated",
-            "resources-processed": false, "resource-count": null, lineage: null, size: null,
+            "resources-processed": false,
+            "resource-count": null,
+            lineage: null,
+            size: null,
           });
           expect(item.attributes["hosted-state-download-url"]).toBeTruthy();
         }
@@ -334,8 +364,13 @@ describe("workspace run history and state metadata", () => {
       status: "finalized",
     });
     expect(listed.attributes).toMatchObject({
-      "summary-status": "ready", "resource-count": 3, "managed-resource-count": 1,
-      "data-resource-count": 2, "module-count": 2, "provider-count": 2, "output-count": 2,
+      "summary-status": "ready",
+      "resource-count": 3,
+      "managed-resource-count": 1,
+      "data-resource-count": 2,
+      "module-count": 2,
+      "provider-count": 2,
+      "output-count": 2,
     });
     expect(listed.attributes.resources).toBeUndefined();
     expect(JSON.stringify(listed)).not.toContain("swordfish");
@@ -345,18 +380,20 @@ describe("workspace run history and state metadata", () => {
 
     const resourcesResponse = await request(`/api/v2/workspaces/${workspaceId}/resources`);
     expect(resourcesResponse.status).toBe(200);
-    expect((await resourcesResponse.json()).data).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          provider: "registry.terraform.io/hashicorp/null",
+    expect((await resourcesResponse.json()).data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            provider: "registry.terraform.io/hashicorp/null",
+          }),
         }),
-      }),
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          provider: "terraform.io/builtin/terraform",
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            provider: "terraform.io/builtin/terraform",
+          }),
         }),
-      }),
-    ]));
+      ]),
+    );
 
     const showResponse = await request(`/api/v2/state-versions/${stateId}`);
     expect(showResponse.status).toBe(200);
@@ -383,16 +420,12 @@ describe("workspace run history and state metadata", () => {
       "total-pages": 2,
       "total-count": 2,
     });
-    expect(outputs.data[0].links.self).toBe(
-      `/api/v2/state-version-outputs/${outputs.data[0].id}`,
-    );
+    expect(outputs.data[0].links.self).toBe(`/api/v2/state-version-outputs/${outputs.data[0].id}`);
 
     const outputResponse = await request(`/api/v2/state-version-outputs/${outputs.data[0].id}`);
     expect(outputResponse.status).toBe(200);
     expect((await outputResponse.json()).data).toEqual(outputs.data[0]);
-    expect((await request(
-      "/api/v2/state-version-outputs/wsout-missing",
-    )).status).toBe(404);
+    expect((await request("/api/v2/state-version-outputs/wsout-missing")).status).toBe(404);
     const outsideUserId = `outside-user-${suffix}`;
     const outsideToken = `outside-token-${suffix}`;
     await db.insert(users).values({
@@ -405,31 +438,28 @@ describe("workspace run history and state metadata", () => {
       token: hashAuthenticationToken(outsideToken),
       userId: outsideUserId,
     });
-    expect((await app.handle(new Request(
-      `http://terrence.test/api/v2/state-version-outputs/${outputs.data[0].id}`,
-      { headers: { Authorization: `Bearer ${outsideToken}` } },
-    ))).status).toBe(404);
+    expect(
+      (
+        await app.handle(
+          new Request(`http://terrence.test/api/v2/state-version-outputs/${outputs.data[0].id}`, {
+            headers: { Authorization: `Bearer ${outsideToken}` },
+          }),
+        )
+      ).status,
+    ).toBe(404);
     await db.delete(apiTokens).where(eq(apiTokens.id, `token-outside-${suffix}`));
     await db.delete(users).where(eq(users.id, outsideUserId));
-    expect((await request(
-      `/api/v2/state-version-outputs/${outputs.data[0].id}`,
-      false,
-    )).status).toBe(401);
+    expect((await request(`/api/v2/state-version-outputs/${outputs.data[0].id}`, false)).status).toBe(401);
 
     const goTfeOutputs = await request(`/api/v2/state-versions/${stateId}/outputs`);
     expect(goTfeOutputs.status).toBe(200);
     expect((await goTfeOutputs.json()).data).toHaveLength(2);
 
-    const currentOutputs = await request(
-      `/api/v2/workspaces/${workspaceId}/current-state-version-outputs`,
-    );
+    const currentOutputs = await request(`/api/v2/workspaces/${workspaceId}/current-state-version-outputs`);
     expect(currentOutputs.status).toBe(200);
     expect((await currentOutputs.json()).data).toHaveLength(2);
 
-    expect((await request(
-      `/api/v2/state-versions/${stateId}/state-version-outputs`,
-      false,
-    )).status).toBe(401);
+    expect((await request(`/api/v2/state-versions/${stateId}/state-version-outputs`, false)).status).toBe(401);
   });
 
   it("bounds valid-shaped output misses instead of scanning all state history", async () => {
@@ -451,8 +481,9 @@ describe("workspace run history and state metadata", () => {
       stateVersionQuery.findMany = originalFindMany;
     }
 
-    const boundedCalls = calls.filter((config): config is { limit?: unknown } =>
-      config !== null && typeof config === "object" && "limit" in config);
+    const boundedCalls = calls.filter(
+      (config): config is { limit?: unknown } => config !== null && typeof config === "object" && "limit" in config,
+    );
     expect(boundedCalls).toHaveLength(1);
     expect(boundedCalls[0]?.limit).toBe(MAX_LEGACY_STATE_OUTPUT_CANDIDATES);
     expect(calls).not.toContain(undefined);

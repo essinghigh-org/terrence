@@ -7,8 +7,18 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { storageDir, databaseUrl } from "../../src/db/driver";
 import {
-  apiTokens, configurationVersions, organizationMemberships, organizations,
-  runs, stateVersions, teams, teamWorkspaces, users, workspaceTags, workspaceVariables, workspaces,
+  apiTokens,
+  configurationVersions,
+  organizationMemberships,
+  organizations,
+  runs,
+  stateVersions,
+  teams,
+  teamWorkspaces,
+  users,
+  workspaceTags,
+  workspaceVariables,
+  workspaces,
 } from "../../src/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { validTarGzip } from "./test-archives";
@@ -42,7 +52,7 @@ describe("the reference format API v2 - Runs", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: TEST_USERNAME, password: "securepassword" } },
         }),
-      })
+      }),
     );
 
     const loginRes = await app.handle(
@@ -52,7 +62,7 @@ describe("the reference format API v2 - Runs", () => {
         body: JSON.stringify({
           data: { attributes: { username: TEST_USERNAME, password: "securepassword" } },
         }),
-      })
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -66,22 +76,25 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
     orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
-    const ws = await db.insert(workspaces).values({
-      id: TEST_WORKSPACE_ID,
-      name: "run-workspace",
-      orgId: orgId,
-      autoApply: false
-    }).returning();
+    const ws = await db
+      .insert(workspaces)
+      .values({
+        id: TEST_WORKSPACE_ID,
+        name: "run-workspace",
+        orgId: orgId,
+        autoApply: false,
+      })
+      .returning();
     workspaceId = ws[0]!.id;
 
     // Runs require an uploaded configuration version (issue #574), so seed
@@ -91,24 +104,24 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: { type: "configuration-versions", attributes: { auto_queue_runs: false, speculative: false } },
         }),
-      })
+      }),
     );
     expect(cvRes.status).toBe(201);
-    const seededCvId = (await cvRes.json() as { data: { id: string } }).data.id;
+    const seededCvId = ((await cvRes.json()) as { data: { id: string } }).data.id;
     const uploadRes = await app.handle(
       new Request(`http://localhost/api/v2/configuration-versions/${seededCvId}/upload`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/octet-stream",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: validTarGzip("runs-suite"),
-      })
+      }),
     );
     expect(uploadRes.status).toBe(200);
   });
@@ -119,7 +132,7 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -137,7 +150,7 @@ describe("the reference format API v2 - Runs", () => {
             },
           },
         }),
-      })
+      }),
     );
 
     expect(response.status).toBe(201);
@@ -163,7 +176,7 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -173,19 +186,19 @@ describe("the reference format API v2 - Runs", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(createRes.status).toBe(201);
-    const created = await createRes.json() as { data: { id: string } };
+    const created = (await createRes.json()) as { data: { id: string } };
     const runId = created.data.id;
 
     const response = await app.handle(
       new Request(`http://localhost/api/v2/runs/${runId}`, {
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(response.status).toBe(200);
-    const document = await response.json() as {
+    const document = (await response.json()) as {
       data: { id: string; relationships?: Record<string, unknown> };
       included?: { id: string; type: string; attributes: Record<string, unknown> }[];
     };
@@ -210,7 +223,7 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -220,18 +233,18 @@ describe("the reference format API v2 - Runs", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(createRes.status).toBe(201);
-    const created = await createRes.json() as { data: { id: string } };
+    const created = (await createRes.json()) as { data: { id: string } };
 
     const response = await app.handle(
       new Request(`http://localhost/api/v2/runs/${created.data.id}`, {
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(response.status).toBe(200);
-    const document = await response.json() as { data: { attributes: Record<string, unknown> } };
+    const document = (await response.json()) as { data: { attributes: Record<string, unknown> } };
     expect(document.data.attributes["has-recovery-state"]).toBe(false);
   });
 
@@ -241,7 +254,7 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -251,10 +264,10 @@ describe("the reference format API v2 - Runs", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(createRes.status).toBe(201);
-    const created = await createRes.json() as { data: { id: string } };
+    const created = (await createRes.json()) as { data: { id: string } };
 
     const recoveryDir = join(storageDir, "recovery", created.data.id);
     await mkdir(recoveryDir, { recursive: true });
@@ -262,11 +275,11 @@ describe("the reference format API v2 - Runs", () => {
     try {
       const response = await app.handle(
         new Request(`http://localhost/api/v2/runs/${created.data.id}`, {
-          headers: { "Authorization": `Bearer ${userToken}` }
-        })
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
       );
       expect(response.status).toBe(200);
-      const document = await response.json() as { data: { attributes: Record<string, unknown> } };
+      const document = (await response.json()) as { data: { attributes: Record<string, unknown> } };
       expect(document.data.attributes["has-recovery-state"]).toBe(true);
     } finally {
       await rm(recoveryDir, { recursive: true, force: true });
@@ -280,7 +293,7 @@ describe("the reference format API v2 - Runs", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           data: {
@@ -290,18 +303,18 @@ describe("the reference format API v2 - Runs", () => {
             },
           },
         }),
-      })
+      }),
     );
     expect(createRes.status).toBe(201);
 
     // List runs for the workspace
     const listRes = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs`, {
-        headers: { "Authorization": `Bearer ${userToken}` }
-      })
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
     );
     expect(listRes.status).toBe(200);
-    const listData = await listRes.json() as {
+    const listData = (await listRes.json()) as {
       data: { id: string; relationships?: { "created-by"?: { data: { id: string; type: string } | null } } }[];
       included?: { id: string; type: string; attributes: { username: string; "avatar-url": string } }[];
     };
@@ -337,39 +350,38 @@ describe("the reference format API v2 - Runs", () => {
         },
       },
     });
-    const createDestroyRun = (path: string): Promise<Response> => app.handle(
-      new Request(`http://localhost${path}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`,
-        },
-        body,
-      }),
-    );
+    const createDestroyRun = (path: string): Promise<Response> =>
+      app.handle(
+        new Request(`http://localhost${path}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/vnd.api+json",
+            Authorization: `Bearer ${userToken}`,
+          },
+          body,
+        }),
+      );
 
-    await db.update(workspaces)
-      .set({ allowDestroyPlan: false })
-      .where(eq(workspaces.id, workspaceId));
+    await db.update(workspaces).set({ allowDestroyPlan: false }).where(eq(workspaces.id, workspaceId));
 
     for (const path of ["/api/v2/runs", `/api/v2/workspaces/${workspaceId}/runs`]) {
       const response = await createDestroyRun(path);
       expect(response.status).toBe(422);
       expect(await response.json()).toMatchObject({
-        errors: [{
-          status: "422",
-          title: "Unprocessable Entity",
-          detail: "Destroy plans are disabled for this workspace",
-        }],
+        errors: [
+          {
+            status: "422",
+            title: "Unprocessable Entity",
+            detail: "Destroy plans are disabled for this workspace",
+          },
+        ],
       });
     }
 
-    await db.update(workspaces)
-      .set({ allowDestroyPlan: true })
-      .where(eq(workspaces.id, workspaceId));
+    await db.update(workspaces).set({ allowDestroyPlan: true }).where(eq(workspaces.id, workspaceId));
     const response = await createDestroyRun("/api/v2/runs");
     expect(response.status).toBe(201);
-    const document = await response.json() as { data: { id: string; attributes: { "is-destroy": boolean } } };
+    const document = (await response.json()) as { data: { id: string; attributes: { "is-destroy": boolean } } };
     expect(document.data.attributes["is-destroy"]).toBe(true);
     expect(await db.query.runs.findFirst({ where: eq(runs.id, document.data.id) })).toMatchObject({
       isDestroy: true,
@@ -377,21 +389,22 @@ describe("the reference format API v2 - Runs", () => {
   });
 
   it("rejects malformed run variables and unsafe target/replace addresses", async () => {
-    const post = (attributes: Record<string, unknown>): Promise<Response> => app.handle(
-      new Request("http://localhost/api/v2/runs", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`,
-        },
-        body: JSON.stringify({
-          data: {
-            attributes,
-            relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+    const post = (attributes: Record<string, unknown>): Promise<Response> =>
+      app.handle(
+        new Request("http://localhost/api/v2/runs", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/vnd.api+json",
+            Authorization: `Bearer ${userToken}`,
           },
+          body: JSON.stringify({
+            data: {
+              attributes,
+              relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+            },
+          }),
         }),
-      }),
-    );
+      );
 
     // Variables must be objects with a string key and value.
     for (const variables of [
@@ -422,10 +435,21 @@ describe("the reference format API v2 - Runs", () => {
     expect(JSON.stringify(persisted?.variables)).not.toContain(secret);
     expect(normalizeRunVariables(persisted?.variables)[0]?.value).toBe(secret);
     // Rehearse the backfill twice against this suite's isolated database.
-    await db.update(runs).set({ variables: [{ key: "credential", value: secret, sensitive: true } as { key: string; value: string }] }).where(eq(runs.id, secretId));
+    await db
+      .update(runs)
+      .set({ variables: [{ key: "credential", value: secret, sensitive: true } as { key: string; value: string }] })
+      .where(eq(runs.id, secretId));
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const child = Bun.spawn([process.execPath, "run", "scripts/encrypt-run-variables.ts"], { env: { ...process.env, DATABASE_URL: databaseUrl, STORAGE_DIR: storageDir }, stdout: "pipe", stderr: "pipe" });
-      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      const child = Bun.spawn([process.execPath, "run", "scripts/encrypt-run-variables.ts"], {
+        env: { ...process.env, DATABASE_URL: databaseUrl, STORAGE_DIR: storageDir },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
       expect(stdout + stderr).not.toContain(secret);
       expect(exitCode, stderr).toBe(0);
       expect(stdout).toContain(`Encrypted sensitive variables in ${attempt === 0 ? 1 : 0} run records.`);
@@ -433,7 +457,9 @@ describe("the reference format API v2 - Runs", () => {
       expect(JSON.stringify(backfilled?.variables)).not.toContain(secret);
       expect(normalizeRunVariables(backfilled?.variables)[0]?.value).toBe(secret);
     }
-    expect(() => normalizeRunVariables([{ key: "bad", value: "", sensitive: true, valueEncrypted: "broken" }])).toThrow("Invalid encrypted run variable");
+    expect(() => normalizeRunVariables([{ key: "bad", value: "", sensitive: true, valueEncrypted: "broken" }])).toThrow(
+      "Invalid encrypted run variable",
+    );
 
     // Unsafe target/replace addresses must be rejected.
     for (const attrs of [
@@ -475,9 +501,10 @@ describe("Run list sorting (kanban 14.8)", () => {
       const res = await app.handle(buildRequest());
       if (res.status !== 429) return res;
       const retryAfter = Number(res.headers.get("Retry-After"));
-      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? Math.min(Math.ceil(retryAfter * 1000), 5000)
-        : 250 * (attempt + 1);
+      const waitMs =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(Math.ceil(retryAfter * 1000), 5000)
+          : 250 * (attempt + 1);
       await Bun.sleep(waitMs);
     }
     // Make one final request after the last retry wait. Returning the last
@@ -486,32 +513,34 @@ describe("Run list sorting (kanban 14.8)", () => {
   };
 
   const listRunIds = async (sort: string | null): Promise<string[]> => {
-    const url = sort === null
-      ? `http://localhost/api/v2/workspaces/${TEST_WORKSPACE_ID}/runs`
-      : `http://localhost/api/v2/workspaces/${TEST_WORKSPACE_ID}/runs?sort=${encodeURIComponent(sort)}`;
+    const url =
+      sort === null
+        ? `http://localhost/api/v2/workspaces/${TEST_WORKSPACE_ID}/runs`
+        : `http://localhost/api/v2/workspaces/${TEST_WORKSPACE_ID}/runs?sort=${encodeURIComponent(sort)}`;
     const response = await handleWithRateLimitRetry(
-      () => new Request(url, { headers: { "Authorization": `Bearer ${userToken}` } }),
+      () => new Request(url, { headers: { Authorization: `Bearer ${userToken}` } }),
     );
     expect(response.status).toBe(200);
-    const document = await response.json() as { data: { id: string }[] };
+    const document = (await response.json()) as { data: { id: string }[] };
     return document.data.map((run): string => run.id);
   };
 
   const createRunFromApi = async (message: string): Promise<string> => {
     const res = await handleWithRateLimitRetry(
-      () => new Request("http://localhost/api/v2/runs", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`,
-        },
-        body: JSON.stringify({
-          data: {
-            attributes: { message },
-            relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+      () =>
+        new Request("http://localhost/api/v2/runs", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/vnd.api+json",
+            Authorization: `Bearer ${userToken}`,
           },
+          body: JSON.stringify({
+            data: {
+              attributes: { message },
+              relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+            },
+          }),
         }),
-      }),
     );
     expect(res.status).toBe(201);
     return ((await res.json()) as { data: { id: string } }).data.id;
@@ -524,9 +553,18 @@ describe("Run list sorting (kanban 14.8)", () => {
     erroredId = await createRunFromApi("run-sort-errored");
     appliedId = await createRunFromApi("run-sort-applied");
     pendingId = await createRunFromApi("run-sort-pending");
-    await db.update(runs).set({ status: "errored", createdAt: base - 3000 }).where(eq(runs.id, erroredId));
-    await db.update(runs).set({ status: "applied", createdAt: base - 2000 }).where(eq(runs.id, appliedId));
-    await db.update(runs).set({ status: "pending", createdAt: base - 1000 }).where(eq(runs.id, pendingId));
+    await db
+      .update(runs)
+      .set({ status: "errored", createdAt: base - 3000 })
+      .where(eq(runs.id, erroredId));
+    await db
+      .update(runs)
+      .set({ status: "applied", createdAt: base - 2000 })
+      .where(eq(runs.id, appliedId));
+    await db
+      .update(runs)
+      .set({ status: "pending", createdAt: base - 1000 })
+      .where(eq(runs.id, pendingId));
     // No fixed sleep here: the list/create helpers above retry 429s on the
     // server's Retry-After hint (issue #382).
   });
@@ -562,7 +600,10 @@ describe("Run list sorting (kanban 14.8)", () => {
     // Two runs sharing status and createdAt must still come back in a stable
     // order; the tiebreaker is id descending (newest id first).
     const twinIds = [await createRunFromApi("run-sort-twin-a"), await createRunFromApi("run-sort-twin-b")];
-    await db.update(runs).set({ status: "applied", createdAt: base - 2000 }).where(inArray(runs.id, twinIds));
+    await db
+      .update(runs)
+      .set({ status: "applied", createdAt: base - 2000 })
+      .where(inArray(runs.id, twinIds));
     const ids = await listRunIds("status");
     // appliedId shares the twins' status and createdAt, so all three must be
     // ordered purely by the id-descending tiebreaker.
@@ -582,26 +623,38 @@ describe("run execution correctness (issues #583, #601)", () => {
     ...init,
     headers: {
       "Content-Type": "application/vnd.api+json",
-      "Authorization": `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
   });
 
   const createRun = async (token: string, attributes: Record<string, unknown> = {}): Promise<Response> =>
-    app.handle(new Request("http://localhost/api/v2/runs", authed(token, {
-      method: "POST",
-      body: JSON.stringify({
-        data: {
-          attributes,
-          relationships: { workspace: { data: { id: execWsId, type: "workspaces" } } },
-        },
-      }),
-    })));
+    app.handle(
+      new Request(
+        "http://localhost/api/v2/runs",
+        authed(token, {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              attributes,
+              relationships: { workspace: { data: { id: execWsId, type: "workspaces" } } },
+            },
+          }),
+        }),
+      ),
+    );
 
   beforeAll(async () => {
     await db.insert(workspaces).values({ id: execWsId, name: `run-exec-${suffix}`, orgId, autoApply: true });
-    await db.insert(configurationVersions).values({ id: execCvId, workspaceId: execWsId, status: "uploaded", archivePath: `test-only/cv-exec-${suffix}.tar.gz` });
+    await db.insert(configurationVersions).values({
+      id: execCvId,
+      workspaceId: execWsId,
+      status: "uploaded",
+      archivePath: `test-only/cv-exec-${suffix}.tar.gz`,
+    });
     await db.insert(teams).values({ id: planTeamId, orgId, name: `plan-${suffix}` });
-    await db.insert(teamWorkspaces).values({ id: `tw-exec-plan-${suffix}`, teamId: planTeamId, workspaceId: execWsId, access: "plan" });
+    await db
+      .insert(teamWorkspaces)
+      .values({ id: `tw-exec-plan-${suffix}`, teamId: planTeamId, workspaceId: execWsId, access: "plan" });
     await db.insert(apiTokens).values({
       id: `token-exec-plan-${suffix}`,
       token: createHash("sha256").update(planToken).digest("hex"),
@@ -621,7 +674,7 @@ describe("run execution correctness (issues #583, #601)", () => {
   it("warns when the workspace default auto-apply is suppressed by permissions (issue #601)", async () => {
     const response = await createRun(planToken);
     expect(response.status).toBe(201);
-    const body = await response.json() as { data: { attributes: Record<string, unknown> } };
+    const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
     // The planner cannot apply, so the run waits even though the workspace
     // defaults to auto-apply — and now says so.
     expect(body.data.attributes["auto-apply"]).toBe(false);
@@ -637,7 +690,7 @@ describe("run execution correctness (issues #583, #601)", () => {
   it("carries no warning when the caller can apply", async () => {
     const response = await createRun(userToken);
     expect(response.status).toBe(201);
-    const body = await response.json() as { data: { attributes: Record<string, unknown> } };
+    const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
     expect(body.data.attributes["auto-apply"]).toBe(true);
     expect("auto-apply-warning" in body.data.attributes).toBe(false);
   });
@@ -646,13 +699,29 @@ describe("run execution correctness (issues #583, #601)", () => {
     const blockerId = `run-exec-blocker-${suffix}`;
     const pendingId = `run-exec-pending-${suffix}`;
     await db.insert(runs).values([
-      { id: blockerId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
-      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+      {
+        id: blockerId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "fetching",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
+      {
+        id: pendingId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "pending",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
     ]);
-    const response = await app.handle(new Request(
-      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
-      authed(userToken, { method: "POST" }),
-    ));
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+        authed(userToken, { method: "POST" }),
+      ),
+    );
     expect(response.status).toBe(202);
     const blocker = await db.query.runs.findFirst({ where: eq(runs.id, blockerId) });
     expect(blocker?.status).toBe("force_canceled");
@@ -662,15 +731,31 @@ describe("run execution correctness (issues #583, #601)", () => {
     const restingId = `run-exec-resting-${suffix}`;
     const pendingId = `run-exec-pending2-${suffix}`;
     await db.insert(runs).values([
-      { id: restingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", autoApply: false, createdAt: Date.now() },
-      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+      {
+        id: restingId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "planned",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
+      {
+        id: pendingId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "pending",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
     ]);
-    const response = await app.handle(new Request(
-      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
-      authed(userToken, { method: "POST" }),
-    ));
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+        authed(userToken, { method: "POST" }),
+      ),
+    );
     expect(response.status).toBe(409);
-    const body = await response.json() as { errors: { detail: string }[] };
+    const body = (await response.json()) as { errors: { detail: string }[] };
     expect(body.errors[0]?.detail).toContain("discard");
     expect(body.errors[0]?.detail).toContain(restingId);
   });
@@ -682,18 +767,41 @@ describe("run execution correctness (issues #583, #601)", () => {
     const restingId = `run-exec-mixed-resting-${suffix}`;
     const pendingId = `run-exec-mixed-pending-${suffix}`;
     await db.insert(runs).values([
-      { id: activeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
-      { id: restingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", autoApply: false, createdAt: Date.now() },
-      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+      {
+        id: activeId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "fetching",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
+      {
+        id: restingId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "planned",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
+      {
+        id: pendingId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "pending",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
     ]);
-    const response = await app.handle(new Request(
-      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
-      authed(userToken, { method: "POST" }),
-    ));
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+        authed(userToken, { method: "POST" }),
+      ),
+    );
     // Clearing only the fetching run would 202 while the planned run still
     // holds the queue, so the endpoint must refuse and name the discard.
     expect(response.status).toBe(409);
-    const body = await response.json() as { errors: { detail: string }[] };
+    const body = (await response.json()) as { errors: { detail: string }[] };
     expect(body.errors[0]?.detail).toContain(restingId);
     const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
     expect(active?.status).toBe("fetching");
@@ -706,14 +814,38 @@ describe("run execution correctness (issues #583, #601)", () => {
     const activeId = `run-exec-spec-active-${suffix}`;
     const pendingId = `run-exec-spec-pending-${suffix}`;
     await db.insert(runs).values([
-      { id: speculativeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", planOnly: true, autoApply: false, createdAt: Date.now() },
-      { id: activeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
-      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+      {
+        id: speculativeId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "planned",
+        planOnly: true,
+        autoApply: false,
+        createdAt: Date.now(),
+      },
+      {
+        id: activeId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "fetching",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
+      {
+        id: pendingId,
+        workspaceId: execWsId,
+        configurationVersionId: execCvId,
+        status: "pending",
+        autoApply: false,
+        createdAt: Date.now(),
+      },
     ]);
-    const response = await app.handle(new Request(
-      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
-      authed(userToken, { method: "POST" }),
-    ));
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+        authed(userToken, { method: "POST" }),
+      ),
+    );
     expect(response.status).toBe(202);
     const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
     expect(active?.status).toBe("force_canceled");
@@ -724,23 +856,39 @@ describe("run execution correctness (issues #583, #601)", () => {
     const backfillOrgId = `org-backfill-${backfillSuffix}`;
     const backfillWsId = `ws-backfill-${backfillSuffix}`;
     const backfillCvId = `cv-backfill-${backfillSuffix}`;
-    await db.insert(organizations).values({ id: backfillOrgId, name: `backfill-${backfillSuffix}`, defaultIacBinary: "tofu" });
+    await db
+      .insert(organizations)
+      .values({ id: backfillOrgId, name: `backfill-${backfillSuffix}`, defaultIacBinary: "tofu" });
     await db.insert(organizationMemberships).values({
-      id: `mem-backfill-${backfillSuffix}`, userId, orgId: backfillOrgId, role: "owner", status: "active",
+      id: `mem-backfill-${backfillSuffix}`,
+      userId,
+      orgId: backfillOrgId,
+      role: "owner",
+      status: "active",
     });
-    await db.insert(workspaces).values({ id: backfillWsId, name: `backfill-${backfillSuffix}`, orgId: backfillOrgId, autoApply: false });
+    await db
+      .insert(workspaces)
+      .values({ id: backfillWsId, name: `backfill-${backfillSuffix}`, orgId: backfillOrgId, autoApply: false });
     await db.insert(configurationVersions).values({
-      id: backfillCvId, workspaceId: backfillWsId, status: "uploaded", archivePath: `test-only/backfill-${backfillSuffix}.tar.gz`,
+      id: backfillCvId,
+      workspaceId: backfillWsId,
+      status: "uploaded",
+      archivePath: `test-only/backfill-${backfillSuffix}.tar.gz`,
     });
-    const response = await app.handle(new Request("http://localhost/api/v2/runs", authed(userToken, {
-      method: "POST",
-      body: JSON.stringify({
-        data: {
-          attributes: {},
-          relationships: { workspace: { data: { id: backfillWsId, type: "workspaces" } } },
-        },
-      }),
-    })));
+    const response = await app.handle(
+      new Request(
+        "http://localhost/api/v2/runs",
+        authed(userToken, {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              attributes: {},
+              relationships: { workspace: { data: { id: backfillWsId, type: "workspaces" } } },
+            },
+          }),
+        }),
+      ),
+    );
     expect(response.status).toBe(201);
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, backfillWsId) });
     expect(ws?.iacBinary).toBe("tofu");

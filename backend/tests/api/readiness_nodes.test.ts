@@ -29,7 +29,7 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
       new Request("http://localhost/api/v1/nodes", {
         method: "GET",
         headers: { Authorization: `Bearer ${systemToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -44,7 +44,7 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
       new Request("http://localhost/api/v1/nodes/readiness", {
         method: "GET",
         headers: { Authorization: `Bearer ${systemToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -62,7 +62,7 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
       new Request("http://localhost/api/v1/health/readiness", {
         method: "GET",
         headers: { Authorization: `Bearer ${systemToken}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);

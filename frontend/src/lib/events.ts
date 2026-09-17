@@ -58,10 +58,7 @@ async function pumpEventStream(
   return received;
 }
 
-export function subscribeEvents(
-  onEvent: EventHandler,
-  signal?: Readonly<AbortSignal>,
-): EventStreamHandle {
+export function subscribeEvents(onEvent: EventHandler, signal?: Readonly<AbortSignal>): EventStreamHandle {
   const controller = new AbortController();
   let closed = false;
   let retryMs = 1000;
@@ -76,7 +73,9 @@ export function subscribeEvents(
     controller.abort();
   };
 
-  const outerAbort = (): void => { close(); };
+  const outerAbort = (): void => {
+    close();
+  };
   if (signal?.aborted === true) {
     // The caller's signal was already aborted: never open or reconnect.
     closed = true;
@@ -122,7 +121,9 @@ export function subscribeEvents(
       // Stream ended or failed; reconnect below unless the caller closed.
     }
     if (!shouldStop()) {
-      timer = window.setTimeout((): void => { void open(); }, retryMs);
+      timer = window.setTimeout((): void => {
+        void open();
+      }, retryMs);
       retryMs = Math.min(retryMs * 2, 30_000);
     }
   };

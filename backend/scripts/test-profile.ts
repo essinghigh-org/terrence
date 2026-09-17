@@ -16,7 +16,12 @@ import {
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const CLI_MATRIX_PATH = join(REPO_ROOT, "backend/tests/e2e/cli_matrix.json");
 const MAX_DIAGNOSTIC_BYTES = 200_000;
-const PROFILE_ENV_NAMES = new Set(["TERRENCE_E2E_PROFILE", "TERRENCE_E2E_ROOT", "TERRENCE_E2E_RESULTS_DIR", "TERRENCE_E2E_SEED"]);
+const PROFILE_ENV_NAMES = new Set([
+  "TERRENCE_E2E_PROFILE",
+  "TERRENCE_E2E_ROOT",
+  "TERRENCE_E2E_RESULTS_DIR",
+  "TERRENCE_E2E_SEED",
+]);
 
 type ParsedArgs = Readonly<{
   profile: OperationalTestProfileName | undefined;
@@ -105,7 +110,14 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     profile = value;
   }
   if (profile !== undefined) parseOperationalTestProfile(profile);
-  return { profile: profile as OperationalTestProfileName | undefined, seed, artifactDirectory, keepArtifacts, list, help };
+  return {
+    profile: profile as OperationalTestProfileName | undefined,
+    seed,
+    artifactDirectory,
+    keepArtifacts,
+    list,
+    help,
+  };
 }
 
 function shellQuote(value: string): string {
@@ -146,21 +158,42 @@ function assertRealProfileEnvironment(profile: OperationalTestProfile): void {
   if (profile.mode !== "real-cli") return;
   const simulated = process.env["SIMULATED_RUNS"]?.toLowerCase();
   if (simulated === "1" || simulated === "true") {
-    throw new Error(`${profile.name} is a real-cli profile and refuses SIMULATED_RUNS=true; use unit-api for simulated execution`);
+    throw new Error(
+      `${profile.name} is a real-cli profile and refuses SIMULATED_RUNS=true; use unit-api for simulated execution`,
+    );
   }
   if (profile.name === "sandbox" && process.env["TERRENCE_E2E_SECURITY_PROFILE"] === "disabled") {
-    throw new Error("sandbox profile requires TERRENCE_E2E_SECURITY_PROFILE=required and will not downgrade to disabled");
+    throw new Error(
+      "sandbox profile requires TERRENCE_E2E_SECURITY_PROFILE=required and will not downgrade to disabled",
+    );
   }
-  if (profile.database === "postgres" && process.env["DATABASE_URL"] !== undefined && !/^postgres(?:ql)?:\/\//i.test(process.env["DATABASE_URL"] ?? "")) {
-    throw new Error("postgres-cli requires a postgres:// or postgresql:// DATABASE_URL and will not fall back to SQLite");
+  if (
+    profile.database === "postgres" &&
+    process.env["DATABASE_URL"] !== undefined &&
+    !/^postgres(?:ql)?:\/\//i.test(process.env["DATABASE_URL"] ?? "")
+  ) {
+    throw new Error(
+      "postgres-cli requires a postgres:// or postgresql:// DATABASE_URL and will not fall back to SQLite",
+    );
   }
 }
 
-function childEnvironment(profile: OperationalTestProfile, root: string, artifacts: string, seed: string, versions: Readonly<Record<string, string>>): Record<string, string> {
-  const inherited = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined
-    && !PROFILE_ENV_NAMES.has(entry[0])
-    && entry[0] !== "DATABASE_URL"
-    && entry[0] !== "STORAGE_DIR"));
+function childEnvironment(
+  profile: OperationalTestProfile,
+  root: string,
+  artifacts: string,
+  seed: string,
+  versions: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined &&
+        !PROFILE_ENV_NAMES.has(entry[0]) &&
+        entry[0] !== "DATABASE_URL" &&
+        entry[0] !== "STORAGE_DIR",
+    ),
+  );
   const environment: Record<string, string> = {
     ...inherited,
   };
@@ -187,7 +220,8 @@ function childEnvironment(profile: OperationalTestProfile, root: string, artifac
       // fresh database directory below TERRENCE_E2E_ROOT.
       environment.DATABASE_URL = "file:";
     } else if (profile.database === "postgres") {
-      environment.DATABASE_URL = process.env["DATABASE_URL"] ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
+      environment.DATABASE_URL =
+        process.env["DATABASE_URL"] ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
     }
   }
   if (profile.name === "sandbox") environment.TERRENCE_E2E_CLI = "terraform";
@@ -202,7 +236,10 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 }
 
-async function collectOutput(stream: ReadableStream<Uint8Array> | null | undefined, target: Pick<NodeJS.WriteStream, "write">): Promise<string> {
+async function collectOutput(
+  stream: ReadableStream<Uint8Array> | null | undefined,
+  target: Pick<NodeJS.WriteStream, "write">,
+): Promise<string> {
   if (stream === null || stream === undefined) return "";
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -222,7 +259,12 @@ async function collectOutput(stream: ReadableStream<Uint8Array> | null | undefin
   return chunks.join("");
 }
 
-async function copyArtifacts(sourceDirectory: string, targetDirectory: string, profile: OperationalTestProfileName, seed: string): Promise<void> {
+async function copyArtifacts(
+  sourceDirectory: string,
+  targetDirectory: string,
+  profile: OperationalTestProfileName,
+  seed: string,
+): Promise<void> {
   await mkdir(targetDirectory, { recursive: true });
   const prefix = `${profile}-${seed}-`;
   for (const entry of await readdir(sourceDirectory, { withFileTypes: true })) {
@@ -285,8 +327,12 @@ async function main(argv: readonly string[]): Promise<number> {
     reproductionCommand: repro,
   };
   await writeJson(join(root, "profile.json"), artifact);
-  await writeFile(join(root, "reproduce.sh"), `#!/bin/sh\nset -eu\ncd ${shellQuote(REPO_ROOT)}\nexec ${repro}\n`, { mode: 0o700 });
-  console.log(`[profile] name=${profile.name} mode=${profile.mode} database=${profile.database} sandbox=${profile.sandbox} seed=${seed}`);
+  await writeFile(join(root, "reproduce.sh"), `#!/bin/sh\nset -eu\ncd ${shellQuote(REPO_ROOT)}\nexec ${repro}\n`, {
+    mode: 0o700,
+  });
+  console.log(
+    `[profile] name=${profile.name} mode=${profile.mode} database=${profile.database} sandbox=${profile.sandbox} seed=${seed}`,
+  );
   console.log(`[profile] pinned-cli=${JSON.stringify(versions)}`);
   console.log(`[profile] reproduction: ${repro}`);
 
@@ -316,7 +362,7 @@ async function main(argv: readonly string[]): Promise<number> {
     stderr = output[1];
     exitCode = output[2];
   } catch (error) {
-    stderr = error instanceof Error ? error.stack ?? error.message : String(error);
+    stderr = error instanceof Error ? (error.stack ?? error.message) : String(error);
     console.error(stderr);
   } finally {
     process.off("SIGINT", onSignal);
@@ -330,8 +376,12 @@ async function main(argv: readonly string[]): Promise<number> {
     }
   }
 
-  await writeFile(join(artifactDirectory, "stdout.log"), boundedDiagnostic(redactOperationalDiagnostic(stdout)), { mode: 0o600 });
-  await writeFile(join(artifactDirectory, "stderr.log"), boundedDiagnostic(redactOperationalDiagnostic(stderr)), { mode: 0o600 });
+  await writeFile(join(artifactDirectory, "stdout.log"), boundedDiagnostic(redactOperationalDiagnostic(stdout)), {
+    mode: 0o600,
+  });
+  await writeFile(join(artifactDirectory, "stderr.log"), boundedDiagnostic(redactOperationalDiagnostic(stderr)), {
+    mode: 0o600,
+  });
   if (exitCode !== 0) {
     await writeJson(join(artifactDirectory, "failure.json"), {
       profile: profile.name,
@@ -360,8 +410,14 @@ async function main(argv: readonly string[]): Promise<number> {
   if (externalArtifactDirectory !== undefined) {
     try {
       await copyArtifacts(artifactDirectory, externalArtifactDirectory, profile.name, seed);
-      await copyFile(join(root, "profile.json"), join(externalArtifactDirectory, `${profile.name}-${seed}-profile.json`));
-      await copyFile(join(root, "reproduce.sh"), join(externalArtifactDirectory, `${profile.name}-${seed}-reproduce.sh`));
+      await copyFile(
+        join(root, "profile.json"),
+        join(externalArtifactDirectory, `${profile.name}-${seed}-profile.json`),
+      );
+      await copyFile(
+        join(root, "reproduce.sh"),
+        join(externalArtifactDirectory, `${profile.name}-${seed}-reproduce.sh`),
+      );
     } catch (error) {
       cleanupErrors.push(`artifact copy failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -372,7 +428,9 @@ async function main(argv: readonly string[]): Promise<number> {
     try {
       await rm(root, { recursive: true, force: true });
     } catch (error) {
-      cleanupErrors.push(`temporary directory cleanup failed: ${root}: ${error instanceof Error ? error.message : String(error)}`);
+      cleanupErrors.push(
+        `temporary directory cleanup failed: ${root}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   if (cleanupErrors.length > 0) {

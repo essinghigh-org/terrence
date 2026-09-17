@@ -1,13 +1,5 @@
 import type { JSX } from "react";
-import {
-  AlertCircle,
-  CheckCircle2,
-  Clock,
-  Loader2,
-  PauseCircle,
-  ShieldAlert,
-  XCircle,
-} from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, Loader2, PauseCircle, ShieldAlert, XCircle } from "lucide-react";
 import { Badge } from "./badge";
 import { cn } from "@/lib/utils";
 import { formatRunStatus } from "@/lib/run-labels";
@@ -97,10 +89,7 @@ export function StatusBadge({
   // Errored / Policy hard failed / Canceled
   if (["errored", "policy_hard_failed", "canceled"].includes(status)) {
     return (
-      <Badge
-        variant="destructive"
-        className={cn("inline-flex items-center gap-1.5 font-medium", className)}
-      >
+      <Badge variant="destructive" className={cn("inline-flex items-center gap-1.5 font-medium", className)}>
         {status === "policy_hard_failed" ? (
           <ShieldAlert aria-hidden="true" className="size-3.5 shrink-0" />
         ) : (

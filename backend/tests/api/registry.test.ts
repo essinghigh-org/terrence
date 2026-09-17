@@ -29,14 +29,16 @@ describe("Private Module & Provider Registries API contract", () => {
   let moduleArchive = "";
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     fixtureDirectory = await mkdtemp(join(tmpdir(), "terrence-registry-api-"));
@@ -44,9 +46,7 @@ describe("Private Module & Provider Registries API contract", () => {
     await makeRegistryModuleArchive(moduleArchive);
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
   });
 
@@ -89,11 +89,14 @@ describe("Private Module & Provider Registries API contract", () => {
     expect(versionRes.status).toBe(201);
     const versionId = (await versionRes.json()).data.id as string;
     const archiveBytes = await Bun.file(moduleArchive).arrayBuffer();
-    const upload = (): Promise<Response> => app.handle(new Request(`http://terrence.test/api/v2/registry-module-versions/${versionId}/upload`, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
-      body: archiveBytes.slice(0),
-    }));
+    const upload = (): Promise<Response> =>
+      app.handle(
+        new Request(`http://terrence.test/api/v2/registry-module-versions/${versionId}/upload`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+          body: archiveBytes.slice(0),
+        }),
+      );
     const uploads = await Promise.all([upload(), upload()]);
     expect(uploads.map(({ status }): number => status).sort()).toEqual([200, 409]);
     const uploadRes = uploads.find(({ status }): boolean => status === 200)!;
@@ -120,7 +123,9 @@ describe("Private Module & Provider Registries API contract", () => {
     // The download header now carries the signed archive URL (module archives).
     const archiveUrl = dlRes.headers.get("X-Terraform-Get");
     expect(archiveUrl).not.toBeNull();
-    expect(new URL(archiveUrl!, "http://terrence.test").pathname).toBe(`/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/archive.tar.gz`);
+    expect(new URL(archiveUrl!, "http://terrence.test").pathname).toBe(
+      `/api/registry/v1/modules/${orgName}/vpc/aws/1.0.0/archive.tar.gz`,
+    );
 
     expect((await request(`/api/v2/registry-modules/${moduleId}`, "DELETE")).status).toBe(204);
   });
@@ -130,9 +135,10 @@ describe("Private Module & Provider Registries API contract", () => {
       data: { attributes: { name: "duplicate-version", provider: "aws", namespace: orgName } },
     });
     const moduleId = (await created.json()).data.id as string;
-    const createVersion = (): Promise<Response> => request(`/api/v2/registry-modules/${moduleId}/versions`, "POST", {
-      data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
-    });
+    const createVersion = (): Promise<Response> =>
+      request(`/api/v2/registry-modules/${moduleId}/versions`, "POST", {
+        data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
+      });
     const responses = await Promise.all([createVersion(), createVersion()]);
     expect(responses.map((response): number => response.status).sort()).toEqual([201, 422]);
     await db.delete(registryModules).where(eq(registryModules.id, moduleId));
@@ -142,7 +148,14 @@ describe("Private Module & Provider Registries API contract", () => {
     const manualId = `search-manual-${suffix}`;
     const vcsId = `search-vcs-${suffix}`;
     await db.insert(registryModules).values([
-      { id: manualId, orgId, namespace: orgName, name: "search-manual", provider: "aws", publishingMechanism: "manual" },
+      {
+        id: manualId,
+        orgId,
+        namespace: orgName,
+        name: "search-manual",
+        provider: "aws",
+        publishingMechanism: "manual",
+      },
       { id: vcsId, orgId, namespace: orgName, name: "search-vcs", provider: "azurerm", publishingMechanism: "vcs" },
     ]);
     const response = await request(
@@ -171,17 +184,70 @@ describe("Private Module & Provider Registries API contract", () => {
     const moduleId = (await created.json()).data.id as string;
     const now = Date.now();
     await db.insert(registryModuleVersions).values([
-      { id: `pending-${suffix}`, moduleId, version: "1.0.0", status: "pending", archivePath: moduleArchive, createdAt: now },
-      { id: `errored-${suffix}`, moduleId, version: "1.1.0", status: "errored", archivePath: moduleArchive, createdAt: now + 1 },
-      { id: `deprecated-${suffix}`, moduleId, version: "1.2.0", status: "ok", archivePath: moduleArchive, isDeprecated: true, createdAt: now + 2 },
-      { id: `revoked-${suffix}`, moduleId, version: "1.3.0", status: "ok", archivePath: moduleArchive, isRevoked: true, createdAt: now + 3 },
-      { id: `healthy-${suffix}`, moduleId, version: "1.4.0", status: "ok", archivePath: moduleArchive, createdAt: now + 4 },
-      { id: `newest-created-${suffix}`, moduleId, version: "2.0.0", status: "ok", archivePath: moduleArchive, createdAt: now + 6 },
-      { id: `highest-${suffix}`, moduleId, version: "10.0.0", status: "ok", archivePath: moduleArchive, createdAt: now + 5 },
+      {
+        id: `pending-${suffix}`,
+        moduleId,
+        version: "1.0.0",
+        status: "pending",
+        archivePath: moduleArchive,
+        createdAt: now,
+      },
+      {
+        id: `errored-${suffix}`,
+        moduleId,
+        version: "1.1.0",
+        status: "errored",
+        archivePath: moduleArchive,
+        createdAt: now + 1,
+      },
+      {
+        id: `deprecated-${suffix}`,
+        moduleId,
+        version: "1.2.0",
+        status: "ok",
+        archivePath: moduleArchive,
+        isDeprecated: true,
+        createdAt: now + 2,
+      },
+      {
+        id: `revoked-${suffix}`,
+        moduleId,
+        version: "1.3.0",
+        status: "ok",
+        archivePath: moduleArchive,
+        isRevoked: true,
+        createdAt: now + 3,
+      },
+      {
+        id: `healthy-${suffix}`,
+        moduleId,
+        version: "1.4.0",
+        status: "ok",
+        archivePath: moduleArchive,
+        createdAt: now + 4,
+      },
+      {
+        id: `newest-created-${suffix}`,
+        moduleId,
+        version: "2.0.0",
+        status: "ok",
+        archivePath: moduleArchive,
+        createdAt: now + 6,
+      },
+      {
+        id: `highest-${suffix}`,
+        moduleId,
+        version: "10.0.0",
+        status: "ok",
+        archivePath: moduleArchive,
+        createdAt: now + 5,
+      },
     ]);
 
     const response = await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/versions`);
-    const versions = (await response.json()).modules[0].versions.map((version: { version: string }): string => version.version);
+    const versions = (await response.json()).modules[0].versions.map(
+      (version: { version: string }): string => version.version,
+    );
     expect(versions).toEqual(["10.0.0", "2.0.0", "1.4.0", "1.2.0"]);
     expect((await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/1.2.0/download`)).status).toBe(204);
     expect((await request(`/api/registry/v1/modules/${orgName}/lifecycle/aws/1.0.0/download`)).status).toBe(404);
@@ -251,7 +317,10 @@ describe("Private Module & Provider Registries API contract", () => {
     const mirrorPath = `/api/registry/v1/provider-mirror/terrence.test/${orgName}/customcloud`;
     const anonymousMirrorRes = await app.handle(new Request(`http://terrence.test${mirrorPath}/index.json`));
     expect(anonymousMirrorRes.status).toBe(404);
-    expect((await request(`/api/registry/v1/provider-mirror/registry.terraform.io/${orgName}/customcloud/index.json`)).status).toBe(404);
+    expect(
+      (await request(`/api/registry/v1/provider-mirror/registry.terraform.io/${orgName}/customcloud/index.json`))
+        .status,
+    ).toBe(404);
 
     const mirrorIndexRes = await request(`${mirrorPath}/index.json`);
     expect(mirrorIndexRes.status).toBe(200);

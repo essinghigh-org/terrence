@@ -18,4 +18,3 @@ export function safeHttpUrl(raw: unknown): string | null {
     return null;
   }
 }
-

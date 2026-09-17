@@ -32,7 +32,7 @@ export type ExportJob = {
   rowsCopied?: number;
   error?: { code?: string; title: string; detail?: string };
   result?: DbExportResult;
-}
+};
 
 // In-memory job registry: jobs live for the lifetime of the process (the
 // wizard's forward path uses the same model). Completed files are durable
@@ -42,7 +42,8 @@ const jobs = new Map<string, ExportJob>();
  * Returns undefined when absent, null when present but invalid. */
 function parseBoundedLimit(value: unknown, cap: number): number | undefined | null {
   if (value === undefined || value === null || value === "") return undefined;
-  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > cap) return null;
   return parsed;
 }
@@ -60,16 +61,23 @@ function setStatus(set: ParamCtx["set"], status: number): void {
   (set as { status?: number }).status = status;
 }
 
-function errorBody(status: number, title: string, detail: string, code?: string): {
+function errorBody(
+  status: number,
+  title: string,
+  detail: string,
+  code?: string,
+): {
   errors: { status: string; title: string; detail: string; code?: string }[];
 } {
   return {
-    errors: [{
-      status: String(status),
-      title,
-      detail,
-      ...(code === undefined ? {} : { code }),
-    }],
+    errors: [
+      {
+        status: String(status),
+        title,
+        detail,
+        ...(code === undefined ? {} : { code }),
+      },
+    ],
   };
 }
 
@@ -93,7 +101,7 @@ function attrsOf(body: unknown): Readonly<Record<string, unknown>> {
 export type DbExportRouteDeps = {
   /** Override source construction (tests inject SQLite-backed sources). */
   readonly sourceFactory?: (url: string) => TransferSource;
-}
+};
 
 export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
   const sourceFactory = deps.sourceFactory ?? ((url: string): TransferSource => createPgSource(url));
@@ -102,7 +110,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
     .use(authPlugin)
     .post("/api/v2/admin/db-export/test-connection", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
       if (!requireAdmin(user, set)) return errorBody(404, "Not Found", "Not Found");
-      const url = typeof attrsOf(body)["postgres-url"] === "string" ? attrsOf(body)["postgres-url"] as string : "";
+      const url = typeof attrsOf(body)["postgres-url"] === "string" ? (attrsOf(body)["postgres-url"] as string) : "";
       if (url.trim() === "") {
         setStatus(set, 422);
         return errorBody(422, "Unprocessable Entity", "postgres-url is required");
@@ -114,7 +122,11 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
         await connection.endSnapshot();
         if (!hasUsers) {
           setStatus(set, 422);
-          return errorBody(422, "Incompatible database", "The source database has no Terrence schema (missing users table)");
+          return errorBody(
+            422,
+            "Incompatible database",
+            "The source database has no Terrence schema (missing users table)",
+          );
         }
         return { data: { type: "db-export-connection-tests", id: "current", attributes: { ok: true } } };
       } catch (error) {
@@ -133,9 +145,10 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
         setStatus(set, 422);
         return errorBody(422, "Unprocessable Entity", "postgres-url is required");
       }
-      const outputName = typeof attrs["output-name"] === "string" && attrs["output-name"].trim() !== ""
-        ? attrs["output-name"]
-        : undefined;
+      const outputName =
+        typeof attrs["output-name"] === "string" && attrs["output-name"].trim() !== ""
+          ? attrs["output-name"]
+          : undefined;
       const force = attrs["force"] === true;
       // Issue #620: expose the verification hash bounds. Caps keep a typo
       // from turning verification into a self-DoS on huge tables.
@@ -143,7 +156,11 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
       const fullDigestLimit = parseBoundedLimit(attrs["full-digest-limit"], 1_000_000);
       if (sampleLimit === null || fullDigestLimit === null) {
         setStatus(set, 422);
-        return errorBody(422, "Unprocessable Entity", "sample-limit and full-digest-limit must be positive integers within their caps");
+        return errorBody(
+          422,
+          "Unprocessable Entity",
+          "sample-limit and full-digest-limit must be positive integers within their caps",
+        );
       }
 
       // Only one export may run at a time: concurrent jobs could both pass the
@@ -166,7 +183,14 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}): AnyElysia {
               pgUrl: url,
               ...(outputName === undefined ? {} : { outputName }),
               ...(force ? { force: true } : {}),
-              ...((sampleLimit === undefined && fullDigestLimit === undefined) ? {} : { verify: { ...(sampleLimit === undefined ? {} : { sampleLimit }), ...(fullDigestLimit === undefined ? {} : { fullDigestLimit }) } }),
+              ...(sampleLimit === undefined && fullDigestLimit === undefined
+                ? {}
+                : {
+                    verify: {
+                      ...(sampleLimit === undefined ? {} : { sampleLimit }),
+                      ...(fullDigestLimit === undefined ? {} : { fullDigestLimit }),
+                    },
+                  }),
               ...(deps.sourceFactory === undefined ? {} : { sourceFactory: deps.sourceFactory }),
             },
             (progress: DbExportProgress) => {

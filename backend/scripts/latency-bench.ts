@@ -76,7 +76,7 @@ type Result = {
   p95: number;
   max: number;
   failed: boolean;
-}
+};
 
 async function main(): Promise<void> {
   if (token === undefined || token === "") throw new Error("--token is required");
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
     });
     console.log(
       `${endpoint.name.padEnd(18)} p50=${String(Math.round(stats.p50)).padStart(5)}ms ` +
-      `p95=${String(Math.round(stats.p95)).padStart(5)}ms max=${String(Math.round(stats.max)).padStart(6)}ms`,
+        `p95=${String(Math.round(stats.p95)).padStart(5)}ms max=${String(Math.round(stats.max)).padStart(6)}ms`,
     );
   }
   const over = results.filter((r) => r.failed);

@@ -53,20 +53,17 @@ const resource = (type: string, attributes: Record<string, unknown>): Record<str
   data: { type, attributes },
 });
 
-function request(
-  path: string,
-  token: string | null = adminToken,
-  method = "GET",
-  body?: unknown,
-): Promise<Response> {
+function request(path: string, token: string | null = adminToken, method = "GET", body?: unknown): Promise<Response> {
   const headers: Record<string, string> = {};
   if (token !== null) headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers,
-    body: body === undefined ? null : JSON.stringify(body),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers,
+      body: body === undefined ? null : JSON.stringify(body),
+    }),
+  );
 }
 
 const scopedPermissions = {
@@ -192,32 +189,53 @@ describe("P1 security and authorization regressions", () => {
   });
 
   it("rejects malformed VCS URLs before persisting an OAuth client", async () => {
-    const invalidProtocol = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
-      name: `invalid-protocol-${suffix}`,
-      "service-provider": "github_enterprise",
-      "api-url": "file:///etc/passwd",
-    }));
+    const invalidProtocol = await request(
+      `/api/v2/organizations/${orgName}/oauth-clients`,
+      adminToken,
+      "POST",
+      resource("oauth-clients", {
+        name: `invalid-protocol-${suffix}`,
+        "service-provider": "github_enterprise",
+        "api-url": "file:///etc/passwd",
+      }),
+    );
     expect(invalidProtocol.status).toBe(422);
 
-    const invalidType = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
-      name: `invalid-type-${suffix}`,
-      "api-url": 42,
-    }));
+    const invalidType = await request(
+      `/api/v2/organizations/${orgName}/oauth-clients`,
+      adminToken,
+      "POST",
+      resource("oauth-clients", {
+        name: `invalid-type-${suffix}`,
+        "api-url": 42,
+      }),
+    );
     expect(invalidType.status).toBe(422);
 
-    const emptyUrls = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
-      name: `empty-urls-${suffix}`,
-      "service-provider": "github_enterprise",
-      "api-url": "",
-      "http-url": "",
-    }));
+    const emptyUrls = await request(
+      `/api/v2/organizations/${orgName}/oauth-clients`,
+      adminToken,
+      "POST",
+      resource("oauth-clients", {
+        name: `empty-urls-${suffix}`,
+        "service-provider": "github_enterprise",
+        "api-url": "",
+        "http-url": "",
+      }),
+    );
     expect(emptyUrls.status).toBe(201);
-    const emptyUrlClient = await db.query.oauthClients.findFirst({ where: eq(oauthClients.name, `empty-urls-${suffix}`) });
+    const emptyUrlClient = await db.query.oauthClients.findFirst({
+      where: eq(oauthClients.name, `empty-urls-${suffix}`),
+    });
     expect(emptyUrlClient?.apiUrl).toBeNull();
     expect(emptyUrlClient?.httpUrl).toBeNull();
 
     const clients = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, orgId) });
-    expect(clients.some((client): boolean => client.name === `invalid-protocol-${suffix}` || client.name === `invalid-type-${suffix}`)).toBeFalse();
+    expect(
+      clients.some(
+        (client): boolean => client.name === `invalid-protocol-${suffix}` || client.name === `invalid-type-${suffix}`,
+      ),
+    ).toBeFalse();
   });
 
   it("requires HTTPS for OAuth endpoints outside test and opted-in development environments", async () => {
@@ -226,20 +244,30 @@ describe("P1 security and authorization regressions", () => {
     try {
       process.env.NODE_ENV = "production";
       delete process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"];
-      const rejected = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
-        name: `http-rejected-${suffix}`,
-        "service-provider": "github_enterprise",
-        "http-url": "http://oauth.example.test",
-      }));
+      const rejected = await request(
+        `/api/v2/organizations/${orgName}/oauth-clients`,
+        adminToken,
+        "POST",
+        resource("oauth-clients", {
+          name: `http-rejected-${suffix}`,
+          "service-provider": "github_enterprise",
+          "http-url": "http://oauth.example.test",
+        }),
+      );
       expect(rejected.status).toBe(422);
 
       process.env.NODE_ENV = "development";
       process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"] = "true";
-      const optedIn = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
-        name: `http-development-${suffix}`,
-        "service-provider": "github_enterprise",
-        "http-url": "http://oauth.example.test",
-      }));
+      const optedIn = await request(
+        `/api/v2/organizations/${orgName}/oauth-clients`,
+        adminToken,
+        "POST",
+        resource("oauth-clients", {
+          name: `http-development-${suffix}`,
+          "service-provider": "github_enterprise",
+          "http-url": "http://oauth.example.test",
+        }),
+      );
       expect(optedIn.status).toBe(201);
     } finally {
       if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
@@ -250,10 +278,15 @@ describe("P1 security and authorization regressions", () => {
   });
 
   it("rejects malformed run-task URLs on create, update, and callback", async () => {
-    const invalidCreate = await request(`/api/v2/organizations/${orgName}/run-tasks`, adminToken, "POST", resource("tasks", {
-      name: `invalid-task-${suffix}`,
-      url: "file:///etc/passwd",
-    }));
+    const invalidCreate = await request(
+      `/api/v2/organizations/${orgName}/run-tasks`,
+      adminToken,
+      "POST",
+      resource("tasks", {
+        name: `invalid-task-${suffix}`,
+        url: "file:///etc/passwd",
+      }),
+    );
     expect(invalidCreate.status).toBe(422);
 
     const taskId = `p1-task-${suffix}`;
@@ -264,80 +297,148 @@ describe("P1 security and authorization regressions", () => {
       url: "https://task.example.test/callback",
       enabled: true,
     });
-    const invalidUpdate = await request(`/api/v2/run-tasks/${taskId}`, adminToken, "PATCH", resource("tasks", {
-      url: "not a URL",
-    }));
+    const invalidUpdate = await request(
+      `/api/v2/run-tasks/${taskId}`,
+      adminToken,
+      "PATCH",
+      resource("tasks", {
+        url: "not a URL",
+      }),
+    );
     expect(invalidUpdate.status).toBe(422);
     const unchanged = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
     expect(unchanged?.url).toBe("https://task.example.test/callback");
 
     const runId = `p1-run-${suffix}`;
     const resultId = `p1-result-${suffix}`;
-    await db.insert(runs).values({ id: runId, workspaceId: targetWorkspaceId, status: "planning", createdAt: Date.now() });
+    await db
+      .insert(runs)
+      .values({ id: runId, workspaceId: targetWorkspaceId, status: "planning", createdAt: Date.now() });
     await db.insert(runTaskResults).values({ id: resultId, runId, runTaskId: taskId, status: "running", url: null });
     const callbackPath = `/api/v2/task-results/${resultId}/callback`;
     const signedCallback = signedApiURL(new Request(`http://terrence.test${callbackPath}`), callbackPath, "PATCH");
-    const callback = await app.handle(new Request(signedCallback, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { type: "task-results", attributes: { status: "passed", url: "file:///etc/passwd" } } }),
-    }));
+    const callback = await app.handle(
+      new Request(signedCallback, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "task-results", attributes: { status: "passed", url: "file:///etc/passwd" } },
+        }),
+      }),
+    );
     expect(callback.status).toBe(422);
     const result = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
     expect(result?.url).toBeNull();
   });
 
   it("validates remote-state consumers and SSH keys against the workspace organization", async () => {
-    const invalidConsumer = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`, adminToken, "POST", {
-      data: [{ id: otherWorkspaceId, type: "workspaces" }],
-    });
+    const invalidConsumer = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`,
+      adminToken,
+      "POST",
+      {
+        data: [{ id: otherWorkspaceId, type: "workspaces" }],
+      },
+    );
     expect(invalidConsumer.status).toBe(422);
 
-    const validConsumer = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`, adminToken, "POST", {
-      data: [{ id: sourceWorkspaceId, type: "workspaces" }],
-    });
+    const validConsumer = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`,
+      adminToken,
+      "POST",
+      {
+        data: [{ id: sourceWorkspaceId, type: "workspaces" }],
+      },
+    );
     expect(validConsumer.status).toBe(204);
-    expect((await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, targetWorkspaceId) })).map((row): string => row.consumerWorkspaceId)).toEqual([sourceWorkspaceId]);
+    expect(
+      (
+        await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, targetWorkspaceId) })
+      ).map((row): string => row.consumerWorkspaceId),
+    ).toEqual([sourceWorkspaceId]);
 
-    const omittedReplacement = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`, adminToken, "PATCH", {});
+    const omittedReplacement = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`,
+      adminToken,
+      "PATCH",
+      {},
+    );
     expect(omittedReplacement.status).toBe(422);
-    expect((await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, targetWorkspaceId) })).map((row): string => row.consumerWorkspaceId)).toEqual([sourceWorkspaceId]);
+    expect(
+      (
+        await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, targetWorkspaceId) })
+      ).map((row): string => row.consumerWorkspaceId),
+    ).toEqual([sourceWorkspaceId]);
 
-    const invalidReplacement = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`, adminToken, "PATCH", {
-      data: [{ id: otherWorkspaceId, type: "workspaces" }],
-    });
+    const invalidReplacement = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/remote-state-consumers`,
+      adminToken,
+      "PATCH",
+      {
+        data: [{ id: otherWorkspaceId, type: "workspaces" }],
+      },
+    );
     expect(invalidReplacement.status).toBe(422);
-    expect((await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, targetWorkspaceId) })).map((row): string => row.consumerWorkspaceId)).toEqual([sourceWorkspaceId]);
+    expect(
+      (
+        await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, targetWorkspaceId) })
+      ).map((row): string => row.consumerWorkspaceId),
+    ).toEqual([sourceWorkspaceId]);
 
-    const invalidSsh = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/ssh-key`, adminToken, "PATCH", {
-      data: { id: otherOrgSshKeyId, type: "ssh-keys" },
-    });
+    const invalidSsh = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/ssh-key`,
+      adminToken,
+      "PATCH",
+      {
+        data: { id: otherOrgSshKeyId, type: "ssh-keys" },
+      },
+    );
     expect(invalidSsh.status).toBe(422);
     const afterInvalidSsh = await db.query.workspaces.findFirst({ where: eq(workspaces.id, targetWorkspaceId) });
     expect(afterInvalidSsh?.sshKeyId).toBeNull();
 
-    const validSsh = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/ssh-key`, adminToken, "PATCH", {
-      data: { id: sameOrgSshKeyId, type: "ssh-keys" },
-    });
+    const validSsh = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/ssh-key`,
+      adminToken,
+      "PATCH",
+      {
+        data: { id: sameOrgSshKeyId, type: "ssh-keys" },
+      },
+    );
     expect(validSsh.status).toBe(200);
     const afterValidSsh = await db.query.workspaces.findFirst({ where: eq(workspaces.id, targetWorkspaceId) });
     expect(afterValidSsh?.sshKeyId).toBe(sameOrgSshKeyId);
   });
 
   it("rejects cross-organization, self, and wrong-type run-trigger relationships", async () => {
-    const crossOrg = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/run-triggers`, adminToken, "POST", {
-      data: [{ id: otherWorkspaceId, type: "workspaces" }],
-    });
+    const crossOrg = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/run-triggers`,
+      adminToken,
+      "POST",
+      {
+        data: [{ id: otherWorkspaceId, type: "workspaces" }],
+      },
+    );
     expect(crossOrg.status).toBe(422);
 
-    const selfReference = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/run-triggers`, adminToken, "POST", {
-      data: [{ id: targetWorkspaceId, type: "workspaces" }],
-    });
+    const selfReference = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/run-triggers`,
+      adminToken,
+      "POST",
+      {
+        data: [{ id: targetWorkspaceId, type: "workspaces" }],
+      },
+    );
     expect(selfReference.status).toBe(422);
 
-    const wrongType = await request(`/api/v2/workspaces/${targetWorkspaceId}/relationships/run-triggers`, adminToken, "POST", {
-      data: [{ id: sourceWorkspaceId, type: "run-triggers" }],
-    });
+    const wrongType = await request(
+      `/api/v2/workspaces/${targetWorkspaceId}/relationships/run-triggers`,
+      adminToken,
+      "POST",
+      {
+        data: [{ id: sourceWorkspaceId, type: "run-triggers" }],
+      },
+    );
     expect(wrongType.status).toBe(422);
 
     const directWrongType = await request(`/api/v2/workspaces/${targetWorkspaceId}/run-triggers`, adminToken, "POST", {
@@ -354,18 +455,28 @@ describe("P1 security and authorization regressions", () => {
   });
 
   it("prevents scoped callers from minting unscoped organization or team tokens", async () => {
-    const orgToken = await request(`/api/v2/organizations/${orgName}/authentication-token`, scopedToken, "POST", resource("authentication-tokens", {}));
+    const orgToken = await request(
+      `/api/v2/organizations/${orgName}/authentication-token`,
+      scopedToken,
+      "POST",
+      resource("authentication-tokens", {}),
+    );
     expect(orgToken.status).toBe(403);
     const teamToken = await request(`/api/v2/teams/${teamId}/authentication-token`, scopedToken, "POST");
     expect(teamToken.status).toBe(403);
-    const modernTeamToken = await request(`/api/v2/teams/${teamId}/authentication-tokens`, scopedToken, "POST", resource("authentication-tokens", { description: "scoped-escape" }));
+    const modernTeamToken = await request(
+      `/api/v2/teams/${teamId}/authentication-tokens`,
+      scopedToken,
+      "POST",
+      resource("authentication-tokens", { description: "scoped-escape" }),
+    );
     expect(modernTeamToken.status).toBe(403);
   });
 
   it("audit-logs impersonation start and end with a linking token identifier", async () => {
     const started = await request(`/api/v2/admin/users/${targetUserId}/actions/impersonate`, adminToken, "POST");
     expect(started.status).toBe(200);
-    const startedBody = await started.json() as { data: { attributes: { token: string } } };
+    const startedBody = (await started.json()) as { data: { attributes: { token: string } } };
     const impersonationToken = startedBody.data.attributes.token;
 
     const startLog = await db.query.auditLogs.findFirst({
@@ -400,16 +511,28 @@ describe("P1 security and authorization regressions", () => {
     });
     await db.insert(oauthTokens).values({ id: tokenId, oauthClientId: clientId, token: "old-access-token" });
 
-    const unchanged = await request(`/api/v2/oauth-clients/${clientId}`, adminToken, "PATCH", resource("oauth-clients", {
-      name: `credential-origin-unchanged-${suffix}`,
-    }));
+    const unchanged = await request(
+      `/api/v2/oauth-clients/${clientId}`,
+      adminToken,
+      "PATCH",
+      resource("oauth-clients", {
+        name: `credential-origin-unchanged-${suffix}`,
+      }),
+    );
     expect(unchanged.status).toBe(200);
-    expect((await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, clientId) }))?.secret).toBe("old-client-secret");
+    expect((await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, clientId) }))?.secret).toBe(
+      "old-client-secret",
+    );
     expect(await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, clientId) })).toHaveLength(1);
 
-    const changed = await request(`/api/v2/oauth-clients/${clientId}`, adminToken, "PATCH", resource("oauth-clients", {
-      "api-url": "https://new-api.example.test/api/v3",
-    }));
+    const changed = await request(
+      `/api/v2/oauth-clients/${clientId}`,
+      adminToken,
+      "PATCH",
+      resource("oauth-clients", {
+        "api-url": "https://new-api.example.test/api/v3",
+      }),
+    );
     expect(changed.status).toBe(200);
     const updated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, clientId) });
     expect(updated?.apiUrl).toBe("https://new-api.example.test/api/v3");
@@ -428,34 +551,49 @@ describe("P1 security and authorization regressions", () => {
       key: "provider-client-key",
       secret: "provider-client-secret",
     });
-    await db.insert(oauthTokens).values({ id: providerTokenId, oauthClientId: providerClientId, token: "provider-access-token" });
+    await db
+      .insert(oauthTokens)
+      .values({ id: providerTokenId, oauthClientId: providerClientId, token: "provider-access-token" });
 
-    const providerChanged = await request(`/api/v2/oauth-clients/${providerClientId}`, adminToken, "PATCH", resource("oauth-clients", {
-      "service-provider": "gitlab",
-    }));
+    const providerChanged = await request(
+      `/api/v2/oauth-clients/${providerClientId}`,
+      adminToken,
+      "PATCH",
+      resource("oauth-clients", {
+        "service-provider": "gitlab",
+      }),
+    );
     expect(providerChanged.status).toBe(200);
     const providerUpdated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, providerClientId) });
     expect(providerUpdated?.serviceProvider).toBe("gitlab");
     expect(providerUpdated?.secret).toBeNull();
-    expect(await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, providerClientId) })).toHaveLength(0);
+    expect(
+      await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, providerClientId) }),
+    ).toHaveLength(0);
   });
 
   it("limits audit reads to owners, auditors, and declared scoped grants", async () => {
     const memberResponse = await request("/api/v2/audit-trails", memberToken);
     expect(memberResponse.status).toBe(200);
-    expect((await memberResponse.json() as { data: unknown[] }).data).toHaveLength(0);
+    expect(((await memberResponse.json()) as { data: unknown[] }).data).toHaveLength(0);
 
     const scopedMemberResponse = await request("/api/v2/audit-trails", scopedMemberToken);
     expect(scopedMemberResponse.status).toBe(200);
-    expect((await scopedMemberResponse.json() as { data: unknown[] }).data).toHaveLength(0);
+    expect(((await scopedMemberResponse.json()) as { data: unknown[] }).data).toHaveLength(0);
 
     const ownerResponse = await request("/api/v2/audit-trails", ownerToken);
     expect(ownerResponse.status).toBe(200);
-    expect((await ownerResponse.json() as { data: { id: string }[] }).data.some(({ id }): boolean => id === auditMemberId)).toBeTrue();
+    expect(
+      ((await ownerResponse.json()) as { data: { id: string }[] }).data.some(({ id }): boolean => id === auditMemberId),
+    ).toBeTrue();
 
     const orgTokenResponse = await request("/api/v2/audit-trails", organizationAuditToken);
     expect(orgTokenResponse.status).toBe(200);
-    expect((await orgTokenResponse.json() as { data: { id: string }[] }).data.some(({ id }): boolean => id === auditOwnerId)).toBeTrue();
+    expect(
+      ((await orgTokenResponse.json()) as { data: { id: string }[] }).data.some(
+        ({ id }): boolean => id === auditOwnerId,
+      ),
+    ).toBeTrue();
 
     const regularOrgTokenResponse = await request("/api/v2/audit-trails", organizationToken);
     expect(regularOrgTokenResponse.status).toBe(403);

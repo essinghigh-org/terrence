@@ -54,28 +54,34 @@ function validateMailbox(value: string, label: string): void {
 /** Encode UTF-8 MIME text without relying on an SMTP 8BITMIME extension. */
 function quotedPrintable(value: string): string {
   const lines = value.replace(/\r?\n/g, "\r\n").split("\r\n");
-  return lines.map((line): string => {
-    const bytes = Buffer.from(line, "utf8");
-    let encoded = "";
-    let lineLength = 0;
-    for (let index = 0; index < bytes.length; index += 1) {
-      const byte = bytes[index] ?? 0;
-      const atLineEnd = index === bytes.length - 1;
-      const safe = (byte >= 33 && byte <= 60) || (byte >= 62 && byte <= 126) || ((byte === 32 || byte === 9) && !atLineEnd);
-      const token = safe ? String.fromCharCode(byte) : `=${byte.toString(16).toUpperCase().padStart(2, "0")}`;
-      if (lineLength + token.length > 75) {
-        encoded += "=\r\n";
-        lineLength = 0;
+  return lines
+    .map((line): string => {
+      const bytes = Buffer.from(line, "utf8");
+      let encoded = "";
+      let lineLength = 0;
+      for (let index = 0; index < bytes.length; index += 1) {
+        const byte = bytes[index] ?? 0;
+        const atLineEnd = index === bytes.length - 1;
+        const safe =
+          (byte >= 33 && byte <= 60) || (byte >= 62 && byte <= 126) || ((byte === 32 || byte === 9) && !atLineEnd);
+        const token = safe ? String.fromCharCode(byte) : `=${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        if (lineLength + token.length > 75) {
+          encoded += "=\r\n";
+          lineLength = 0;
+        }
+        encoded += token;
+        lineLength += token.length;
       }
-      encoded += token;
-      lineLength += token.length;
-    }
-    return encoded;
-  }).join("\r\n");
+      return encoded;
+    })
+    .join("\r\n");
 }
 
 class SmtpError extends Error {
-  constructor(message: string, public readonly code: number) {
+  constructor(
+    message: string,
+    public readonly code: number,
+  ) {
     super(message);
     this.name = "SmtpError";
   }
@@ -86,7 +92,7 @@ type Session = {
   send(line: string): Promise<Response>;
   upgradeTLS(): void;
   close(): void;
-}
+};
 
 type SmtpStep = <T>(promise: Readonly<Promise<T>>, what: string) => Promise<T>;
 
@@ -164,9 +170,14 @@ async function createSession(host: string, port: number, tls: boolean): Promise<
 
 async function withTimeout<T>(promise: Readonly<Promise<T>>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => { reject(new Error(`SMTP ${what} timed out`)); }, ms);
+    const timer = setTimeout(() => {
+      reject(new Error(`SMTP ${what} timed out`));
+    }, ms);
     promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
       (error: unknown) => {
         clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -179,7 +190,11 @@ function validateEmailRequest(settings: SmtpSettings, message: EmailMessage): vo
   if (!Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535) {
     throw new SmtpError("Invalid SMTP port", 0);
   }
-  if (settings.host === "" || settings.host.trim() !== settings.host || /[\r\n\u0000-\u001f\u007f]/.test(settings.host)) {
+  if (
+    settings.host === "" ||
+    settings.host.trim() !== settings.host ||
+    /[\r\n\u0000-\u001f\u007f]/.test(settings.host)
+  ) {
     throw new SmtpError("Invalid SMTP host", 0);
   }
   validateMailbox(settings.senderEmail, "sender address");
@@ -203,7 +218,11 @@ function smtpEncryption(settings: SmtpSettings): SmtpEncryption {
   return settings.encryption;
 }
 
-async function negotiateStartTls(session: DeepReadonly<Session>, encryption: SmtpEncryption, step: SmtpStep): Promise<void> {
+async function negotiateStartTls(
+  session: DeepReadonly<Session>,
+  encryption: SmtpEncryption,
+  step: SmtpStep,
+): Promise<void> {
   if (encryption !== "starttls") return;
   const startTls = await step(session.send("STARTTLS"), "STARTTLS");
   if (startTls.code === 220) {
@@ -217,7 +236,12 @@ async function negotiateStartTls(session: DeepReadonly<Session>, encryption: Smt
   throw new SmtpError(`STARTTLS is required but unavailable: ${startTls.code} ${startTls.message}`, startTls.code);
 }
 
-async function authenticateSmtp(settings: SmtpSettings, authMode: string, session: DeepReadonly<Session>, step: SmtpStep): Promise<void> {
+async function authenticateSmtp(
+  settings: SmtpSettings,
+  authMode: string,
+  session: DeepReadonly<Session>,
+  step: SmtpStep,
+): Promise<void> {
   if (authMode === "none" || settings.username === null || settings.username === "") return;
   if (authMode === "plain") {
     const authLine = `AUTH PLAIN ${Buffer.from(`\0${settings.username}\0${settings.password ?? ""}`).toString("base64")}`;
@@ -230,31 +254,37 @@ async function authenticateSmtp(settings: SmtpSettings, authMode: string, sessio
   const auth = await step(session.send("AUTH LOGIN"), "AUTH LOGIN");
   if (auth.code !== 334) throw new SmtpError(`AUTH LOGIN rejected: ${auth.code} ${auth.message}`, auth.code);
   const username = await step(session.send(Buffer.from(settings.username).toString("base64")), "AUTH LOGIN username");
-  if (username.code !== 334) throw new SmtpError(`AUTH LOGIN username rejected: ${username.code} ${username.message}`, username.code);
-  const password = await step(session.send(Buffer.from(settings.password ?? "").toString("base64")), "AUTH LOGIN password");
-  if (password.code !== 235) throw new SmtpError(`AUTH LOGIN rejected: ${password.code} ${password.message}`, password.code);
+  if (username.code !== 334)
+    throw new SmtpError(`AUTH LOGIN username rejected: ${username.code} ${username.message}`, username.code);
+  const password = await step(
+    session.send(Buffer.from(settings.password ?? "").toString("base64")),
+    "AUTH LOGIN password",
+  );
+  if (password.code !== 235)
+    throw new SmtpError(`AUTH LOGIN rejected: ${password.code} ${password.message}`, password.code);
 }
 
 function composeSmtpMessage(settings: SmtpSettings, message: EmailMessage): string {
   const plainText = message.text.replace(/\r?\n/g, "\r\n");
   const boundary = `=_terrence_${crypto.randomUUID()}`;
   const encodedText = quotedPrintable(plainText);
-  const entityBody = message.html === undefined
-    ? encodedText
-    : [
-        `--${boundary}`,
-        "Content-Type: text/plain; charset=utf-8",
-        "Content-Transfer-Encoding: quoted-printable",
-        "",
-        encodedText,
-        `--${boundary}`,
-        "Content-Type: text/html; charset=utf-8",
-        "Content-Transfer-Encoding: quoted-printable",
-        "",
-        quotedPrintable(message.html.replace(/\r?\n/g, "\r\n")),
-        `--${boundary}--`,
-        "",
-      ].join("\r\n");
+  const entityBody =
+    message.html === undefined
+      ? encodedText
+      : [
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: quoted-printable",
+          "",
+          encodedText,
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "Content-Transfer-Encoding: quoted-printable",
+          "",
+          quotedPrintable(message.html.replace(/\r?\n/g, "\r\n")),
+          `--${boundary}--`,
+          "",
+        ].join("\r\n");
   const headers = [
     `From: ${settings.senderEmail}`,
     `To: ${message.to.join(", ")}`,
@@ -272,7 +302,12 @@ function composeSmtpMessage(settings: SmtpSettings, message: EmailMessage): stri
   return stuffed.endsWith("\r\n") ? `${stuffed}.` : `${stuffed}\r\n.`;
 }
 
-async function sendSmtpMessage(settings: SmtpSettings, message: EmailMessage, session: DeepReadonly<Session>, step: SmtpStep): Promise<void> {
+async function sendSmtpMessage(
+  settings: SmtpSettings,
+  message: EmailMessage,
+  session: DeepReadonly<Session>,
+  step: SmtpStep,
+): Promise<void> {
   const mail = await step(session.send(`MAIL FROM:<${settings.senderEmail}>`), "MAIL FROM");
   if (mail.code !== 250) {
     throw new SmtpError(`MAIL FROM rejected: ${mail.code} ${mail.message}`, mail.code);

@@ -13,7 +13,7 @@ describe("server-level error pages", () => {
     expect(html).toContain("Page not found");
     expect(html).toContain('data-pose="lost"');
     expect(html).toContain('href="/app/docs"');
-    expect(html).not.toContain('<script');
+    expect(html).not.toContain("<script");
   });
 
   it("returns a branded 404 page for unknown methods on unknown paths", async () => {

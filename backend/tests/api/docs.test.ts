@@ -1,11 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
-import {
-  cleanupSeed,
-  jsonHeaders,
-  persistSeed,
-  seedOrg,
-} from "./compat_contract_helpers";
+import { cleanupSeed, jsonHeaders, persistSeed, seedOrg } from "./compat_contract_helpers";
 
 // Bundled documentation endpoints (auth-gated, file-backed, additive).
 describe("bundled documentation endpoints", () => {
@@ -30,37 +25,37 @@ describe("bundled documentation endpoints", () => {
   it("lists the documentation index for authenticated users", async () => {
     const response = await app.handle(new Request("http://localhost/api/v2/docs", { headers }));
     expect(response.status).toBe(200);
-    const body = await response.json() as { data?: unknown[] };
+    const body = (await response.json()) as { data?: unknown[] };
     expect(Array.isArray(body.data)).toBe(true);
     expect((body.data ?? []).length).toBeGreaterThan(10);
-    const overview = (body.data ?? []).find((entry): boolean =>
-      (entry as { id?: string }).id === "overview");
+    const overview = (body.data ?? []).find((entry): boolean => (entry as { id?: string }).id === "overview");
     expect(overview).toBeDefined();
     const attributes = (overview as { attributes?: Record<string, unknown> }).attributes ?? {};
     expect(attributes["title"]).toBe("Overview");
     expect(attributes["category"]).toBe("Getting started");
     // The index must not carry the full markdown payloads.
     expect(attributes["markdown"]).toBeUndefined();
-    const languageGuide = (body.data ?? []).find((entry): boolean =>
-      (entry as { id?: string }).id === "product-language");
+    const languageGuide = (body.data ?? []).find(
+      (entry): boolean => (entry as { id?: string }).id === "product-language",
+    );
     expect(languageGuide).toBeDefined();
   });
 
   it("serves a document by slug with markdown content", async () => {
     const response = await app.handle(new Request("http://localhost/api/v2/docs/runs", { headers }));
     expect(response.status).toBe(200);
-    const body = await response.json() as { data?: { attributes?: Record<string, unknown> } };
+    const body = (await response.json()) as { data?: { attributes?: Record<string, unknown> } };
     const markdown = body.data?.attributes?.["markdown"];
     expect(typeof markdown).toBe("string");
     expect((markdown as string).length).toBeGreaterThan(500);
     // The doc must be the Terrence documentation, not a redirect to external docs.
-    expect((markdown as string)).not.toContain("developer.hashicorp.com");
+    expect(markdown as string).not.toContain("developer.hashicorp.com");
   });
 
   it("serves the product-language guide with precise recovery wording", async () => {
     const response = await app.handle(new Request("http://localhost/api/v2/docs/product-language", { headers }));
     expect(response.status).toBe(200);
-    const body = await response.json() as { data?: { attributes?: Record<string, unknown> } };
+    const body = (await response.json()) as { data?: { attributes?: Record<string, unknown> } };
     const markdown = body.data?.attributes?.["markdown"];
     expect(typeof markdown).toBe("string");
     expect(markdown as string).toContain("Promotion replaces recorded current state");

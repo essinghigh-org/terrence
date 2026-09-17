@@ -8,7 +8,13 @@ type VariableSet = Readonly<{
 
 // Low to high; callers overlay later entries. HCP's priority order reverses
 // scope AND ownership. https://developer.hashicorp.com/terraform/cloud-docs/variables#precedence
-const scopeRank = { global: 0, organizationProject: 1, organizationWorkspace: 2, projectProject: 3, projectWorkspace: 4 };
+const scopeRank = {
+  global: 0,
+  organizationProject: 1,
+  organizationWorkspace: 2,
+  projectProject: 3,
+  projectWorkspace: 4,
+};
 
 export function compareVariableSets(
   left: VariableSet,
@@ -20,17 +26,22 @@ export function compareVariableSets(
 ): number {
   const rank = (set: VariableSet): number => {
     const projectScope = !workspaceSetIds.has(set.id) || (set.priority === true && projectSetIds.has(set.id));
-    const scope = set.global === true ? "global"
-      : set.parentProjectId === null ? (projectScope ? "organizationProject" : "organizationWorkspace")
-      : (projectScope ? "projectProject" : "projectWorkspace");
+    const scope =
+      set.global === true
+        ? "global"
+        : set.parentProjectId === null
+          ? projectScope
+            ? "organizationProject"
+            : "organizationWorkspace"
+          : projectScope
+            ? "projectProject"
+            : "projectWorkspace";
     const ordinary = scopeRank[scope];
     return set.priority === true ? 10 - ordinary : ordinary;
   };
   // UTF-8 byte ordering matches Unicode code-point ordering, unlike localeCompare
   // or UTF-16 string comparison for supplementary characters.
-  return rank(left) - rank(right)
-    || compareCodePoints(right.name, left.name)
-    || compareCodePoints(right.id, left.id);
+  return rank(left) - rank(right) || compareCodePoints(right.name, left.name) || compareCodePoints(right.id, left.id);
 }
 
 /**

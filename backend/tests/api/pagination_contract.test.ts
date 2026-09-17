@@ -3,14 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
 
 describe("JSON:API pagination", () => {
   const suffix = crypto.randomUUID();
@@ -24,9 +17,12 @@ describe("JSON:API pagination", () => {
   const runIds = [`run-new-${suffix}`, `run-old-${suffix}`];
   const privateRunId = `run-private-${suffix}`;
 
-  const request = (path: string) => app.handle(new Request(`http://terrence.test${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }));
+  const request = (path: string) =>
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({
@@ -83,9 +79,7 @@ describe("JSON:API pagination", () => {
   });
 
   it("parses bracket parameters and scopes page-two workspace and run counts", async () => {
-    const workspaceResponse = await request(
-      `/api/v2/organizations/${orgName}/workspaces?page[number]=2&page[size]=1`,
-    );
+    const workspaceResponse = await request(`/api/v2/organizations/${orgName}/workspaces?page[number]=2&page[size]=1`);
     expect(workspaceResponse.status).toBe(200);
     const workspacePage = await workspaceResponse.json();
     expect(workspacePage.data).toHaveLength(1);
@@ -106,9 +100,7 @@ describe("JSON:API pagination", () => {
       last: expect.stringContaining("page%5Bnumber%5D=2"),
     });
 
-    const runResponse = await request(
-      `/api/v2/organizations/${orgName}/runs?page[number]=2&page[size]=1`,
-    );
+    const runResponse = await request(`/api/v2/organizations/${orgName}/runs?page[number]=2&page[size]=1`);
     expect(runResponse.status).toBe(200);
     const runPage = await runResponse.json();
     expect(runPage.data.map((run: any) => run.id)).toEqual([runIds[1]]);
@@ -136,9 +128,7 @@ describe("JSON:API pagination", () => {
     let hasNext = true;
 
     while (hasNext) {
-      const res = await request(
-        `/api/v2/organizations/${orgName}/workspaces?page[number]=${pageNum}&page[size]=1`,
-      );
+      const res = await request(`/api/v2/organizations/${orgName}/workspaces?page[number]=${pageNum}&page[size]=1`);
       expect(res.status).toBe(200);
       const json = await res.json();
       for (const item of json.data) {
@@ -155,9 +145,7 @@ describe("JSON:API pagination", () => {
   });
 
   it("included relationships never bypass authorization or cross tenant boundaries", async () => {
-    const res = await request(
-      `/api/v2/organizations/${orgName}/runs?include=workspace&page[size]=10`,
-    );
+    const res = await request(`/api/v2/organizations/${orgName}/runs?include=workspace&page[size]=10`);
     expect(res.status).toBe(200);
     const body = await res.json();
 
@@ -179,9 +167,7 @@ describe("JSON:API pagination", () => {
 
   it("pagination metadata stays consistent with query filters", async () => {
     // Filter matching a single workspace "alpha"
-    const res = await request(
-      `/api/v2/organizations/${orgName}/workspaces?q=alpha&page[number]=1&page[size]=10`,
-    );
+    const res = await request(`/api/v2/organizations/${orgName}/workspaces?q=alpha&page[number]=1&page[size]=10`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data).toHaveLength(1);

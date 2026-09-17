@@ -17,7 +17,9 @@ function interruptedRequest(): Request {
       controller.error(new Error("connection interrupted"));
     },
   });
-  return new Request("http://localhost/upload", { method: "PUT", body, duplex: "half" } as RequestInit & { duplex: "half" });
+  return new Request("http://localhost/upload", { method: "PUT", body, duplex: "half" } as RequestInit & {
+    duplex: "half";
+  });
 }
 
 test("an interrupted upload leaves the previously published artifact intact", async () => {
@@ -37,13 +39,15 @@ test("an upload whose lease expires leaves the previously published artifact int
   const path = join(directory, "artifact.tar.gz");
   await writeFile(path, "published-before-upload");
 
-  expect(persistUploadBody(
-    new TextEncoder().encode("stale-upload"),
-    new Request("http://localhost/upload"),
-    path,
-    1024,
-    async (): Promise<boolean> => false,
-  )).rejects.toThrow("stale-agent-lease");
+  expect(
+    persistUploadBody(
+      new TextEncoder().encode("stale-upload"),
+      new Request("http://localhost/upload"),
+      path,
+      1024,
+      async (): Promise<boolean> => false,
+    ),
+  ).rejects.toThrow("stale-agent-lease");
   expect(await readFile(path, "utf8")).toBe("published-before-upload");
   expect((await readdir(directory)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
 });
@@ -54,7 +58,9 @@ test("an empty upload does not replace the previously published artifact", async
   const path = join(directory, "artifact.tar.gz");
   await writeFile(path, "published-before-upload");
 
-  expect(persistUploadBody(new Uint8Array(), new Request("http://localhost/upload"), path, 1024)).rejects.toThrow("empty");
+  expect(persistUploadBody(new Uint8Array(), new Request("http://localhost/upload"), path, 1024)).rejects.toThrow(
+    "empty",
+  );
   expect(await readFile(path, "utf8")).toBe("published-before-upload");
   expect((await readdir(directory)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
 });
@@ -65,7 +71,12 @@ test("a completed upload atomically replaces the previous artifact", async () =>
   const path = join(directory, "artifact.tar.gz");
   await writeFile(path, "published-before-upload");
 
-  await persistUploadBody(new TextEncoder().encode("published-after-upload"), new Request("http://localhost/upload"), path, 1024);
+  await persistUploadBody(
+    new TextEncoder().encode("published-after-upload"),
+    new Request("http://localhost/upload"),
+    path,
+    1024,
+  );
   expect(await readFile(path, "utf8")).toBe("published-after-upload");
   expect((await readdir(directory)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
 });

@@ -4,7 +4,11 @@ import { db } from "../db";
 import { orgTokenTTLPolicies, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
-import { denormalizeTtlPolicyTokenType, isTtlPolicyTokenType, normalizeTtlPolicyTokenType } from "../lib/token-ttl-policy";
+import {
+  denormalizeTtlPolicyTokenType,
+  isTtlPolicyTokenType,
+  normalizeTtlPolicyTokenType,
+} from "../lib/token-ttl-policy";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -32,13 +36,14 @@ function ttlResource(r: TtlRow): Record<string, unknown> {
   };
 }
 
-function parseTtlPolicyList(
-  body: unknown,
-  set: ParamCtx["set"],
-): { rawList: unknown[] } | { error: unknown } {
-  const root = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = root["data"] !== null && typeof root["data"] === "object" ? root["data"] as Record<string, unknown> : {};
-  const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : undefined;
+function parseTtlPolicyList(body: unknown, set: ParamCtx["set"]): { rawList: unknown[] } | { error: unknown } {
+  const root = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const data =
+    root["data"] !== null && typeof root["data"] === "object" ? (root["data"] as Record<string, unknown>) : {};
+  const attributes =
+    data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? (data["attributes"] as Record<string, unknown>)
+      : undefined;
   if (attributes === undefined) {
     (set as { status: number }).status = 422;
     return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "missing data.attributes" }] } };
@@ -46,7 +51,11 @@ function parseTtlPolicyList(
   const rawList = attributes["token-ttl-policies"];
   if (!Array.isArray(rawList)) {
     (set as { status: number }).status = 422;
-    return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token-ttl-policies must be an array" }] } };
+    return {
+      error: {
+        errors: [{ status: "422", title: "Unprocessable Entity", detail: "token-ttl-policies must be an array" }],
+      },
+    };
   }
   return { rawList };
 }
@@ -56,15 +65,21 @@ function cleanTtlPolicies(
   orgId: string,
   now: number,
   set: ParamCtx["set"],
-): { cleaned: typeof orgTokenTTLPolicies.$inferInsert[] } | { error: unknown } {
+): { cleaned: (typeof orgTokenTTLPolicies.$inferInsert)[] } | { error: unknown } {
   // Validate every entry BEFORE replacing stored policies — a malformed
   // payload must be rejected outright, never silently dropped (which would
   // otherwise delete the whole existing set and write garbage).
-  const cleaned: typeof orgTokenTTLPolicies.$inferInsert[] = [];
+  const cleaned: (typeof orgTokenTTLPolicies.$inferInsert)[] = [];
   for (const item of rawList) {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
       (set as { status: number }).status = 422;
-      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each token-ttl-policies entry must be an object" }] } };
+      return {
+        error: {
+          errors: [
+            { status: "422", title: "Unprocessable Entity", detail: "each token-ttl-policies entry must be an object" },
+          ],
+        },
+      };
     }
     const o = item as Record<string, unknown>;
     const rawTokenType = typeof o["token-type"] === "string" ? o["token-type"].trim() : "";
@@ -74,16 +89,34 @@ function cleanTtlPolicies(
     // Only an *absent or non-string* token-type is malformed here. Token
     // types are whitelisted (todo 76): a policy can only govern token kinds
     // the mint path actually enforces.
-    if (typeof o["token-type"] !== "string" || tokenType.length > 100 || !isTtlPolicyTokenType(tokenType) || typeof maxTtlMs !== "number" || !Number.isFinite(maxTtlMs) || maxTtlMs < 0) {
+    if (
+      typeof o["token-type"] !== "string" ||
+      tokenType.length > 100 ||
+      !isTtlPolicyTokenType(tokenType) ||
+      typeof maxTtlMs !== "number" ||
+      !Number.isFinite(maxTtlMs) ||
+      maxTtlMs < 0
+    ) {
       (set as { status: number }).status = 422;
-      return { error: { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each policy requires a whitelisted token-type string (\"\" (empty, organization token slot) | user | team | team-legacy | audit-trails | agent; empty = org token slot) and a non-negative max-ttl-ms number" }] } };
+      return {
+        error: {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail:
+                'each policy requires a whitelisted token-type string ("" (empty, organization token slot) | user | team | team-legacy | audit-trails | agent; empty = org token slot) and a non-negative max-ttl-ms number',
+            },
+          ],
+        },
+      };
     }
     cleaned.push({ id: newResourceId("ttl"), orgId, tokenType, maxTtlMs, createdAt: now, updatedAt: now });
   }
   return { cleaned };
 }
 
-async function replaceTtlPolicies(orgId: string, cleaned: typeof orgTokenTTLPolicies.$inferInsert[]): Promise<void> {
+async function replaceTtlPolicies(orgId: string, cleaned: (typeof orgTokenTTLPolicies.$inferInsert)[]): Promise<void> {
   await db.transaction(async (tx): Promise<void> => {
     await tx.delete(orgTokenTTLPolicies).where(eq(orgTokenTTLPolicies.orgId, orgId));
     if (cleaned.length > 0) await tx.insert(orgTokenTTLPolicies).values(cleaned);
@@ -92,23 +125,37 @@ async function replaceTtlPolicies(orgId: string, cleaned: typeof orgTokenTTLPoli
 
 export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
   .use(authPlugin)
-  .get("/api/v2/organizations/:org_name/token-ttl-policies", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))) return notFound(set);
-    const rows = await db.query.orgTokenTTLPolicies.findMany({ where: eq(orgTokenTTLPolicies.orgId, org.id) });
-    return { data: rows.map((r: TtlRow): Record<string, unknown> => ttlResource(r)) };
-  })
-  .patch("/api/v2/organizations/:org_name/token-ttl-policies", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params["org_name"] ?? "";
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))) return notFound(set);
-    const parsed = parseTtlPolicyList(body, set);
-    if ("error" in parsed) return parsed.error;
-    const now = Date.now();
-    const validated = cleanTtlPolicies(parsed.rawList, org.id, now, set);
-    if ("error" in validated) return validated.error;
-    await replaceTtlPolicies(org.id, validated.cleaned);
-    const saved = await db.query.orgTokenTTLPolicies.findMany({ where: eq(orgTokenTTLPolicies.orgId, org.id) });
-    return { data: saved.map((r: TtlRow): Record<string, unknown> => ttlResource(r)) };
-  });
+  .get(
+    "/api/v2/organizations/:org_name/token-ttl-policies",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))
+      )
+        return notFound(set);
+      const rows = await db.query.orgTokenTTLPolicies.findMany({ where: eq(orgTokenTTLPolicies.orgId, org.id) });
+      return { data: rows.map((r: TtlRow): Record<string, unknown> => ttlResource(r)) };
+    },
+  )
+  .patch(
+    "/api/v2/organizations/:org_name/token-ttl-policies",
+    async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))
+      )
+        return notFound(set);
+      const parsed = parseTtlPolicyList(body, set);
+      if ("error" in parsed) return parsed.error;
+      const now = Date.now();
+      const validated = cleanTtlPolicies(parsed.rawList, org.id, now, set);
+      if ("error" in validated) return validated.error;
+      await replaceTtlPolicies(org.id, validated.cleaned);
+      const saved = await db.query.orgTokenTTLPolicies.findMany({ where: eq(orgTokenTTLPolicies.orgId, org.id) });
+      return { data: saved.map((r: TtlRow): Record<string, unknown> => ttlResource(r)) };
+    },
+  );

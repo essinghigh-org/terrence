@@ -7,11 +7,13 @@ import { isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const json = (data: JsonValue, status = 200): Response => new Response(JSON.stringify(data), {
-  status,
-  headers: { "Content-Type": "application/vnd.api+json" },
-});
-const urlOf = (input: string | URL | Request): string => isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+const json = (data: JsonValue, status = 200): Response =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
+const urlOf = (input: string | URL | Request): string =>
+  isString(input) ? input : input instanceof URL ? input.toString() : input.url;
 
 function changeInput(element: HTMLElement, value: string): void {
   fireEvent.input(element, { target: { value } });
@@ -36,14 +38,22 @@ function moduleResource(id: string, name: string, provider: string, mechanism: "
 }
 
 function baseResponse(url: string): Response | null {
-  if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-modules": true, "can-manage-providers": false } } } });
-  if (url.startsWith("/api/v2/organizations/acme/registry-modules?")) return json({ data: [], meta: { pagination: { "total-pages": 1 }, providers: [] } });
-  if (url === "/api/v2/organizations/acme/github-app/installations") return json({ data: [{ id: "installation-1", attributes: { name: "Acme GitHub" } }] });
+  if (url === "/api/v2/organizations/acme")
+    return json({
+      data: { attributes: { permissions: { "can-manage-modules": true, "can-manage-providers": false } } },
+    });
+  if (url.startsWith("/api/v2/organizations/acme/registry-modules?"))
+    return json({ data: [], meta: { pagination: { "total-pages": 1 }, providers: [] } });
+  if (url === "/api/v2/organizations/acme/github-app/installations")
+    return json({ data: [{ id: "installation-1", attributes: { name: "Acme GitHub" } }] });
   if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
-  if (url === "/api/v2/organizations/acme/vcs-connections/github-app%3Ainstallation-1/repositories") return json({ data: [
-    { attributes: { identifier: "acme/terraform-network", name: "terraform-network", owner: "acme" } },
-    { attributes: { identifier: "acme/terraform-storage", name: "terraform-storage", owner: "acme" } },
-  ] });
+  if (url === "/api/v2/organizations/acme/vcs-connections/github-app%3Ainstallation-1/repositories")
+    return json({
+      data: [
+        { attributes: { identifier: "acme/terraform-network", name: "terraform-network", owner: "acme" } },
+        { attributes: { identifier: "acme/terraform-storage", name: "terraform-storage", owner: "acme" } },
+      ],
+    });
   return null;
 }
 
@@ -52,7 +62,10 @@ function renderRegistry(): ReturnType<typeof render> {
     <MemoryRouter initialEntries={["/app/acme/registry"]}>
       <Routes>
         <Route path="/app/:orgName/registry" element={<Registry />} />
-        <Route path="/app/:orgName/registry/modules/:namespace/:name/:provider" element={<p>Module detail landing</p>} />
+        <Route
+          path="/app/:orgName/registry/modules/:namespace/:name/:provider"
+          element={<p>Module detail landing</p>}
+        />
       </Routes>
     </MemoryRouter>,
   );
@@ -81,25 +94,36 @@ afterEach((): void => {
 });
 
 test("offers only registry-supported VCS connections with an honest provider boundary", async () => {
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null && !url.endsWith("/oauth-clients")) return base;
-    if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [
-      { id: "github-client", attributes: { name: "GitHub", "service-provider": "github", "service-provider-display-name": "GitHub" } },
-      { id: "gitlab-client", attributes: { name: "GitLab", "service-provider": "gitlab", "service-provider-display-name": "GitLab" } },
-    ] });
-    if (url === "/api/v2/oauth-clients/github-client/oauth-tokens") return json({ data: [
-      { id: "github-token", attributes: { "service-provider-user": "octocat" } },
-    ] });
+    if (url === "/api/v2/organizations/acme/oauth-clients")
+      return json({
+        data: [
+          {
+            id: "github-client",
+            attributes: { name: "GitHub", "service-provider": "github", "service-provider-display-name": "GitHub" },
+          },
+          {
+            id: "gitlab-client",
+            attributes: { name: "GitLab", "service-provider": "gitlab", "service-provider-display-name": "GitLab" },
+          },
+        ],
+      });
+    if (url === "/api/v2/oauth-clients/github-client/oauth-tokens")
+      return json({ data: [{ id: "github-token", attributes: { "service-provider-user": "octocat" } }] });
     if (url === "/api/v2/oauth-clients/github-token/oauth-tokens") return json({ data: [] });
-    if (url === "/api/v2/organizations/acme/vcs-connections/oauth-token%3Agithub-token/repositories") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/vcs-connections/oauth-token%3Agithub-token/repositories")
+      return json({ data: [] });
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
   const view = renderRegistry();
   await openPublish(view);
   const connectionSelect = await view.findByLabelText("VCS connection");
-  const connectionLabels = [...(connectionSelect as HTMLSelectElement).options].map((option): string => option.textContent ?? "");
+  const connectionLabels = [...(connectionSelect as HTMLSelectElement).options].map(
+    (option): string => option.textContent ?? "",
+  );
   expect(connectionLabels.some((label): boolean => label.includes("GitHub"))).toBeTrue();
   expect(connectionLabels.some((label): boolean => label.includes("octocat"))).toBeTrue();
   expect(connectionLabels.some((label): boolean => label.includes("GitLab"))).toBeFalse();
@@ -108,18 +132,18 @@ test("offers only registry-supported VCS connections with an honest provider bou
 
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
   let payload: { data: { attributes: JsonObject } } | null = null;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
     if (url === "/api/v2/organizations/acme/registry-modules/vcs" && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       return json({ data: moduleResource("mod-vcs", "network", "aws") }, 201);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
@@ -131,7 +155,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
   fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
   await view.findByText("Module detail landing");
 
-// SAFETY: the fixture object is read as a record; each field is typed below.
+  // SAFETY: the fixture object is read as a record; each field is typed below.
   const attributes = payload!.data.attributes;
   expect(attributes["module-name"]).toBe("network");
   expect(attributes["module-provider"]).toBe("aws");
@@ -146,19 +170,19 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
 
 test("publishes branch configuration with branch and initial version", async () => {
   let attributes: JsonObject | null = null;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
     if (url.endsWith("/registry-modules/vcs") && init?.method === "POST") {
-// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const body = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       attributes = body.data.attributes;
       return json({ data: moduleResource("mod-branch", "network", "azurerm") }, 201);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
@@ -173,7 +197,7 @@ test("publishes branch configuration with branch and initial version", async () 
   await view.findByText("Module detail landing");
   expect(attributes!["source-directory"]).toBe("terraform/module");
   expect(attributes!["version"]).toBe("3.2.1");
-// SAFETY: the fixture object is read as a record; each field is typed below.
+  // SAFETY: the fixture object is read as a record; each field is typed below.
   expect((attributes!["vcs-repo"] as JsonObject)["branch"]).toBe("release");
   expect(attributes!["tag-prefix"]).toBe("");
 });
@@ -183,8 +207,8 @@ test("manual publication uploads the selected archive bytes and retries without 
   const uploadBodies: BodyInit[] = [];
   let moduleCreates = 0;
   let versionCreates = 0;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
@@ -197,14 +221,15 @@ test("manual publication uploads the selected archive bytes and retries without 
       return json({ data: { id: "version-manual", attributes: { version: "1.0.0", status: "pending" } } }, 201);
     }
     if (url === "/api/v2/registry-module-versions/version-manual/upload" && init?.method === "PUT") {
-// SAFETY: the captured request body is a string per the request construction.
+      // SAFETY: the captured request body is a string per the request construction.
       uploadBodies.push(init.body!);
       if (uploadBodies.length === 1) return json({ errors: [{ detail: "Archive traversal detected" }] }, 422);
       return json({ data: { id: "version-manual", attributes: { status: "ok" } } });
     }
-    if (url === "/api/v2/registry-modules/mod-manual") return json({ data: moduleResource("mod-manual", "network", "aws", "manual") });
+    if (url === "/api/v2/registry-modules/mod-manual")
+      return json({ data: moduleResource("mod-manual", "network", "aws", "manual") });
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
@@ -212,7 +237,9 @@ test("manual publication uploads the selected archive bytes and retries without 
   changeInput(view.getByLabelText("Module name"), "network");
   changeInput(view.getByLabelText("Provider"), "aws");
   changeInput(view.getByLabelText("Version"), "1.0.0");
-  fireEvent.change(view.getByLabelText("Module archive", { selector: 'input[type="file"]' }), { target: { files: [archive] } });
+  fireEvent.change(view.getByLabelText("Module archive", { selector: 'input[type="file"]' }), {
+    target: { files: [archive] },
+  });
   fireEvent.click(view.getByRole("button", { name: "Upload module" }));
   await view.findByText("Archive traversal detected");
   expect(uploadBodies[0]).toBe(archive);
@@ -228,26 +255,36 @@ test("manual publication uploads the selected archive bytes and retries without 
 
 test("cancelling after a failed manual upload removes the staged module", async () => {
   let deleted = false;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
-    if (url === "/api/v2/organizations/acme/registry-modules" && init?.method === "POST") return json({ data: moduleResource("mod-staged", "network", "aws", "manual") }, 201);
-    if (url === "/api/v2/registry-modules/mod-staged/versions" && init?.method === "POST") return json({ data: { id: "version-staged" } }, 201);
-    if (url === "/api/v2/registry-module-versions/version-staged/upload" && init?.method === "PUT") return json({ errors: [{ detail: "Expanded archive is too large" }] }, 422);
-    if (url === "/api/v2/registry-modules/mod-staged" && init?.method === "DELETE") { deleted = true; return new Response(null, { status: 204 }); }
+    if (url === "/api/v2/organizations/acme/registry-modules" && init?.method === "POST")
+      return json({ data: moduleResource("mod-staged", "network", "aws", "manual") }, 201);
+    if (url === "/api/v2/registry-modules/mod-staged/versions" && init?.method === "POST")
+      return json({ data: { id: "version-staged" } }, 201);
+    if (url === "/api/v2/registry-module-versions/version-staged/upload" && init?.method === "PUT")
+      return json({ errors: [{ detail: "Expanded archive is too large" }] }, 422);
+    if (url === "/api/v2/registry-modules/mod-staged" && init?.method === "DELETE") {
+      deleted = true;
+      return new Response(null, { status: 204 });
+    }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
   fireEvent.click(view.getByLabelText(/^Module archive/));
   changeInput(view.getByLabelText("Module name"), "network");
   changeInput(view.getByLabelText("Provider"), "aws");
-  fireEvent.change(view.getByLabelText("Module archive", { selector: 'input[type="file"]' }), { target: { files: [new File(["real"], "network.tar.gz")] } });
+  fireEvent.change(view.getByLabelText("Module archive", { selector: 'input[type="file"]' }), {
+    target: { files: [new File(["real"], "network.tar.gz")] },
+  });
   fireEvent.click(view.getByRole("button", { name: "Upload module" }));
   await view.findByText("Expanded archive is too large");
   fireEvent.click(view.getByRole("button", { name: "Cancel" }));
-  await waitFor((): void => { expect(deleted).toBeTrue(); });
+  await waitFor((): void => {
+    expect(deleted).toBeTrue();
+  });
 });

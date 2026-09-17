@@ -3,14 +3,36 @@ import { fenceStateWorkspace, pruneStateReservations } from "./state-reservation
 import { db } from "../db";
 import { isPostgres } from "../db/driver";
 import {
-  users, workspaces,
-  runs, stateVersions, workspaceVariables, workspaceTags,
-  configurationVersions, variableSets,
-  auditLogs, dataRetentionPolicies, organizationDataRetentionPolicies, remoteStateConsumers,
-  agentPools, workspaceRunTasks, logs, organizationMemberships, projectTags, reservedTagKeys,
-  organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
-  organizationMembershipRoles, organizationRoles, apiTokens, stackStateLocks, workloadIdentityTokens,
-  registryModules, registryModuleVersions,
+  users,
+  workspaces,
+  runs,
+  stateVersions,
+  workspaceVariables,
+  workspaceTags,
+  configurationVersions,
+  variableSets,
+  auditLogs,
+  dataRetentionPolicies,
+  organizationDataRetentionPolicies,
+  remoteStateConsumers,
+  agentPools,
+  workspaceRunTasks,
+  logs,
+  organizationMemberships,
+  projectTags,
+  reservedTagKeys,
+  organizations,
+  registryPartnerships,
+  teams,
+  teamMemberships,
+  teamWorkspaces,
+  organizationMembershipRoles,
+  organizationRoles,
+  apiTokens,
+  stackStateLocks,
+  workloadIdentityTokens,
+  registryModules,
+  registryModuleVersions,
 } from "../db/schema";
 import { and, desc, eq, exists, gte, ilike, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
@@ -124,28 +146,30 @@ export async function auditLog(
   options?: Readonly<{ result?: AuditResult; immutable?: boolean; effectiveUserId?: string | null }>,
 ): Promise<void> {
   try {
-    await db.insert(auditLogs).values(auditLogValues({
-      action,
-      resourceType,
-      resourceId,
-      userId,
-      orgId,
-      ...(details === undefined ? {} : { details }),
-      ...(options?.result === undefined ? {} : { result: options.result }),
-      ...(options?.immutable === undefined ? {} : { immutable: options.immutable }),
-      ...(options?.effectiveUserId === undefined ? {} : { effectiveUserId: options.effectiveUserId }),
-    }) as typeof auditLogs.$inferInsert);
-    } catch (error: unknown) {
-      if (isDiskFullError(error)) markStorageDegraded("audit log writes are failing (disk full)");
-      recordFailure("auditWrites");
-      log.error("Audit log write failed", {
+    await db.insert(auditLogs).values(
+      auditLogValues({
         action,
         resourceType,
         resourceId,
+        userId,
         orgId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+        ...(details === undefined ? {} : { details }),
+        ...(options?.result === undefined ? {} : { result: options.result }),
+        ...(options?.immutable === undefined ? {} : { immutable: options.immutable }),
+        ...(options?.effectiveUserId === undefined ? {} : { effectiveUserId: options.effectiveUserId }),
+      }) as typeof auditLogs.$inferInsert,
+    );
+  } catch (error: unknown) {
+    if (isDiskFullError(error)) markStorageDegraded("audit log writes are failing (disk full)");
+    recordFailure("auditWrites");
+    log.error("Audit log write failed", {
+      action,
+      resourceType,
+      resourceId,
+      orgId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
@@ -224,7 +248,13 @@ export type OrganizationPermission =
   | "read-varsets";
 
 const TEAM_ORG_FALLBACK_MAP: Readonly<Record<string, readonly string[]>> = {
-  "read-workspaces": ["manage-workspaces", "read-projects", "manage-projects", "manage-agent-pools", "manage-policy-overrides"],
+  "read-workspaces": [
+    "manage-workspaces",
+    "read-projects",
+    "manage-projects",
+    "manage-agent-pools",
+    "manage-policy-overrides",
+  ],
   "manage-workspaces": ["manage-projects"],
   "read-projects": ["manage-projects", "manage-agent-pools"],
   "manage-membership": ["manage-teams", "manage-organization-access"],
@@ -240,10 +270,7 @@ function hasAnyFallback(access: Readonly<Record<string, boolean>>, keys: readonl
   return keys.some((key): boolean => access[key] === true);
 }
 
-function teamOrganizationAllows(
-  access: Readonly<Record<string, boolean>>,
-  required: OrganizationPermission,
-): boolean {
+function teamOrganizationAllows(access: Readonly<Record<string, boolean>>, required: OrganizationPermission): boolean {
   if (access[required] === true) return true;
   if (required === "read-varsets") {
     if (access["manage-varsets"] === true) return true;
@@ -295,7 +322,7 @@ type OrgAccessDetails = {
   readonly directRoles: readonly (typeof organizationRoles.$inferSelect)[];
   readonly teamIds: readonly string[];
   readonly userTeams: readonly (typeof teams.$inferSelect)[];
-}
+};
 
 /**
  * Read a user's org-membership facts in ONE pass (mirrors the owner/member
@@ -309,7 +336,11 @@ type OrgAccessDetails = {
 async function loadMembershipFacts(
   userId: string,
   orgId: string,
-): Promise<{ readonly isOwner: boolean; readonly isMember: boolean; readonly membership: (typeof organizationMemberships.$inferSelect) | undefined }> {
+): Promise<{
+  readonly isOwner: boolean;
+  readonly isMember: boolean;
+  readonly membership: typeof organizationMemberships.$inferSelect | undefined;
+}> {
   const key = `membership:${userId}:${orgId}`;
   const cached = requestCacheGet<Promise<Awaited<ReturnType<typeof loadMembershipFactsUncached>>>>(key);
   if (cached !== undefined) return cached;
@@ -323,7 +354,11 @@ async function loadMembershipFacts(
 async function loadMembershipFactsUncached(
   userId: string,
   orgId: string,
-): Promise<{ readonly isOwner: boolean; readonly isMember: boolean; readonly membership: (typeof organizationMemberships.$inferSelect) | undefined }> {
+): Promise<{
+  readonly isOwner: boolean;
+  readonly isMember: boolean;
+  readonly membership: typeof organizationMemberships.$inferSelect | undefined;
+}> {
   // The auth derive already loaded the full user row (joined token lookup), so
   // its site-admin flag is in the request cache — skip the duplicate users read.
   const knownSiteAdmin = currentSiteAdmin(userId);
@@ -436,7 +471,10 @@ async function loadOrgAccessDetailsUncached(orgId: string, userId: string): Prom
       });
       if (assigned.length === 0) return [];
       return db.query.organizationRoles.findMany({
-        where: inArray(organizationRoles.id, assigned.map((item): string => item.roleId)),
+        where: inArray(
+          organizationRoles.id,
+          assigned.map((item): string => item.roleId),
+        ),
       });
     })();
     const [roles, teamData] = await Promise.all([roleResult, teamAccess]);
@@ -452,7 +490,8 @@ async function loadOrgAccessDetailsUncached(orgId: string, userId: string): Prom
 function deriveOrgAccessAllows(details: OrgAccessDetails, required: OrganizationPermission): boolean {
   if (details.isOwner) return true;
   if (!details.isMember) return false;
-  if (details.directRoles.some((role): boolean => teamOrganizationAllows(role.permissions ?? {}, required))) return true;
+  if (details.directRoles.some((role): boolean => teamOrganizationAllows(role.permissions ?? {}, required)))
+    return true;
   if (details.teamIds.length === 0) return false;
   return details.userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, required));
 }
@@ -512,8 +551,9 @@ export async function checkOrganizationPermissionsMany(
   if (tokenTeamId !== null && tokenTeamId !== undefined) {
     const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
     if (team === undefined || team.orgId !== orgId) return requireds.map((): boolean => false);
-    return requireds.map((required): boolean =>
-      !scopeDenies(required) && teamOrganizationAllows(team.organizationAccess, required));
+    return requireds.map(
+      (required): boolean => !scopeDenies(required) && teamOrganizationAllows(team.organizationAccess, required),
+    );
   }
   if (userId === undefined) return requireds.map((): boolean => false);
   const details = await loadOrgAccessDetails(orgId, userId);
@@ -526,24 +566,10 @@ export async function checkOrganizationVcsReadPermission(
   tokenOrgId: string | null | undefined,
   tokenTeamId: string | null | undefined,
 ): Promise<boolean> {
-  return await checkOrganizationPermission(
-    orgId,
-    userId,
-    tokenOrgId,
-    tokenTeamId,
-    "read-vcs-settings",
-  ) || await checkOrganizationPermission(
-    orgId,
-    userId,
-    tokenOrgId,
-    tokenTeamId,
-    "manage-vcs-settings",
-  ) || await checkOrganizationPermission(
-    orgId,
-    userId,
-    tokenOrgId,
-    tokenTeamId,
-    "manage-workspaces",
+  return (
+    (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "read-vcs-settings")) ||
+    (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "manage-vcs-settings")) ||
+    (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "manage-workspaces"))
   );
 }
 
@@ -567,7 +593,11 @@ export type WorkspacePermission =
 
 export type LockPrincipal = Readonly<{ type: string; id: string }>;
 
-export function lockPrincipal(userId: string | null | undefined, orgId: string | null | undefined, teamId: string | null | undefined): LockPrincipal {
+export function lockPrincipal(
+  userId: string | null | undefined,
+  orgId: string | null | undefined,
+  teamId: string | null | undefined,
+): LockPrincipal {
   if (teamId !== null && teamId !== undefined && teamId !== "") return { type: "team", id: teamId };
   if (userId !== null && userId !== undefined && userId !== "") return { type: "user", id: userId };
   if (orgId !== null && orgId !== undefined && orgId !== "") return { type: "organization", id: orgId };
@@ -578,25 +608,57 @@ export function ownsWorkspaceLock(
   workspace: Readonly<{ locked?: boolean | null; lockOwnerType?: string | null; lockOwnerId?: string | null }>,
   principal: LockPrincipal,
 ): boolean {
-  return workspace.locked === true
-    && workspace.lockOwnerType === principal.type
-    && workspace.lockOwnerId === principal.id;
+  return (
+    workspace.locked === true && workspace.lockOwnerType === principal.type && workspace.lockOwnerId === principal.id
+  );
 }
 
 export function strongDocumentEtag(document: unknown): string {
   return `"${createHash("sha256").update(JSON.stringify(document)).digest("hex")}"`;
 }
 
-export function ifMatchSatisfied(request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>, document: unknown): boolean {
+export function ifMatchSatisfied(
+  request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>,
+  document: unknown,
+): boolean {
   const ifMatch = request.headers.get("if-match");
   if (ifMatch === null || ifMatch.trim() === "*") return true;
   const expected = strongDocumentEtag(document);
-  return ifMatch.split(",").map((tag): string => tag.trim()).some((tag): boolean => tag === expected);
+  return ifMatch
+    .split(",")
+    .map((tag): string => tag.trim())
+    .some((tag): boolean => tag === expected);
 }
 
 const NON_CUSTOM_ALLOWS: Readonly<Record<string, readonly WorkspacePermission[]>> = {
-  admin: ["read", "run-read", "plan", "apply", "discard", "cancel", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"],
-  write: ["read", "run-read", "plan", "apply", "discard", "cancel", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"],
+  admin: [
+    "read",
+    "run-read",
+    "plan",
+    "apply",
+    "discard",
+    "cancel",
+    "lock",
+    "variables-read",
+    "variables-write",
+    "state-outputs",
+    "state-read",
+    "state-write",
+  ],
+  write: [
+    "read",
+    "run-read",
+    "plan",
+    "apply",
+    "discard",
+    "cancel",
+    "lock",
+    "variables-read",
+    "variables-write",
+    "state-outputs",
+    "state-read",
+    "state-write",
+  ],
   plan: ["read", "run-read", "plan", "variables-read", "state-outputs", "state-read"],
   read: ["read", "run-read", "variables-read", "state-outputs", "state-read"],
 };
@@ -615,20 +677,29 @@ function allowsCustomRuns(runs: string, required: WorkspacePermission): boolean 
   return null;
 }
 
-function allowsCustomTaskOrLock(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
+function allowsCustomTaskOrLock(
+  permissions: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
   if (required === "run-tasks" || required === "run-tasks-read") return permissions["run-tasks"] === true;
   if (required === "lock") return permissions["workspace-locking"] === true;
   return null;
 }
 
-function allowsCustomVariables(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
+function allowsCustomVariables(
+  permissions: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
   const variableAccess = typeof permissions["variables"] === "string" ? permissions["variables"] : "none";
   if (required === "variables-read") return variableAccess === "read" || variableAccess === "write";
   if (required === "variables-write") return variableAccess === "write";
   return null;
 }
 
-function allowsCustomState(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
+function allowsCustomState(
+  permissions: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
   const stateAccess = typeof permissions["state-versions"] === "string" ? permissions["state-versions"] : "none";
   if (required === "state-outputs") return ["read-outputs", "read", "write"].includes(stateAccess);
   if (required === "state-read") return stateAccess === "read" || stateAccess === "write";
@@ -686,10 +757,12 @@ async function collectWorkspaceScopedIds(scope: TokenScopes, orgId: string): Pro
 
 async function collectTagScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
   if (scope.tags === null || scope.tags.rules.length === 0) return [];
-  const orgWorkspaceIds = (await db.query.workspaces.findMany({
-    where: eq(workspaces.orgId, orgId),
-    columns: { id: true },
-  })).map((row): string => row.id);
+  const orgWorkspaceIds = (
+    await db.query.workspaces.findMany({
+      where: eq(workspaces.orgId, orgId),
+      columns: { id: true },
+    })
+  ).map((row): string => row.id);
   if (orgWorkspaceIds.length === 0) return [];
   const tagRows: { workspaceId: string; key: string; value: string | null }[] = [];
   for (let offset = 0; offset < orgWorkspaceIds.length; offset += DELETE_ID_CHUNK_SIZE) {
@@ -710,7 +783,9 @@ async function collectTagScopedIds(scope: TokenScopes, orgId: string): Promise<r
   return matching;
 }
 
-function buildTagsByWorkspace(tagRows: readonly DeepReadonly<{ workspaceId: string; key: string; value: string | null }>[]): Map<string, Set<string>> {
+function buildTagsByWorkspace(
+  tagRows: readonly DeepReadonly<{ workspaceId: string; key: string; value: string | null }>[],
+): Map<string, Set<string>> {
   const tagsByWorkspace = new Map<string, Set<string>>();
   for (const row of tagRows) {
     const tags = tagsByWorkspace.get(row.workspaceId) ?? new Set<string>();
@@ -775,7 +850,7 @@ type WorkspaceAccessBase = DeepReadonly<{
   userId: string | undefined;
   tokenOrgId: string | null;
   tokenTeamId: string | null;
-  tokenTeam: (typeof teams.$inferSelect) | null;
+  tokenTeam: typeof teams.$inferSelect | null;
   tokenTeamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
   isOwner: boolean;
   isMember: boolean;
@@ -876,42 +951,68 @@ async function loadWorkspaceAccessBaseUncached(
  * Pure in-memory; mirrors the exact early-return semantics of the original
  * single-level implementation so behavior is unchanged.
  */
-function derivesFromTeamToken(base: WorkspaceAccessBase, required: WorkspacePermission): readonly string[] | null | undefined {
+function derivesFromTeamToken(
+  base: WorkspaceAccessBase,
+  required: WorkspacePermission,
+): readonly string[] | null | undefined {
   if (base.tokenTeamId === null) return undefined;
   const team = base.tokenTeam;
   if (team === null || team.orgId !== base.orgId) return [];
   if (teamOrganizationAllows(team.organizationAccess, "manage-workspaces")) return null;
   if (grantsTeamOrgWide(team, required)) return null;
-  const delegateTeamIds = required === "policy-override"
-    ? new Set(teamOverrideDelegationActive(team) ? [team.id] : [])
-    : null;
-  return [...new Set(base.tokenTeamWorkspaces
-    .filter((entry): boolean =>
-      teamWorkspaceAllows(entry.access, entry.permissions, required)
-      && (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)))
-    .map((entry): string => entry.workspaceId))];
+  const delegateTeamIds =
+    required === "policy-override" ? new Set(teamOverrideDelegationActive(team) ? [team.id] : []) : null;
+  return [
+    ...new Set(
+      base.tokenTeamWorkspaces
+        .filter(
+          (entry): boolean =>
+            teamWorkspaceAllows(entry.access, entry.permissions, required) &&
+            (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)),
+        )
+        .map((entry): string => entry.workspaceId),
+    ),
+  ];
 }
 
 function grantsTeamOrgWide(team: DeepReadonly<typeof teams.$inferSelect>, required: WorkspacePermission): boolean {
   if (required === "read" && team.organizationAccess["manage-policies"] === true) return true;
   if (required === "policy-override" && team.organizationAccess["manage-policy-overrides"] === true) return true;
-  if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
-    && teamOrganizationAllows(team.organizationAccess, "read-workspaces")) return true;
+  if (
+    ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required) &&
+    teamOrganizationAllows(team.organizationAccess, "read-workspaces")
+  )
+    return true;
   return false;
 }
 
-function derivesFromOrgToken(base: WorkspaceAccessBase, required: WorkspacePermission): readonly string[] | null | undefined {
+function derivesFromOrgToken(
+  base: WorkspaceAccessBase,
+  required: WorkspacePermission,
+): readonly string[] | null | undefined {
   if (base.tokenOrgId === null) return undefined;
   if (base.tokenOrgId !== base.orgId || ["plan", "apply", "policy-override"].includes(required)) return [];
   return null;
 }
 
-function grantsUserOrgWide(userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[], required: WorkspacePermission): boolean {
-  if (userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces"))) return true;
-  if (required === "read" && userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true)) return true;
-  if (required === "policy-override" && userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)) return true;
-  if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
-    && userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))) return true;
+function grantsUserOrgWide(
+  userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[],
+  required: WorkspacePermission,
+): boolean {
+  if (userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces")))
+    return true;
+  if (required === "read" && userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true))
+    return true;
+  if (
+    required === "policy-override" &&
+    userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)
+  )
+    return true;
+  if (
+    ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required) &&
+    userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))
+  )
+    return true;
   return false;
 }
 
@@ -920,18 +1021,29 @@ function deriveForUserTeams(base: WorkspaceAccessBase, required: WorkspacePermis
   if (teamData === null || teamData.teamIds.length === 0) return [];
   if (grantsUserOrgWide(teamData.userTeams, required)) return null;
   const delegateTeamIds = buildDelegateTeamIds(teamData.userTeams, required);
-  return [...new Set(teamData.teamWorkspaces
-    .filter((entry): boolean =>
-      teamWorkspaceAllows(entry.access, entry.permissions, required)
-      && (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)))
-    .map((entry): string => entry.workspaceId))];
+  return [
+    ...new Set(
+      teamData.teamWorkspaces
+        .filter(
+          (entry): boolean =>
+            teamWorkspaceAllows(entry.access, entry.permissions, required) &&
+            (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)),
+        )
+        .map((entry): string => entry.workspaceId),
+    ),
+  ];
 }
 
-function buildDelegateTeamIds(userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[], required: WorkspacePermission): ReadonlySet<string> | null {
+function buildDelegateTeamIds(
+  userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[],
+  required: WorkspacePermission,
+): ReadonlySet<string> | null {
   if (required !== "policy-override") return null;
-  return new Set(userTeams
-    .filter((t: DeepReadonly<typeof teams.$inferSelect>): boolean => teamOverrideDelegationActive(t))
-    .map((t: DeepReadonly<typeof teams.$inferSelect>): string => t.id));
+  return new Set(
+    userTeams
+      .filter((t: DeepReadonly<typeof teams.$inferSelect>): boolean => teamOverrideDelegationActive(t))
+      .map((t: DeepReadonly<typeof teams.$inferSelect>): string => t.id),
+  );
 }
 
 function deriveWorkspaceIdsForRequired(
@@ -956,7 +1068,10 @@ function deriveWorkspaceIdsForRequired(
  * the pre-existing semantics before time-bounded delegations existed.
  */
 function teamOverrideDelegationActive(
-  team: DeepReadonly<{ organizationAccess?: Record<string, boolean> | null; policyOverrideDelegationExpiresAt?: number | null }>,
+  team: DeepReadonly<{
+    organizationAccess?: Record<string, boolean> | null;
+    policyOverrideDelegationExpiresAt?: number | null;
+  }>,
 ): boolean {
   if (team.organizationAccess?.["delegate-policy-overrides"] !== true) return false;
   const expiresAt = team.policyOverrideDelegationExpiresAt;
@@ -1014,9 +1129,12 @@ export type WorkspacePermissionSets = {
   stateRead: ReadonlySet<string> | null;
   stateWrite: ReadonlySet<string> | null;
   runTasks: ReadonlySet<string> | null;
-}
+};
 
-const PERMISSION_SET_LEVELS: readonly { readonly key: keyof WorkspacePermissionSets; readonly permission: WorkspacePermission }[] = [
+const PERMISSION_SET_LEVELS: readonly {
+  readonly key: keyof WorkspacePermissionSets;
+  readonly permission: WorkspacePermission;
+}[] = [
   { key: "read", permission: "read" },
   { key: "plan", permission: "plan" },
   { key: "apply", permission: "apply" },
@@ -1059,9 +1177,10 @@ export async function workspacePermissionSets(
       sets[key] = scopes !== null && scopeIds !== null ? new Set(scopeIds) : null;
       continue;
     }
-    sets[key] = scopes !== null && scopeIds !== null && scopeSet !== null
-      ? new Set(derived.filter((id): boolean => scopeSet.has(id)))
-      : new Set(derived);
+    sets[key] =
+      scopes !== null && scopeIds !== null && scopeSet !== null
+        ? new Set(derived.filter((id): boolean => scopeSet.has(id)))
+        : new Set(derived);
   }
   // Checked build: every declared level must be assigned (a silent undefined
   // would make workspaceAllows return false for that level).
@@ -1124,13 +1243,16 @@ export async function checkRegistryReadPermission(
   const producer = await db.query.organizations.findFirst({ where: eq(organizations.id, producerOrgId) });
   if (producer?.[kind === "modules" ? "globalModuleSharing" : "globalProviderSharing"] === true) return true;
 
-  const consumerOrgIds = tokenOrgId === null
-    ? (userId === undefined
-      ? []
-      : (await db.query.organizationMemberships.findMany({
-          where: eq(organizationMemberships.userId, userId),
-        })).map((membership): string => membership.orgId))
-    : [tokenOrgId];
+  const consumerOrgIds =
+    tokenOrgId === null
+      ? userId === undefined
+        ? []
+        : (
+            await db.query.organizationMemberships.findMany({
+              where: eq(organizationMemberships.userId, userId),
+            })
+          ).map((membership): string => membership.orgId)
+      : [tokenOrgId];
   if (consumerOrgIds.length === 0) return false;
 
   const partnership = await db.query.registryPartnerships.findFirst({
@@ -1208,16 +1330,20 @@ export function variableRelationshipResources(body: unknown): VarRelationshipRes
   const resources = many ? (data as unknown[]) : [data];
   if (
     resources.length > 0 &&
-    (resources.some((item: unknown): boolean => !isJsonApiData(item, "vars"))
-      || new Set(resources.map((item: unknown): string => (item as { readonly id: string }).id)).size !== resources.length)
-  ) return undefined;
+    (resources.some((item: unknown): boolean => !isJsonApiData(item, "vars")) ||
+      new Set(resources.map((item: unknown): string => (item as { readonly id: string }).id)).size !== resources.length)
+  )
+    return undefined;
   // An explicit empty array (data: []) is a valid no-op bulk request under
   // JSON:API; the reference format accepts it. Only missing data or malformed/duplicate
   // items reject.
   return { many, resources };
 }
 
-export async function findWorkspaceByName(orgId: string, name: string): Promise<typeof workspaces.$inferSelect | undefined> {
+export async function findWorkspaceByName(
+  orgId: string,
+  name: string,
+): Promise<typeof workspaces.$inferSelect | undefined> {
   return db.query.workspaces.findFirst({
     where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, name)),
   });
@@ -1230,7 +1356,9 @@ export async function findAuthorizedWorkspace(
   tokenTeamId: string | null = null,
   required: WorkspacePermission = "read",
 ): Promise<typeof workspaces.$inferSelect | undefined> {
-  const workspace = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })) as typeof workspaces.$inferSelect | undefined;
+  const workspace = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })) as
+    | typeof workspaces.$inferSelect
+    | undefined;
   if (workspace === undefined) return undefined;
   const hasPerm = await checkWorkspacePermission(workspace, userId, tokenOrgId, tokenTeamId, required);
   return hasPerm ? workspace : undefined;
@@ -1271,7 +1399,8 @@ export async function canConsumeRemoteState(
   // 3. Global remote state grants org-wide access.
   if (producer.globalRemoteState === true) return true;
   // 2. Project remote state grants access to workspaces sharing the project.
-  if (producer.projectRemoteState === true && producer.projectId !== null && producer.projectId === consumer.projectId) return true;
+  if (producer.projectRemoteState === true && producer.projectId !== null && producer.projectId === consumer.projectId)
+    return true;
   // 1. Explicit consumer link.
   const link = await db.query.remoteStateConsumers.findFirst({
     where: and(
@@ -1314,20 +1443,32 @@ export async function findAuthorizedRun(
 }
 
 /** The signature lives in the path: go-tfe replaces the query with offset/limit. */
-export function runLogURL(run: Readonly<{ id: string; logToken: string | null; softDeletedAt?: number | null }>, phase: "plan" | "apply", request: RequestWithUrl): string | null {
+export function runLogURL(
+  run: Readonly<{ id: string; logToken: string | null; softDeletedAt?: number | null }>,
+  phase: "plan" | "apply",
+  request: RequestWithUrl,
+): string | null {
   if (!run.logToken || run.softDeletedAt != null) return null;
   const ttl = integerSetting("LOG_CAPABILITY_TTL_SECONDS");
   const expires = Math.floor(Date.now() / 1000) + ttl;
-  const signature = createHmac("sha256", SIGNED_URL_SECRET).update(`${run.id}\n${phase}\n${run.logToken}\n${expires}`).digest("hex");
+  const signature = createHmac("sha256", SIGNED_URL_SECRET)
+    .update(`${run.id}\n${phase}\n${run.logToken}\n${expires}`)
+    .digest("hex");
   return apiURL(request, `/api/v2/runs/${run.id}/${phase}/log/${expires}.${signature}`);
 }
 
-export async function findLogCapability(runId: string, token: string, phase: "plan" | "apply"): Promise<typeof runs.$inferSelect | undefined> {
+export async function findLogCapability(
+  runId: string,
+  token: string,
+  phase: "plan" | "apply",
+): Promise<typeof runs.$inferSelect | undefined> {
   const match = /^(\d{1,12})\.([a-f0-9]{64})$/.exec(token);
   if (!match || match[2] === undefined || Number(match[1]) <= Math.floor(Date.now() / 1000)) return undefined;
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   if (run === undefined || !run.logToken || run.softDeletedAt !== null) return undefined;
-  const expected = Buffer.from(createHmac("sha256", SIGNED_URL_SECRET).update(`${runId}\n${phase}\n${run.logToken}\n${match[1]}`).digest("hex"));
+  const expected = Buffer.from(
+    createHmac("sha256", SIGNED_URL_SECRET).update(`${runId}\n${phase}\n${run.logToken}\n${match[1]}`).digest("hex"),
+  );
   return timingSafeEqual(expected, Buffer.from(match[2])) ? run : undefined;
 }
 
@@ -1345,7 +1486,12 @@ export function pageRequest(request: RequestWithUrl): { number: number; size: nu
 
 /** Cursor pagination (303-305): keyset helper for enormous tables. */
 /** @lintignore Intentional surface: large-table consumers opt into cursor pagination. */
-export function cursorPagination(request: RequestWithUrl, cursor: string | null, pageSize: number, hasMore: boolean): { links: Record<string, string | null>; meta: Record<string, unknown> } {
+export function cursorPagination(
+  request: RequestWithUrl,
+  cursor: string | null,
+  pageSize: number,
+  hasMore: boolean,
+): { links: Record<string, string | null>; meta: Record<string, unknown> } {
   const nextCursor = hasMore ? cursor : null;
   const base = new URL(request.url);
   const linkFor = (c: string | null): string | null => {
@@ -1357,11 +1503,16 @@ export function cursorPagination(request: RequestWithUrl, cursor: string | null,
   };
   return {
     links: { self: request.url, first: linkFor(null), prev: null, next: linkFor(nextCursor), last: null },
-    meta: { pagination: { "page-size": pageSize, "next-cursor": nextCursor, "cursor": cursor } },
+    meta: { pagination: { "page-size": pageSize, "next-cursor": nextCursor, cursor: cursor } },
   };
 }
 
-export function pagination(request: RequestWithUrl, currentPage: number, pageSize: number, totalCount: number): { links: Record<string, string | null>; meta: Record<string, unknown> } {
+export function pagination(
+  request: RequestWithUrl,
+  currentPage: number,
+  pageSize: number,
+  totalCount: number,
+): { links: Record<string, string | null>; meta: Record<string, unknown> } {
   // Empty collections still expose page 1 through first/last links. Keep the
   // metadata consistent with those links instead of reporting zero pages.
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -1426,18 +1577,23 @@ function loadSignedUrlSecret(): string {
       } catch {
         // Another process may have created the file but not made it readable yet.
       }
-      throw new Error(`Signed-URL secret at ${path} is present but unusable; replace the file before starting Terrence.`);
+      throw new Error(
+        `Signed-URL secret at ${path} is present but unusable; replace the file before starting Terrence.`,
+      );
     }
     throw error;
   }
 }
 
 const configuredSignedUrlSecret = deploymentSecret("SIGNED_URL_SECRET")?.trim();
-const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
-  ? loadSignedUrlSecret()
-  : configuredSignedUrlSecret.length >= 32
-    ? configuredSignedUrlSecret
-    : (() => { throw new Error("SIGNED_URL_SECRET must be at least 32 characters"); })();
+const SIGNED_URL_SECRET =
+  configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
+    ? loadSignedUrlSecret()
+    : configuredSignedUrlSecret.length >= 32
+      ? configuredSignedUrlSecret
+      : (() => {
+          throw new Error("SIGNED_URL_SECRET must be at least 32 characters");
+        })();
 
 /** Stable, non-reversible identifier fingerprint keyed by an installation secret. */
 export function sensitiveIdentifierHash(value: string): string {
@@ -1560,17 +1716,22 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
   const url = new URL(request.url);
   const expires = url.searchParams.get("expires");
   const signature = url.searchParams.get("signature");
-  if (expires === null || signature === null || !/^\d+$/.test(expires) || Number(expires) < Math.floor(Date.now() / 1000)) return false;
-  const expected = Buffer.from(createHmac("sha256", SIGNED_URL_SECRET)
-    .update(`${method}\n${path}\n${expires}`)
-    .digest("hex"));
+  if (
+    expires === null ||
+    signature === null ||
+    !/^\d+$/.test(expires) ||
+    Number(expires) < Math.floor(Date.now() / 1000)
+  )
+    return false;
+  const expected = Buffer.from(
+    createHmac("sha256", SIGNED_URL_SECRET).update(`${method}\n${path}\n${expires}`).digest("hex"),
+  );
   const actual = Buffer.from(signature);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 // Private/loopback/link-local/CGNAT/cloud-metadata range checks live in
 // lib/url-safety.ts (privateHostReason); validateExternalUrl delegates there.
-
 
 export function validateExternalUrl(url: string, allowPrivate = false): string | null {
   try {
@@ -1632,12 +1793,14 @@ export async function findLockedInheritedTagKey(
     .select({ key: reservedTagKeys.key })
     .from(reservedTagKeys)
     .innerJoin(projectTags, eq(projectTags.key, reservedTagKeys.key))
-    .where(and(
-      eq(reservedTagKeys.orgId, orgId),
-      eq(reservedTagKeys.disableOverrides, true),
-      eq(projectTags.projectId, projectId),
-      inArray(reservedTagKeys.key, [...new Set(keys)]),
-    ))
+    .where(
+      and(
+        eq(reservedTagKeys.orgId, orgId),
+        eq(reservedTagKeys.disableOverrides, true),
+        eq(projectTags.projectId, projectId),
+        inArray(reservedTagKeys.key, [...new Set(keys)]),
+      ),
+    )
     .limit(1);
   return matches[0]?.key;
 }
@@ -1645,17 +1808,28 @@ export async function findLockedInheritedTagKey(
 type RunWhereCondition = DeepReadonly<ReturnType<typeof eq> | ReturnType<typeof or>>;
 type RunWhereConditions = readonly RunWhereCondition[];
 
-function addStatusFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+function addStatusFilter(
+  conditions: readonly RunWhereCondition[],
+  csv: (name: string) => string[] | undefined,
+): RunWhereConditions {
   const statuses = csv("filter[status]");
   return statuses !== undefined && statuses.length > 0 ? [...conditions, inArray(runs.status, statuses)] : conditions;
 }
 
-function addOperationFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+function addOperationFilter(
+  conditions: readonly RunWhereCondition[],
+  csv: (name: string) => string[] | undefined,
+): RunWhereConditions {
   const operations = csv("filter[operation]");
-  return operations !== undefined && operations.length > 0 ? [...conditions, inArray(runs.operation, operations)] : conditions;
+  return operations !== undefined && operations.length > 0
+    ? [...conditions, inArray(runs.operation, operations)]
+    : conditions;
 }
 
-function addSourceFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+function addSourceFilter(
+  conditions: readonly RunWhereCondition[],
+  csv: (name: string) => string[] | undefined,
+): RunWhereConditions {
   const sources = csv("filter[source]");
   if (sources === undefined || sources.length === 0) return conditions;
   const wantsApi = sources.includes("tfe-api");
@@ -1665,13 +1839,24 @@ function addSourceFilter(conditions: readonly RunWhereCondition[], csv: (name: s
   }
   if (wantsApi === wantsVcs) return conditions;
   const vcsSources = ["github", "gitlab", "bitbucket"];
-  const vcsRuns = exists(db.select({ id: configurationVersions.id })
-    .from(configurationVersions)
-    .where(and(eq(configurationVersions.id, runs.configurationVersionId), inArray(configurationVersions.source, vcsSources))));
+  const vcsRuns = exists(
+    db
+      .select({ id: configurationVersions.id })
+      .from(configurationVersions)
+      .where(
+        and(
+          eq(configurationVersions.id, runs.configurationVersionId),
+          inArray(configurationVersions.source, vcsSources),
+        ),
+      ),
+  );
   return [...conditions, wantsVcs ? vcsRuns : or(isNull(runs.configurationVersionId), sql`NOT ${vcsRuns}`)];
 }
 
-function addStatusGroupFilter(conditions: readonly RunWhereCondition[], statusGroup: string | null): RunWhereConditions {
+function addStatusGroupFilter(
+  conditions: readonly RunWhereCondition[],
+  statusGroup: string | null,
+): RunWhereConditions {
   if (statusGroup === null || statusGroup === "") return conditions;
   if (statusGroup === "final") return [...conditions, inArray(runs.status, FINAL_RUN_STATUSES)];
   if (statusGroup === "non_final") return [...conditions, notInArray(runs.status, FINAL_RUN_STATUSES)];
@@ -1698,55 +1883,99 @@ function addBasicSearchFilter(conditions: readonly RunWhereCondition[], basic: s
   // status, creator username, and configuration source.
   const pattern = `%${basic}%`;
   const creatorMatches = db.select({ id: users.id }).from(users).where(caseInsensitiveLike(users.username, pattern));
-  const sourceMatches = db.select({ id: configurationVersions.id }).from(configurationVersions)
+  const sourceMatches = db
+    .select({ id: configurationVersions.id })
+    .from(configurationVersions)
     .where(caseInsensitiveLike(configurationVersions.source, pattern));
-  return [...conditions, or(
-    caseInsensitiveLike(runs.id, pattern),
-    caseInsensitiveLike(runs.message, pattern),
-    caseInsensitiveLike(runs.status, pattern),
-    inArray(runs.createdBy, creatorMatches),
-    inArray(runs.configurationVersionId, sourceMatches),
-  )];
+  return [
+    ...conditions,
+    or(
+      caseInsensitiveLike(runs.id, pattern),
+      caseInsensitiveLike(runs.message, pattern),
+      caseInsensitiveLike(runs.status, pattern),
+      inArray(runs.createdBy, creatorMatches),
+      inArray(runs.configurationVersionId, sourceMatches),
+    ),
+  ];
 }
 
-function addUserSearchFilter(conditions: readonly RunWhereCondition[], userSearch: string | undefined): RunWhereConditions {
+function addUserSearchFilter(
+  conditions: readonly RunWhereCondition[],
+  userSearch: string | undefined,
+): RunWhereConditions {
   if (userSearch === undefined || userSearch === "") return conditions;
-  const userMatches = db.select({ id: users.id }).from(users).where(caseInsensitiveLike(users.username, `%${userSearch}%`));
+  const userMatches = db
+    .select({ id: users.id })
+    .from(users)
+    .where(caseInsensitiveLike(users.username, `%${userSearch}%`));
   return [...conditions, inArray(runs.createdBy, userMatches)];
 }
 
-function addAgentPoolFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+function addAgentPoolFilter(
+  conditions: readonly RunWhereCondition[],
+  csv: (name: string) => string[] | undefined,
+): RunWhereConditions {
   const agentPoolNames = csv("filter[agent_pool_names]");
   if (agentPoolNames === undefined || agentPoolNames.length === 0) return conditions;
-  const matchingPools = db.select({ id: agentPools.id }).from(agentPools).where(inArray(agentPools.name, agentPoolNames));
-  const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.agentPoolId, matchingPools));
+  const matchingPools = db
+    .select({ id: agentPools.id })
+    .from(agentPools)
+    .where(inArray(agentPools.name, agentPoolNames));
+  const matchingWorkspaces = db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(inArray(workspaces.agentPoolId, matchingPools));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
-function addCommitSearchFilter(conditions: readonly RunWhereCondition[], commitSearch: string | undefined): RunWhereConditions {
+function addCommitSearchFilter(
+  conditions: readonly RunWhereCondition[],
+  commitSearch: string | undefined,
+): RunWhereConditions {
   if (commitSearch === undefined || commitSearch === "") return conditions;
-  return [...conditions, inArray(runs.id, db.select({ id: runs.id }).from(runs)
-    .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
-    .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`))];
+  return [
+    ...conditions,
+    inArray(
+      runs.id,
+      db
+        .select({ id: runs.id })
+        .from(runs)
+        .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
+        .where(
+          sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, "$.commitSha")}, '') LIKE ${`%${commitSearch}%`}`,
+        ),
+    ),
+  ];
 }
 
 function addWorkspaceNameFilter(conditions: readonly RunWhereCondition[], name: string | null): RunWhereConditions {
   const trimmed = name?.trim();
   if (trimmed === undefined || trimmed === "") return conditions;
-  const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
+  const matchingWorkspaces = db
+    .select({ id: workspaces.id })
+    .from(workspaces)
     .where(caseInsensitiveLike(workspaces.name, `%${trimmed}%`));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
-function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: readonly string[] | undefined): RunWhereConditions {
+function addWorkspaceNamesFilter(
+  conditions: readonly RunWhereCondition[],
+  names: readonly string[] | undefined,
+): RunWhereConditions {
   if (names === undefined || names.length === 0) return conditions;
-  const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
+  const matchingWorkspaces = db
+    .select({ id: workspaces.id })
+    .from(workspaces)
     .where(or(...names.map((name: string) => caseInsensitiveLike(workspaces.name, `%${name}%`))));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
 function runHistoryCsv(params: DeepReadonly<URLSearchParams>, name: string): string[] | undefined {
-  return params.get(name)?.split(",").map((value: string): string => value.trim()).filter((s: string): boolean => s !== "");
+  return params
+    .get(name)
+    ?.split(",")
+    .map((value: string): string => value.trim())
+    .filter((s: string): boolean => s !== "");
 }
 
 function runHistoryWhere(request: RequestWithUrl, initial: RunWhereConditions): ReturnType<typeof and> {
@@ -1770,7 +1999,10 @@ export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: s
 }
 
 /** Build the same filtered run-history predicate for an authorized organization scope. */
-export function organizationRunHistoryWhere(request: RequestWithUrl, workspaceIds: readonly string[]): ReturnType<typeof and> {
+export function organizationRunHistoryWhere(
+  request: RequestWithUrl,
+  workspaceIds: readonly string[],
+): ReturnType<typeof and> {
   const params = new URL(request.url).searchParams;
   let conditions: RunWhereConditions = [inArray(runs.workspaceId, [...workspaceIds])];
   conditions = addWorkspaceNamesFilter(conditions, runHistoryCsv(params, "filter[workspace_names]"));
@@ -1790,17 +2022,40 @@ export const FINAL_RUN_STATUSES = [
 ];
 export const CAPACITY_PENDING_STATUSES = ["pending", "queuing", "plan_queued", "confirmed", "apply_queued"];
 export const CAPACITY_RUNNING_STATUSES = [
-  "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-  "planning", "cost_estimating", "cost_estimated", "policy_checking",
-  "policy_override", "policy_checked", "post_plan_running", "post_plan_completed",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "planning",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
   "applying",
 ];
 export const WORKSPACE_BLOCKING_RUN_STATUSES = [
-  "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-  "queuing", "plan_queued", "planning", "planned", "cost_estimating",
-  "cost_estimated", "policy_checking", "policy_override", "policy_checked",
-  "post_plan_running", "post_plan_completed", "policy_soft_failed",
-  "confirmed", "apply_queued", "applying",
+  "fetching",
+  "fetching_completed",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "queuing",
+  "plan_queued",
+  "planning",
+  "planned",
+  "cost_estimating",
+  "cost_estimated",
+  "policy_checking",
+  "policy_override",
+  "policy_checked",
+  "post_plan_running",
+  "post_plan_completed",
+  "policy_soft_failed",
+  "confirmed",
+  "apply_queued",
+  "applying",
 ];
 export const DISCARDABLE_RUN_STATUSES = [
   "pending",
@@ -1881,10 +2136,11 @@ async function deleteWorkspaceDataInTransaction(
     await transaction.delete(workspaceTags).where(inArray(workspaceTags.workspaceId, chunk));
     await transaction.delete(stateVersions).where(inArray(stateVersions.workspaceId, chunk));
     await transaction.delete(dataRetentionPolicies).where(inArray(dataRetentionPolicies.workspaceId, chunk));
-    await transaction.delete(remoteStateConsumers).where(or(
-      inArray(remoteStateConsumers.workspaceId, chunk),
-      inArray(remoteStateConsumers.consumerWorkspaceId, chunk),
-    ));
+    await transaction
+      .delete(remoteStateConsumers)
+      .where(
+        or(inArray(remoteStateConsumers.workspaceId, chunk), inArray(remoteStateConsumers.consumerWorkspaceId, chunk)),
+      );
     await transaction.delete(workspaceRunTasks).where(inArray(workspaceRunTasks.workspaceId, chunk));
   });
 }
@@ -1908,7 +2164,8 @@ async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<
     const batch = cleanupOperations.splice(0, DELETION_ARTIFACT_BATCH_SIZE);
     const results = await Promise.allSettled(batch.map(async (cleanup): Promise<void> => cleanup()));
     for (const result of results) {
-      if (result.status === "rejected") log.error("Workspace deletion artifact cleanup failed", { error: result.reason });
+      if (result.status === "rejected")
+        log.error("Workspace deletion artifact cleanup failed", { error: result.reason });
     }
   };
 
@@ -1932,8 +2189,12 @@ async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<
         if (parsed.kind === "configuration") {
           cleanupOperations.push(async (): Promise<void> => rm(parsed.value, { force: true }));
         } else {
-          cleanupOperations.push(async (): Promise<void> => { await deleteRunLogArchive(parsed.value); });
-          cleanupOperations.push(async (): Promise<void> => { await deletePlanJsonArtifact(parsed.value); });
+          cleanupOperations.push(async (): Promise<void> => {
+            await deleteRunLogArchive(parsed.value);
+          });
+          cleanupOperations.push(async (): Promise<void> => {
+            await deletePlanJsonArtifact(parsed.value);
+          });
         }
         if (cleanupOperations.length >= DELETION_ARTIFACT_BATCH_SIZE) await flush();
       }
@@ -1951,9 +2212,7 @@ async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<
   }
 }
 
-async function withWorkspaceDeletionManifest<T>(
-  operation: (manifestPath: string) => Promise<T>,
-): Promise<T> {
+async function withWorkspaceDeletionManifest<T>(operation: (manifestPath: string) => Promise<T>): Promise<T> {
   const manifestPath = workspaceDeletionManifestPath();
   try {
     const result = await operation(manifestPath);
@@ -1998,45 +2257,53 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  */
 export async function deleteOrganization(organizationId: string): Promise<readonly string[]> {
   return withWorkspaceDeletionManifest(async (manifestPath): Promise<readonly string[]> => {
-    const outcome = await db.transaction(async (tx: unknown): Promise<{ memberIds: readonly string[]; moduleArchives: readonly string[] }> => {
-      const transaction = tx as typeof db;
-      const organizationWorkspaces = await transaction.query.workspaces.findMany({
-        where: eq(workspaces.orgId, organizationId),
-        columns: { id: true },
-      });
-      const memberships = await transaction.query.organizationMemberships.findMany({
-        where: eq(organizationMemberships.orgId, organizationId),
-        columns: { userId: true },
-      });
-      await deleteWorkspaceDataInTransaction(
-        transaction,
-        organizationWorkspaces.map((workspace): string => workspace.id),
-        manifestPath,
-      );
-      // Issue #619: registry module rows cascade, but their archive files
-      // would leak on disk. Collect the paths before the cascade deletes
-      // the rows so they can be removed after commit.
-      const orgModules = await transaction.query.registryModules.findMany({
-        where: eq(registryModules.orgId, organizationId),
-        columns: { id: true },
-      });
-      const moduleArchives = orgModules.length === 0
-        ? []
-        : (await transaction.query.registryModuleVersions.findMany({
-          where: inArray(registryModuleVersions.moduleId, orgModules.map((module): string => module.id)),
-          columns: { archivePath: true },
-        }))
-          .map((version): string | null => version.archivePath)
-          .filter((archivePath): archivePath is string => archivePath !== null);
-      await transaction.delete(workspaces).where(eq(workspaces.orgId, organizationId));
-      await transaction.delete(organizationMemberships).where(eq(organizationMemberships.orgId, organizationId));
-      await transaction.delete(apiTokens).where(eq(apiTokens.orgId, organizationId));
-      await transaction.delete(organizations).where(eq(organizations.id, organizationId));
-      return {
-        memberIds: [...new Set(memberships.map((membership): string => membership.userId))],
-        moduleArchives,
-      };
-    });
+    const outcome = await db.transaction(
+      async (tx: unknown): Promise<{ memberIds: readonly string[]; moduleArchives: readonly string[] }> => {
+        const transaction = tx as typeof db;
+        const organizationWorkspaces = await transaction.query.workspaces.findMany({
+          where: eq(workspaces.orgId, organizationId),
+          columns: { id: true },
+        });
+        const memberships = await transaction.query.organizationMemberships.findMany({
+          where: eq(organizationMemberships.orgId, organizationId),
+          columns: { userId: true },
+        });
+        await deleteWorkspaceDataInTransaction(
+          transaction,
+          organizationWorkspaces.map((workspace): string => workspace.id),
+          manifestPath,
+        );
+        // Issue #619: registry module rows cascade, but their archive files
+        // would leak on disk. Collect the paths before the cascade deletes
+        // the rows so they can be removed after commit.
+        const orgModules = await transaction.query.registryModules.findMany({
+          where: eq(registryModules.orgId, organizationId),
+          columns: { id: true },
+        });
+        const moduleArchives =
+          orgModules.length === 0
+            ? []
+            : (
+                await transaction.query.registryModuleVersions.findMany({
+                  where: inArray(
+                    registryModuleVersions.moduleId,
+                    orgModules.map((module): string => module.id),
+                  ),
+                  columns: { archivePath: true },
+                })
+              )
+                .map((version): string | null => version.archivePath)
+                .filter((archivePath): archivePath is string => archivePath !== null);
+        await transaction.delete(workspaces).where(eq(workspaces.orgId, organizationId));
+        await transaction.delete(organizationMemberships).where(eq(organizationMemberships.orgId, organizationId));
+        await transaction.delete(apiTokens).where(eq(apiTokens.orgId, organizationId));
+        await transaction.delete(organizations).where(eq(organizations.id, organizationId));
+        return {
+          memberIds: [...new Set(memberships.map((membership): string => membership.userId))],
+          moduleArchives,
+        };
+      },
+    );
     for (const archivePath of outcome.moduleArchives) {
       try {
         await rm(archivePath, { force: true });
@@ -2088,7 +2355,7 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
 export async function promoteIntermediateStateVersion(workspaceId: string): Promise<string | null> {
   await db.transaction(async (tx) => {
     const workspace = await tx.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-    if (workspace !== undefined && await fenceStateWorkspace(tx, workspace)) {
+    if (workspace !== undefined && (await fenceStateWorkspace(tx, workspace))) {
       await pruneStateReservations(tx, workspace);
     }
   });
@@ -2103,12 +2370,23 @@ export async function promoteIntermediateStateVersion(workspaceId: string): Prom
   });
   if (snapshot === undefined) return null;
   await db.update(stateVersions).set({ intermediate: false }).where(eq(stateVersions.id, snapshot.id));
-  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } });
-  await auditLog("promote", "state-version", snapshot.id, currentAuditContext()?.userId ?? null, workspace?.orgId ?? null, {
-    workspaceId,
-    before: { intermediate: true },
-    after: { intermediate: false },
-  }, { immutable: true });
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { orgId: true },
+  });
+  await auditLog(
+    "promote",
+    "state-version",
+    snapshot.id,
+    currentAuditContext()?.userId ?? null,
+    workspace?.orgId ?? null,
+    {
+      workspaceId,
+      before: { intermediate: true },
+      after: { intermediate: false },
+    },
+    { immutable: true },
+  );
   return snapshot.id;
 }
 
@@ -2134,24 +2412,32 @@ function getGraceCutoff(now: number, gracePeriodMs: number | undefined): number 
   return now - (gracePeriodMs ?? defaultGracePeriodMs);
 }
 
-function getRetentionCutoff(policy: Readonly<{ deleteOlderThanNDays?: number | null }> | undefined, now: number): number | null {
+function getRetentionCutoff(
+  policy: Readonly<{ deleteOlderThanNDays?: number | null }> | undefined,
+  now: number,
+): number | null {
   if (policy === undefined) return null;
   if (typeof policy.deleteOlderThanNDays !== "number" || policy.deleteOlderThanNDays <= 0) return null;
   return now - policy.deleteOlderThanNDays * 86_400_000;
 }
 
-async function loadRetentionPolicy(workspaceId: string): Promise<{ policy: typeof dataRetentionPolicies.$inferSelect | typeof organizationDataRetentionPolicies.$inferSelect | undefined; policySource: string | null }> {
+async function loadRetentionPolicy(workspaceId: string): Promise<{
+  policy: typeof dataRetentionPolicies.$inferSelect | typeof organizationDataRetentionPolicies.$inferSelect | undefined;
+  policySource: string | null;
+}> {
   const [workspacePolicy, workspace] = await Promise.all([
     db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) }),
     db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } }),
   ]);
-  const organizationPolicy = workspacePolicy === undefined && workspace !== undefined
-    ? await db.query.organizationDataRetentionPolicies.findFirst({
-      where: eq(organizationDataRetentionPolicies.organizationId, workspace.orgId),
-    })
-    : undefined;
+  const organizationPolicy =
+    workspacePolicy === undefined && workspace !== undefined
+      ? await db.query.organizationDataRetentionPolicies.findFirst({
+          where: eq(organizationDataRetentionPolicies.organizationId, workspace.orgId),
+        })
+      : undefined;
   const policy = workspacePolicy ?? organizationPolicy;
-  const policySource = workspacePolicy !== undefined ? "workspace" : organizationPolicy !== undefined ? "organization" : null;
+  const policySource =
+    workspacePolicy !== undefined ? "workspace" : organizationPolicy !== undefined ? "organization" : null;
   return { policy, policySource };
 }
 
@@ -2160,11 +2446,23 @@ type GcCollections = DeepReadonly<{
   softDeletedVersions: { id: string; softDeletedAt: number | null }[];
   retainedConfigurationVersions: { id: string; createdAt: number }[];
   softDeletedConfigurationVersions: { id: string; archivePath: string | null; softDeletedAt: number | null }[];
-  workspaceRuns: { id: string; status: string; createdAt: number; configurationVersionId: string | null; softDeletedAt: number | null }[];
+  workspaceRuns: {
+    id: string;
+    status: string;
+    createdAt: number;
+    configurationVersionId: string | null;
+    softDeletedAt: number | null;
+  }[];
 }>;
 
 async function fetchGcCollections(workspaceId: string): Promise<GcCollections> {
-  const [finalizedVersions, softDeletedVersions, retainedConfigurationVersions, softDeletedConfigurationVersions, workspaceRuns] = await Promise.all([
+  const [
+    finalizedVersions,
+    softDeletedVersions,
+    retainedConfigurationVersions,
+    softDeletedConfigurationVersions,
+    workspaceRuns,
+  ] = await Promise.all([
     db.query.stateVersions.findMany({
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
       orderBy: [desc(stateVersions.serial)],
@@ -2175,12 +2473,18 @@ async function fetchGcCollections(workspaceId: string): Promise<GcCollections> {
       columns: { id: true, softDeletedAt: true },
     }),
     db.query.configurationVersions.findMany({
-      where: and(eq(configurationVersions.workspaceId, workspaceId), inArray(configurationVersions.status, ["uploaded", "archived"])),
+      where: and(
+        eq(configurationVersions.workspaceId, workspaceId),
+        inArray(configurationVersions.status, ["uploaded", "archived"]),
+      ),
       orderBy: [desc(configurationVersions.createdAt)],
       columns: { id: true, createdAt: true },
     }),
     db.query.configurationVersions.findMany({
-      where: and(eq(configurationVersions.workspaceId, workspaceId), eq(configurationVersions.status, "backing_data_soft_deleted")),
+      where: and(
+        eq(configurationVersions.workspaceId, workspaceId),
+        eq(configurationVersions.status, "backing_data_soft_deleted"),
+      ),
       columns: { id: true, archivePath: true, softDeletedAt: true },
     }),
     db.query.runs.findMany({
@@ -2189,39 +2493,82 @@ async function fetchGcCollections(workspaceId: string): Promise<GcCollections> {
       columns: { id: true, status: true, createdAt: true, configurationVersionId: true, softDeletedAt: true },
     }),
   ]);
-  return { finalizedVersions, softDeletedVersions, retainedConfigurationVersions, softDeletedConfigurationVersions, workspaceRuns };
+  return {
+    finalizedVersions,
+    softDeletedVersions,
+    retainedConfigurationVersions,
+    softDeletedConfigurationVersions,
+    workspaceRuns,
+  };
 }
 
-async function purgeStaleStateVersions(softDeletedVersions: GcCollections["softDeletedVersions"], graceCutoff: number): Promise<number> {
-  const stale = softDeletedVersions.filter(({ softDeletedAt }): boolean => typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff);
-  if (stale.length > 0) await db.delete(stateVersions).where(inArray(stateVersions.id, stale.map((v): string => v.id)));
+async function purgeStaleStateVersions(
+  softDeletedVersions: GcCollections["softDeletedVersions"],
+  graceCutoff: number,
+): Promise<number> {
+  const stale = softDeletedVersions.filter(
+    ({ softDeletedAt }): boolean => typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff,
+  );
+  if (stale.length > 0)
+    await db.delete(stateVersions).where(
+      inArray(
+        stateVersions.id,
+        stale.map((v): string => v.id),
+      ),
+    );
   return stale.length;
 }
 
-async function stampPendingSoftDeletedStateVersions(softDeletedVersions: GcCollections["softDeletedVersions"], now: number): Promise<void> {
-  const ids = softDeletedVersions.filter(({ softDeletedAt }): boolean => softDeletedAt === null).map((v): string => v.id);
+async function stampPendingSoftDeletedStateVersions(
+  softDeletedVersions: GcCollections["softDeletedVersions"],
+  now: number,
+): Promise<void> {
+  const ids = softDeletedVersions
+    .filter(({ softDeletedAt }): boolean => softDeletedAt === null)
+    .map((v): string => v.id);
   if (ids.length > 0) await db.update(stateVersions).set({ softDeletedAt: now }).where(inArray(stateVersions.id, ids));
 }
 
-async function purgeStaleConfigurationVersions(softDeletedConfigurationVersions: GcCollections["softDeletedConfigurationVersions"], graceCutoff: number): Promise<{ count: number; archivesDeleted: number }> {
-  const stale = softDeletedConfigurationVersions.filter(({ softDeletedAt }): boolean => typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff);
+async function purgeStaleConfigurationVersions(
+  softDeletedConfigurationVersions: GcCollections["softDeletedConfigurationVersions"],
+  graceCutoff: number,
+): Promise<{ count: number; archivesDeleted: number }> {
+  const stale = softDeletedConfigurationVersions.filter(
+    ({ softDeletedAt }): boolean => typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff,
+  );
   let archivesDeleted = 0;
   const ids: string[] = [];
   for (const cv of stale) {
     if (await removeConfigurationArchive(cv.archivePath)) archivesDeleted += 1;
     ids.push(cv.id);
   }
-  if (ids.length > 0) await db.update(configurationVersions).set({ archivePath: null, status: "backing_data_permanently_deleted" }).where(inArray(configurationVersions.id, ids));
+  if (ids.length > 0)
+    await db
+      .update(configurationVersions)
+      .set({ archivePath: null, status: "backing_data_permanently_deleted" })
+      .where(inArray(configurationVersions.id, ids));
   return { count: stale.length, archivesDeleted };
 }
 
-async function stampPendingSoftDeletedConfigurationVersions(softDeletedConfigurationVersions: GcCollections["softDeletedConfigurationVersions"], now: number): Promise<void> {
-  const ids = softDeletedConfigurationVersions.filter(({ softDeletedAt }): boolean => softDeletedAt === null).map((v): string => v.id);
-  if (ids.length > 0) await db.update(configurationVersions).set({ softDeletedAt: now }).where(inArray(configurationVersions.id, ids));
+async function stampPendingSoftDeletedConfigurationVersions(
+  softDeletedConfigurationVersions: GcCollections["softDeletedConfigurationVersions"],
+  now: number,
+): Promise<void> {
+  const ids = softDeletedConfigurationVersions
+    .filter(({ softDeletedAt }): boolean => softDeletedAt === null)
+    .map((v): string => v.id);
+  if (ids.length > 0)
+    await db.update(configurationVersions).set({ softDeletedAt: now }).where(inArray(configurationVersions.id, ids));
 }
 
-async function purgeStaleRuns(workspaceRuns: GcCollections["workspaceRuns"], graceCutoff: number): Promise<{ count: number; archivesDeleted: number; retainedRuns: GcCollections["workspaceRuns"] }> {
-  const staleRuns = workspaceRuns.filter(({ status, softDeletedAt }): boolean => FINAL_RUN_STATUSES.includes(status) && typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff);
+async function purgeStaleRuns(
+  workspaceRuns: GcCollections["workspaceRuns"],
+  graceCutoff: number,
+): Promise<{ count: number; archivesDeleted: number; retainedRuns: GcCollections["workspaceRuns"] }> {
+  const staleRuns = workspaceRuns.filter(
+    ({ status, softDeletedAt }): boolean =>
+      FINAL_RUN_STATUSES.includes(status) && typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff,
+  );
   let archivesDeleted = 0;
   const ids: string[] = [];
   for (const run of staleRuns) {
@@ -2235,21 +2582,35 @@ async function purgeStaleRuns(workspaceRuns: GcCollections["workspaceRuns"], gra
   return { count: staleRuns.length, archivesDeleted, retainedRuns };
 }
 
-function collectStateVersionIdsToSoftDelete(finalizedVersions: GcCollections["finalizedVersions"], policy: Readonly<{ stateVersionsCount?: number | null }>, currentStateVersionId: string | undefined, retentionCutoff: number | null): Set<string> {
+function collectStateVersionIdsToSoftDelete(
+  finalizedVersions: GcCollections["finalizedVersions"],
+  policy: Readonly<{ stateVersionsCount?: number | null }>,
+  currentStateVersionId: string | undefined,
+  retentionCutoff: number | null,
+): Set<string> {
   return new Set([
     ...addCountBasedStateVersions(finalizedVersions, policy, currentStateVersionId),
     ...addCutoffBasedStateVersions(finalizedVersions, currentStateVersionId, retentionCutoff),
   ]);
 }
 
-function addCountBasedStateVersions(finalizedVersions: GcCollections["finalizedVersions"], policy: Readonly<{ stateVersionsCount?: number | null }>, currentStateVersionId: string | undefined): readonly string[] {
+function addCountBasedStateVersions(
+  finalizedVersions: GcCollections["finalizedVersions"],
+  policy: Readonly<{ stateVersionsCount?: number | null }>,
+  currentStateVersionId: string | undefined,
+): readonly string[] {
   if (typeof policy.stateVersionsCount !== "number" || policy.stateVersionsCount <= 0) return [];
-  return finalizedVersions.slice(policy.stateVersionsCount)
+  return finalizedVersions
+    .slice(policy.stateVersionsCount)
     .filter((sv): boolean => sv.id !== currentStateVersionId)
     .map((sv): string => sv.id);
 }
 
-function addCutoffBasedStateVersions(finalizedVersions: GcCollections["finalizedVersions"], currentStateVersionId: string | undefined, retentionCutoff: number | null): readonly string[] {
+function addCutoffBasedStateVersions(
+  finalizedVersions: GcCollections["finalizedVersions"],
+  currentStateVersionId: string | undefined,
+  retentionCutoff: number | null,
+): readonly string[] {
   if (retentionCutoff === null) return [];
   return finalizedVersions
     .filter((sv): boolean => sv.id !== currentStateVersionId && sv.createdAt <= retentionCutoff)
@@ -2258,37 +2619,67 @@ function addCutoffBasedStateVersions(finalizedVersions: GcCollections["finalized
 
 async function softDeleteStateVersions(ids: Readonly<ReadonlySet<string>>, now: number): Promise<void> {
   if (ids.size === 0) return;
-  await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt: now }).where(inArray(stateVersions.id, [...ids]));
+  await db
+    .update(stateVersions)
+    .set({ status: "backing_data_soft_deleted", softDeletedAt: now })
+    .where(inArray(stateVersions.id, [...ids]));
 }
 
-function collectConfigurationVersionIds(retainedConfigurationVersions: GcCollections["retainedConfigurationVersions"], retainedRuns: GcCollections["workspaceRuns"], retentionCutoff: number | null): string[] {
+function collectConfigurationVersionIds(
+  retainedConfigurationVersions: GcCollections["retainedConfigurationVersions"],
+  retainedRuns: GcCollections["workspaceRuns"],
+  retentionCutoff: number | null,
+): string[] {
   if (retentionCutoff === null) return [];
   const protectedIds = buildProtectedConfigurationIds(retainedConfigurationVersions, retainedRuns);
-  return retainedConfigurationVersions.filter(({ id, createdAt }): boolean => !protectedIds.has(id) && createdAt <= retentionCutoff).map(({ id }): string => id);
+  return retainedConfigurationVersions
+    .filter(({ id, createdAt }): boolean => !protectedIds.has(id) && createdAt <= retentionCutoff)
+    .map(({ id }): string => id);
 }
 
-function buildProtectedConfigurationIds(retainedConfigurationVersions: GcCollections["retainedConfigurationVersions"], retainedRuns: GcCollections["workspaceRuns"]): Set<string> {
+function buildProtectedConfigurationIds(
+  retainedConfigurationVersions: GcCollections["retainedConfigurationVersions"],
+  retainedRuns: GcCollections["workspaceRuns"],
+): Set<string> {
   const currentId = retainedConfigurationVersions[0]?.id;
   const ids = new Set<string>(currentId === undefined ? [] : [currentId]);
   for (const run of retainedRuns) {
-    if (run.configurationVersionId !== null && !FINAL_RUN_STATUSES.includes(run.status)) ids.add(run.configurationVersionId);
+    if (run.configurationVersionId !== null && !FINAL_RUN_STATUSES.includes(run.status))
+      ids.add(run.configurationVersionId);
   }
   return ids;
 }
 
 async function softDeleteConfigurationVersions(ids: readonly string[], now: number): Promise<void> {
   if (ids.length === 0) return;
-  await db.update(configurationVersions).set({ status: "backing_data_soft_deleted", softDeletedAt: now }).where(inArray(configurationVersions.id, ids));
+  await db
+    .update(configurationVersions)
+    .set({ status: "backing_data_soft_deleted", softDeletedAt: now })
+    .where(inArray(configurationVersions.id, ids));
 }
 
-function collectExpiredRunIds(retainedRuns: GcCollections["workspaceRuns"], retentionCutoff: number | null): readonly string[] {
+function collectExpiredRunIds(
+  retainedRuns: GcCollections["workspaceRuns"],
+  retentionCutoff: number | null,
+): readonly string[] {
   if (retentionCutoff === null) return [];
-  return retainedRuns.filter(({ status, createdAt, softDeletedAt }): boolean => FINAL_RUN_STATUSES.includes(status) && softDeletedAt === null && createdAt <= retentionCutoff).map(({ id }): string => id);
+  return retainedRuns
+    .filter(
+      ({ status, createdAt, softDeletedAt }): boolean =>
+        FINAL_RUN_STATUSES.includes(status) && softDeletedAt === null && createdAt <= retentionCutoff,
+    )
+    .map(({ id }): string => id);
 }
 
-async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now: number): Promise<{ logsDeletedCount: number; logsArchived: number }> {
+async function archiveAndDeleteExpiredRuns(
+  expiredRunIds: readonly string[],
+  now: number,
+): Promise<{ logsDeletedCount: number; logsArchived: number }> {
   if (expiredRunIds.length === 0) return { logsDeletedCount: 0, logsArchived: 0 };
-  const expiredLogs = await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
+  const expiredLogs = await db.query.logs.findMany({
+    where: inArray(logs.runId, expiredRunIds),
+    columns: { id: true },
+  });
   let logsArchived = 0;
   for (const runId of expiredRunIds) {
     if (await archiveRunLogs(runId)) logsArchived++;
@@ -2298,12 +2689,32 @@ async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now
   return { logsDeletedCount: expiredLogs.length, logsArchived };
 }
 
-async function applyRetentionPolicy(collections: GcCollections, policy: Readonly<{ stateVersionsCount?: number | null; deleteOlderThanNDays?: number | null }>, now: number, retainedRuns: GcCollections["workspaceRuns"]): Promise<{ stateVersionIds: Set<string>; configurationVersionIds: readonly string[]; expiredRunIds: readonly string[]; logsDeleted: number; logsArchived: number }> {
+async function applyRetentionPolicy(
+  collections: GcCollections,
+  policy: Readonly<{ stateVersionsCount?: number | null; deleteOlderThanNDays?: number | null }>,
+  now: number,
+  retainedRuns: GcCollections["workspaceRuns"],
+): Promise<{
+  stateVersionIds: Set<string>;
+  configurationVersionIds: readonly string[];
+  expiredRunIds: readonly string[];
+  logsDeleted: number;
+  logsArchived: number;
+}> {
   const retentionCutoff = getRetentionCutoff(policy, now);
   const currentStateVersionId = collections.finalizedVersions.find(({ intermediate }): boolean => !intermediate)?.id;
-  const stateVersionIds = collectStateVersionIdsToSoftDelete(collections.finalizedVersions, policy, currentStateVersionId, retentionCutoff);
+  const stateVersionIds = collectStateVersionIdsToSoftDelete(
+    collections.finalizedVersions,
+    policy,
+    currentStateVersionId,
+    retentionCutoff,
+  );
   await softDeleteStateVersions(stateVersionIds, now);
-  const configurationVersionIds = collectConfigurationVersionIds(collections.retainedConfigurationVersions, retainedRuns, retentionCutoff);
+  const configurationVersionIds = collectConfigurationVersionIds(
+    collections.retainedConfigurationVersions,
+    retainedRuns,
+    retentionCutoff,
+  );
   await softDeleteConfigurationVersions(configurationVersionIds, now);
   const expiredRunIds = collectExpiredRunIds(retainedRuns, retentionCutoff);
   const { logsDeletedCount, logsArchived } = await archiveAndDeleteExpiredRuns(expiredRunIds, now);
@@ -2320,9 +2731,16 @@ export async function applyDataRetentionGarbageCollection(
   const collections = await fetchGcCollections(workspaceId);
   const staleStateCount = await purgeStaleStateVersions(collections.softDeletedVersions, graceCutoff);
   await stampPendingSoftDeletedStateVersions(collections.softDeletedVersions, now);
-  const { count: staleConfigCount, archivesDeleted } = await purgeStaleConfigurationVersions(collections.softDeletedConfigurationVersions, graceCutoff);
+  const { count: staleConfigCount, archivesDeleted } = await purgeStaleConfigurationVersions(
+    collections.softDeletedConfigurationVersions,
+    graceCutoff,
+  );
   await stampPendingSoftDeletedConfigurationVersions(collections.softDeletedConfigurationVersions, now);
-  const { count: staleRunCount, archivesDeleted: runArchivesDeleted, retainedRuns } = await purgeStaleRuns(collections.workspaceRuns, graceCutoff);
+  const {
+    count: staleRunCount,
+    archivesDeleted: runArchivesDeleted,
+    retainedRuns,
+  } = await purgeStaleRuns(collections.workspaceRuns, graceCutoff);
   const summary = {
     softDeleted: 0,
     permanentlyDeleted: staleStateCount,
@@ -2336,7 +2754,8 @@ export async function applyDataRetentionGarbageCollection(
     const hasCleanup = staleStateCount + staleConfigCount + staleRunCount > 0;
     return { ...summary, reason: hasCleanup ? "cleanup" : "no-policy" };
   }
-  const { stateVersionIds, configurationVersionIds, expiredRunIds, logsDeleted, logsArchived } = await applyRetentionPolicy(collections, policy, now, retainedRuns);
+  const { stateVersionIds, configurationVersionIds, expiredRunIds, logsDeleted, logsArchived } =
+    await applyRetentionPolicy(collections, policy, now, retainedRuns);
   return {
     ...summary,
     softDeleted: stateVersionIds.size,

@@ -14,20 +14,24 @@ describe("scheduled apply workspace loading", () => {
     workspaceIds = Array.from({ length: 3 }, (): string => `ws-scheduled-apply-${crypto.randomUUID()}`);
     runIds = workspaceIds.map((workspaceId): string => `run-scheduled-apply-${workspaceId}`);
     await db.insert(organizations).values({ id: orgId, name: orgId });
-    await db.insert(workspaces).values(workspaceIds.map((id): typeof workspaces.$inferInsert => ({
-      id,
-      orgId,
-      name: id,
-      locked: true,
-    })));
-    await db.insert(runs).values(runIds.map((id, index): typeof runs.$inferInsert => ({
-      id,
-      workspaceId: workspaceIds[index]!,
-      status: "confirmed",
-      planOnly: false,
-      scheduledAt: Date.now() - 1_000,
-      createdAt: Date.now() - 2_000,
-    })));
+    await db.insert(workspaces).values(
+      workspaceIds.map((id): typeof workspaces.$inferInsert => ({
+        id,
+        orgId,
+        name: id,
+        locked: true,
+      })),
+    );
+    await db.insert(runs).values(
+      runIds.map((id, index): typeof runs.$inferInsert => ({
+        id,
+        workspaceId: workspaceIds[index]!,
+        status: "confirmed",
+        planOnly: false,
+        scheduledAt: Date.now() - 1_000,
+        createdAt: Date.now() - 2_000,
+      })),
+    );
   });
 
   afterEach(async (): Promise<void> => {
@@ -47,7 +51,9 @@ describe("scheduled apply workspace loading", () => {
       result = await applyDueScheduledRuns();
       workspaceManyCalls = workspaceFindMany.mock.calls.length;
       workspaceFirstCalls = workspaceFindFirst.mock.calls.length;
-      const workspaceQueryResult = workspaceFindMany.mock.results[0]?.value as Promise<readonly { id: string }[]> | undefined;
+      const workspaceQueryResult = workspaceFindMany.mock.results[0]?.value as
+        | Promise<readonly { id: string }[]>
+        | undefined;
       if (workspaceQueryResult !== undefined) {
         loadedWorkspaceIds = (await workspaceQueryResult).map((workspace): string => workspace.id);
       }

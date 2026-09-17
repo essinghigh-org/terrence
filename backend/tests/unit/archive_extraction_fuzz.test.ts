@@ -45,9 +45,11 @@ function randomPath(rand: () => number, maxLen = 24): string {
 /** The exact spec zipEntryEscapes is supposed to implement. */
 function zipEscapesSpec(entry: string): boolean {
   const normalized = entry.replaceAll("\\", "/");
-  return normalized.startsWith("/")
-    || /^[A-Za-z]:/.test(normalized)
-    || normalized.split("/").some((segment): boolean => segment === "..");
+  return (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.split("/").some((segment): boolean => segment === "..")
+  );
 }
 
 describe("zipEntryEscapes (binaryManager)", () => {
@@ -175,16 +177,7 @@ describe("tarMemberPathUnsafe (worker)", () => {
   });
 
   test("curated safe corpus is fully accepted", () => {
-    const safe = [
-      "main.tf",
-      "terraform.tfvars",
-      "./main.tf",
-      "modules/net/vpc.tf",
-      "a.b",
-      "0/1",
-      "-",
-      ".",
-    ];
+    const safe = ["main.tf", "terraform.tfvars", "./main.tf", "modules/net/vpc.tf", "a.b", "0/1", "-", "."];
     for (const member of safe) {
       expect(tarMemberPathUnsafe(member), `expected ${JSON.stringify(member)} to be safe`).toBe(false);
     }

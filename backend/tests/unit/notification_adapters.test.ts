@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { renderPayloadForDestination, verifyDestinationOwnership, isOwnershipVerified } from "../../src/lib/notifications";
+import {
+  renderPayloadForDestination,
+  verifyDestinationOwnership,
+  isOwnershipVerified,
+} from "../../src/lib/notifications";
 
 // Only destinationType and token are consulted by renderPayloadForDestination;
 // the remaining fields are type-fixed placeholders. NotificationConfiguration
@@ -7,7 +11,11 @@ import { renderPayloadForDestination, verifyDestinationOwnership, isOwnershipVer
 // parameter slot.
 type Config = Parameters<typeof renderPayloadForDestination>[0];
 
-function config(destinationType: Config["destinationType"], url = "https://example.invalid/hook", id = `cfg-${crypto.randomUUID()}`): Config {
+function config(
+  destinationType: Config["destinationType"],
+  url = "https://example.invalid/hook",
+  id = `cfg-${crypto.randomUUID()}`,
+): Config {
   return {
     id,
     workspaceId: "ws",
@@ -31,7 +39,15 @@ const runPayload: Record<string, unknown> = {
   workspace_id: "ws-1",
   workspace_name: "prod",
   organization_name: "acme",
-  notifications: [{ message: "Run Completed", trigger: "run:completed", run_status: "completed", run_updated_at: "2026-01-01T00:00:01.000Z", run_updated_by: "henry" }],
+  notifications: [
+    {
+      message: "Run Completed",
+      trigger: "run:completed",
+      run_status: "completed",
+      run_updated_at: "2026-01-01T00:00:01.000Z",
+      run_updated_by: "henry",
+    },
+  ],
 };
 
 describe("Notification rich destination adapters (kanban 7.11)", () => {
@@ -54,7 +70,10 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
   });
 
   it("discord failures render a red accent", () => {
-    const failed = { ...runPayload, notifications: [{ message: "Run Errored", trigger: "run:errored", run_status: "errored" }] };
+    const failed = {
+      ...runPayload,
+      notifications: [{ message: "Run Errored", trigger: "run:errored", run_status: "errored" }],
+    };
     const render = renderPayloadForDestination(config("discord"), failed);
     const discord = JSON.parse(render.body) as { embeds: Record<string, unknown>[] };
     expect(discord.embeds[0]?.["color"]).toBe(0xc0392b);
@@ -127,14 +146,22 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
       trigger: "assessment:drifted",
       message: "Drift Detected",
       details: {
-        new_assessment_result: { id: "ar-1", url: "https://terrence.local/api/v2/assessment-results/ar-1", resources_drifted: 3, checks_failed: 1 },
+        new_assessment_result: {
+          id: "ar-1",
+          url: "https://terrence.local/api/v2/assessment-results/ar-1",
+          resources_drifted: 3,
+          checks_failed: 1,
+        },
         workspace_id: "ws-1",
         workspace_name: "prod",
         organization_name: "acme",
       },
     };
 
-    const slack = JSON.parse(renderPayloadForDestination(config("slack"), assessmentPayload).body) as { text: string; blocks: Record<string, unknown>[] };
+    const slack = JSON.parse(renderPayloadForDestination(config("slack"), assessmentPayload).body) as {
+      text: string;
+      blocks: Record<string, unknown>[];
+    };
     expect(slack.text).toBe("Drift Detected");
     const body = renderPayloadForDestination(config("slack"), assessmentPayload).body;
     expect(body).toContain("3");
@@ -169,7 +196,7 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       hostname: "127.0.0.1",
       port: 0,
       async fetch(req) {
-        const body = await req.json() as { ownership_challenge?: string };
+        const body = (await req.json()) as { ownership_challenge?: string };
         return new Response(JSON.stringify({ echoed: body.ownership_challenge }));
       },
     });
@@ -190,8 +217,11 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       hostname: "127.0.0.1",
       port: 0,
       async fetch(req) {
-        const body = await req.json() as { ownership_challenge?: string };
-        return new Response(null, { status: 204, headers: { "X-Terrence-Ownership-Challenge": body.ownership_challenge ?? "" } });
+        const body = (await req.json()) as { ownership_challenge?: string };
+        return new Response(null, {
+          status: 204,
+          headers: { "X-Terrence-Ownership-Challenge": body.ownership_challenge ?? "" },
+        });
       },
     });
     try {
@@ -230,8 +260,11 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       port: 0,
       async fetch(req) {
         if (!echo) return new Response(JSON.stringify({ ok: true }), { status: 200 });
-        const body = await req.json() as { ownership_challenge?: string };
-        return new Response(null, { status: 204, headers: { "X-Terrence-Ownership-Challenge": body.ownership_challenge ?? "" } });
+        const body = (await req.json()) as { ownership_challenge?: string };
+        return new Response(null, {
+          status: 204,
+          headers: { "X-Terrence-Ownership-Challenge": body.ownership_challenge ?? "" },
+        });
       },
     });
     try {

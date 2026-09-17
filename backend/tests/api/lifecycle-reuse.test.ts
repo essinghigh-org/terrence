@@ -8,18 +8,22 @@ import { apiTokens, organizations, organizationMemberships, users, workspaces } 
 const suffix = crypto.randomUUID();
 
 describe("lifecycle — reused names/slugs after deletion", () => {
-  let orgId = "", orgName = "";
-  let userId = "", token = "";
+  let orgId = "",
+    orgName = "";
+  let userId = "",
+    token = "";
 
   const req = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+    );
 
   beforeAll(async () => {
     userId = `reuse-user-${suffix}`;
@@ -29,7 +33,9 @@ describe("lifecycle — reused names/slugs after deletion", () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "h" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
     await db.insert(organizationMemberships).values([{ id: `om-reuse-${suffix}`, userId, orgId, role: "owner" }]);
-    await db.insert(apiTokens).values([{ id: `api-reuse-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId }]);
+    await db
+      .insert(apiTokens)
+      .values([{ id: `api-reuse-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId }]);
   });
 
   afterAll(async () => {
@@ -46,7 +52,7 @@ describe("lifecycle — reused names/slugs after deletion", () => {
       data: { type: "workspaces", attributes: { name } },
     });
     expect(create.status).toBe(201);
-    const wsId = (await create.json() as { data: { id: string } }).data.id;
+    const wsId = ((await create.json()) as { data: { id: string } }).data.id;
 
     // Delete
     const del = await req(`/api/v2/workspaces/${wsId}`, "DELETE");
@@ -57,7 +63,7 @@ describe("lifecycle — reused names/slugs after deletion", () => {
       data: { type: "workspaces", attributes: { name } },
     });
     expect(recreate.status).toBe(201);
-    const newId = (await recreate.json() as { data: { id: string } }).data.id;
+    const newId = ((await recreate.json()) as { data: { id: string } }).data.id;
     expect(newId).not.toBe(wsId);
   });
 
@@ -66,7 +72,7 @@ describe("lifecycle — reused names/slugs after deletion", () => {
     const create = await req(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
       data: { type: "workspaces", attributes: { name } },
     });
-    const wsId = (await create.json() as { data: { id: string } }).data.id;
+    const wsId = ((await create.json()) as { data: { id: string } }).data.id;
     await req(`/api/v2/workspaces/${wsId}`, "DELETE");
     const fetchOld = await req(`/api/v2/workspaces/${wsId}`, "GET");
     expect(fetchOld.status).toBe(404);

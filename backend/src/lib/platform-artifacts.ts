@@ -33,9 +33,15 @@ type ArtifactPayload = Readonly<Record<string, unknown>>;
 
 function isArtifactKind(value: string): value is PlatformArtifactKind {
   return [
-    "state-comparison", "plan-comparison", "fleet-operation", "promotion",
-    "dependency-impact", "drift-incident", "import-workbench",
-    "upgrade-rehearsal", "policy-playground",
+    "state-comparison",
+    "plan-comparison",
+    "fleet-operation",
+    "promotion",
+    "dependency-impact",
+    "drift-incident",
+    "import-workbench",
+    "upgrade-rehearsal",
+    "policy-playground",
   ].includes(value);
 }
 
@@ -59,16 +65,18 @@ export function platformArtifactDigest(value: unknown): string {
   return sha256Hex(canonicalJson(value));
 }
 
-export async function createPlatformArtifact(input: Readonly<{
-  kind: PlatformArtifactKind;
-  organizationId: string;
-  workspaceId?: string | null;
-  actorId?: string | null;
-  payload: ArtifactPayload;
-  status?: string;
-  dedupeKey?: string;
-  runAfter?: number;
-}>): Promise<PlatformArtifact> {
+export async function createPlatformArtifact(
+  input: Readonly<{
+    kind: PlatformArtifactKind;
+    organizationId: string;
+    workspaceId?: string | null;
+    actorId?: string | null;
+    payload: ArtifactPayload;
+    status?: string;
+    dedupeKey?: string;
+    runAfter?: number;
+  }>,
+): Promise<PlatformArtifact> {
   const payload = boundedPayload({
     ...input.payload,
     organizationId: input.organizationId,
@@ -76,9 +84,14 @@ export async function createPlatformArtifact(input: Readonly<{
     ...(input.actorId === undefined ? {} : { actorId: input.actorId }),
     schemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
   });
-  const dedupeKey = input.dedupeKey === undefined ? undefined : platformArtifactDigest({
-    organizationId: input.organizationId, workspaceId: input.workspaceId ?? null, key: input.dedupeKey,
-  });
+  const dedupeKey =
+    input.dedupeKey === undefined
+      ? undefined
+      : platformArtifactDigest({
+          organizationId: input.organizationId,
+          workspaceId: input.workspaceId ?? null,
+          key: input.dedupeKey,
+        });
   if (dedupeKey !== undefined) {
     const existing = await db.query.durableJobs.findFirst({
       where: and(eq(durableJobs.kind, input.kind), eq(durableJobs.dedupeKey, dedupeKey)),
@@ -122,16 +135,19 @@ export async function getPlatformArtifact(
   organizationId: string,
 ): Promise<PlatformArtifact | undefined> {
   const row = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, id), eq(durableJobs.kind, kind)) });
-  if (row === undefined || !isArtifactKind(row.kind) || organizationIdOf(row.payload) !== organizationId) return undefined;
+  if (row === undefined || !isArtifactKind(row.kind) || organizationIdOf(row.payload) !== organizationId)
+    return undefined;
   return row as PlatformArtifact;
 }
 
-export async function listPlatformArtifacts(input: Readonly<{
-  kind: PlatformArtifactKind;
-  organizationId: string;
-  workspaceId?: string | null;
-  limit?: number;
-}>): Promise<readonly PlatformArtifact[]> {
+export async function listPlatformArtifacts(
+  input: Readonly<{
+    kind: PlatformArtifactKind;
+    organizationId: string;
+    workspaceId?: string | null;
+    limit?: number;
+  }>,
+): Promise<readonly PlatformArtifact[]> {
   const rows = await db.query.durableJobs.findMany({
     where: and(
       eq(durableJobs.kind, input.kind),
@@ -152,26 +168,36 @@ export async function updatePlatformArtifact(
 ): Promise<PlatformArtifact | undefined> {
   const current = await getPlatformArtifact(id, kind, organizationId);
   if (current === undefined) return undefined;
-  const payload = update.payload === undefined ? current.payload : boundedPayload({
-    ...update.payload,
-    organizationId,
-    schemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
-  });
-  const rows = await db.update(durableJobs).set({
-    ...(update.status === undefined ? {} : { status: update.status }),
-    payload,
-    payloadSchemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
-    updatedAt: Date.now(),
-  }).where(and(eq(durableJobs.id, id), eq(durableJobs.kind, kind))).returning();
+  const payload =
+    update.payload === undefined
+      ? current.payload
+      : boundedPayload({
+          ...update.payload,
+          organizationId,
+          schemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
+        });
+  const rows = await db
+    .update(durableJobs)
+    .set({
+      ...(update.status === undefined ? {} : { status: update.status }),
+      payload,
+      payloadSchemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
+      updatedAt: Date.now(),
+    })
+    .where(and(eq(durableJobs.id, id), eq(durableJobs.kind, kind)))
+    .returning();
   const row = rows[0];
-  return row === undefined || !isArtifactKind(row.kind) ? undefined : row as PlatformArtifact;
+  return row === undefined || !isArtifactKind(row.kind) ? undefined : (row as PlatformArtifact);
 }
 
 export function artifactPayload(row: DeepReadonly<PlatformArtifact>): Record<string, unknown> {
   return { ...row.payload };
 }
 
-export function artifactResource(row: DeepReadonly<PlatformArtifact>, type: string = row.kind): Record<string, unknown> {
+export function artifactResource(
+  row: DeepReadonly<PlatformArtifact>,
+  type: string = row.kind,
+): Record<string, unknown> {
   const payload = artifactPayload(row);
   delete payload["organizationId"];
   delete payload["actorId"];

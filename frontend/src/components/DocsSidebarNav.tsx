@@ -18,18 +18,13 @@ type DocsSidebarNavProps = Readonly<{
  * /app/docs route. Categories are collapsed by default; the category of the
  * currently viewed document is expanded automatically.
  */
-export function DocsSidebarNav({
-  index,
-  selectedSlug,
-  collapsed,
-  onNavigate,
-}: DocsSidebarNavProps): JSX.Element {
+export function DocsSidebarNav({ index, selectedSlug, collapsed, onNavigate }: DocsSidebarNavProps): JSX.Element {
   const groups = groupDocsByCategory(index ?? []);
   const activeCategory = groups.find((group): boolean =>
     group.docs.some((doc): boolean => doc.slug === selectedSlug),
   )?.category;
-  const [expanded, setExpanded] = useState<Set<string>>((): Set<string> =>
-    new Set(activeCategory === undefined ? [] : [activeCategory]),
+  const [expanded, setExpanded] = useState<Set<string>>(
+    (): Set<string> => new Set(activeCategory === undefined ? [] : [activeCategory]),
   );
   const activeRef = useRef<HTMLAnchorElement | null>(null);
 
@@ -38,8 +33,8 @@ export function DocsSidebarNav({
   // same document; navigating to another document re-opens its category.
   useEffect((): void => {
     if (activeCategory === undefined || index === null) return;
-    setExpanded((previous): Set<string> =>
-      previous.has(activeCategory) ? previous : new Set(previous).add(activeCategory),
+    setExpanded(
+      (previous): Set<string> => (previous.has(activeCategory) ? previous : new Set(previous).add(activeCategory)),
     );
   }, [activeCategory, index]);
 
@@ -82,9 +77,7 @@ export function DocsSidebarNav({
         onNavigate={onNavigate}
         to="/app"
       />
-      <div className="px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground">
-        Documentation
-      </div>
+      <div className="px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground">Documentation</div>
       {index === null ? (
         <div className="px-3 py-1.5 text-sm text-muted-foreground">Loading documentation…</div>
       ) : (
@@ -103,9 +96,7 @@ export function DocsSidebarNav({
                   aria-controls={listId}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                    open
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    open ? "text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                   )}
                 >
                   <ChevronRight

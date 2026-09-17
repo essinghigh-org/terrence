@@ -104,13 +104,16 @@ export function discover<T>(
         activeByHost.set(hostKey, (activeByHost.get(hostKey) ?? 0) + 1);
         void Promise.resolve()
           .then(async (): Promise<T> => operation(controller.signal))
-          .then((value): void => {
-            operationFinished = true;
-            settle(value);
-          }, (): void => {
-            operationFinished = true;
-            settle(null);
-          })
+          .then(
+            (value): void => {
+              operationFinished = true;
+              settle(value);
+            },
+            (): void => {
+              operationFinished = true;
+              settle(null);
+            },
+          )
           .finally((): void => {
             settled = true;
             clearTimeout(timer);
@@ -129,6 +132,13 @@ export function discover<T>(
 }
 
 /** Aggregate-only instance metrics: no registry hostnames or credentials. */
-export function discoveryStats(): Readonly<{ active: number; queued: number; rejected: number; canceled: number; timedOut: number; limit: number }> {
+export function discoveryStats(): Readonly<{
+  active: number;
+  queued: number;
+  rejected: number;
+  canceled: number;
+  timedOut: number;
+  limit: number;
+}> {
   return { active, queued: queue.length, rejected, canceled, timedOut, limit: MAX_PENDING };
 }

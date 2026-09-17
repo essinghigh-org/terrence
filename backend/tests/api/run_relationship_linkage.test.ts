@@ -29,9 +29,11 @@ describe("run relationship linkage (audit finding 6)", () => {
   const outsiderToken = `outsider-${suffix}`;
 
   const request = (path: string, auth?: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -81,7 +83,7 @@ describe("run relationship linkage (audit finding 6)", () => {
   it("links policy checks, task stages, and the cost estimate from the run read", async () => {
     const res = await request(`/api/v2/runs/${runId}`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { relationships: Record<string, { data?: unknown; links?: Record<string, string> }> };
     };
     const rels = body.data.relationships;
@@ -95,7 +97,7 @@ describe("run relationship linkage (audit finding 6)", () => {
   it("sideloads task stages on include=task_stages for the CLI stage wait", async () => {
     const res = await request(`/api/v2/runs/${runId}?include=task_stages`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       included: { id: string; type: string; attributes: Record<string, unknown> }[];
     };
     const stage = body.included.find((item): boolean => item.type === "task-stages");
@@ -107,7 +109,7 @@ describe("run relationship linkage (audit finding 6)", () => {
   it("serializes stored failed checks as hard_failed with scope and override metadata", async () => {
     const res = await request(`/api/v2/runs/${runId}/policy-checks`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { id: string; attributes: Record<string, unknown> }[];
     };
     expect(body.data).toHaveLength(1);
@@ -121,7 +123,7 @@ describe("run relationship linkage (audit finding 6)", () => {
   it("serves the linked cost estimate through the cost-estimates read route", async () => {
     const res = await request(`/api/v2/cost-estimates/ce-${runId}`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: { id: string; type: string } };
+    const body = (await res.json()) as { data: { id: string; type: string } };
     expect(body.data.id).toBe(`ce-${runId}`);
     expect(body.data.type).toBe("cost-estimates");
   });

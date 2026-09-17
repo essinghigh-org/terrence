@@ -14,7 +14,10 @@ export type BreadcrumbItem = Readonly<{
 export function Breadcrumbs(props: Readonly<{ items: readonly BreadcrumbItem[] }>): React.JSX.Element {
   const { items } = props;
   return (
-    <nav aria-label="Breadcrumb" className="mb-3 flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
+    <nav
+      aria-label="Breadcrumb"
+      className="mb-3 flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground"
+    >
       <ol className="flex min-w-0 flex-wrap items-center gap-1.5">
         {items.map((item, index): React.JSX.Element => {
           const isLast = index === items.length - 1;
@@ -31,7 +34,11 @@ export function Breadcrumbs(props: Readonly<{ items: readonly BreadcrumbItem[] }
                   {item.label}
                 </span>
               )}
-              {!isLast && <span aria-hidden="true" className="text-muted-foreground/70">/</span>}
+              {!isLast && (
+                <span aria-hidden="true" className="text-muted-foreground/70">
+                  /
+                </span>
+              )}
             </li>
           );
         })}

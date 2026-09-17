@@ -9,12 +9,7 @@ export type HelpTooltipProps = Readonly<{
   className?: string;
 }>;
 
-export function HelpTooltip({
-  content,
-  title,
-  icon = "help",
-  className,
-}: HelpTooltipProps): React.JSX.Element {
+export function HelpTooltip({ content, title, icon = "help", className }: HelpTooltipProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
   const tooltipId = useId();
 
@@ -23,14 +18,24 @@ export function HelpTooltip({
   return (
     <div
       className="relative inline-flex items-center"
-      onMouseEnter={(): void => { setIsOpen(true); }}
-      onMouseLeave={(): void => { setIsOpen(false); }}
+      onMouseEnter={(): void => {
+        setIsOpen(true);
+      }}
+      onMouseLeave={(): void => {
+        setIsOpen(false);
+      }}
     >
       <button
         type="button"
-        onClick={(): void => { setIsOpen(true); }}
-        onFocus={(event): void => { if (event.currentTarget.matches(":focus-visible")) setIsOpen(true); }}
-        onBlur={(): void => { setIsOpen(false); }}
+        onClick={(): void => {
+          setIsOpen(true);
+        }}
+        onFocus={(event): void => {
+          if (event.currentTarget.matches(":focus-visible")) setIsOpen(true);
+        }}
+        onBlur={(): void => {
+          setIsOpen(false);
+        }}
         aria-label={title ?? "Help info"}
         aria-expanded={isOpen}
         aria-describedby={isOpen ? tooltipId : undefined}
@@ -48,9 +53,7 @@ export function HelpTooltip({
           role="tooltip"
           className="absolute bottom-full left-1/2 z-50 mb-2 ml-[-8rem] w-64 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md origin-top duration-150 animate-in fade-in-0 zoom-in-95"
         >
-          {title !== undefined && (
-            <div className="mb-1 font-semibold text-foreground">{title}</div>
-          )}
+          {title !== undefined && <div className="mb-1 font-semibold text-foreground">{title}</div>}
           <div className="leading-normal text-muted-foreground">{content}</div>
           <div className="absolute top-full left-1/2 -mt-1 -translate-x-1/2 border-4 border-transparent border-t-popover" />
         </div>

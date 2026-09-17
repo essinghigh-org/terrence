@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { signedApiURL, validSignedApiURL, workspaceRelationshipIds, validateExternalUrl, type DeepReadonly } from "../../src/lib/utils";
+import {
+  signedApiURL,
+  validSignedApiURL,
+  workspaceRelationshipIds,
+  validateExternalUrl,
+  type DeepReadonly,
+} from "../../src/lib/utils";
 
 // An empty (but not-expired) signed URL is always valid against the same
 // SIGNED_URL_SECRET the module uses, so we use signedApiURL itself as a
@@ -71,7 +77,10 @@ describe("validSignedApiURL", () => {
     // tamper with the signature
     const url = new URL(signed);
     const originalSig = url.searchParams.get("signature") ?? "";
-    url.searchParams.set("signature", originalSig.replace(/[0-9a-f]/g, (c: string) => c === "a" ? "b" : "a"));
+    url.searchParams.set(
+      "signature",
+      originalSig.replace(/[0-9a-f]/g, (c: string) => (c === "a" ? "b" : "a")),
+    );
     expect(validSignedApiURL(makeRequest(url.toString()), path, "GET")).toBe(false);
   });
 
@@ -122,9 +131,11 @@ describe("workspaceRelationshipIds", () => {
   });
 
   it("returns undefined when items have wrong type", () => {
-    expect(workspaceRelationshipIds({
-      data: [{ id: "proj-1", type: "projects" }],
-    })).toBeUndefined();
+    expect(
+      workspaceRelationshipIds({
+        data: [{ id: "proj-1", type: "projects" }],
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -138,27 +149,19 @@ describe("validateExternalUrl", () => {
   });
 
   it("rejects loopback", () => {
-    expect(validateExternalUrl("http://127.0.0.1:3000/hook")).toBe(
-      "URL points to a private or loopback address",
-    );
+    expect(validateExternalUrl("http://127.0.0.1:3000/hook")).toBe("URL points to a private or loopback address");
   });
 
   it("rejects localhost", () => {
-    expect(validateExternalUrl("http://localhost:3000/hook")).toBe(
-      "URL points to a private or loopback address",
-    );
+    expect(validateExternalUrl("http://localhost:3000/hook")).toBe("URL points to a private or loopback address");
   });
 
   it("rejects private 10.x", () => {
-    expect(validateExternalUrl("http://10.0.1.5/hook")).toBe(
-      "URL points to a private or loopback address",
-    );
+    expect(validateExternalUrl("http://10.0.1.5/hook")).toBe("URL points to a private or loopback address");
   });
 
   it("rejects private 192.168.x", () => {
-    expect(validateExternalUrl("http://192.168.1.1/hook")).toBe(
-      "URL points to a private or loopback address",
-    );
+    expect(validateExternalUrl("http://192.168.1.1/hook")).toBe("URL points to a private or loopback address");
   });
 
   it("rejects invalid URL strings", () => {
@@ -166,9 +169,7 @@ describe("validateExternalUrl", () => {
   });
 
   it("rejects non-http protocols", () => {
-    expect(validateExternalUrl("ftp://example.com")).toBe(
-      "Only http and https URLs are allowed",
-    );
+    expect(validateExternalUrl("ftp://example.com")).toBe("Only http and https URLs are allowed");
   });
 
   it("allows private IPs when allowPrivate is true", () => {

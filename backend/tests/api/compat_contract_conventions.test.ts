@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { cleanupSeed, expectErrorResponse, jsonHeaders, persistSeed, request, seedOrg } from "./compat_contract_helpers";
+import {
+  cleanupSeed,
+  expectErrorResponse,
+  jsonHeaders,
+  persistSeed,
+  request,
+  seedOrg,
+} from "./compat_contract_helpers";
 import { TFP_API_VERSION } from "../../src/lib/constants";
 
 describe("remote-workflow API global conventions", () => {
@@ -61,7 +68,10 @@ describe("remote-workflow API global conventions", () => {
 
   it("returns 404 error documents for unknown resources", async () => {
     await expectErrorResponse(await request("/api/v2/workspaces/ws-does-not-exist", { headers }), 404);
-    await expectErrorResponse(await request(`/api/v2/organizations/${seed.orgName}/workspaces/does-not-exist`, { headers }), 404);
+    await expectErrorResponse(
+      await request(`/api/v2/organizations/${seed.orgName}/workspaces/does-not-exist`, { headers }),
+      404,
+    );
     await expectErrorResponse(await request("/api/v2/runs/run-does-not-exist", { headers }), 404);
     await expectErrorResponse(await request("/api/v2/teams/team-does-not-exist", { headers }), 404);
     await expectErrorResponse(await request("/api/v2/projects/prj-does-not-exist", { headers }), 404);
@@ -98,7 +108,7 @@ describe("remote-workflow API global conventions", () => {
     });
     expect(unsupportedAccept.status).toBe(406);
     expect(unsupportedAccept.headers.get("content-type")).toContain("application/vnd.api+json");
-    const acceptBody = await unsupportedAccept.json() as { errors?: { status?: string; title?: string }[] };
+    const acceptBody = (await unsupportedAccept.json()) as { errors?: { status?: string; title?: string }[] };
     expect(acceptBody.errors?.[0]?.status).toBe("406");
     expect(acceptBody.errors?.[0]?.title).toBe("Not Acceptable");
     expect(unsupportedAccept.headers.get("vary")?.toLowerCase()).toContain("accept");
@@ -110,7 +120,7 @@ describe("remote-workflow API global conventions", () => {
     });
     expect(unsupportedContentType.status).toBe(415);
     expect(unsupportedContentType.headers.get("content-type")).toContain("application/vnd.api+json");
-    const contentTypeBody = await unsupportedContentType.json() as { errors?: { status?: string; title?: string }[] };
+    const contentTypeBody = (await unsupportedContentType.json()) as { errors?: { status?: string; title?: string }[] };
     expect(contentTypeBody.errors?.[0]?.status).toBe("415");
     expect(contentTypeBody.errors?.[0]?.title).toBe("Unsupported Media Type");
 
@@ -160,7 +170,7 @@ describe("remote-workflow API global conventions", () => {
       body: JSON.stringify({ data: { type: "policies", attributes: { name: `upload-media-${seed.suffix}` } } }),
     });
     expect(policy.status).toBe(201);
-    const policyId = (await policy.json() as { data?: { id?: string } }).data?.id;
+    const policyId = ((await policy.json()) as { data?: { id?: string } }).data?.id;
     expect(policyId).toBeTypeOf("string");
     if (typeof policyId !== "string") throw new Error("Policy create response did not include an id");
     const uploadHeaders = new Headers(headers);

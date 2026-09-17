@@ -9,7 +9,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { fetchApi, setAuthToken } from "@/lib/api";
 import { resolveReturnTarget } from "@/lib/return-to";
 
-
 export function Register(): React.JSX.Element {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -34,8 +33,12 @@ export function Register(): React.JSX.Element {
           void navigate(loginTarget);
         }
       })
-      .catch((): void => { /* assume signup is enabled */ })
-      .finally((): void => { setCheckingSignup(false); });
+      .catch((): void => {
+        /* assume signup is enabled */
+      })
+      .finally((): void => {
+        setCheckingSignup(false);
+      });
   }, [navigate, loginTarget]);
 
   const handleRegister = async (event: React.SyntheticEvent): Promise<void> => {
@@ -64,11 +67,11 @@ export function Register(): React.JSX.Element {
       }
 
       try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const login = await fetchApi("/users/login", {
+        // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+        const login = (await fetchApi("/users/login", {
           method: "POST",
           body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
-        }) as { data: { attributes: { token: string; "expired-at"?: string | null } } };
+        })) as { data: { attributes: { token: string; "expired-at"?: string | null } } };
         setAuthToken(login.data.attributes.token, login.data.attributes["expired-at"], true);
         await navigate(resolveReturnTarget(returnTo));
       } catch (_loginError: unknown) {
@@ -82,7 +85,10 @@ export function Register(): React.JSX.Element {
   if (checkingSignup) {
     return (
       <AuthLayout mode="signup">
-        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner className="size-5" />Checking account registration…</div>
+        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner className="size-5" />
+          Checking account registration…
+        </div>
       </AuthLayout>
     );
   }
@@ -96,7 +102,9 @@ export function Register(): React.JSX.Element {
             <CardDescription>Local account creation is disabled on this instance.</CardDescription>
           </CardHeader>
           <CardFooter>
-            <Link to="/login" className={buttonVariants({ variant: "outline", className: "w-full" })}>Sign in</Link>
+            <Link to="/login" className={buttonVariants({ variant: "outline", className: "w-full" })}>
+              Sign in
+            </Link>
           </CardFooter>
         </Card>
       </AuthLayout>
@@ -120,7 +128,9 @@ export function Register(): React.JSX.Element {
                   id="register-username"
                   name="username"
                   value={username}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setUsername(event.currentTarget.value);
+                  }}
                   autoComplete="username"
                   aria-invalid={Boolean(error)}
                   required
@@ -134,7 +144,9 @@ export function Register(): React.JSX.Element {
                   name="email"
                   type="email"
                   value={email}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setEmail(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setEmail(event.currentTarget.value);
+                  }}
                   autoComplete="email"
                   aria-invalid={Boolean(error)}
                   required
@@ -147,7 +159,9 @@ export function Register(): React.JSX.Element {
                   name="password"
                   type="password"
                   value={password}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setPassword(event.currentTarget.value);
+                  }}
                   autoComplete="new-password"
                   minLength={10}
                   aria-describedby="register-password-hint"
@@ -155,7 +169,9 @@ export function Register(): React.JSX.Element {
                   required
                 />
               </Field>
-              <p id="register-password-hint" className="text-xs text-muted-foreground">Use at least 10 characters for your password.</p>
+              <p id="register-password-hint" className="text-xs text-muted-foreground">
+                Use at least 10 characters for your password.
+              </p>
               <FieldError>{error}</FieldError>
             </FieldGroup>
           </CardContent>

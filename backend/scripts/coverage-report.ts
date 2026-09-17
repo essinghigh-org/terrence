@@ -39,11 +39,7 @@ const thresholdArg = process.argv.find((arg) => arg.startsWith("--threshold="));
 const includeDirs = process.argv
   .filter((arg) => arg.startsWith("--include="))
   .map((arg) => arg.slice("--include=".length));
-const threshold = Number(
-  thresholdArg?.slice("--threshold=".length)
-    ?? process.env.COVERAGE_THRESHOLD
-    ?? 60,
-);
+const threshold = Number(thresholdArg?.slice("--threshold=".length) ?? process.env.COVERAGE_THRESHOLD ?? 60);
 
 if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
   console.error(`Invalid threshold: ${threshold}`);
@@ -68,11 +64,12 @@ const run = spawnSync(
 );
 
 if (run.status !== 0) {
-  const detail = run.error !== undefined
-    ? run.error.message
-    : run.signal !== null
-      ? `terminated by signal ${run.signal}`
-      : `exit ${run.status}`;
+  const detail =
+    run.error !== undefined
+      ? run.error.message
+      : run.signal !== null
+        ? `terminated by signal ${run.signal}`
+        : `exit ${run.status}`;
   console.error(`Coverage run failed (${detail}):\n${run.stderr ?? run.stdout}`);
   rmSync(coverageDir, { recursive: true, force: true });
   process.exit(1);
@@ -85,11 +82,11 @@ type LcovRecord = {
   file: string;
   lf: number;
   lh: number;
-}
+};
 
 type CoverageRecord = {
   pct: number;
-} & LcovRecord
+} & LcovRecord;
 
 function parseLcov(text: string): LcovRecord[] {
   const records: LcovRecord[] = [];
@@ -112,10 +109,12 @@ try {
   const lcovPath = join(coverageDir, "lcov.info");
   const raw = parseLcov(readFileSync(lcovPath, "utf8")).filter((record) => record.file.startsWith("src/"));
   records = raw
-    .map((record): CoverageRecord => ({
-      ...record,
-      pct: record.lf === 0 ? 100 : (record.lh / record.lf) * 100,
-    }))
+    .map(
+      (record): CoverageRecord => ({
+        ...record,
+        pct: record.lf === 0 ? 100 : (record.lh / record.lf) * 100,
+      }),
+    )
     .sort((a, b) => a.pct - b.pct || a.file.localeCompare(b.file));
 } finally {
   // The temp coverage dir is removed on every exit path, including a
@@ -174,7 +173,7 @@ type ReportShape = {
   belowThreshold: { file: string; pct: number; lf: number; lh: number }[];
   uncovered: string[];
   rollups: { dir: string; pct: number; lf: number; lh: number }[];
-}
+};
 
 const totalLf = records.reduce((sum, record) => sum + record.lf, 0);
 const totalLh = records.reduce((sum, record) => sum + record.lh, 0);
@@ -196,7 +195,7 @@ const report: ReportShape = {
   rollups: [...rollups.entries()]
     .map(([dir, { lf, lh }]) => ({
       dir,
-      pct: lf === 0 ? 100 : Math.round(((lh / lf) * 100) * 10) / 10,
+      pct: lf === 0 ? 100 : Math.round((lh / lf) * 100 * 10) / 10,
       lf,
       lh,
     }))
@@ -206,8 +205,12 @@ const report: ReportShape = {
 if (jsonOutput) {
   console.log(JSON.stringify(report, null, 2));
 } else {
-  console.log(`Line coverage: ${report.lineCoveragePct.toFixed(1)}% (${report.coveredLines}/${report.totalLines}) across ${report.totalFiles} imported files`);
-  console.log(`Threshold: ${threshold}% — ${report.belowThreshold.length} file(s) below, ${uncoveredTracked.length} tracked file(s) never imported by any test\n`);
+  console.log(
+    `Line coverage: ${report.lineCoveragePct.toFixed(1)}% (${report.coveredLines}/${report.totalLines}) across ${report.totalFiles} imported files`,
+  );
+  console.log(
+    `Threshold: ${threshold}% — ${report.belowThreshold.length} file(s) below, ${uncoveredTracked.length} tracked file(s) never imported by any test\n`,
+  );
   console.log("Per-directory rollups (worst first):");
   for (const rollup of report.rollups) {
     console.log(`  ${rollup.dir.padEnd(14)} ${rollup.pct.toFixed(1).padStart(6)}%  (${rollup.lh}/${rollup.lf})`);

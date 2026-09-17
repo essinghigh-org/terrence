@@ -2,7 +2,13 @@ import { chmod, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import { decodeStatePayload, decryptStatePayload, encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload } from "./validation";
+import {
+  decodeStatePayload,
+  decryptStatePayload,
+  encryptStatePayload,
+  isClientEncryptedState,
+  parseTerraformStatePayload,
+} from "./validation";
 import { log } from "./log";
 
 // ---------------------------------------------------------------------------
@@ -123,7 +129,8 @@ function evidenceForPayload(payload: string, capturedAt: string): RecoveryCaptur
     capturedAt,
     digest: createHash("sha256").update(payload).digest("hex"),
     size: Buffer.byteLength(payload),
-    serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : null,
+    serial:
+      parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? (parsed["serial"] as number) : null,
     lineage: boundedStateString(parsed?.["lineage"]),
     representation: evidenceRepresentation(payload),
     status: "captured",
@@ -131,25 +138,32 @@ function evidenceForPayload(payload: string, capturedAt: string): RecoveryCaptur
 }
 
 function validEvidenceShape(record: Readonly<Record<string, unknown>>): boolean {
-  return record["version"] === RECOVERY_EVIDENCE_VERSION
-    && typeof record["capturedAt"] === "string"
-    && /^\d{4}-\d{2}-\d{2}T/.test(record["capturedAt"])
-    && typeof record["digest"] === "string"
-    && /^[a-f0-9]{64}$/.test(record["digest"])
-    && Number.isSafeInteger(record["size"])
-    && (record["size"] as number) >= 0
-    && ["terraform-v4", "opentofu-encrypted", "invalid"].includes(String(record["representation"]))
-    && ["captured", "promoted"].includes(String(record["status"]))
-    && (record["serial"] === null || Number.isSafeInteger(record["serial"]))
-    && (record["lineage"] === null || boundedStateString(record["lineage"]) !== null);
+  return (
+    record["version"] === RECOVERY_EVIDENCE_VERSION &&
+    typeof record["capturedAt"] === "string" &&
+    /^\d{4}-\d{2}-\d{2}T/.test(record["capturedAt"]) &&
+    typeof record["digest"] === "string" &&
+    /^[a-f0-9]{64}$/.test(record["digest"]) &&
+    Number.isSafeInteger(record["size"]) &&
+    (record["size"] as number) >= 0 &&
+    ["terraform-v4", "opentofu-encrypted", "invalid"].includes(String(record["representation"])) &&
+    ["captured", "promoted"].includes(String(record["status"])) &&
+    (record["serial"] === null || Number.isSafeInteger(record["serial"])) &&
+    (record["lineage"] === null || boundedStateString(record["lineage"]) !== null)
+  );
 }
 
 function validPromotedFields(record: Readonly<Record<string, unknown>>): boolean {
   const promotedStateVersionId = record["promotedStateVersionId"];
   const promotedAt = record["promotedAt"];
   const promotedSerial = record["promotedSerial"];
-  if (record["status"] === "promoted"
-    && (typeof promotedStateVersionId !== "string" || promotedStateVersionId === "" || typeof promotedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(promotedAt))) {
+  if (
+    record["status"] === "promoted" &&
+    (typeof promotedStateVersionId !== "string" ||
+      promotedStateVersionId === "" ||
+      typeof promotedAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T/.test(promotedAt))
+  ) {
     return false;
   }
   return promotedSerial === undefined || Number.isSafeInteger(promotedSerial);
@@ -193,7 +207,11 @@ async function readEvidence(storageDir: string, runId: string): Promise<Recovery
 
 async function missingMarkerInspection(storageDir: string, runId: string): Promise<RecoveryCopyInspection> {
   let stateExists = false;
-  try { stateExists = await Bun.file(recoveryStatePathFor(storageDir, runId)).exists(); } catch { stateExists = false; }
+  try {
+    stateExists = await Bun.file(recoveryStatePathFor(storageDir, runId)).exists();
+  } catch {
+    stateExists = false;
+  }
   return {
     status: stateExists ? "incomplete" : "missing",
     marker: null,
@@ -208,7 +226,11 @@ async function missingMarkerInspection(storageDir: string, runId: string): Promi
 }
 
 async function evidenceFileExists(storageDir: string, runId: string): Promise<boolean> {
-  try { return await Bun.file(recoveryEvidencePathFor(storageDir, runId)).exists(); } catch { return false; }
+  try {
+    return await Bun.file(recoveryEvidencePathFor(storageDir, runId)).exists();
+  } catch {
+    return false;
+  }
 }
 
 function resolveMarkerCapturedAt(markerValue: string, evidence: RecoveryCaptureEvidence | null): string | null {
@@ -220,8 +242,22 @@ function resolveMarkerCapturedAt(markerValue: string, evidence: RecoveryCaptureE
   return null;
 }
 
-function incompleteInspection(marker: string, capturedAt: string | null, evidence: RecoveryCaptureEvidence | null): RecoveryCopyInspection {
-  return { status: "incomplete", marker, capturedAt, evidence, digest: null, size: null, serial: null, lineage: null, terraformVersion: null };
+function incompleteInspection(
+  marker: string,
+  capturedAt: string | null,
+  evidence: RecoveryCaptureEvidence | null,
+): RecoveryCopyInspection {
+  return {
+    status: "incomplete",
+    marker,
+    capturedAt,
+    evidence,
+    digest: null,
+    size: null,
+    serial: null,
+    lineage: null,
+    terraformVersion: null,
+  };
 }
 
 function decodeRecoveryPayload(stored: string): string | null {
@@ -235,18 +271,40 @@ function decodeRecoveryPayload(stored: string): string | null {
   }
 }
 
-function invalidPayloadInspection(marker: string, capturedAt: string | null, evidence: RecoveryCaptureEvidence | null, stored: string): RecoveryCopyInspection {
-  return { status: "invalid", marker, capturedAt, evidence, digest: null, size: Buffer.byteLength(stored), serial: null, lineage: null, terraformVersion: null };
+function invalidPayloadInspection(
+  marker: string,
+  capturedAt: string | null,
+  evidence: RecoveryCaptureEvidence | null,
+  stored: string,
+): RecoveryCopyInspection {
+  return {
+    status: "invalid",
+    marker,
+    capturedAt,
+    evidence,
+    digest: null,
+    size: Buffer.byteLength(stored),
+    serial: null,
+    lineage: null,
+    terraformVersion: null,
+  };
 }
 
-function classifyRecoveryStatus(input: Readonly<{
-  evidence: RecoveryCaptureEvidence | null;
-  evidenceInvalid: boolean;
-  evidenceMatches: boolean;
-  parsed: unknown;
-  payload: string;
-}>): RecoveryCopyInspection["status"] {
-  if (input.evidence?.status === "promoted" && input.evidence.promotedStateVersionId !== undefined && input.evidenceMatches) return "promoted";
+function classifyRecoveryStatus(
+  input: Readonly<{
+    evidence: RecoveryCaptureEvidence | null;
+    evidenceInvalid: boolean;
+    evidenceMatches: boolean;
+    parsed: unknown;
+    payload: string;
+  }>,
+): RecoveryCopyInspection["status"] {
+  if (
+    input.evidence?.status === "promoted" &&
+    input.evidence.promotedStateVersionId !== undefined &&
+    input.evidenceMatches
+  )
+    return "promoted";
   if (input.evidenceInvalid) return "invalid";
   if (input.parsed !== null && input.evidenceMatches) return "candidate";
   if (isClientEncryptedState(input.payload) && input.evidenceMatches) return "opaque";
@@ -257,18 +315,30 @@ function invalidMarker(markerValue: string, capturedAt: string | null): boolean 
   return markerValue === "" || (capturedAt === null && markerValue !== "complete");
 }
 
-function payloadSummary(payload: string): { digest: string; serial: number | null; lineage: string | null; terraformVersion: string | null; parsed: unknown } {
+function payloadSummary(payload: string): {
+  digest: string;
+  serial: number | null;
+  lineage: string | null;
+  terraformVersion: string | null;
+  parsed: unknown;
+} {
   const parsed = parseTerraformStatePayload(payload);
   return {
     digest: createHash("sha256").update(payload).digest("hex"),
-    serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : null,
+    serial:
+      parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? (parsed["serial"] as number) : null,
     lineage: boundedStateString(parsed?.["lineage"]),
     terraformVersion: boundedStateString(parsed?.["terraform_version"]),
     parsed,
   };
 }
 
-function evidenceMatchesDigest(evidence: RecoveryCaptureEvidence | null, evidenceInvalid: boolean, digest: string, size: number): boolean {
+function evidenceMatchesDigest(
+  evidence: RecoveryCaptureEvidence | null,
+  evidenceInvalid: boolean,
+  digest: string,
+  size: number,
+): boolean {
   if (evidenceInvalid) return false;
   return evidence === null || (evidence.digest === digest && evidence.size === size);
 }
@@ -284,7 +354,7 @@ export async function inspectRecoveryCopy(
   const marker = await readOptionalFile(recoveryMarkerPathFor(storageDir, runId));
   if (marker === null) return missingMarkerInspection(storageDir, runId);
   const evidence = await readEvidence(storageDir, runId);
-  const evidenceInvalid = evidence === null && await evidenceFileExists(storageDir, runId);
+  const evidenceInvalid = evidence === null && (await evidenceFileExists(storageDir, runId));
   const markerValue = marker.trim();
   const capturedAt = resolveMarkerCapturedAt(markerValue, evidence);
   if (invalidMarker(markerValue, capturedAt)) {
@@ -296,7 +366,13 @@ export async function inspectRecoveryCopy(
   if (payload === null) return invalidPayloadInspection(marker, capturedAt, evidence, stored);
   const summary = payloadSummary(payload);
   const evidenceMatches = evidenceMatchesDigest(evidence, evidenceInvalid, summary.digest, Buffer.byteLength(payload));
-  const status = classifyRecoveryStatus({ evidence, evidenceInvalid, evidenceMatches, parsed: summary.parsed, payload });
+  const status = classifyRecoveryStatus({
+    evidence,
+    evidenceInvalid,
+    evidenceMatches,
+    parsed: summary.parsed,
+    payload,
+  });
   return {
     status,
     marker,
@@ -355,7 +431,11 @@ export async function markRecoveryPromoted(
   serial: number,
 ): Promise<void> {
   const inspection = await inspectRecoveryCopy(storageDir, runId, true);
-  const evidence = inspection.evidence ?? (inspection.payload === undefined ? null : evidenceForPayload(inspection.payload, inspection.capturedAt ?? new Date().toISOString()));
+  const evidence =
+    inspection.evidence ??
+    (inspection.payload === undefined
+      ? null
+      : evidenceForPayload(inspection.payload, inspection.capturedAt ?? new Date().toISOString()));
   if (evidence === null) throw new Error("Cannot retain recovery evidence without a valid capture manifest");
   const promoted: RecoveryCaptureEvidence = {
     ...evidence,
@@ -364,8 +444,18 @@ export async function markRecoveryPromoted(
     promotedStateVersionId: stateVersionId,
     promotedSerial: serial,
   };
-  await writeFileDurable(recoveryDirFor(storageDir, runId), RECOVERY_EVIDENCE_FILENAME, JSON.stringify(promoted), 0o600);
-  await writeFileDurable(recoveryDirFor(storageDir, runId), RECOVERY_PROMOTED_FILENAME, promoted.promotedAt ?? new Date().toISOString(), 0o600);
+  await writeFileDurable(
+    recoveryDirFor(storageDir, runId),
+    RECOVERY_EVIDENCE_FILENAME,
+    JSON.stringify(promoted),
+    0o600,
+  );
+  await writeFileDurable(
+    recoveryDirFor(storageDir, runId),
+    RECOVERY_PROMOTED_FILENAME,
+    promoted.promotedAt ?? new Date().toISOString(),
+    0o600,
+  );
 }
 
 /** Recursively create `dir` (mode 0700: this module only manages the
@@ -412,12 +502,7 @@ async function mkdirDurable(dir: string): Promise<void> {
  * rename, directory fsync, then mode bits. A crash can leave the staging
  * temp behind (swept at boot) but never a partial published file. Staging
  * temps from a failed attempt are removed before throwing. */
-export async function writeFileDurable(
-  dir: string,
-  name: string,
-  data: string,
-  mode: number,
-): Promise<void> {
+export async function writeFileDurable(dir: string, name: string, data: string, mode: number): Promise<void> {
   await mkdirDurable(dir);
   const staging = stagingPathFor(dir, name);
   try {
@@ -472,7 +557,13 @@ async function readPreviousCapture(storageDir: string, runId: string, markerPath
   };
 }
 
-async function clearSupersededCapture(recoveryDir: string, storageDir: string, runId: string, markerPath: string, previous: PreviousCapture): Promise<void> {
+async function clearSupersededCapture(
+  recoveryDir: string,
+  storageDir: string,
+  runId: string,
+  markerPath: string,
+  previous: PreviousCapture,
+): Promise<void> {
   if (previous.marker !== null) {
     await rm(markerPath, { force: true });
     await fsyncDirectory(recoveryDir);
@@ -500,7 +591,12 @@ async function publishCapture(recoveryDir: string, storageDir: string, runId: st
     throw new Error("recovery copy failed read-back verification");
   }
   const capturedAt = new Date().toISOString();
-  await writeFileDurable(recoveryDir, RECOVERY_EVIDENCE_FILENAME, JSON.stringify(evidenceForPayload(payload, capturedAt)), 0o600);
+  await writeFileDurable(
+    recoveryDir,
+    RECOVERY_EVIDENCE_FILENAME,
+    JSON.stringify(evidenceForPayload(payload, capturedAt)),
+    0o600,
+  );
   await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, capturedAt, 0o600);
 }
 
@@ -569,9 +665,14 @@ export async function captureInterruptedApplyState(
     markerWritten = true;
     return true;
   } catch (error: unknown) {
-    markerWritten = previous.marker !== null && previous.state !== null
-      ? await restorePreviousCapture(recoveryDir, storageDir, runId, { ...previous, marker: previous.marker, state: previous.state })
-      : false;
+    markerWritten =
+      previous.marker !== null && previous.state !== null
+        ? await restorePreviousCapture(recoveryDir, storageDir, runId, {
+            ...previous,
+            marker: previous.marker,
+            state: previous.state,
+          })
+        : false;
     // Never leave a markerless partial behind: without the marker the copy
     // is unreadable by design, so an incomplete capture is just garbage.
     // (When the replacement itself was published but unverifiable, the

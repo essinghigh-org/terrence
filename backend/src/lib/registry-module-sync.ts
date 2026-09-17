@@ -18,10 +18,7 @@ import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
 import { ingestModuleArchive } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
 import { isModuleVersion, sortModuleVersionsDescending } from "./registry-version";
-import {
-  currentModuleVersions,
-  RegistrySyncLease,
-} from "./registry-sync-lease";
+import { currentModuleVersions, RegistrySyncLease } from "./registry-sync-lease";
 
 const API_TIMEOUT_MS = 15_000;
 const MAX_MODULE_DOWNLOAD_BYTES = 1 * 1024 * 1024;
@@ -29,18 +26,17 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MODULE_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "modules");
 
 type RegistryModule = Readonly<typeof registryModules.$inferSelect>;
-type RegistryModuleSource = Pick<RegistryModule, "orgId" | "vcsConnectionType" | "vcsConnectionId" | "repositoryIdentifier">;
+type RegistryModuleSource = Pick<
+  RegistryModule,
+  "orgId" | "vcsConnectionType" | "vcsConnectionId" | "repositoryIdentifier"
+>;
 type Credentials = Readonly<{ apiUrl: string; token: string }>;
 export type RegistryModuleCandidate = Readonly<{ version: string; ref: string; sha: string; branch: string | null }>;
 export const REGISTRY_VERSION_IMPORT_BATCH_SIZE = 100;
 
-
 async function githubAppCredentials(mod: RegistryModuleSource, connectionId: string): Promise<Credentials> {
   const installation = await db.query.githubAppInstallations.findFirst({
-    where: and(
-      eq(githubAppInstallations.id, connectionId),
-      eq(githubAppInstallations.orgId, mod.orgId),
-    ),
+    where: and(eq(githubAppInstallations.id, connectionId), eq(githubAppInstallations.orgId, mod.orgId)),
   });
   if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
   const token = await getGitHubAppAccessToken(installation.installationId);
@@ -120,9 +116,9 @@ export function discoverModuleVersions(
     // A repository should not publish the same version twice. If it does,
     // choose a stable ref/SHA instead of depending on API response order.
     if (
-      existing === undefined
-      || candidate.ref.localeCompare(existing.ref) < 0
-      || (candidate.ref === existing.ref && candidate.sha.localeCompare(existing.sha) < 0)
+      existing === undefined ||
+      candidate.ref.localeCompare(existing.ref) < 0 ||
+      (candidate.ref === existing.ref && candidate.sha.localeCompare(existing.sha) < 0)
     ) {
       candidates.set(version, candidate);
     }
@@ -156,7 +152,8 @@ async function branchCandidateFor(
     credentials,
     `/repos/${encodedRepository}/branches/${encodeURIComponent(mod.branch)}`,
   );
-  if (typeof branch.commit?.sha !== "string" || branch.commit.sha === "") throw new Error("The selected branch has no resolvable commit");
+  if (typeof branch.commit?.sha !== "string" || branch.commit.sha === "")
+    throw new Error("The selected branch has no resolvable commit");
   return [{ version: branchVersion, ref: mod.branch, sha: branch.commit.sha, branch: mod.branch }];
 }
 
@@ -168,7 +165,8 @@ async function candidatesFor(
   const repository = mod.repositoryIdentifier ?? "";
   if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
-  if (mod.publishingWorkflow === "branch") return branchCandidateFor(mod, credentials, encodedRepository, branchVersion);
+  if (mod.publishingWorkflow === "branch")
+    return branchCandidateFor(mod, credentials, encodedRepository, branchVersion);
   const tags: { name: string; sha: string }[] = [];
   for (let page = 1; page <= 10; page += 1) {
     const response = await githubJson<readonly Readonly<{ name?: unknown; commit?: { sha?: unknown } }>[]>(
@@ -176,7 +174,8 @@ async function candidatesFor(
       `/repos/${encodedRepository}/tags?per_page=100&page=${page}`,
     );
     for (const tag of response) {
-      if (typeof tag.name === "string" && typeof tag.commit?.sha === "string") tags.push({ name: tag.name, sha: tag.commit.sha });
+      if (typeof tag.name === "string" && typeof tag.commit?.sha === "string")
+        tags.push({ name: tag.name, sha: tag.commit.sha });
     }
     if (response.length < 100) break;
   }
@@ -191,18 +190,23 @@ async function withDownloadedArchive<T>(
 ): Promise<T> {
   const repository = mod.repositoryIdentifier ?? "";
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
-  const response = await fetchVcsUrlStream(`${credentials.apiUrl}/repos/${encodedRepository}/tarball/${encodeURIComponent(sha)}`, {
-    headers: {
-      Authorization: `Bearer ${credentials.token}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": "Terrence",
+  const response = await fetchVcsUrlStream(
+    `${credentials.apiUrl}/repos/${encodedRepository}/tarball/${encodeURIComponent(sha)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${credentials.token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Terrence",
+      },
+      timeoutMs: API_TIMEOUT_MS,
+      maxResponseBytes: MAX_MODULE_DOWNLOAD_BYTES,
     },
-    timeoutMs: API_TIMEOUT_MS,
-    maxResponseBytes: MAX_MODULE_DOWNLOAD_BYTES,
-  });
-  if (!response.ok || response.body === null) throw new Error(`The module source download failed with HTTP ${response.status}`);
+  );
+  if (!response.ok || response.body === null)
+    throw new Error(`The module source download failed with HTTP ${response.status}`);
   const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_DOWNLOAD_BYTES) throw new Error("The module source download is too large");
+  if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_DOWNLOAD_BYTES)
+    throw new Error("The module source download is too large");
 
   const staging = await mkdtemp(join(tmpdir(), "terrence-registry-download-"));
   const path = join(staging, "source.tar.gz");
@@ -237,7 +241,9 @@ async function withDownloadedArchive<T>(
       // already closed, so never assume the result is a thenable here.
       const closeResult: unknown = file.close();
       if (closeResult !== undefined && typeof (closeResult as { catch?: unknown }).catch === "function") {
-        await (closeResult as Promise<void>).catch((): void => { return; });
+        await (closeResult as Promise<void>).catch((): void => {
+          return;
+        });
       }
     }
     await rm(staging, { recursive: true, force: true });
@@ -253,12 +259,17 @@ async function synchronizeRegistryModuleOnce(
   shouldContinue: () => boolean = (): boolean => true,
 ): Promise<SyncResult> {
   const attemptedAt = Date.now();
-  await db.update(registryModules).set({ lastSyncAttemptAt: attemptedAt, updatedAt: attemptedAt }).where(eq(registryModules.id, mod.id));
+  await db
+    .update(registryModules)
+    .set({ lastSyncAttemptAt: attemptedAt, updatedAt: attemptedAt })
+    .where(eq(registryModules.id, mod.id));
   const createdArchives: string[] = [];
   try {
     const credentials = await credentialsFor(mod);
     const candidates = await candidatesFor(mod, credentials, branchVersion);
-    const existing = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
+    const existing = await db.query.registryModuleVersions.findMany({
+      where: eq(registryModuleVersions.moduleId, mod.id),
+    });
     const existingVersions = new Set(existing.map((version): string => version.version));
     const outstanding = selectRegistryModuleVersionBatch(candidates, existingVersions, Number.MAX_SAFE_INTEGER);
     const pending = outstanding.slice(0, REGISTRY_VERSION_IMPORT_BATCH_SIZE);
@@ -271,8 +282,13 @@ async function synchronizeRegistryModuleOnce(
       if (!shouldContinue()) throw new Error("Registry module sync lease lost; another replica took over ingestion");
       const id = newResourceId("modver");
       const archivePath = join(MODULE_STORAGE_DIR, `${id}.tar.gz`);
-      const metadata = await withDownloadedArchive(mod, credentials, candidate.sha, async (downloaded): Promise<RegistryModuleMetadata> =>
-        ingestModuleArchive(downloaded, archivePath, mod.sourceDirectory, inspectRegistryModule));
+      const metadata = await withDownloadedArchive(
+        mod,
+        credentials,
+        candidate.sha,
+        async (downloaded): Promise<RegistryModuleMetadata> =>
+          ingestModuleArchive(downloaded, archivePath, mod.sourceDirectory, inspectRegistryModule),
+      );
       createdArchives.push(archivePath);
       prepared.push({
         id,
@@ -295,25 +311,42 @@ async function synchronizeRegistryModuleOnce(
     await db.transaction(async (tx): Promise<void> => {
       if (prepared.length > 0) await tx.insert(registryModuleVersions).values(prepared);
       const description = prepared.at(-1)?.metadata;
-      await tx.update(registryModules).set({
-        status: prepared.length > 0 || existing.some((version): boolean => version.status === "ok") ? "setup_complete" : "pending",
-        description: typeof description?.["description"] === "string" ? description["description"] : mod.description,
-        lastSuccessfulSyncAt: completedAt,
-        lastSyncAttemptAt: attemptedAt,
-        lastSyncError: null,
-        updatedAt: completedAt,
-      }).where(eq(registryModules.id, mod.id));
+      await tx
+        .update(registryModules)
+        .set({
+          status:
+            prepared.length > 0 || existing.some((version): boolean => version.status === "ok")
+              ? "setup_complete"
+              : "pending",
+          description: typeof description?.["description"] === "string" ? description["description"] : mod.description,
+          lastSuccessfulSyncAt: completedAt,
+          lastSyncAttemptAt: attemptedAt,
+          lastSyncError: null,
+          updatedAt: completedAt,
+        })
+        .where(eq(registryModules.id, mod.id));
     });
-    return { imported: prepared.length, versions: prepared.map((version): string => version.version), pendingRemaining };
+    return {
+      imported: prepared.length,
+      versions: prepared.map((version): string => version.version),
+      pendingRemaining,
+    };
   } catch (error: unknown) {
-    await Promise.allSettled(createdArchives.map(async (path): Promise<void> => { await rm(path, { force: true }); }));
+    await Promise.allSettled(
+      createdArchives.map(async (path): Promise<void> => {
+        await rm(path, { force: true });
+      }),
+    );
     const message = error instanceof Error ? error.message : "Registry module synchronization failed";
-    await db.update(registryModules).set({
-      status: "errored",
-      lastSyncAttemptAt: attemptedAt,
-      lastSyncError: message.slice(0, 2_000),
-      updatedAt: Date.now(),
-    }).where(eq(registryModules.id, mod.id));
+    await db
+      .update(registryModules)
+      .set({
+        status: "errored",
+        lastSyncAttemptAt: attemptedAt,
+        lastSyncError: message.slice(0, 2_000),
+        updatedAt: Date.now(),
+      })
+      .where(eq(registryModules.id, mod.id));
     throw new Error(message);
   }
 }
@@ -330,10 +363,7 @@ function scheduleRemainingRegistryModuleSync(mod: RegistryModule): void {
   }, 0);
 }
 
-export async function synchronizeRegistryModule(
-  mod: RegistryModule,
-  branchVersion?: string,
-): Promise<SyncResult> {
+export async function synchronizeRegistryModule(mod: RegistryModule, branchVersion?: string): Promise<SyncResult> {
   const key = `${mod.id}:${branchVersion ?? "tags"}`;
   // In-process coalescing is preserved: concurrent callers in this replica
   // share one in-flight Promise, so the lease is claimed at most once per

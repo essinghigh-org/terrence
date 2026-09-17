@@ -3,7 +3,22 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { eq } from "drizzle-orm";
-import { users, organizations, organizationMemberships, teams, projects, workspaces, runs, logs, runComments, runTasks, runTaskResults, workspaceRunTasks, apiTokens, auditLogs } from "../../src/db/schema";
+import {
+  users,
+  organizations,
+  organizationMemberships,
+  teams,
+  projects,
+  workspaces,
+  runs,
+  logs,
+  runComments,
+  runTasks,
+  runTaskResults,
+  workspaceRunTasks,
+  apiTokens,
+  auditLogs,
+} from "../../src/db/schema";
 import { archiveRunLogs, deleteRunLogArchive } from "../../src/lib/run-logs";
 import { writePlanJsonArtifact } from "../../src/lib/plan-json";
 describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", () => {
@@ -106,7 +121,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
         body: JSON.stringify({
           comment: "Approved by SRE on call",
         }),
-      })
+      }),
     );
     expect(applyRes.status).toBe(202);
 
@@ -114,7 +129,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     const listRes = await app.handle(
       new Request(`http://localhost/api/v2/runs/${runId}/comments`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(listRes.status).toBe(200);
     const listBody = await listRes.json();
@@ -145,7 +160,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     const planRes = await app.handle(
       new Request(`http://localhost/api/v2/plans/${runId}/json-output`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(planRes.status).toBe(200);
     const planBody = await planRes.json();
@@ -158,10 +173,46 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
 
   it("paginates merged run events, comments, and logs", async () => {
     await db.insert(auditLogs).values([
-      { id: "event-1", orgId, userId, action: "queued", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 1_000 },
-      { id: "event-2", orgId, userId, action: "planned", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 3_000 },
-      { id: "event-3", orgId, userId, action: "applied", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 5_000 },
-      { id: "event-4", orgId, userId, action: "completed", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 7_000 },
+      {
+        id: "event-1",
+        orgId,
+        userId,
+        action: "queued",
+        resourceType: "runs",
+        resourceId: runId,
+        details: { source: "test" },
+        createdAt: 1_000,
+      },
+      {
+        id: "event-2",
+        orgId,
+        userId,
+        action: "planned",
+        resourceType: "runs",
+        resourceId: runId,
+        details: { source: "test" },
+        createdAt: 3_000,
+      },
+      {
+        id: "event-3",
+        orgId,
+        userId,
+        action: "applied",
+        resourceType: "runs",
+        resourceId: runId,
+        details: { source: "test" },
+        createdAt: 5_000,
+      },
+      {
+        id: "event-4",
+        orgId,
+        userId,
+        action: "completed",
+        resourceType: "runs",
+        resourceId: runId,
+        details: { source: "test" },
+        createdAt: 7_000,
+      },
     ]);
     await db.insert(runComments).values([
       { id: "comment-1", runId, userId, body: "first", createdAt: 2_000 },
@@ -177,9 +228,12 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       { id: "log-6", runId, phase: "apply", outputText: "six", createdAt: 6_000 },
     ]);
 
-    const get = (path: string): Promise<Response> => app.handle(new Request(`http://localhost${path}`, {
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    const get = (path: string): Promise<Response> =>
+      app.handle(
+        new Request(`http://localhost${path}`, {
+          headers: { Authorization: `Bearer ${userToken}` },
+        }),
+      );
 
     const eventsPageOne = await get(`/api/v2/runs/${runId}/run-events?page[number]=1&page[size]=3`);
     expect(eventsPageOne.status).toBe(200);
@@ -244,31 +298,39 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       new Request(`http://localhost/api/v2/teams/${teamId}/authentication-token`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(postTeamTok.status).toBe(201);
     const teamTokBody = await postTeamTok.json();
     expect(teamTokBody.data.attributes.token).toContain("team-tok-");
-    expect((await app.handle(
-      new Request(`http://localhost/api/v2/organizations/${orgName}/authentication-token`, {
-        headers: { Authorization: `Bearer ${userToken}` },
-      })
-    )).status).toBe(404);
+    expect(
+      (
+        await app.handle(
+          new Request(`http://localhost/api/v2/organizations/${orgName}/authentication-token`, {
+            headers: { Authorization: `Bearer ${userToken}` },
+          }),
+        )
+      ).status,
+    ).toBe(404);
 
     const postOrgTok = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}/authentication-token`, {
         method: "POST",
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(postOrgTok.status).toBe(201);
     const orgTokBody = await postOrgTok.json();
     expect(orgTokBody.data.attributes.token).toContain("org-");
-    expect((await app.handle(
-      new Request(`http://localhost/api/v2/teams/${teamId}/authentication-token`, {
-        headers: { Authorization: `Bearer ${userToken}` },
-      })
-    )).status).toBe(200);
+    expect(
+      (
+        await app.handle(
+          new Request(`http://localhost/api/v2/teams/${teamId}/authentication-token`, {
+            headers: { Authorization: `Bearer ${userToken}` },
+          }),
+        )
+      ).status,
+    ).toBe(200);
   });
 
   it("manages Run Tasks and Workspace Task Bindings", async () => {
@@ -288,7 +350,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
             },
           },
         }),
-      })
+      }),
     );
     expect(createTask.status).toBe(201);
     const taskBody = await createTask.json();
@@ -368,7 +430,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
             },
           },
         }),
-      })
+      }),
     );
     expect(bindTask.status).toBe(201);
     const reattachTask = await app.handle(
@@ -390,7 +452,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
             },
           },
         }),
-      })
+      }),
     );
     expect(reattachTask.status).toBe(409);
     expect((await reattachTask.json()).errors[0]).toMatchObject({ status: "409", title: "Conflict" });
@@ -434,7 +496,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     const entRes = await app.handle(
       new Request("http://localhost/api/v2/entitlements", {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(entRes.status).toBe(200);
     const entBody = await entRes.json();
@@ -443,7 +505,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     const auditRes = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}/audit-logs`, {
         headers: { Authorization: `Bearer ${userToken}` },
-      })
+      }),
     );
     expect(auditRes.status).toBe(200);
   });
@@ -459,7 +521,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
         body: JSON.stringify({
           data: { type: "agent-pools", attributes: { name: "homelab-k8s-agents" } },
         }),
-      })
+      }),
     );
     expect(createPool.status).toBe(201);
 
@@ -468,7 +530,7 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ref: "refs/heads/main" }),
-      })
+      }),
     );
     expect(ghWebhook.status).toBe(401); // fail closed without configured secret
   });

@@ -63,17 +63,25 @@ export const eventsRoutes = new Elysia({ name: "events" })
       });
     }
     if (activeConnections >= MAX_CONNECTIONS) {
-      return new Response(JSON.stringify({ errors: [{ status: "503", title: "Service Unavailable", detail: "Too many event streams" }] }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ errors: [{ status: "503", title: "Service Unavailable", detail: "Too many event streams" }] }),
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
     const userStreams = activeConnectionsByUser.get(user.id) ?? 0;
     if (userStreams >= MAX_CONNECTIONS_PER_USER) {
-      return new Response(JSON.stringify({ errors: [{ status: "503", title: "Service Unavailable", detail: "Too many event streams for this user" }] }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          errors: [{ status: "503", title: "Service Unavailable", detail: "Too many event streams for this user" }],
+        }),
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
     // Reserve the slot BEFORE the async membership lookup so concurrent
     // connects cannot both pass the cap check; the reservation is released
@@ -180,26 +188,30 @@ export const eventsRoutes = new Elysia({ name: "events" })
         // bus forever because cleanup can never run again.
         if (cleanedUp) return;
         for (const topic of RELAYED_TOPICS) {
-          disposers.push(subscribe(topic, (payload: Readonly<Record<string, unknown>>): void => {
-            const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
-            if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
-            const eventWorkspaceId = typeof payload["workspace-id"] === "string" ? payload["workspace-id"] : "";
-            if (eventOrgId === "" || eventWorkspaceId === "") return;
-            if (readableWorkspaceIds !== null) {
-              const ids = readableWorkspaceIds.get(eventOrgId);
-              if (ids === undefined || (ids !== null && !ids.has(eventWorkspaceId))) return;
-            }
-            enqueue(topic, payload);
-          }));
+          disposers.push(
+            subscribe(topic, (payload: Readonly<Record<string, unknown>>): void => {
+              const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
+              if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
+              const eventWorkspaceId = typeof payload["workspace-id"] === "string" ? payload["workspace-id"] : "";
+              if (eventOrgId === "" || eventWorkspaceId === "") return;
+              if (readableWorkspaceIds !== null) {
+                const ids = readableWorkspaceIds.get(eventOrgId);
+                if (ids === undefined || (ids !== null && !ids.has(eventWorkspaceId))) return;
+              }
+              enqueue(topic, payload);
+            }),
+          );
         }
         // Control topic, never relayed: membership revocation or user
         // suspension closes this user's stream so the browser reconnects and
         // re-resolves its permission snapshot immediately instead of after
         // the one-hour reconnect cap (scratch review: authorization lag).
-        disposers.push(subscribe("authz.changed", (payload: Readonly<Record<string, unknown>>): void => {
-          const targetUserId = typeof payload["user-id"] === "string" ? payload["user-id"] : "";
-          if (targetUserId !== "" && targetUserId === user.id) cleanup();
-        }));
+        disposers.push(
+          subscribe("authz.changed", (payload: Readonly<Record<string, unknown>>): void => {
+            const targetUserId = typeof payload["user-id"] === "string" ? payload["user-id"] : "";
+            if (targetUserId !== "" && targetUserId === user.id) cleanup();
+          }),
+        );
 
         heartbeat = setInterval((): void => {
           enqueue("ping", { at: new Date().toISOString() });

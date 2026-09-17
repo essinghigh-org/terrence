@@ -2,7 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, configurationVersions, organizationMemberships, organizations, runs, users, workspaces,
+  apiTokens,
+  configurationVersions,
+  organizationMemberships,
+  organizations,
+  runs,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
@@ -20,30 +26,39 @@ describe("run creation requires a configuration (#574)", () => {
   const seededWsId = `ws-nocv-seeded-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, contentType = "application/vnd.api+json") =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": contentType }),
-      },
-      ...(body === undefined ? {} : {
-        body: body instanceof Uint8Array ? body as BodyInit : JSON.stringify(body),
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": contentType }),
+        },
+        ...(body === undefined
+          ? {}
+          : {
+              body: body instanceof Uint8Array ? (body as BodyInit) : JSON.stringify(body),
+            }),
       }),
-    }));
+    );
 
-  const createRun = (workspaceId: string) => request("/api/v2/runs", "POST", {
-    data: {
-      type: "runs",
-      attributes: { message: "configuration probe" },
-      relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
-    },
-  });
+  const createRun = (workspaceId: string) =>
+    request("/api/v2/runs", "POST", {
+      data: {
+        type: "runs",
+        attributes: { message: "configuration probe" },
+        relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+      },
+    });
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(workspaces).values([
@@ -55,29 +70,55 @@ describe("run creation requires a configuration (#574)", () => {
       data: { type: "configuration-versions", attributes: { auto_queue_runs: false, speculative: false } },
     });
     expect(cvRes.status).toBe(201);
-    const cvId = (await cvRes.json() as { data: { id: string } }).data.id;
+    const cvId = ((await cvRes.json()) as { data: { id: string } }).data.id;
     const uploadRes = await request(
-      `/api/v2/configuration-versions/${cvId}/upload`, "PUT",
-      validTarGzip("nocv"), "application/octet-stream",
+      `/api/v2/configuration-versions/${cvId}/upload`,
+      "PUT",
+      validTarGzip("nocv"),
+      "application/octet-stream",
     );
     expect(uploadRes.status).toBe(200);
   });
 
   afterAll(async () => {
-    await db.delete(runs).where(eq(runs.workspaceId, emptyWsId)).catch((): void => undefined);
-    await db.delete(runs).where(eq(runs.workspaceId, seededWsId)).catch((): void => undefined);
-    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, seededWsId)).catch((): void => undefined);
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(eq(runs.workspaceId, emptyWsId))
+      .catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(eq(runs.workspaceId, seededWsId))
+      .catch((): void => undefined);
+    await db
+      .delete(configurationVersions)
+      .where(eq(configurationVersions.workspaceId, seededWsId))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(eq(workspaces.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.id, `tok-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizationMemberships)
+      .where(eq(organizationMemberships.id, `mem-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .catch((): void => undefined);
   });
 
   it("rejects runs on workspaces with no configuration version", async () => {
     const res = await createRun(emptyWsId);
     expect(res.status).toBe(422);
-    const body = await res.json() as { errors?: { detail?: string }[] };
+    const body = (await res.json()) as { errors?: { detail?: string }[] };
     expect(body.errors?.[0]?.detail).toContain("Upload a configuration version or connect a VCS repository");
   });
 

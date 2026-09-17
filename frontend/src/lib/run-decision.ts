@@ -47,9 +47,7 @@ export type RunDecision = Readonly<{
 function lockedReason(attributes: RunAttributes): string | null {
   if (attributes["workspace-locked"] !== true) return null;
   const reason = attributes["workspace-locked-reason"];
-  return isString(reason) && reason !== ""
-    ? `The workspace is locked: ${reason}`
-    : "The workspace is locked.";
+  return isString(reason) && reason !== "" ? `The workspace is locked: ${reason}` : "The workspace is locked.";
 }
 
 /**
@@ -58,10 +56,7 @@ function lockedReason(attributes: RunAttributes): string | null {
  * problem needs a different person, a lock needs a different step, and a stale
  * page needs a reload — telling the user all three at once helps nobody.
  */
-function applyBlocker(
-  attributes: RunAttributes,
-  fresh: boolean,
-): string | null {
+function applyBlocker(attributes: RunAttributes, fresh: boolean): string | null {
   if (!fresh) return "This page could not confirm the run is current. Reload before applying.";
   if (attributes.permissions?.["can-apply"] !== true) {
     return "You do not have permission to apply in this workspace.";
@@ -131,18 +126,20 @@ const SETTLED_HEADLINES: Readonly<Record<string, string>> = {
 };
 
 /** A discard offer, when the run is in a state that permits one. */
-function discardOffer(
-  attributes: RunAttributes,
-  fresh: boolean,
-  label: string,
-): readonly RunActionOffer[] {
+function discardOffer(attributes: RunAttributes, fresh: boolean, label: string): readonly RunActionOffer[] {
   if (attributes.actions?.["is-discardable"] !== true) return [];
-  return [offer(
-    "discard",
-    label,
-    "secondary",
-    permissionBlocker(fresh, attributes.permissions?.["can-discard"] === true, "You do not have permission to discard runs in this workspace."),
-  )];
+  return [
+    offer(
+      "discard",
+      label,
+      "secondary",
+      permissionBlocker(
+        fresh,
+        attributes.permissions?.["can-discard"] === true,
+        "You do not have permission to discard runs in this workspace.",
+      ),
+    ),
+  ];
 }
 
 /** The stop-it-now offers, available while a run is still working. */
@@ -150,20 +147,32 @@ function stopOffers(attributes: RunAttributes, fresh: boolean): readonly RunActi
   const { actions, permissions } = attributes;
   return [
     ...(actions?.["is-cancelable"] === true
-      ? [offer(
-          "cancel",
-          "Cancel run",
-          "secondary",
-          permissionBlocker(fresh, permissions?.["can-cancel"] === true, "You do not have permission to cancel runs in this workspace."),
-        )]
+      ? [
+          offer(
+            "cancel",
+            "Cancel run",
+            "secondary",
+            permissionBlocker(
+              fresh,
+              permissions?.["can-cancel"] === true,
+              "You do not have permission to cancel runs in this workspace.",
+            ),
+          ),
+        ]
       : []),
     ...(actions?.["is-force-cancelable"] === true
-      ? [offer(
-          "force-cancel",
-          "Force cancel",
-          "danger",
-          permissionBlocker(fresh, permissions?.["can-force-cancel"] === true, "Force cancel requires workspace admin permission."),
-        )]
+      ? [
+          offer(
+            "force-cancel",
+            "Force cancel",
+            "danger",
+            permissionBlocker(
+              fresh,
+              permissions?.["can-force-cancel"] === true,
+              "Force cancel requires workspace admin permission.",
+            ),
+          ),
+        ]
       : []),
   ];
 }
@@ -181,14 +190,14 @@ function inFlightDecision(attributes: RunAttributes, fresh: boolean, awaitingAct
   // for the run to update" with force cancel hidden, which is precisely the
   // situation force cancel exists for. The action just sent is excluded so
   // it cannot be re-sent.
-  const escapes = stopOffers(attributes, fresh)
-    .filter((item: RunActionOffer): boolean => item.kind !== awaitingAction);
+  const escapes = stopOffers(attributes, fresh).filter((item: RunActionOffer): boolean => item.kind !== awaitingAction);
   return {
     kind: "waiting",
     headline: inFlightHeadline(awaitingAction),
-    detail: escapes.length > 0 && awaitingAction === "cancel"
-      ? "If it stays here, the process is not responding and can be force canceled."
-      : "",
+    detail:
+      escapes.length > 0 && awaitingAction === "cancel"
+        ? "If it stays here, the process is not responding and can be force canceled."
+        : "",
     offers: escapes,
     showProgress: true,
   };
@@ -207,9 +216,7 @@ function terminalDecision(status: string): RunDecision {
 function planOnlyDecision(speculative: boolean): RunDecision {
   return {
     kind: "settled",
-    headline: speculative
-      ? "Speculative plan — this run never applies"
-      : "Plan-only run — this run never applies",
+    headline: speculative ? "Speculative plan — this run never applies" : "Plan-only run — this run never applies",
     detail: "It exists to show what would change. Start a normal run to apply.",
     offers: [],
     showProgress: false,
@@ -227,9 +234,9 @@ function policyDecision(attributes: RunAttributes, fresh: boolean): RunDecision 
     kind: "decide",
     headline: "A policy check needs an override before this run can apply",
     detail: canOverride
-      ? (canJustify
+      ? canJustify
         ? "Overrides are recorded with your comment. Explain why the finding is acceptable."
-        : "Overrides are recorded with a justification comment, which needs comment permission on this run.")
+        : "Overrides are recorded with a justification comment, which needs comment permission on this run."
       : "Someone with override permission has to accept the finding, or the run can be discarded.",
     offers: [
       offer(
@@ -238,7 +245,9 @@ function policyDecision(attributes: RunAttributes, fresh: boolean): RunDecision 
         "primary",
         !canOverride
           ? permissionBlocker(fresh, false, "You do not have permission to override policy checks.")
-          : (!canJustify ? "Overriding requires a written justification, and you cannot comment on this run." : null),
+          : !canJustify
+            ? "Overriding requires a written justification, and you cannot comment on this run."
+            : null,
       ),
       ...discardOffer(attributes, fresh, "Discard run"),
     ],
@@ -340,12 +349,17 @@ export function resolveRunDecision(
  * accessible name a click apart, and neither the user nor a screen reader
  * could tell from the label alone which step they were on.
  */
-export const ACTION_CONFIRMATIONS: Readonly<Record<RunActionKind, Readonly<{
-  title: string;
-  body: string;
-  confirmLabel: string;
-  successTitle: string;
-}>>> = {
+export const ACTION_CONFIRMATIONS: Readonly<
+  Record<
+    RunActionKind,
+    Readonly<{
+      title: string;
+      body: string;
+      confirmLabel: string;
+      successTitle: string;
+    }>
+  >
+> = {
   apply: {
     title: "Apply these changes?",
     body: "Terraform will make the planned changes to your real infrastructure. This cannot be undone automatically.",

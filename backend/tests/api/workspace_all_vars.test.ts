@@ -29,10 +29,12 @@ describe("workspace all-vars (audit finding 1)", () => {
   const foreignWsId = `foreign-${suffix}`;
 
   const request = (path: string, auth?: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method: "GET",
-      headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method: "GET",
+        headers: auth === undefined ? {} : { Authorization: "Bearer " + auth },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -59,7 +61,15 @@ describe("workspace all-vars (audit finding 1)", () => {
     await db.insert(workspaceVariables).values([
       { id: `wsv-shared-${suffix}`, workspaceId: wsId, key: "SHARED", value: "from-workspace", category: "terraform" },
       { id: `wsv-wsonly-${suffix}`, workspaceId: wsId, key: "WS_ONLY", value: "1", category: "terraform" },
-      { id: `wsv-secret-${suffix}`, workspaceId: wsId, key: "SECRET", value: "", valueEncrypted: "enc:v1:fake", sensitive: true, category: "terraform" },
+      {
+        id: `wsv-secret-${suffix}`,
+        workspaceId: wsId,
+        key: "SECRET",
+        value: "",
+        valueEncrypted: "enc:v1:fake",
+        sensitive: true,
+        category: "terraform",
+      },
       { id: `wsv-k-${suffix}`, workspaceId: wsId, key: "K", value: "from-workspace", category: "terraform" },
     ]);
     const setA = `set-a-${suffix}`;
@@ -85,9 +95,27 @@ describe("workspace all-vars (audit finding 1)", () => {
       { id: `vsv-setonly-${suffix}`, variableSetId: setA, key: "SET_ONLY", value: "2", category: "terraform" },
       { id: `vsv-k-${suffix}`, variableSetId: setA, key: "K", value: "from-set-env", category: "env" },
       { id: `vsv-global-${suffix}`, variableSetId: setGlobal, key: "GLOBAL_ONLY", value: "3", category: "terraform" },
-      { id: `vsv-globalshared-${suffix}`, variableSetId: setGlobal, key: "SHARED", value: "from-global", category: "terraform" },
-      { id: `vsv-priority-${suffix}`, variableSetId: setPriority, key: "SHARED", value: "from-priority", category: "terraform" },
-      { id: `vsv-detached-${suffix}`, variableSetId: setDetached, key: "DETACHED_ONLY", value: "9", category: "terraform" },
+      {
+        id: `vsv-globalshared-${suffix}`,
+        variableSetId: setGlobal,
+        key: "SHARED",
+        value: "from-global",
+        category: "terraform",
+      },
+      {
+        id: `vsv-priority-${suffix}`,
+        variableSetId: setPriority,
+        key: "SHARED",
+        value: "from-priority",
+        category: "terraform",
+      },
+      {
+        id: `vsv-detached-${suffix}`,
+        variableSetId: setDetached,
+        key: "DETACHED_ONLY",
+        value: "9",
+        category: "terraform",
+      },
       { id: `vsv-foreign-${suffix}`, variableSetId: setForeign, key: "FOREIGN", value: "9", category: "terraform" },
     ]);
   });
@@ -100,7 +128,7 @@ describe("workspace all-vars (audit finding 1)", () => {
   it("returns workspace variables plus inherited varset variables with CLI precedence", async () => {
     const res = await request(`/api/v2/workspaces/${wsId}/all-vars`, token);
     expect(res.status).toBe(200);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { id: string; attributes: Record<string, unknown>; relationships?: Record<string, unknown> }[];
       meta: { pagination: Record<string, unknown> };
     };
@@ -109,8 +137,7 @@ describe("workspace all-vars (audit finding 1)", () => {
       const key = String((item.attributes as Record<string, unknown>)["key"]);
       byKey[key] = [...(byKey[key] ?? []), item.attributes];
     }
-    const valueOf = (key: string): unknown =>
-      (byKey[key]?.[0] as Record<string, unknown> | undefined)?.["value"];
+    const valueOf = (key: string): unknown => (byKey[key]?.[0] as Record<string, unknown> | undefined)?.["value"];
     // Priority set beats workspace beats attached set beats global.
     expect(valueOf("SHARED")).toBe("from-priority");
     expect(valueOf("WS_ONLY")).toBe("1");
@@ -129,14 +156,16 @@ describe("workspace all-vars (audit finding 1)", () => {
 
   it("serializes workspace and varset rows with their own relationships", async () => {
     const res = await request(`/api/v2/workspaces/${wsId}/all-vars`, token);
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       data: { id: string; relationships?: { workspace?: unknown; varset?: unknown } }[];
     };
-    const kinds = new Set(body.data.map((item): string => {
-      if (item.relationships?.workspace !== undefined) return "workspace";
-      if (item.relationships?.varset !== undefined) return "varset";
-      return "none";
-    }));
+    const kinds = new Set(
+      body.data.map((item): string => {
+        if (item.relationships?.workspace !== undefined) return "workspace";
+        if (item.relationships?.varset !== undefined) return "varset";
+        return "none";
+      }),
+    );
     expect(kinds.has("workspace")).toBe(true);
     expect(kinds.has("varset")).toBe(true);
     expect(kinds.has("none")).toBe(false);

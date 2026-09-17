@@ -34,14 +34,16 @@ let workspaceId = "";
 let projectId: string | null = null;
 
 function request(path: string, method = "GET", body?: unknown): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 beforeAll(async () => {
@@ -89,10 +91,13 @@ beforeAll(async () => {
     status: "uploaded",
     archivePath: `test-only/cv-audit-${suffix}.tar.gz`,
   });
-  projectId = (await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId),
-    columns: { projectId: true },
-  }))?.projectId ?? null;
+  projectId =
+    (
+      await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { projectId: true },
+      })
+    )?.projectId ?? null;
 
   await db.insert(runs).values([
     { id: runIds.apply, workspaceId, status: "planned", createdAt: Date.now() },
@@ -176,7 +181,7 @@ describe("audit coverage", () => {
     expect(auditTrailsResponse.status).toBe(200);
 
     for (const response of [organizationTrailersResponse, auditTrailsResponse]) {
-      const body = await response.json() as { data: { type: string; attributes: Record<string, unknown> }[] };
+      const body = (await response.json()) as { data: { type: string; attributes: Record<string, unknown> }[] };
       const entry = body.data.find(({ attributes }) => attributes["resource-id"] === orgId);
       expect(entry).toBeDefined();
       expect(entry).toMatchObject({
@@ -274,7 +279,10 @@ describe("audit coverage", () => {
     }
 
     const entries = await db.query.auditLogs.findMany({
-      where: inArray(auditLogs.resourceId, transitions.map(({ runId }): string => runId)),
+      where: inArray(
+        auditLogs.resourceId,
+        transitions.map(({ runId }): string => runId),
+      ),
     });
     expect(entries).toHaveLength(transitions.length);
 
@@ -296,9 +304,11 @@ describe("audit coverage", () => {
 
     const repeat = await request(`/api/v2/runs/${runIds.discard}/actions/discard`, "POST");
     expect(repeat.status).toBe(409);
-    expect((await db.query.auditLogs.findMany({
-      where: and(eq(auditLogs.action, "discard"), eq(auditLogs.resourceId, runIds.discard)),
-    }))).toHaveLength(1);
+    expect(
+      await db.query.auditLogs.findMany({
+        where: and(eq(auditLogs.action, "discard"), eq(auditLogs.resourceId, runIds.discard)),
+      }),
+    ).toHaveLength(1);
 
     await db.insert(auditLogs).values({
       id: `audit-run-created-${suffix}`,
@@ -325,7 +335,11 @@ describe("audit coverage", () => {
     // The justification comment and the override event are written in the
     // same millisecond, so their relative order is a UUID tiebreak, not a
     // contract: compare as sets.
-    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"]).sort()).toEqual(["comment", "create", "override-policy"]);
+    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"]).sort()).toEqual([
+      "comment",
+      "create",
+      "override-policy",
+    ]);
     expect(runEvents.data[0]).toMatchObject({
       type: "run-events",
       attributes: {
@@ -353,7 +367,9 @@ describe("audit coverage", () => {
       const entry = await db.query.auditLogs.findFirst({
         where: and(eq(auditLogs.action, "override-policy"), eq(auditLogs.resourceId, runId)),
       });
-      expect((entry?.details as Record<string, unknown> | null)?.["justification"]).toBe("Accepted: staging-only finding.");
+      expect((entry?.details as Record<string, unknown> | null)?.["justification"]).toBe(
+        "Accepted: staging-only finding.",
+      );
     } finally {
       await db.delete(runs).where(eq(runs.id, runId));
     }

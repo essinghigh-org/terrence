@@ -6,10 +6,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { AdminDatabaseMigration } from "../src/views/AdminDatabaseMigration";
 import { ApplyOutput } from "../src/components/ApplyOutput";
 import { PlanOutput } from "../src/components/PlanOutput";
-import {
-  clearProviderIconCacheForTests,
-  ProviderIcon,
-} from "../src/components/ProviderIcon";
+import { clearProviderIconCacheForTests, ProviderIcon } from "../src/components/ProviderIcon";
 import { RunList } from "../src/views/RunList";
 import { waitForAbortableDelay } from "../src/lib/run-detail-format";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
@@ -63,15 +60,17 @@ function workspaceDocument(): JsonValue {
 
 function runDocument(status: string): JsonValue {
   return {
-    data: [{
-      id: "run-1",
-      type: "runs",
-      attributes: {
-        status,
-        message: "Regression fixture",
-        "created-at": "2026-09-03T10:00:00.000Z",
+    data: [
+      {
+        id: "run-1",
+        type: "runs",
+        attributes: {
+          status,
+          message: "Regression fixture",
+          "created-at": "2026-09-03T10:00:00.000Z",
+        },
       },
-    }],
+    ],
   };
 }
 
@@ -104,11 +103,11 @@ afterEach((): void => {
 });
 
 test("renders the apply fallback when plan JSON responds with 204", async () => {
-  globalThis.fetch = (mock(async (): Promise<Response> => new Response(null, { status: 204 }))) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    async (): Promise<Response> => new Response(null, { status: 204 }),
+  ) as unknown as typeof fetch;
 
-  const view = render(
-    <ApplyOutput runId="run-204" status="applied" applyStatus="applied" applyLogs="raw apply log" />,
-  );
+  const view = render(<ApplyOutput runId="run-204" status="applied" applyStatus="applied" applyLogs="raw apply log" />);
 
   await waitFor((): void => {
     expect(view.getByText("Apply view is unavailable. See raw apply logs below.")).toBeTruthy();
@@ -137,14 +136,20 @@ test("resolves duplicate provider icons by notification without per-instance int
     </>,
   );
 
-  await waitFor((): void => { expect(fetchMock).toHaveBeenCalledTimes(1); });
+  await waitFor((): void => {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   expect(intervalCalls).toBe(0);
   if (resolveFetch === undefined) throw new Error("Expected the provider icon request to be pending");
-  resolveFetch(json({
-    data: [{ id: "hashicorp/aws", attributes: { "icon-url": "https://example.com/aws.svg" } }],
-  }));
+  resolveFetch(
+    json({
+      data: [{ id: "hashicorp/aws", attributes: { "icon-url": "https://example.com/aws.svg" } }],
+    }),
+  );
 
-  await waitFor((): void => { expect(view.container.querySelectorAll("img")).toHaveLength(2); });
+  await waitFor((): void => {
+    expect(view.container.querySelectorAll("img")).toHaveLength(2);
+  });
 });
 
 test("keeps a mounted provider icon subscribed after the fallback timeout", async () => {
@@ -173,20 +178,26 @@ test("keeps a mounted provider icon subscribed after the fallback timeout", asyn
   });
   const fallbackTimer = triggerFallback;
   if (fallbackTimer === undefined) throw new Error("Expected the provider icon fallback timer");
-  act((): void => { fallbackTimer(); });
+  act((): void => {
+    fallbackTimer();
+  });
   expect(view.getByText("Fallback")).toBeTruthy();
 
   const resolve = resolveFetch;
   if (resolve === undefined) throw new Error("Expected the provider icon request to be pending");
-  resolve(json({
-    data: [{ id: "hashicorp/aws", attributes: { "icon-url": "https://example.com/aws.svg" } }],
-  }));
-  await waitFor((): void => { expect(view.container.querySelector("img")).toBeTruthy(); });
+  resolve(
+    json({
+      data: [{ id: "hashicorp/aws", attributes: { "icon-url": "https://example.com/aws.svg" } }],
+    }),
+  );
+  await waitFor((): void => {
+    expect(view.container.querySelector("img")).toBeTruthy();
+  });
 });
 
 test("does not poll WorkspaceDetail while hidden and resumes on visibility", async () => {
   let runRequests = 0;
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") return json(workspaceDocument());
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") {
@@ -198,18 +209,22 @@ test("does not poll WorkspaceDetail while hidden and resumes on visibility", asy
       if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
   setDocumentHidden(true);
 
   const view = renderWorkspace();
-  await waitFor((): void => { expect(view.getByRole("heading", { name: "production" })).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "production" })).toBeTruthy();
+  });
   expect(runRequests).toBe(0);
 
   act((): void => {
     setDocumentHidden(false);
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await waitFor((): void => { expect(runRequests).toBe(1); });
+  await waitFor((): void => {
+    expect(runRequests).toBe(1);
+  });
   expect(view.getByRole("link", { name: "Regression fixture" })).toBeTruthy();
 
   act((): void => {
@@ -231,19 +246,21 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
     if (timeout === 5000) scheduledDelays.push(timeout);
     return originalSetTimeout(handler, timeout);
   }) as typeof window.setTimeout;
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") return json(workspaceDocument());
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") {
       runRequests++;
-      return new Promise<Response>((resolve): void => { runResolvers.push(resolve); });
+      return new Promise<Response>((resolve): void => {
+        runResolvers.push(resolve);
+      });
     }
     {
       const phaseLogFallback = anyPhaseLog(url);
       if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <EventProvider streamFactory={streamFactory}>
@@ -254,11 +271,17 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
       </MemoryRouter>
     </EventProvider>,
   );
-  await waitFor((): void => { expect(runResolvers).toHaveLength(1); });
+  await waitFor((): void => {
+    expect(runResolvers).toHaveLength(1);
+  });
   const resolveInitial = runResolvers[0];
   if (resolveInitial === undefined) throw new Error("Expected the initial latest-run request");
-  act((): void => { resolveInitial(json(runDocument("applied"))); });
-  await waitFor((): void => { expect(view.getByRole("link", { name: "Regression fixture" })).toBeTruthy(); });
+  act((): void => {
+    resolveInitial(json(runDocument("applied")));
+  });
+  await waitFor((): void => {
+    expect(view.getByRole("link", { name: "Regression fixture" })).toBeTruthy();
+  });
   expect(runRequests).toBe(1);
   expect(scheduledDelays).toHaveLength(0);
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
@@ -289,7 +312,9 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
       },
     });
   });
-  await waitFor((): void => { expect(runRequests).toBe(3); });
+  await waitFor((): void => {
+    expect(runRequests).toBe(3);
+  });
   const resolveOlder = runResolvers[1];
   const resolveNewest = runResolvers[2];
   if (resolveOlder === undefined || resolveNewest === undefined) {
@@ -299,7 +324,9 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
     resolveNewest(json(runDocument("planning")));
     resolveOlder(json(runDocument("errored")));
   });
-  await waitFor((): void => { expect(view.getByText("Planning")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Planning")).toBeTruthy();
+  });
   expect(view.queryByText("Errored")).toBeNull();
   expect(scheduledDelays).toHaveLength(1);
 
@@ -310,19 +337,21 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
 });
 
 test("announces run status in the RunList live region", async () => {
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/workspaces/ws-1/runs") {
       return json({
-        data: [{
-          id: "run-1",
-          type: "runs",
-          attributes: {
-            status: "applied",
-            message: "Completed fixture",
-            "created-at": "2026-09-03T10:00:00.000Z",
+        data: [
+          {
+            id: "run-1",
+            type: "runs",
+            attributes: {
+              status: "applied",
+              message: "Completed fixture",
+              "created-at": "2026-09-03T10:00:00.000Z",
+            },
           },
-        }],
+        ],
       });
     }
     {
@@ -330,7 +359,7 @@ test("announces run status in the RunList live region", async () => {
       if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -338,7 +367,9 @@ test("announces run status in the RunList live region", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Applied")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Applied")).toBeTruthy();
+  });
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
   expect(liveRegion?.textContent).toContain("Applied");
   expect(view.queryByText("Workspace readiness")).toBeNull();
@@ -347,34 +378,39 @@ test("announces run status in the RunList live region", async () => {
 });
 
 test("announces the polled database migration phase", async () => {
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    data: {
-      wizard: {
-        id: "migration-1",
-        phase: "copying",
-        createdAt: "2026-09-03T10:00:00.000Z",
-        updatedAt: "2026-09-03T10:00:01.000Z",
-        targetUrl: "postgres://internal",
-        targetMasked: "postgres://***",
-        steps: [],
-        verification: null,
-        report: null,
-        error: null,
-        copyProgress: null,
-      },
-      running: true,
-      "source-database": { path: "/tmp/terrence.db", memory: false },
-      "restart-disabled": false,
-      "environment-database-url": null,
-    },
-  }))) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        data: {
+          wizard: {
+            id: "migration-1",
+            phase: "copying",
+            createdAt: "2026-09-03T10:00:00.000Z",
+            updatedAt: "2026-09-03T10:00:01.000Z",
+            targetUrl: "postgres://internal",
+            targetMasked: "postgres://***",
+            steps: [],
+            verification: null,
+            report: null,
+            error: null,
+            copyProgress: null,
+          },
+          running: true,
+          "source-database": { path: "/tmp/terrence.db", memory: false },
+          "restart-disabled": false,
+          "environment-database-url": null,
+        },
+      }),
+  ) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
       <AdminDatabaseMigration />
     </MemoryRouter>,
   );
-  await waitFor((): void => { expect(view.getByText("Copying records")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Copying records")).toBeTruthy();
+  });
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
   expect(liveRegion?.textContent).toContain("Copying records");
 });
@@ -412,18 +448,24 @@ test("keeps semantic inline markdown keys stable when earlier text changes", () 
 
 test("ignores a clipboard completion after PlanOutput unmounts", async () => {
   let resolveWrite: (() => void) | undefined;
-  const writeText = mock((): Promise<void> => new Promise<void>((resolve): void => {
-    resolveWrite = resolve;
-  }));
+  const writeText = mock(
+    (): Promise<void> =>
+      new Promise<void>((resolve): void => {
+        resolveWrite = resolve;
+      }),
+  );
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText },
   });
-  globalThis.fetch = (mock(async (): Promise<Response> => json({
-    terraform_version: "1.11.0",
-    format_version: "1.2",
-    resource_changes: [],
-  }))) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        terraform_version: "1.11.0",
+        format_version: "1.2",
+        resource_changes: [],
+      }),
+  ) as unknown as typeof fetch;
   let resetTimerCalls = 0;
   window.setTimeout = ((handler: TimerHandler, timeout?: number): number => {
     if (timeout === 2_000) resetTimerCalls++;
@@ -450,17 +492,19 @@ test("keeps derived plan and apply output visible across rerenders", async () =>
   const plan: JsonValue = {
     terraform_version: "1.11.0",
     format_version: "1.2",
-    resource_changes: [{
-      address: "aws_instance.web",
-      type: "aws_instance",
-      change: {
-        actions: ["create"],
-        before: null,
-        after: { id: "i-web" },
+    resource_changes: [
+      {
+        address: "aws_instance.web",
+        type: "aws_instance",
+        change: {
+          actions: ["create"],
+          before: null,
+          after: { id: "i-web" },
+        },
       },
-    }],
+    ],
   };
-  globalThis.fetch = (mock(async (): Promise<Response> => json(plan))) as unknown as typeof fetch;
+  globalThis.fetch = mock(async (): Promise<Response> => json(plan)) as unknown as typeof fetch;
 
   const view = render(
     <>
@@ -468,7 +512,9 @@ test("keeps derived plan and apply output visible across rerenders", async () =>
       <ApplyOutput runId="run-memo" status="applied" applyStatus="applied" applyLogs="" />
     </>,
   );
-  await waitFor((): void => { expect(view.getAllByText("aws_instance.web").length).toBeGreaterThanOrEqual(2); });
+  await waitFor((): void => {
+    expect(view.getAllByText("aws_instance.web").length).toBeGreaterThanOrEqual(2);
+  });
 
   view.rerender(
     <>

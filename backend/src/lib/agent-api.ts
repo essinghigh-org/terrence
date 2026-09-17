@@ -35,9 +35,10 @@ function validateAgentArtifactBaseUrl(baseUrl: string): string {
   } catch {
     throw new Error("PUBLIC_URL must be a valid http(s) URL");
   }
-  const isInsecureLoopback = parsed.protocol === "http:"
-    && (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test")
-    && isLoopbackHostname(parsed.hostname);
+  const isInsecureLoopback =
+    parsed.protocol === "http:" &&
+    (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") &&
+    isLoopbackHostname(parsed.hostname);
   if (parsed.protocol !== "https:" && !isInsecureLoopback) {
     throw new Error("Agent artifact URLs require HTTPS outside verified loopback development/test environments");
   }
@@ -49,14 +50,17 @@ export function agentFilesystemPath(runId: string): string {
 }
 
 /** Public base URL for the job's absolute artifact URLs (caddy reverse proxy aware). */
-export function agentApiBaseUrl(request: { readonly headers: { readonly get: (name: string) => string | null } }): string {
+export function agentApiBaseUrl(request: {
+  readonly headers: { readonly get: (name: string) => string | null };
+}): string {
   const configured = process.env["PUBLIC_URL"]?.trim();
   if (configured) return validateAgentArtifactBaseUrl(configured);
   // A Host header is attacker-controlled. Only use a loopback host for local
   // development/test; deployed instances must configure their public origin.
   if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") {
     const host = request.headers.get("host") ?? "localhost";
-    if (/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(host)) return validateAgentArtifactBaseUrl(`http://${host}`);
+    if (/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(host))
+      return validateAgentArtifactBaseUrl(`http://${host}`);
     return validateAgentArtifactBaseUrl("http://localhost");
   }
   throw new Error("PUBLIC_URL must be configured for agent artifact URLs");
@@ -75,7 +79,8 @@ export async function terraformReleaseInfo(
   const constraint = versionInput === "" || versionInput === null ? "latest" : versionInput;
   const version = await resolveTerraformVersion(constraint);
   if (version === null) return null;
-  const normalizedArchitecture = architecture.toLowerCase() === "aarch64" || architecture.toLowerCase() === "arm64" ? "arm64" : "amd64";
+  const normalizedArchitecture =
+    architecture.toLowerCase() === "aarch64" || architecture.toLowerCase() === "arm64" ? "arm64" : "amd64";
   const cacheKey = `${version}:${normalizedArchitecture}`;
   const cached = releaseInfoCache.get(cacheKey);
   if (cached !== undefined && Date.now() - cached.at < RELEASE_INFO_TTL_MS) {
@@ -84,10 +89,9 @@ export async function terraformReleaseInfo(
   const zipName = `terraform_${version}_linux_${normalizedArchitecture}.zip`;
   const url = `https://releases.hashicorp.com/terraform/${version}/${zipName}`;
   try {
-    const sums = await fetch(
-      `https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS`,
-      { signal: AbortSignal.timeout(15000) },
-    );
+    const sums = await fetch(`https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS`, {
+      signal: AbortSignal.timeout(15000),
+    });
     if (!sums.ok) return null;
     const text = await sums.text();
     const line = text.split("\n").find((l: string): boolean => l.includes(zipName));
@@ -106,15 +110,19 @@ async function resolveTerraformVersion(constraint: string): Promise<string | nul
   // Constraint expression (>=, ~>, !=): pick the highest satisfying release.
   const releases = await availableVersions("terraform");
   if (releases.length === 0) return null;
-  const candidates = releases
-    .filter((v: string): boolean => satisfiesConstraint(v, constraint))
-    .sort(compareVersions);
-  return candidates.length > 0 ? candidates[candidates.length - 1] ?? null : null;
+  const candidates = releases.filter((v: string): boolean => satisfiesConstraint(v, constraint)).sort(compareVersions);
+  return candidates.length > 0 ? (candidates[candidates.length - 1] ?? null) : null;
 }
 
 function compareVersions(a: string, b: string): number {
-  const pa = a.replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
-  const pb = b.replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
+  const pa = a
+    .replace(/^v/, "")
+    .split(".")
+    .map((n: string): number => Number.parseInt(n, 10) || 0);
+  const pb = b
+    .replace(/^v/, "")
+    .split(".")
+    .map((n: string): number => Number.parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
     const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (diff !== 0) return diff;
@@ -123,7 +131,10 @@ function compareVersions(a: string, b: string): number {
 }
 
 function parseVersionParts(version: string): number[] {
-  return version.replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
+  return version
+    .replace(/^v/, "")
+    .split(".")
+    .map((n: string): number => Number.parseInt(n, 10) || 0);
 }
 
 function compareVersionParts(parts: readonly number[], target: readonly number[]): number {
@@ -174,7 +185,7 @@ export type AgentJobDetails = Readonly<{
   run: DeepReadonly<typeof runs.$inferSelect>;
   workspace: DeepReadonly<typeof workspaces.$inferSelect>;
   organizationName: string;
-  configuration: (DeepReadonly<typeof configurationVersions.$inferSelect>) | null;
+  configuration: DeepReadonly<typeof configurationVersions.$inferSelect> | null;
 }>;
 
 /** Mint a run token for the agent's cloud-protocol calls. */
@@ -197,12 +208,9 @@ export async function buildAgentJobPayload(
   // Artifact URLs must remain valid for the full one-hour job plus time for
   // final uploads and status callbacks.
   const artifactUrl = (suffix: string): string => {
-    const url = new URL(signedApiURL(
-      { url: validatedBaseUrl },
-      `${jobPath}${suffix}`,
-      "*",
-      AGENT_ARTIFACT_URL_TTL_SECONDS,
-    ));
+    const url = new URL(
+      signedApiURL({ url: validatedBaseUrl }, `${jobPath}${suffix}`, "*", AGENT_ARTIFACT_URL_TTL_SECONDS),
+    );
     url.searchParams.set("fencing_token", String(job.fencingToken));
     return url.toString();
   };
@@ -300,7 +308,11 @@ export async function agentEnvironment(
 ): Promise<Record<string, string>> {
   const variables = await executionVariables(workspaceId, orgId, projectId);
   const out: Record<string, string> = {};
-  for (const variable of [...variables, ...normalizeRunVariables(runVariables), ...variables.filter((entry) => entry.priority)]) {
+  for (const variable of [
+    ...variables,
+    ...normalizeRunVariables(runVariables),
+    ...variables.filter((entry) => entry.priority),
+  ]) {
     if (variable.category === "env") {
       out[variable.key] = variable.value;
     } else if (variable.category === "terraform") {

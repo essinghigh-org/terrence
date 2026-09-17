@@ -3,9 +3,7 @@ import { app } from "../../src/app";
 
 describe("the reference format API Service Discovery", () => {
   it("should return the well-known discovery JSON", async () => {
-    const response = await app.handle(
-      new Request("http://localhost/.well-known/terraform.json")
-    );
+    const response = await app.handle(new Request("http://localhost/.well-known/terraform.json"));
 
     expect(response.status).toBe(200);
     const data = await response.json();

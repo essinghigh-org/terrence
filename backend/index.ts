@@ -4,7 +4,12 @@ import { integerSetting, listenerSetting } from "./src/lib/runtime-config";
 import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
-import { reconcileInterruptedLocalRuns, stopWorkerQueue, terminateActiveRunExecutions, waitForWorkerDrain } from "./src/worker";
+import {
+  reconcileInterruptedLocalRuns,
+  stopWorkerQueue,
+  terminateActiveRunExecutions,
+  waitForWorkerDrain,
+} from "./src/worker";
 import { sweepUploadTemps } from "./src/lib/upload-sweep";
 import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
@@ -21,13 +26,20 @@ const systemPort = integerSetting("SYSTEM_API_PORT");
 const systemHost = listenerSetting("SYSTEM_API_HOST");
 const systemTlsCertPath = listenerSetting("SYSTEM_API_TLS_CERT") ?? undefined;
 const systemTlsKeyPath = listenerSetting("SYSTEM_API_TLS_KEY") ?? undefined;
-const systemTls = systemTlsCertPath !== undefined && systemTlsKeyPath !== undefined
-  ? {
-      cert: Bun.file(systemTlsCertPath),
-      key: Bun.file(systemTlsKeyPath),
-    }
-  : undefined;
-if (systemTls !== undefined && (!(await systemTls.cert.exists()) || !(await systemTls.key.exists()) || systemTls.cert.size === 0 || systemTls.key.size === 0)) {
+const systemTls =
+  systemTlsCertPath !== undefined && systemTlsKeyPath !== undefined
+    ? {
+        cert: Bun.file(systemTlsCertPath),
+        key: Bun.file(systemTlsKeyPath),
+      }
+    : undefined;
+if (
+  systemTls !== undefined &&
+  (!(await systemTls.cert.exists()) ||
+    !(await systemTls.key.exists()) ||
+    systemTls.cert.size === 0 ||
+    systemTls.key.size === 0)
+) {
   throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must point to non-empty files.");
 }
 
@@ -47,8 +59,13 @@ try {
   const githubAppBootstrap = await importLegacyGitHubAppConfiguration();
   if (githubAppBootstrap.imported) {
     console.log("[terrence] Imported the legacy GitHub App environment configuration into encrypted site settings");
-  } else if (githubAppBootstrap.reason !== "legacy-environment-incomplete" && githubAppBootstrap.reason !== "bootstrap-consumed") {
-    console.warn(`[terrence] Legacy GitHub App environment import skipped: ${githubAppBootstrap.reason ?? "unknown reason"}`);
+  } else if (
+    githubAppBootstrap.reason !== "legacy-environment-incomplete" &&
+    githubAppBootstrap.reason !== "bootstrap-consumed"
+  ) {
+    console.warn(
+      `[terrence] Legacy GitHub App environment import skipped: ${githubAppBootstrap.reason ?? "unknown reason"}`,
+    );
   }
 } catch (error: unknown) {
   // A bad or unreachable legacy App must never prevent the control plane from
@@ -69,11 +86,16 @@ startControlPlaneHeartbeat();
 // replayed. Agent-mode runs are left to recoverStaleAgentJobs.
 try {
   const reconciled = await reconcileInterruptedLocalRuns();
-  if (reconciled.requeued > 0 || reconciled.errored > 0 || reconciled.assessmentsErrored > 0 || reconciled.rearmed > 0) {
+  if (
+    reconciled.requeued > 0 ||
+    reconciled.errored > 0 ||
+    reconciled.assessmentsErrored > 0 ||
+    reconciled.rearmed > 0
+  ) {
     console.log(
-      `[terrence] Startup reconciliation: ${reconciled.requeued} run(s) requeued, `
-      + `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored, `
-      + `${reconciled.rearmed} apply(s) re-armed for dispatch`,
+      `[terrence] Startup reconciliation: ${reconciled.requeued} run(s) requeued, ` +
+        `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored, ` +
+        `${reconciled.rearmed} apply(s) re-armed for dispatch`,
     );
   }
 } catch (error: unknown) {
@@ -88,26 +110,26 @@ try {
 // idempotent like the reconciliation above.
 try {
   const swept = await sweepUploadTemps(storageDir);
-  const sweptTotal = swept.stateUploads + swept.cvTemps + swept.unclaimedArchives + swept.invalidExports + swept.orphanedModuleArchives;
+  const sweptTotal =
+    swept.stateUploads + swept.cvTemps + swept.unclaimedArchives + swept.invalidExports + swept.orphanedModuleArchives;
   if (sweptTotal > 0) {
     console.log(
-      `[terrence] Startup upload sweep: removed ${sweptTotal} leftover file(s) `
-      + `(state-uploads: ${swept.stateUploads}, cv-temps: ${swept.cvTemps}, `
-      + `unclaimed-archives: ${swept.unclaimedArchives}, invalid-exports: ${swept.invalidExports}, `
-      + `orphaned-module-archives: ${swept.orphanedModuleArchives})`,
+      `[terrence] Startup upload sweep: removed ${sweptTotal} leftover file(s) ` +
+        `(state-uploads: ${swept.stateUploads}, cv-temps: ${swept.cvTemps}, ` +
+        `unclaimed-archives: ${swept.unclaimedArchives}, invalid-exports: ${swept.invalidExports}, ` +
+        `orphaned-module-archives: ${swept.orphanedModuleArchives})`,
     );
   }
 } catch (error: unknown) {
   console.error("[terrence] Startup upload sweep failed; leftover temp files remain for the next restart", error);
 }
 
-app
-  .listen({
-    port,
-    // Reject request bodies larger than the 100 MiB configuration-version
-    // upload limit before Elysia buffers them into memory (memory DoS guard).
-    maxRequestBodySize: 100 * 1024 * 1024,
-  });
+app.listen({
+  port,
+  // Reject request bodies larger than the 100 MiB configuration-version
+  // upload limit before Elysia buffers them into memory (memory DoS guard).
+  maxRequestBodySize: 100 * 1024 * 1024,
+});
 systemApiApp.listen({
   // The System API is an administrative surface (node inventory, diagnostics,
   // support-bundle downloads). Bind it to loopback by default so it is not
@@ -119,11 +141,9 @@ systemApiApp.listen({
   ...(systemTls === undefined ? {} : { tls: systemTls }),
 });
 
+console.log(`🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`);
 console.log(
-  `🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`
-);
-console.log(
-  `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)}${systemTls === undefined ? " (HTTP loopback)" : " (TLS)"}`
+  `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)}${systemTls === undefined ? " (HTTP loopback)" : " (TLS)"}`,
 );
 
 if (isPostgres) {
@@ -131,8 +151,8 @@ if (isPostgres) {
   // but the event bus, the worker queue, and the run sandbox are all
   // in-process. Warn loudly so nobody mistakes Postgres for HA.
   console.warn(
-    "[terrence] Multiple control-plane replicas are not currently supported. "
-    + "Run exactly one Terrence control-plane instance; remote agent pools may be scaled independently.",
+    "[terrence] Multiple control-plane replicas are not currently supported. " +
+      "Run exactly one Terrence control-plane instance; remote agent pools may be scaled independently.",
   );
 }
 
@@ -141,10 +161,10 @@ if (isPostgres) {
 // #576). Warn once so reverse-proxy deployments set it.
 if (typeof process.env["PUBLIC_URL"] !== "string" || process.env["PUBLIC_URL"] === "") {
   console.warn(
-    "[terrence] PUBLIC_URL is not set. Generated upload/download URLs and private "
-    + "registry resolution fall back to proxy headers, then localhost. Set PUBLIC_URL "
-    + "to the outward address (for example https://terraform.example.com) when serving "
-    + "behind a reverse proxy or using the private registry.",
+    "[terrence] PUBLIC_URL is not set. Generated upload/download URLs and private " +
+      "registry resolution fall back to proxy headers, then localhost. Set PUBLIC_URL " +
+      "to the outward address (for example https://terraform.example.com) when serving " +
+      "behind a reverse proxy or using the private registry.",
   );
 }
 
@@ -169,7 +189,9 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     markControlPlaneNodeDraining().catch((error: unknown): void => {
       console.warn("[terrence] Failed to mark control-plane node draining", error);
     }),
-    new Promise<void>((resolve): void => { setTimeout(resolve, 2_000); }),
+    new Promise<void>((resolve): void => {
+      setTimeout(resolve, 2_000);
+    }),
   ]);
   let checkpointFailed = false;
   try {
@@ -183,12 +205,11 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
       // graceful stop has not completed within the deadline, force-close.
       const graceful = server.stop(false);
       const deadline = new Promise<"timeout">((resolve): void => {
-        setTimeout((): void => { resolve("timeout"); }, 5000);
+        setTimeout((): void => {
+          resolve("timeout");
+        }, 5000);
       });
-      const outcome = await Promise.race([
-        graceful.then((): "drained" => "drained"),
-        deadline,
-      ]);
+      const outcome = await Promise.race([graceful.then((): "drained" => "drained"), deadline]);
       if (outcome === "timeout") {
         console.warn("[terrence] Graceful stop timed out; forcing connection close");
         await server.stop(true);
@@ -213,5 +234,9 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   // can react instead of treating a flaky shutdown as success.
   process.exit(checkpointFailed ? 1 : 0);
 }
-process.on("SIGTERM", (): void => { void shutdown("SIGTERM"); });
-process.on("SIGINT", (): void => { void shutdown("SIGINT"); });
+process.on("SIGTERM", (): void => {
+  void shutdown("SIGTERM");
+});
+process.on("SIGINT", (): void => {
+  void shutdown("SIGINT");
+});

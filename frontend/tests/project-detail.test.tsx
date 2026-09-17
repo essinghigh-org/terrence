@@ -48,10 +48,7 @@ function renderProject(section: ProjectSection): ReturnType<typeof render> {
   return render(
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1"]}>
       <Routes>
-        <Route
-          path="/app/:orgName/projects/:projectId"
-          element={<ProjectDetail section={section} />}
-        />
+        <Route path="/app/:orgName/projects/:projectId" element={<ProjectDetail section={section} />} />
       </Routes>
       <Toaster />
     </MemoryRouter>,
@@ -71,9 +68,10 @@ test("links GitHub App-backed repositories in project workspace tables", async (
     },
   };
   const fetchMock = baseFetchMock({
-    "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () => json({ data: [workspace] }),
+    "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () =>
+      json({ data: [workspace] }),
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = renderProject("workspaces");
   const repositoryLink = await view.findByRole("link", { name: "Open GitHub repository acme/infrastructure" });
@@ -88,16 +86,20 @@ test("renders project latest changes as relative time with an exact tooltip", as
     attributes: { name: "production", locked: false },
   };
   const fetchMock = baseFetchMock({
-    "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () => json({ data: [workspace] }),
-    "GET /api/v2/organizations/acme/runs?page%5Bsize%5D=100": () => json({
-      data: [{
-        id: "run-1",
-        attributes: { "created-at": createdAt, message: "Apply network", status: "applied" },
-        relationships: { workspace: { data: { id: "ws-1" } } },
-      }],
-    }),
+    "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () =>
+      json({ data: [workspace] }),
+    "GET /api/v2/organizations/acme/runs?page%5Bsize%5D=100": () =>
+      json({
+        data: [
+          {
+            id: "run-1",
+            attributes: { "created-at": createdAt, message: "Apply network", status: "applied" },
+            relationships: { workspace: { data: { id: "ws-1" } } },
+          },
+        ],
+      }),
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = renderProject("workspaces");
   await view.findByText("Apply network");
@@ -111,12 +113,15 @@ test("creates a project variable set from the project detail settings", async ()
   const fetchMock = baseFetchMock({
     "POST /api/v2/organizations/acme/varsets": (init) => {
       postedBody = init?.body;
-      return json({
-        data: { id: "vs-1", attributes: { name: "Shared", description: "Shared values" } },
-      }, 201);
+      return json(
+        {
+          data: { id: "vs-1", attributes: { name: "Shared", description: "Shared values" } },
+        },
+        201,
+      );
     },
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = renderProject("variable-sets");
 
@@ -137,14 +142,18 @@ test("creates a project variable set from the project detail settings", async ()
   // SAFETY: closest("form") above resolved the form element for the dialog.
   fireEvent.submit(form!);
 
-await waitFor((): void => {
+  await waitFor((): void => {
     expect(postedBody).toBeDefined();
   });
-// SAFETY: the captured call argument is a stringified JSON body.
-  const posted = JSON.parse(postedBody as string) as { data?: { attributes?: { name?: string; "parent-project-id"?: string } } };
+  // SAFETY: the captured call argument is a stringified JSON body.
+  const posted = JSON.parse(postedBody as string) as {
+    data?: { attributes?: { name?: string; "parent-project-id"?: string } };
+  };
   expect(posted.data?.attributes?.name).toBe("Shared");
   expect(posted.data?.attributes?.["parent-project-id"]).toBe("prj-1");
-  await waitFor((): void => { expect(view.getByText("Shared")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Shared")).toBeTruthy();
+  });
 });
 
 test("saves a project default execution mode and agent pool", async () => {
@@ -160,9 +169,10 @@ test("saves a project default execution mode and agent pool", async () => {
   };
   const fetchMock = baseFetchMock({
     "GET /api/v2/projects/prj-1": () => json({ data: projectWithSettings }),
-    "GET /api/v2/organizations/acme/agent-pools": () => json({
-      data: [{ id: "apool-build", attributes: { name: "Build pool" } }],
-    }),
+    "GET /api/v2/organizations/acme/agent-pools": () =>
+      json({
+        data: [{ id: "apool-build", attributes: { name: "Build pool" } }],
+      }),
     "PATCH /api/v2/projects/prj-1": (init) => {
       // SAFETY: this component sends the PATCH body through JSON.stringify.
       postedBody = init?.body as string;
@@ -179,7 +189,7 @@ test("saves a project default execution mode and agent pool", async () => {
       });
     },
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = renderProject("settings");
   const executionMode = await view.findByLabelText("Default execution mode");
@@ -195,7 +205,9 @@ test("saves a project default execution mode and agent pool", async () => {
   // SAFETY: the form is present because the preceding role query found its submit button.
   fireEvent.submit(form!);
 
-  await waitFor((): void => { expect(postedBody).toBeDefined(); });
+  await waitFor((): void => {
+    expect(postedBody).toBeDefined();
+  });
   if (postedBody === undefined) throw new Error("Expected a serialized project PATCH body");
   // SAFETY: the request body is JSON.stringify'd by the component and has the JSON:API shape asserted below.
   const posted = JSON.parse(postedBody) as {
@@ -230,7 +242,7 @@ test("preserves an inherited project execution mode when saving other settings",
       return json({ data: inheritedProject });
     },
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = renderProject("settings");
   const executionMode = await view.findByLabelText("Default execution mode");
@@ -241,7 +253,9 @@ test("preserves an inherited project execution mode when saving other settings",
   // SAFETY: the form is present because the preceding role query found its submit button.
   fireEvent.submit(form!);
 
-  await waitFor((): void => { expect(postedBody).toBeDefined(); });
+  await waitFor((): void => {
+    expect(postedBody).toBeDefined();
+  });
   if (postedBody === undefined) throw new Error("Expected a serialized project PATCH body");
   // SAFETY: the request body is JSON.stringify'd by the component and has the JSON:API shape asserted below.
   const posted = JSON.parse(postedBody) as {
@@ -262,7 +276,7 @@ test("deletes a project from the project detail settings", async () => {
       return new Response(null, { status: 204 });
     },
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const page = renderProject("settings");
 

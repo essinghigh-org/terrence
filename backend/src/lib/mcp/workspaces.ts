@@ -1,12 +1,7 @@
 import { newResourceId } from "../resource-id";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../db";
-import {
-  projects,
-  workspaceTags,
-  workspaceVariables,
-  workspaces,
-} from "../../db/schema";
+import { projects, workspaceTags, workspaceVariables, workspaces } from "../../db/schema";
 import {
   checkOrgPermission,
   checkOrganizationPermission,
@@ -23,7 +18,17 @@ import { isExecutionMode } from "../constants";
 import { ensureDefaultProject } from "../../routes/projects";
 import { validVariableAttributes } from "../validation";
 import { variableValueForRead, variableValueForWrite } from "../variable-crypto";
-import { ADDITIVE_TOOL, READ_ONLY_TOOL, DESTRUCTIVE_TOOL, IDEMPOTENT_DESTRUCTIVE_TOOL, IDEMPOTENT_MUTATION_TOOL, toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
+import {
+  ADDITIVE_TOOL,
+  READ_ONLY_TOOL,
+  DESTRUCTIVE_TOOL,
+  IDEMPOTENT_DESTRUCTIVE_TOOL,
+  IDEMPOTENT_MUTATION_TOOL,
+  toolBadRequest,
+  toolError,
+  type McpSession,
+  type McpTool,
+} from "./types";
 import type { DeepReadonly } from "../types";
 import { cachedOrgByName } from "../cached-lookups";
 
@@ -56,26 +61,38 @@ type WorkspaceCreationOptions = Readonly<{
 function workspaceCreationOptions(args: Readonly<Record<string, unknown>>): WorkspaceCreationOptions {
   return {
     name: (typeof args["name"] === "string" ? args["name"] : "").trim(),
-    description: typeof args["description"] === "string" && args["description"] !== "" ? args["description"].trim() : null,
+    description:
+      typeof args["description"] === "string" && args["description"] !== "" ? args["description"].trim() : null,
     autoApply: typeof args["auto-apply"] === "boolean" ? args["auto-apply"] : false,
     executionMode: typeof args["execution-mode"] === "string" ? args["execution-mode"] : undefined,
     terraformVersion: typeof args["terraform-version"] === "string" ? args["terraform-version"] : undefined,
   };
 }
 
-async function workspaceCreationOptionError(options: WorkspaceCreationOptions, orgId: string): Promise<string | undefined> {
+async function workspaceCreationOptionError(
+  options: WorkspaceCreationOptions,
+  orgId: string,
+): Promise<string | undefined> {
   if (options.name === "" || !/^[A-Za-z0-9_-]+$/.test(options.name)) return "Invalid workspace name";
-  if ((await findWorkspaceByName(orgId, options.name)) !== undefined) return "Workspace name already exists in this organization";
-  if (options.terraformVersion !== undefined && !validateVersion(options.terraformVersion)) return "Invalid terraformVersion format";
-  if (options.executionMode !== undefined && !isExecutionMode(options.executionMode)) return "execution-mode must be remote, local, or agent";
+  if ((await findWorkspaceByName(orgId, options.name)) !== undefined)
+    return "Workspace name already exists in this organization";
+  if (options.terraformVersion !== undefined && !validateVersion(options.terraformVersion))
+    return "Invalid terraformVersion format";
+  if (options.executionMode !== undefined && !isExecutionMode(options.executionMode))
+    return "execution-mode must be remote, local, or agent";
   return undefined;
 }
 
 type WorkspaceProjectResult = typeof projects.$inferSelect | Readonly<{ error: string }>;
 
-async function resolveWorkspaceProject(args: Readonly<Record<string, unknown>>, orgId: string): Promise<WorkspaceProjectResult> {
+async function resolveWorkspaceProject(
+  args: Readonly<Record<string, unknown>>,
+  orgId: string,
+): Promise<WorkspaceProjectResult> {
   if (typeof args["project_id"] === "string" && args["project_id"] !== "") {
-    const project = await db.query.projects.findFirst({ where: and(eq(projects.id, args["project_id"]), eq(projects.orgId, orgId)) });
+    const project = await db.query.projects.findFirst({
+      where: and(eq(projects.id, args["project_id"]), eq(projects.orgId, orgId)),
+    });
     return project ?? { error: "Project must belong to the workspace organization" };
   }
   return ensureDefaultProject(orgId);
@@ -83,8 +100,13 @@ async function resolveWorkspaceProject(args: Readonly<Record<string, unknown>>, 
 
 function workspaceTagBindings(args: Readonly<Record<string, unknown>>): readonly { key: string; value: string }[] {
   const rawTags = Array.isArray(args["tags"]) ? args["tags"] : [];
-  const tagBindings = rawTags.filter((tag): boolean =>
-    tag !== null && typeof tag === "object" && typeof (tag as Record<string, unknown>)["key"] === "string" && typeof (tag as Record<string, unknown>)["value"] === "string");
+  const tagBindings = rawTags.filter(
+    (tag): boolean =>
+      tag !== null &&
+      typeof tag === "object" &&
+      typeof (tag as Record<string, unknown>)["key"] === "string" &&
+      typeof (tag as Record<string, unknown>)["value"] === "string",
+  );
   return tagBindings.map((tag): { key: string; value: string } => {
     const binding = tag as Record<string, unknown>;
     return { key: binding["key"] as string, value: binding["value"] as string };
@@ -104,7 +126,14 @@ type WorkspaceVariableUpdate = Readonly<{
 function resolvedVariableFlags(
   variable: DeepReadonly<typeof workspaceVariables.$inferSelect>,
   args: Readonly<Record<string, unknown>>,
-): { key: string; category: string; sensitive: boolean; hcl: boolean; description: string | null; suppliedValue: string | null } {
+): {
+  key: string;
+  category: string;
+  sensitive: boolean;
+  hcl: boolean;
+  description: string | null;
+  suppliedValue: string | null;
+} {
   const key = typeof args["key"] === "string" ? args["key"] : variable.key;
   const category = typeof args["category"] === "string" ? args["category"] : variable.category;
   let sensitive = typeof args["sensitive"] === "boolean" ? args["sensitive"] : (variable.sensitive ?? false);
@@ -123,7 +152,8 @@ async function storedVariableValue(
 ): Promise<{ value: string; valueEncrypted: string | null }> {
   // An unchanged sensitive value keeps its stored ciphertext so the rotation
   // below never re-encrypts (and re-keys) an untouched secret.
-  const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
+  const unchangedSensitive =
+    suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
   return unchangedSensitive
     ? { value: variable.value, valueEncrypted: variable.valueEncrypted }
     : await variableValueForWrite(sensitive, effectiveValue);
@@ -152,8 +182,13 @@ async function persistWorkspaceVariableUpdate(
   try {
     await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, variableId));
   } catch (error: unknown) {
-    if (error !== null && typeof error === "object" && "message" in error
-      && typeof error.message === "string" && error.message.includes("UNIQUE")) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "message" in error &&
+      typeof error.message === "string" &&
+      error.message.includes("UNIQUE")
+    ) {
       return "Variable key already exists in this workspace";
     }
     throw error;
@@ -185,7 +220,8 @@ export const workspaceTools: readonly McpTool[] = [
         "execution-mode": { type: "string", description: "remote, local, or agent" },
         "terraform-version": { type: "string", description: "Terraform/OpenTofu version (default latest)" },
         tags: {
-          type: "array", items: {
+          type: "array",
+          items: {
             type: "object",
             properties: { key: { type: "string" }, value: { type: "string" } },
             required: ["key", "value"],
@@ -200,7 +236,15 @@ export const workspaceTools: readonly McpTool[] = [
       const orgName = typeof args["org"] === "string" ? args["org"] : "";
       const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
-      if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-workspaces"))) {
+      if (
+        !(await checkOrganizationPermission(
+          org.id,
+          session.userId ?? undefined,
+          session.orgId,
+          session.teamId,
+          "manage-workspaces",
+        ))
+      ) {
         return toolError("Not authorized to manage workspaces in this organization");
       }
       const options = workspaceCreationOptions(args);
@@ -212,18 +256,35 @@ export const workspaceTools: readonly McpTool[] = [
       const id = newResourceId("ws");
       const finalTfVer = options.terraformVersion ?? "latest";
       await db.insert(workspaces).values({
-        id, name: options.name, orgId: org.id, description: options.description, projectId: project.id,
-        autoApply: options.autoApply, terraformVersion: finalTfVer,
+        id,
+        name: options.name,
+        orgId: org.id,
+        description: options.description,
+        projectId: project.id,
+        autoApply: options.autoApply,
+        terraformVersion: finalTfVer,
         executionMode: options.executionMode ?? project.defaultExecutionMode ?? "remote",
         createdAt: Date.now(),
       });
       const bindings = workspaceTagBindings(args);
       if (bindings.length > 0) {
-        await db.insert(workspaceTags).values(bindings.map((binding): typeof workspaceTags.$inferInsert => ({
-          id: crypto.randomUUID(), workspaceId: id, key: binding.key, value: binding.value,
-        })));
+        await db.insert(workspaceTags).values(
+          bindings.map((binding): typeof workspaceTags.$inferInsert => ({
+            id: crypto.randomUUID(),
+            workspaceId: id,
+            key: binding.key,
+            value: binding.value,
+          })),
+        );
       }
-      return { id, name: options.name, orgId: org.id, projectId: project.id, autoApply: options.autoApply, executionMode: options.executionMode ?? project.defaultExecutionMode ?? "remote" };
+      return {
+        id,
+        name: options.name,
+        orgId: org.id,
+        projectId: project.id,
+        autoApply: options.autoApply,
+        executionMode: options.executionMode ?? project.defaultExecutionMode ?? "remote",
+      };
     },
   },
   {
@@ -242,24 +303,32 @@ export const workspaceTools: readonly McpTool[] = [
       required: ["org"],
     },
     requires: ["workspaces:read"],
-      handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-        const orgName = String(args["org"]);
-        const org = await cachedOrgByName(orgName);
-        if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
-        if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
+    handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
+      const orgName = String(args["org"]);
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
+      if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
         return toolError("Not authorized to access this organization");
       }
       const exactName = typeof args["name"] === "string" ? args["name"] : undefined;
       const search = typeof args["search"] === "string" ? args["search"] : undefined;
       const limit = Math.min(Math.max(Number(args["limit"] ?? 50), 1), 200);
       const offset = Math.max(Number(args["offset"] ?? 0), 0);
-      if (exactName !== undefined) return exactWorkspaceResult(org.id, orgName, exactName, session.userId, session.orgId, session.teamId);
-      const authorizedIds = await workspaceIdsForPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
+      if (exactName !== undefined)
+        return exactWorkspaceResult(org.id, orgName, exactName, session.userId, session.orgId, session.teamId);
+      const authorizedIds = await workspaceIdsForPermission(
+        org.id,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "read",
+      );
       if (authorizedIds === null || authorizedIds.length === 0) return [];
       const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
-      const where = search !== undefined
-        ? and(inArray(workspaces.id, authorizedIds as string[]), sql`${workspaces.name} LIKE ${pattern} ESCAPE '\\'`)
-        : inArray(workspaces.id, authorizedIds as string[]);
+      const where =
+        search !== undefined
+          ? and(inArray(workspaces.id, authorizedIds as string[]), sql`${workspaces.name} LIKE ${pattern} ESCAPE '\\'`)
+          : inArray(workspaces.id, authorizedIds as string[]);
       const rows = await db.query.workspaces.findMany({
         where,
         orderBy: [asc(workspaces.name)],
@@ -286,7 +355,13 @@ export const workspaceTools: readonly McpTool[] = [
     requires: ["variables:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-read");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "variables-read",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const limit = Math.min(Math.max(Number(args["limit"] ?? 100), 1), 500);
       const offset = Math.max(Number(args["offset"] ?? 0), 0);
@@ -320,7 +395,13 @@ export const workspaceTools: readonly McpTool[] = [
     requires: ["variables:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-write");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "variables-write",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const key = typeof args["key"] === "string" ? args["key"] : "";
       const value = typeof args["value"] === "string" ? args["value"] : "";
@@ -339,8 +420,27 @@ export const workspaceTools: readonly McpTool[] = [
       // Sensitive values are encrypted at rest like the API path (issue
       // #577): plaintext never lands in the value column.
       const stored = await variableValueForWrite(sensitive, value);
-      await db.insert(workspaceVariables).values({ id, workspaceId: wsId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
-      return { id, workspaceId: wsId, key, value: sensitive === true ? null : value, category, sensitive, hcl, description };
+      await db.insert(workspaceVariables).values({
+        id,
+        workspaceId: wsId,
+        key,
+        value: stored.value,
+        valueEncrypted: stored.valueEncrypted,
+        category,
+        sensitive,
+        hcl,
+        description,
+      });
+      return {
+        id,
+        workspaceId: wsId,
+        key,
+        value: sensitive === true ? null : value,
+        category,
+        sensitive,
+        hcl,
+        description,
+      };
     },
   },
   {
@@ -365,7 +465,13 @@ export const workspaceTools: readonly McpTool[] = [
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
       const varId = String(args["variable_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-write");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "variables-write",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const variable = await db.query.workspaceVariables.findFirst({
         where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, wsId)),
@@ -394,7 +500,13 @@ export const workspaceTools: readonly McpTool[] = [
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
       const varId = String(args["variable_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-write");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "variables-write",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const variable = await db.query.workspaceVariables.findFirst({
         where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, wsId)),
@@ -428,12 +540,16 @@ export const workspaceTools: readonly McpTool[] = [
       const reason = typeof args["reason"] === "string" ? args["reason"].trim() : "";
       if (reason.length > 300) return toolBadRequest("Lock reason must be at most 300 characters");
       const principal = lockPrincipal(session.userId, session.orgId ?? ws.orgId, session.teamId);
-      const locked = await db.update(workspaces).set({
-        locked: true,
-        lockedReason: reason === "" ? null : reason,
-        lockOwnerType: principal.type,
-        lockOwnerId: principal.id,
-      }).where(and(eq(workspaces.id, wsId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+      const locked = await db
+        .update(workspaces)
+        .set({
+          locked: true,
+          lockedReason: reason === "" ? null : reason,
+          lockOwnerType: principal.type,
+          lockOwnerId: principal.id,
+        })
+        .where(and(eq(workspaces.id, wsId), or(eq(workspaces.locked, false), isNull(workspaces.locked))))
+        .returning({ id: workspaces.id });
       if (locked.length === 0) return toolBadRequest("Workspace is already locked");
       return { id: wsId, locked: true, lockedReason: reason === "" ? null : reason };
     },
@@ -458,12 +574,18 @@ export const workspaceTools: readonly McpTool[] = [
       if (ws.locked !== true) return toolBadRequest("Workspace is not locked");
       const principal = lockPrincipal(session.userId, session.orgId ?? ws.orgId, session.teamId);
       if (!ownsWorkspaceLock(ws, principal)) return toolError("Only the lock owner can unlock this workspace");
-      const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-        eq(workspaces.id, wsId),
-        eq(workspaces.locked, true),
-        eq(workspaces.lockOwnerType, principal.type),
-        eq(workspaces.lockOwnerId, principal.id),
-      )).returning({ id: workspaces.id });
+      const unlocked = await db
+        .update(workspaces)
+        .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+        .where(
+          and(
+            eq(workspaces.id, wsId),
+            eq(workspaces.locked, true),
+            eq(workspaces.lockOwnerType, principal.type),
+            eq(workspaces.lockOwnerId, principal.id),
+          ),
+        )
+        .returning({ id: workspaces.id });
       if (unlocked.length === 0) return toolError("Workspace lock changed while unlocking");
       await promoteIntermediateStateVersion(wsId);
       return { id: wsId, locked: false };

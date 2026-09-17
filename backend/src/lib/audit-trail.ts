@@ -85,7 +85,11 @@ function buildEffectiveScope(input: AuditPrincipalInput): Readonly<Record<string
     orgs: [...scopes.orgs].slice(0, 256),
     projects: scopes.projects === null ? null : [...scopes.projects].slice(0, 256),
     workspaces: scopes.workspaces === null ? null : [...scopes.workspaces].slice(0, 256),
-    permissions: Object.entries(scopes.permissions).filter(([, value]): boolean => value === true).map(([key]): string => key).sort().slice(0, 256),
+    permissions: Object.entries(scopes.permissions)
+      .filter(([, value]): boolean => value === true)
+      .map(([key]): string => key)
+      .sort()
+      .slice(0, 256),
     ...identityScopeEntries(input),
   });
 }
@@ -118,10 +122,12 @@ export function resetAuditRequest(): void {
   });
 }
 
-const SECRET_KEY = /(?:^|[-_])(authorization|bearer|password|passwd|secret|raw[-_]?token|access[-_]?token|refresh[-_]?token|credential|private[-_]?key|raw[-_]?state|state[-_]?payload|plan[-_]?json|encrypted[-_]?value)(?:$|[-_])/i;
+const SECRET_KEY =
+  /(?:^|[-_])(authorization|bearer|password|passwd|secret|raw[-_]?token|access[-_]?token|refresh[-_]?token|credential|private[-_]?key|raw[-_]?state|state[-_]?payload|plan[-_]?json|encrypted[-_]?value)(?:$|[-_])/i;
 const RAW_PAYLOAD_KEYS = new Set(["body", "comment", "payload", "plan", "raw", "state"]);
 const BEARER_VALUE = /\bBearer\s+[^\s,;]+/gi;
-const URL_SECRET_QUERY = /^(?:token|access[_-]?token|refresh[_-]?token|authorization|signature|sig|secret|key|password)$/i;
+const URL_SECRET_QUERY =
+  /^(?:token|access[_-]?token|refresh[_-]?token|authorization|signature|sig|secret|key|password)$/i;
 const MAX_DETAIL_DEPTH = 8;
 const MAX_DETAIL_ENTRIES = 96;
 const MAX_DETAIL_STRING = 4096;
@@ -162,10 +168,14 @@ export function sanitizeAuditValue(value: unknown, depth = 0, key = ""): unknown
     return redacted.length > MAX_DETAIL_STRING ? `${redacted.slice(0, MAX_DETAIL_STRING)}…` : redacted;
   }
   if (depth >= MAX_DETAIL_DEPTH) return "[REDACTED: depth limit]";
-  if (Array.isArray(value)) return value.slice(0, MAX_DETAIL_ENTRIES).map((item): unknown => sanitizeAuditValue(item, depth + 1, key));
+  if (Array.isArray(value))
+    return value.slice(0, MAX_DETAIL_ENTRIES).map((item): unknown => sanitizeAuditValue(item, depth + 1, key));
   if (typeof value === "object") {
     const output: Record<string, unknown> = {};
-    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>).slice(0, MAX_DETAIL_ENTRIES)) {
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>).slice(
+      0,
+      MAX_DETAIL_ENTRIES,
+    )) {
       output[childKey] = sanitizeAuditValue(childValue, depth + 1, childKey);
     }
     return output;
@@ -174,14 +184,30 @@ export function sanitizeAuditValue(value: unknown, depth = 0, key = ""): unknown
 }
 
 const IMMUTABLE_ACTIONS = new Set([
-  "approve", "apply", "cancel", "delete", "discard", "force-cancel", "force-execute", "impersonate",
-  "override-policy", "recover-state", "revoke", "unimpersonate", "grant-admin", "revoke-admin",
-  "disable-2fa", "replace", "remove",
+  "approve",
+  "apply",
+  "cancel",
+  "delete",
+  "discard",
+  "force-cancel",
+  "force-execute",
+  "impersonate",
+  "override-policy",
+  "recover-state",
+  "revoke",
+  "unimpersonate",
+  "grant-admin",
+  "revoke-admin",
+  "disable-2fa",
+  "replace",
+  "remove",
 ]);
 
 function lifecycleMetadata(details: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  const before = details["before"] ?? (typeof details["fromStatus"] === "string" ? { status: details["fromStatus"] } : undefined);
-  const after = details["after"] ?? (typeof details["toStatus"] === "string" ? { status: details["toStatus"] } : undefined);
+  const before =
+    details["before"] ?? (typeof details["fromStatus"] === "string" ? { status: details["fromStatus"] } : undefined);
+  const after =
+    details["after"] ?? (typeof details["toStatus"] === "string" ? { status: details["toStatus"] } : undefined);
   return {
     ...(before === undefined ? {} : { before: sanitizeAuditValue(before) }),
     ...(after === undefined ? {} : { after: sanitizeAuditValue(after) }),
@@ -202,7 +228,7 @@ function resolveEffectiveUserId(
 ): string | null {
   if (explicit !== undefined && explicit !== null) return explicit;
   if (typeof safeSource["effectiveUserId"] === "string") return safeSource["effectiveUserId"];
-  return context === null ? fallback : context.userId ?? fallback;
+  return context === null ? fallback : (context.userId ?? fallback);
 }
 
 function auditCredentialClass(context: AuditRequestContext | null): AuditCredentialClass {
@@ -219,17 +245,19 @@ function auditIdentity(context: AuditRequestContext | null): { requestId: string
 }
 
 /** Build the stable envelope shared by every audit writer. */
-export function buildAuditDetails(input: Readonly<{
-  action: string;
-  resourceType: string;
-  resourceId: string | null;
-  orgId: string | null;
-  userId: string | null;
-  effectiveUserId?: string | null;
-  details?: Readonly<Record<string, unknown>>;
-  result?: AuditResult;
-  immutable?: boolean;
-}>): Readonly<Record<string, unknown>> {
+export function buildAuditDetails(
+  input: Readonly<{
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    orgId: string | null;
+    userId: string | null;
+    effectiveUserId?: string | null;
+    details?: Readonly<Record<string, unknown>>;
+    result?: AuditResult;
+    immutable?: boolean;
+  }>,
+): Readonly<Record<string, unknown>> {
   const source = input.details ?? {};
   const context = currentAuditContext();
   const result = resolveAuditResult(input.result, source);
@@ -261,19 +289,21 @@ export function buildAuditDetails(input: Readonly<{
   };
 }
 
-export function auditLogValues(input: Readonly<{
-  id?: string;
-  action: string;
-  resourceType: string;
-  resourceId: string | null;
-  orgId: string | null;
-  userId: string | null;
-  effectiveUserId?: string | null;
-  createdAt?: number;
-  details?: Readonly<Record<string, unknown>>;
-  result?: AuditResult;
-  immutable?: boolean;
-}>): Readonly<Record<string, unknown>> {
+export function auditLogValues(
+  input: Readonly<{
+    id?: string;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    orgId: string | null;
+    userId: string | null;
+    effectiveUserId?: string | null;
+    createdAt?: number;
+    details?: Readonly<Record<string, unknown>>;
+    result?: AuditResult;
+    immutable?: boolean;
+  }>,
+): Readonly<Record<string, unknown>> {
   return {
     id: input.id ?? crypto.randomUUID(),
     orgId: input.orgId,

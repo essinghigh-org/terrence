@@ -38,16 +38,16 @@ function handleDocContentClick(event: React.SyntheticEvent, navigate: (path: str
   navigate(`/app/docs/${encodeURIComponent(targetSlug)}`);
 }
 
-function DocNav({ previous, next }: Readonly<{
+function DocNav({
+  previous,
+  next,
+}: Readonly<{
   previous: DocSummary | undefined;
   next: DocSummary | undefined;
 }>): React.JSX.Element | null {
   if (previous === undefined && next === undefined) return null;
   return (
-    <nav
-      aria-label="Document navigation"
-      className="mt-10 grid gap-3 border-t border-border pt-6 sm:grid-cols-2"
-    >
+    <nav aria-label="Document navigation" className="mt-10 grid gap-3 border-t border-border pt-6 sm:grid-cols-2">
       {previous !== undefined ? (
         <Link
           to={`/app/docs/${encodeURIComponent(previous.slug)}`}
@@ -78,7 +78,13 @@ function DocNav({ previous, next }: Readonly<{
   );
 }
 
-function DocArticle({ selected, showIntro, previous, next, navigate }: Readonly<{
+function DocArticle({
+  selected,
+  showIntro,
+  previous,
+  next,
+  navigate,
+}: Readonly<{
   selected: DocDetail;
   showIntro: boolean;
   previous: DocSummary | undefined;
@@ -90,14 +96,22 @@ function DocArticle({ selected, showIntro, previous, next, navigate }: Readonly<
       {showIntro && (
         <aside className="flex items-center gap-4 rounded-lg border bg-accent/30 px-5 py-3">
           <Terrence pose="guide" detail="small" className="w-24 shrink-0" />
-          <div><h2 className="font-heading font-semibold">A good place to start</h2><p className="mt-1 text-sm text-muted-foreground">Get to know Terrence, then connect your first workspace. Follow the guides in the sidebar at your own pace.</p></div>
+          <div>
+            <h2 className="font-heading font-semibold">A good place to start</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Get to know Terrence, then connect your first workspace. Follow the guides in the sidebar at your own
+              pace.
+            </p>
+          </div>
         </aside>
       )}
       {/* A typographic measure, not a competing page width: prose stops
           being readable much past ~80 characters a line. */}
       <div
         className="max-w-[80ch]"
-        onClick={(event): void => { handleDocContentClick(event, navigate); }}
+        onClick={(event): void => {
+          handleDocContentClick(event, navigate);
+        }}
       >
         <MarkdownContent markdown={selected.markdown} />
       </div>
@@ -125,17 +139,19 @@ export function Docs(): React.JSX.Element {
     setDetailError(false);
     if (selectedSlug === undefined || details.has(selectedSlug)) return;
     let cancelled = false;
-    void fetchApi<{ data?: unknown }>(`/docs/${encodeURIComponent(selectedSlug)}`).then((result): void => {
-      if (cancelled) return;
-      const parsed = parseDocDetail(result);
-      if (parsed === null) {
-        setDetailError(true);
-        return;
-      }
-      setDetails((previous): Map<string, DocDetail> => new Map(previous).set(selectedSlug, parsed));
-    }).catch((): void => {
-      if (!cancelled) setDetailError(true);
-    });
+    void fetchApi<{ data?: unknown }>(`/docs/${encodeURIComponent(selectedSlug)}`)
+      .then((result): void => {
+        if (cancelled) return;
+        const parsed = parseDocDetail(result);
+        if (parsed === null) {
+          setDetailError(true);
+          return;
+        }
+        setDetails((previous): Map<string, DocDetail> => new Map(previous).set(selectedSlug, parsed));
+      })
+      .catch((): void => {
+        if (!cancelled) setDetailError(true);
+      });
     return (): void => {
       cancelled = true;
     };
@@ -161,8 +177,18 @@ export function Docs(): React.JSX.Element {
         <div role="alert" className="rounded-xl border bg-card px-6 py-10 text-center">
           <Terrence pose="lost" className="mx-auto mb-4 w-44" />
           <h2 className="font-heading text-xl font-semibold">This guide is unavailable</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">Choose another guide from the sidebar, or reload the page to try again.</p>
-          <button type="button" className={buttonVariants({ variant: "outline", className: "mt-5" })} onClick={(): void => { window.location.reload(); }}>Reload documentation</button>
+          <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+            Choose another guide from the sidebar, or reload the page to try again.
+          </p>
+          <button
+            type="button"
+            className={buttonVariants({ variant: "outline", className: "mt-5" })}
+            onClick={(): void => {
+              window.location.reload();
+            }}
+          >
+            Reload documentation
+          </button>
         </div>
       </PageShell>
     );
@@ -172,7 +198,9 @@ export function Docs(): React.JSX.Element {
     return (
       <PageShell variant="form">
         <PageHeader title="Documentation" description="Loading documentation." />
-        <div className="flex justify-center py-16"><Spinner className="size-6" /></div>
+        <div className="flex justify-center py-16">
+          <Spinner className="size-6" />
+        </div>
       </PageShell>
     );
   }
@@ -184,7 +212,9 @@ export function Docs(): React.JSX.Element {
         description={selected?.description ?? "Loading documentation."}
       />
       {selected === undefined ? (
-        <div className="flex justify-center py-16"><Spinner className="size-6" /></div>
+        <div className="flex justify-center py-16">
+          <Spinner className="size-6" />
+        </div>
       ) : (
         <DocArticle
           selected={selected}

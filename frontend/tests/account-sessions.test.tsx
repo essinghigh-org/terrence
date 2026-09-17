@@ -39,10 +39,7 @@ afterEach((): void => {
 });
 
 test("shows honest browser-session metadata and revokes a non-current session", async () => {
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
@@ -58,7 +55,8 @@ test("shows honest browser-session metadata and revokes a non-current session", 
               "last-rotated-at": "2026-07-29T11:00:00.000Z",
               "expires-at": "2026-08-28T10:00:00.000Z",
               "ip-address": "203.0.113.10",
-              "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+              "user-agent":
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
             },
           },
           {
@@ -70,7 +68,8 @@ test("shows honest browser-session metadata and revokes a non-current session", 
               "last-rotated-at": null,
               "expires-at": "2026-08-27T10:00:00.000Z",
               "ip-address": "198.51.100.7",
-              "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+              "user-agent":
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
             },
           },
           {
@@ -93,7 +92,7 @@ test("shows honest browser-session metadata and revokes a non-current session", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
@@ -106,10 +105,18 @@ test("shows honest browser-session metadata and revokes a non-current session", 
   if (currentRow === null || otherRow === null) throw new Error("Expected session rows");
 
   expect(view.getByText(/IP address and browser recorded when you signed in/)).toBeTruthy();
-  expect(within(currentRow).getByText("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")).toBeTruthy();
+  expect(
+    within(currentRow).getByText(
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    ),
+  ).toBeTruthy();
   expect(within(currentRow).getByText("Current")).toBeTruthy();
   expect(within(currentRow).queryByRole("button", { name: /Revoke session/ })).toBeNull();
-  expect(within(otherRow).getByText("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15")).toBeTruthy();
+  expect(
+    within(otherRow).getByText(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    ),
+  ).toBeTruthy();
   expect(within(otherRow).getByText("Not rotated yet")).toBeTruthy();
 
   const nullMetaRow = (await view.findByText("Unknown IP")).closest("tr");
@@ -123,26 +130,27 @@ test("shows honest browser-session metadata and revokes a non-current session", 
   });
   expect(view.getByText("203.0.113.10")).toBeTruthy();
   expect(view.getByText("Session revoked")).toBeTruthy();
-  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
-    requestUrl(input) === "/api/v2/account/sessions/session-other"
-    && init?.method === "DELETE")).toBeTrue();
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]): boolean =>
+        requestUrl(input) === "/api/v2/account/sessions/session-other" && init?.method === "DELETE",
+    ),
+  ).toBeTrue();
 });
 
 test("keeps session load errors local and retries to an honest empty state", async () => {
   let sessionRequests = 0;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     if (url === "/api/v2/account/sessions") {
       sessionRequests += 1;
-      return sessionRequests === 1
-        ? json({ errors: [{ title: "Service unavailable" }] }, 503)
-        : json({ data: [] });
+      return sessionRequests === 1 ? json({ errors: [{ title: "Service unavailable" }] }, 503) : json({ data: [] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>

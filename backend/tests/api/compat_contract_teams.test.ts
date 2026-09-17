@@ -79,7 +79,9 @@ describe("remote-workflow teams contract", () => {
   });
 
   it("lists teams with pagination metadata", async () => {
-    const response = await request(`/api/v2/organizations/${seed.orgName}/teams?page[number]=1&page[size]=10`, { headers });
+    const response = await request(`/api/v2/organizations/${seed.orgName}/teams?page[number]=1&page[size]=10`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "teams");
@@ -92,9 +94,7 @@ describe("remote-workflow teams contract", () => {
       method: "POST",
       headers,
       body: JSON.stringify({
-        data: [
-          { type: "users", id: seed.userId },
-        ],
+        data: [{ type: "users", id: seed.userId }],
       }),
     });
     expect(response.status).toBe(204);

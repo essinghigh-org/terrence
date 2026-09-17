@@ -6,15 +6,20 @@ async function api(
   path: string,
   body?: unknown,
   token?: string,
-): Promise<{ status: number; json: { data?: Record<string, unknown>; errors?: { status: string; title: string; detail?: string }[] } }> {
+): Promise<{
+  status: number;
+  json: { data?: Record<string, unknown>; errors?: { status: string; title: string; detail?: string }[] };
+}> {
   const headers: Record<string, string> = {};
   if (token !== undefined && token !== "") headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
-  const res = await app.handle(new Request(`http://localhost${path}`, {
-    method,
-    headers,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+  const res = await app.handle(
+    new Request(`http://localhost${path}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
   let json: { data?: Record<string, unknown>; errors?: { status: string; title: string; detail?: string }[] } = {};
   try {
     json = (await res.json()) as typeof json;
@@ -46,26 +51,41 @@ describe("project-owned variable sets", () => {
     expect(token).not.toBe("");
 
     orgName = `vsorg_${Date.now()}`;
-    const org = await api("POST", "/api/v2/organizations", {
-      data: { type: "organizations", attributes: { name: orgName } },
-    }, token);
+    const org = await api(
+      "POST",
+      "/api/v2/organizations",
+      {
+        data: { type: "organizations", attributes: { name: orgName } },
+      },
+      token,
+    );
     expect(org.status).toBe(201);
 
-    const project = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/projects`, {
-      data: { type: "projects", attributes: { name: "project-owned-test" } },
-    }, token);
+    const project = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/projects`,
+      {
+        data: { type: "projects", attributes: { name: "project-owned-test" } },
+      },
+      token,
+    );
     expect(project.status).toBe(201);
     projectId = (project.json.data?.["id"] as string) ?? "";
     expect(projectId).not.toBe("");
   });
 
   test("creates an org-owned variable set (no parent)", async () => {
-    const res = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
-      data: {
-        type: "varsets",
-        attributes: { name: "Org-wide vars", global: true },
+    const res = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`,
+      {
+        data: {
+          type: "varsets",
+          attributes: { name: "Org-wide vars", global: true },
+        },
       },
-    }, token);
+      token,
+    );
     expect(res.status).toBe(201);
     const attrs = res.json.data?.["attributes"] as Record<string, unknown> | undefined;
     expect(attrs?.["parent-project-id"]).toBeNull();
@@ -73,12 +93,17 @@ describe("project-owned variable sets", () => {
   });
 
   test("creates a project-owned variable set via parent-project-id", async () => {
-    const res = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
-      data: {
-        type: "varsets",
-        attributes: { name: "Project vars", "parent-project-id": projectId },
+    const res = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`,
+      {
+        data: {
+          type: "varsets",
+          attributes: { name: "Project vars", "parent-project-id": projectId },
+        },
       },
-    }, token);
+      token,
+    );
     expect(res.status).toBe(201);
     const attrs = res.json.data?.["attributes"] as Record<string, unknown> | undefined;
     expect(attrs?.["parent-project-id"]).toBe(projectId);
@@ -87,35 +112,60 @@ describe("project-owned variable sets", () => {
   });
 
   test("rejects global=true with parent-project-id (the reference format: mutually exclusive)", async () => {
-    const res = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
-      data: {
-        type: "varsets",
-        attributes: { name: "Bad", global: true, "parent-project-id": projectId },
+    const res = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`,
+      {
+        data: {
+          type: "varsets",
+          attributes: { name: "Bad", global: true, "parent-project-id": projectId },
+        },
       },
-    }, token);
+      token,
+    );
     expect(res.status).toBe(422);
   });
 
   test("rejects a parent project from another org", async () => {
     const otherOrgName = `vsorg2_${Date.now()}`;
-    await api("POST", "/api/v2/organizations", {
-      data: { type: "organizations", attributes: { name: otherOrgName } },
-    }, token);
-    const otherProject = await api("POST", `/api/v2/organizations/${encodeURIComponent(otherOrgName)}/projects`, {
-      data: { type: "projects", attributes: { name: "other" } },
-    }, token);
-    expect(otherProject.status).toBe(201);
-    const res = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
-      data: {
-        type: "varsets",
-        attributes: { name: "Cross-org", "parent-project-id": otherProject.json.data?.["id"] as string },
+    await api(
+      "POST",
+      "/api/v2/organizations",
+      {
+        data: { type: "organizations", attributes: { name: otherOrgName } },
       },
-    }, token);
+      token,
+    );
+    const otherProject = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(otherOrgName)}/projects`,
+      {
+        data: { type: "projects", attributes: { name: "other" } },
+      },
+      token,
+    );
+    expect(otherProject.status).toBe(201);
+    const res = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`,
+      {
+        data: {
+          type: "varsets",
+          attributes: { name: "Cross-org", "parent-project-id": otherProject.json.data?.["id"] as string },
+        },
+      },
+      token,
+    );
     expect(res.status).toBe(422);
   });
 
   test("filter[project][id] returns owned variable sets", async () => {
-    const res = await api("GET", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets?filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`, undefined, token);
+    const res = await api(
+      "GET",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets?filter%5Bproject%5D%5Bid%5D=${encodeURIComponent(projectId)}`,
+      undefined,
+      token,
+    );
     expect(res.status).toBe(200);
     const data = res.json.data as { id?: string }[] | undefined;
     const items = Array.isArray(data) ? data : [];
@@ -123,30 +173,50 @@ describe("project-owned variable sets", () => {
   });
 
   test("PATCH cannot change the owning project", async () => {
-    const created = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
-      data: {
-        type: "varsets",
-        attributes: { name: "Immutable parent", "parent-project-id": projectId },
+    const created = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`,
+      {
+        data: {
+          type: "varsets",
+          attributes: { name: "Immutable parent", "parent-project-id": projectId },
+        },
       },
-    }, token);
+      token,
+    );
     const varsetId = created.json.data?.["id"] as string;
-    const res = await api("PATCH", `/api/v2/varsets/${varsetId}`, {
-      data: { type: "varsets", attributes: { "parent-project-id": null } },
-    }, token);
+    const res = await api(
+      "PATCH",
+      `/api/v2/varsets/${varsetId}`,
+      {
+        data: { type: "varsets", attributes: { "parent-project-id": null } },
+      },
+      token,
+    );
     expect(res.status).toBe(422);
   });
 
   test("PATCH cannot make a project-owned set global", async () => {
-    const created = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
-      data: {
-        type: "varsets",
-        attributes: { name: "Project no-global", "parent-project-id": projectId },
+    const created = await api(
+      "POST",
+      `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`,
+      {
+        data: {
+          type: "varsets",
+          attributes: { name: "Project no-global", "parent-project-id": projectId },
+        },
       },
-    }, token);
+      token,
+    );
     const varsetId = created.json.data?.["id"] as string;
-    const res = await api("PATCH", `/api/v2/varsets/${varsetId}`, {
-      data: { type: "varsets", attributes: { global: true } },
-    }, token);
+    const res = await api(
+      "PATCH",
+      `/api/v2/varsets/${varsetId}`,
+      {
+        data: { type: "varsets", attributes: { global: true } },
+      },
+      token,
+    );
     expect(res.status).toBe(422);
   });
 

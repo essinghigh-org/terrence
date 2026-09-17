@@ -88,15 +88,17 @@ const SQLITE_MAGIC = "SQLite format 3" + String.fromCharCode(0);
  * versions, payload fractions, and text encoding. */
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
 function headerFieldsValid(header: Buffer): boolean {
-  return header.length >= 100
-    && header.subarray(0, 16).toString("latin1") === SQLITE_MAGIC
-    && header[18] === 1
-    && header[19] === 1
-    && header[21] === 64
-    && header[22] === 32
-    && header[23] === 32
-    && header.readUInt32BE(56) >= 1
-    && header.readUInt32BE(56) <= 3;
+  return (
+    header.length >= 100 &&
+    header.subarray(0, 16).toString("latin1") === SQLITE_MAGIC &&
+    header[18] === 1 &&
+    header[19] === 1 &&
+    header[21] === 64 &&
+    header[22] === 32 &&
+    header[23] === 32 &&
+    header.readUInt32BE(56) >= 1 &&
+    header.readUInt32BE(56) <= 3
+  );
 }
 
 /** Size rule for checkSqliteExport: the file must hold exactly page size
@@ -236,7 +238,12 @@ export async function sweepUploadTemps(storageDir: string): Promise<UploadSweepR
     invalidExports: await sweepInvalidExports(join(storageDir, "exports"), startedAt),
     orphanedModuleArchives: await sweepOrphanedModuleArchives(join(storageDir, "modules"), startedAt),
   };
-  const total = result.stateUploads + result.cvTemps + result.unclaimedArchives + result.invalidExports + result.orphanedModuleArchives;
+  const total =
+    result.stateUploads +
+    result.cvTemps +
+    result.unclaimedArchives +
+    result.invalidExports +
+    result.orphanedModuleArchives;
   if (total > 0) {
     log.info("Startup upload sweep removed leftover files", { ...result });
   }

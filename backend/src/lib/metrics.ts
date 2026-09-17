@@ -17,24 +17,13 @@
  * of the oldest queued job.
  */
 import { db } from "../db";
-import {
-  agentJobs,
-  agentPools,
-  agents,
-  organizations,
-  runs,
-  users,
-  workspaces,
-} from "../db/schema";
+import { agentJobs, agentPools, agents, organizations, runs, users, workspaces } from "../db/schema";
 import { and, count, eq, inArray, min, type SQL } from "drizzle-orm";
 import { databaseMetrics, databasePoolMetrics } from "../db";
 import { slowQueriesSnapshot, slowQueryFingerprints } from "./db-pool-metrics";
 import type { DbPoolMetrics, SlowQuery } from "./db-pool-metrics";
 import { configuredHeartbeatTimeoutMs } from "./agent-jobs";
-import {
-  checkOrganizationPermission,
-  workspaceIdsForPermission,
-} from "./utils";
+import { checkOrganizationPermission, workspaceIdsForPermission } from "./utils";
 import type { TokenScopes } from "./token-scopes";
 import { processHistory, processSnapshot, type ProcessSnapshot, type SampleWindow } from "./process-metrics";
 import { collectWebhookQueueMetrics, type WebhookQueueMetrics } from "./webhook-jobs";
@@ -107,9 +96,7 @@ export type MetricsCollection = Readonly<{
   agentPoolsTotal: number;
 }>;
 
-function runsByStatusFrom(
-  rows: readonly Readonly<{ status: string; value: number }>[],
-): Record<string, number> {
+function runsByStatusFrom(rows: readonly Readonly<{ status: string; value: number }>[]): Record<string, number> {
   return Object.fromEntries(rows.map((row): [string, number] => [row.status, row.value]));
 }
 
@@ -122,22 +109,24 @@ async function collectPoolMetrics(
   const now = Date.now();
 
   const [agentRows, jobRows, oldestRows] = await Promise.all([
-    db.select({ agentPoolId: agents.agentPoolId, status: agents.status, lastPingAt: agents.lastPingAt })
+    db
+      .select({ agentPoolId: agents.agentPoolId, status: agents.status, lastPingAt: agents.lastPingAt })
       .from(agents)
       .where(inArray(agents.agentPoolId, poolIds)),
-    db.select({ agentPoolId: agentJobs.agentPoolId, status: agentJobs.status, value: count() })
+    db
+      .select({ agentPoolId: agentJobs.agentPoolId, status: agentJobs.status, value: count() })
       .from(agentJobs)
-      .where(and(
-        inArray(agentJobs.agentPoolId, poolIds),
-        inArray(agentJobs.status, ["queued", "claimed", "errored"] as const),
-      ))
+      .where(
+        and(
+          inArray(agentJobs.agentPoolId, poolIds),
+          inArray(agentJobs.status, ["queued", "claimed", "errored"] as const),
+        ),
+      )
       .groupBy(agentJobs.agentPoolId, agentJobs.status),
-    db.select({ agentPoolId: agentJobs.agentPoolId, oldest: min(agentJobs.createdAt) })
+    db
+      .select({ agentPoolId: agentJobs.agentPoolId, oldest: min(agentJobs.createdAt) })
       .from(agentJobs)
-      .where(and(
-        inArray(agentJobs.agentPoolId, poolIds),
-        eq(agentJobs.status, "queued"),
-      ))
+      .where(and(inArray(agentJobs.agentPoolId, poolIds), eq(agentJobs.status, "queued")))
       .groupBy(agentJobs.agentPoolId),
   ]);
 
@@ -187,7 +176,17 @@ async function collectPoolMetrics(
 
 /** Instance-wide metrics (legacy tokens only). */
 export async function collectInstanceMetrics(): Promise<NonNullable<MetricsCollection["instance"]>> {
-  const [userCount, organizationCount, workspaceCount, runCount, runsByStatus, database, webhookQueue, outboxQueue, resourceBudgets] = await Promise.all([
+  const [
+    userCount,
+    organizationCount,
+    workspaceCount,
+    runCount,
+    runsByStatus,
+    database,
+    webhookQueue,
+    outboxQueue,
+    resourceBudgets,
+  ] = await Promise.all([
     db.select({ value: count() }).from(users),
     db.select({ value: count() }).from(organizations),
     db.select({ value: count() }).from(workspaces),
@@ -227,8 +226,7 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
 export async function collectLegacyMetrics(): Promise<MetricsCollection> {
   const [instance, pools] = await Promise.all([
     collectInstanceMetrics(),
-    db.select({ id: agentPools.id, name: agentPools.name, orgId: agentPools.orgId })
-      .from(agentPools),
+    db.select({ id: agentPools.id, name: agentPools.name, orgId: agentPools.orgId }).from(agentPools),
   ]);
   const agentPoolMetrics = await collectPoolMetrics(pools);
   return {
@@ -264,37 +262,43 @@ export async function collectScopedMetrics(
   for (const orgId of new Set(scope.orgs)) {
     // read-workspaces eligibility: scope org coverage + grant + principal access.
     const canReadWorkspaces = await checkOrganizationPermission(
-      orgId, userId, orgTokenId, teamTokenId, "read-workspaces",
+      orgId,
+      userId,
+      orgTokenId,
+      teamTokenId,
+      "read-workspaces",
     );
     if (canReadWorkspaces) {
       // Resolve the workspace set the scope permits within this org: null =
       // all workspaces, otherwise an explicit ID list (project/workspace/tag
       // selectors) that run counts must be restricted to.
-      const allowedWorkspaceIds = await workspaceIdsForPermission(
-        orgId, userId, orgTokenId, teamTokenId, "read",
-      );
+      const allowedWorkspaceIds = await workspaceIdsForPermission(orgId, userId, orgTokenId, teamTokenId, "read");
       if (allowedWorkspaceIds !== null && allowedWorkspaceIds.length === 0) {
         // The scope cannot reach any workspace in this org.
         orgs.push({ orgId, workspaces: 0, runsByStatus: {} });
       } else {
-        const workspaceFilter: SQL | undefined = allowedWorkspaceIds === null
-          ? undefined
-          : inArray(workspaces.id, [...allowedWorkspaceIds]);
+        const workspaceFilter: SQL | undefined =
+          allowedWorkspaceIds === null ? undefined : inArray(workspaces.id, [...allowedWorkspaceIds]);
         const [workspaceCount, runsByStatus] = await Promise.all([
           workspaceFilter === undefined
             ? db.select({ value: count() }).from(workspaces).where(eq(workspaces.orgId, orgId))
-            : db.select({ value: count() }).from(workspaces).where(and(eq(workspaces.orgId, orgId), workspaceFilter)),
+            : db
+                .select({ value: count() })
+                .from(workspaces)
+                .where(and(eq(workspaces.orgId, orgId), workspaceFilter)),
           workspaceFilter === undefined
-            ? db.select({ status: runs.status, value: count() })
-              .from(runs)
-              .innerJoin(workspaces, eq(runs.workspaceId, workspaces.id))
-              .where(eq(workspaces.orgId, orgId))
-              .groupBy(runs.status)
-            : db.select({ status: runs.status, value: count() })
-              .from(runs)
-              .innerJoin(workspaces, eq(runs.workspaceId, workspaces.id))
-              .where(and(eq(workspaces.orgId, orgId), workspaceFilter))
-              .groupBy(runs.status),
+            ? db
+                .select({ status: runs.status, value: count() })
+                .from(runs)
+                .innerJoin(workspaces, eq(runs.workspaceId, workspaces.id))
+                .where(eq(workspaces.orgId, orgId))
+                .groupBy(runs.status)
+            : db
+                .select({ status: runs.status, value: count() })
+                .from(runs)
+                .innerJoin(workspaces, eq(runs.workspaceId, workspaces.id))
+                .where(and(eq(workspaces.orgId, orgId), workspaceFilter))
+                .groupBy(runs.status),
         ]);
         orgs.push({
           orgId,
@@ -306,7 +310,8 @@ export async function collectScopedMetrics(
 
     // Agent pool metrics require the agent-pools:read grant for the org.
     if (await checkOrganizationPermission(orgId, userId, orgTokenId, teamTokenId, "read-agent-pools")) {
-      const orgPools = await db.select({ id: agentPools.id, name: agentPools.name, orgId: agentPools.orgId })
+      const orgPools = await db
+        .select({ id: agentPools.id, name: agentPools.name, orgId: agentPools.orgId })
         .from(agentPools)
         .where(eq(agentPools.orgId, orgId));
       pools.push(...orgPools);

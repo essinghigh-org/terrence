@@ -23,14 +23,16 @@ describe("preserved Explorer bulk-action compatibility", () => {
   const outsiderToken = `explorer-bulk-outsider-token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, token = ownerToken): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -50,7 +52,9 @@ describe("preserved Explorer bulk-action compatibility", () => {
   });
 
   afterAll(async () => {
-    await db.delete(explorerBulkActionRecords).where(inArray(explorerBulkActionRecords.workspaceId, [workspaceId, queryWorkspaceId]));
+    await db
+      .delete(explorerBulkActionRecords)
+      .where(inArray(explorerBulkActionRecords.workspaceId, [workspaceId, queryWorkspaceId]));
     await db.delete(workspaces).where(eq(workspaces.orgId, orgId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, ownerId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, outsiderId));
@@ -78,23 +82,25 @@ describe("preserved Explorer bulk-action compatibility", () => {
     const response = await request(path, "POST", targetPayload);
     expect(response.status).toBe(201);
     const responseBody = await response.json();
-    expect(responseBody.data).toEqual(expect.objectContaining({
-      id: expect.stringMatching(/^ebar-/),
-      type: "change-requests",
-      attributes: expect.objectContaining({
-        subject,
-        message: "Update every selected workspace.",
-        status: "pending",
-        "created-at": expect.any(String),
-        "updated-at": expect.any(String),
+    expect(responseBody.data).toEqual(
+      expect.objectContaining({
+        id: expect.stringMatching(/^ebar-/),
+        type: "change-requests",
+        attributes: expect.objectContaining({
+          subject,
+          message: "Update every selected workspace.",
+          status: "pending",
+          "created-at": expect.any(String),
+          "updated-at": expect.any(String),
+        }),
+        relationships: expect.objectContaining({
+          organization: { data: { id: orgId, type: "organizations" } },
+          workspace: { data: expect.objectContaining({ type: "workspaces" }) },
+          "created-by": { data: { id: ownerId, type: "users" } },
+          "resolved-by": { data: null },
+        }),
       }),
-      relationships: expect.objectContaining({
-        organization: { data: { id: orgId, type: "organizations" } },
-        workspace: { data: expect.objectContaining({ type: "workspaces" }) },
-        "created-by": { data: { id: ownerId, type: "users" } },
-        "resolved-by": { data: null },
-      }),
-    }));
+    );
     expect(responseBody.data.attributes).not.toHaveProperty("organization_id");
     expect(responseBody.data.attributes).not.toHaveProperty("created_by");
     expect(responseBody.meta).toEqual({
@@ -102,7 +108,9 @@ describe("preserved Explorer bulk-action compatibility", () => {
       "action-inputs": { subject, message: "Update every selected workspace." },
       "created-count": 2,
     });
-    const targetRows = await db.query.explorerBulkActionRecords.findMany({ where: eq(explorerBulkActionRecords.subject, subject) });
+    const targetRows = await db.query.explorerBulkActionRecords.findMany({
+      where: eq(explorerBulkActionRecords.subject, subject),
+    });
     expect(targetRows.map((row): string => row.workspaceId).sort()).toEqual([queryWorkspaceId, workspaceId].sort());
     expect(targetRows.some((row): boolean => row.id === responseBody.data.id)).toBeTrue();
 
@@ -121,7 +129,9 @@ describe("preserved Explorer bulk-action compatibility", () => {
       },
     });
     expect(queryResponse.status).toBe(201);
-    const queryRows = await db.query.explorerBulkActionRecords.findMany({ where: eq(explorerBulkActionRecords.subject, querySubject) });
+    const queryRows = await db.query.explorerBulkActionRecords.findMany({
+      where: eq(explorerBulkActionRecords.subject, querySubject),
+    });
     expect(queryRows.map((row): string => row.workspaceId)).toEqual([queryWorkspaceId]);
 
     const constrainedResponse = await request(path, "POST", {
@@ -141,30 +151,40 @@ describe("preserved Explorer bulk-action compatibility", () => {
       },
     });
     expect(constrainedResponse.status).toBe(422);
-    expect((await db.query.explorerBulkActionRecords.findMany({
-      where: eq(explorerBulkActionRecords.subject, `Constrained ${suffix}`),
-    }))).toEqual([]);
+    expect(
+      await db.query.explorerBulkActionRecords.findMany({
+        where: eq(explorerBulkActionRecords.subject, `Constrained ${suffix}`),
+      }),
+    ).toEqual([]);
 
-    expect((await request(path, "POST", {
-      data: {
-        type: "bulk_actions",
-        attributes: {
-          action_type: "change_requests",
-          action_inputs: { subject: `Too many ${suffix}`, message: "Reject oversized selections." },
-          target_ids: Array.from({ length: 501 }, (): string => workspaceId),
-        },
-      },
-    })).status).toBe(422);
+    expect(
+      (
+        await request(path, "POST", {
+          data: {
+            type: "bulk_actions",
+            attributes: {
+              action_type: "change_requests",
+              action_inputs: { subject: `Too many ${suffix}`, message: "Reject oversized selections." },
+              target_ids: Array.from({ length: 501 }, (): string => workspaceId),
+            },
+          },
+        })
+      ).status,
+    ).toBe(422);
 
-    expect((await request(path, "POST", {
-      data: {
-        type: "bulk_actions",
-        attributes: {
-          action_type: "change_requests",
-          action_inputs: { subject: "Missing targets", message: "No selector." },
-        },
-      },
-    })).status).toBe(422);
+    expect(
+      (
+        await request(path, "POST", {
+          data: {
+            type: "bulk_actions",
+            attributes: {
+              action_type: "change_requests",
+              action_inputs: { subject: "Missing targets", message: "No selector." },
+            },
+          },
+        })
+      ).status,
+    ).toBe(422);
   });
 
   it("does not expose the removed workspace change-request routes", async () => {

@@ -58,7 +58,10 @@ export async function findVcsIntegrationUsage(
 }
 
 function usageSummary(label: string, resources: readonly Readonly<{ name: string }>[]): string {
-  const names = resources.slice(0, 5).map((resource): string => resource.name).join(", ");
+  const names = resources
+    .slice(0, 5)
+    .map((resource): string => resource.name)
+    .join(", ");
   const remaining = resources.length > 5 ? ", …" : "";
   return `${String(resources.length)} ${label}${resources.length === 1 ? "" : "s"}${names === "" ? "" : ` (${names}${remaining})`}`;
 }

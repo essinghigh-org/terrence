@@ -52,7 +52,10 @@ async function signupAndToken(): Promise<{ token: string; userId: string }> {
   const username = `av-e2e-${Date.now().toString(36)}`;
   const password = "av-e2e-password-123";
   await api("/api/v2/users", { method: "POST", body: { data: { type: "users", attributes: { username, password } } } });
-  const login = await api("/api/v2/users/login", { method: "POST", body: { data: { attributes: { username, password } } } });
+  const login = await api("/api/v2/users/login", {
+    method: "POST",
+    body: { data: { attributes: { username, password } } },
+  });
   expect(login.status).toBe(200);
   const token = login.json["data"]?.attributes?.token as string;
   expect(typeof token).toBe("string");

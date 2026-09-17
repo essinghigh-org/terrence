@@ -129,14 +129,11 @@ export function extractFieldErrors(rawErrors: readonly DeepReadonly<JsonObject>[
     if (!isString(pointer) || pointer === "") continue;
     const detail = isString(entry["detail"]) ? entry["detail"] : "";
     if (detail === "") continue;
-    const path = pointer
-      .replace(/^\/data\/attributes\//, "")
-      .replace(/^\//, "");
+    const path = pointer.replace(/^\/data\/attributes\//, "").replace(/^\//, "");
     if (path !== "") fieldErrors[path] = detail;
   }
   return fieldErrors;
 }
-
 
 export function getAuthToken(): string | null {
   if (accessToken === null) return null;
@@ -157,16 +154,10 @@ export function isRefreshableSession(): boolean {
   return refreshableSession;
 }
 
-export function setAuthToken(
-  token: string,
-  expiresAt?: string | number | null,
-  refreshable = false,
-): void {
+export function setAuthToken(token: string, expiresAt?: string | number | null, refreshable = false): void {
   accessToken = token;
   const normalizedExpiry = isString(expiresAt) ? Date.parse(expiresAt) : expiresAt;
-  accessTokenExpiry = isNumber(normalizedExpiry) && Number.isFinite(normalizedExpiry)
-    ? normalizedExpiry
-    : null;
+  accessTokenExpiry = isNumber(normalizedExpiry) && Number.isFinite(normalizedExpiry) ? normalizedExpiry : null;
   refreshableSession = refreshable;
   storageRemove(SESSION_EXPIRED_KEY);
   window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
@@ -242,15 +233,11 @@ async function refreshAccessToken(force = false): Promise<string | null> {
     if (!response.ok) return null;
     // SAFETY: /users/refresh returns the JSON:API access-token document; its
     // token and expired-at fields are typeof-checked below.
-    const document = await readResponseBody(response) as AccessTokenDocument;
+    const document = (await readResponseBody(response)) as AccessTokenDocument;
     const token = document.data?.attributes?.token;
     const expiresAt = document.data?.attributes?.["expired-at"];
     if (!isString(token) || token === "") return null;
-    setAuthToken(
-      token,
-      isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null,
-      true,
-    );
+    setAuthToken(token, isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null, true);
     return token;
   })().finally((): void => {
     refreshRequest = null;
@@ -258,7 +245,11 @@ async function refreshAccessToken(force = false): Promise<string | null> {
   return refreshRequest;
 }
 
-async function sendApiRequest(url: string, options: ReadonlyRequestInit = {}, token: string | null = null): Promise<Response> {
+async function sendApiRequest(
+  url: string,
+  options: ReadonlyRequestInit = {},
+  token: string | null = null,
+): Promise<Response> {
   // SAFETY: Headers accepts record and tuple-array shapes; the readonly
   // modifiers on the stored options are compile-time only.
   const headers = new Headers(options.headers as HeadersInit | undefined);
@@ -288,19 +279,28 @@ function isAuthEndpoint(url: string): boolean {
   return url.endsWith("/users/login") || url.endsWith("/users/refresh") || url.endsWith("/users/logout");
 }
 
-function shouldRetryWorkspace404(status: number, method: string | undefined, token: string | null, url: string): boolean {
+function shouldRetryWorkspace404(
+  status: number,
+  method: string | undefined,
+  token: string | null,
+  url: string,
+): boolean {
   // A stale in-memory token can yield 404 on workspace-scoped reads
   // when the principal lacks that workspace. Har review showed 5 rapid
   // 404s for /workspaces/ws-…/runs with Bearer VvQ… while the same URL
   // succeeded with HrTW… after a refresh. Retry a single 404 via the
   // refresh cookie when in a refreshable session so the correct principal
   // is picked up without surfacing "Run history may be out of date".
-  return status === 404
-    && ["GET", "HEAD"].includes((method ?? "GET").toUpperCase())
-    && hasUsableToken(token)
-    && isRefreshableSession()
-    && /\/api\/v2\/workspaces\/[^/]+\/(runs|state-versions|vars|varsets|resources|dependency-graph|current-state-version-outputs|readme)$/.test(url.split("?")[0] ?? url)
-    && !isAuthEndpoint(url);
+  return (
+    status === 404 &&
+    ["GET", "HEAD"].includes((method ?? "GET").toUpperCase()) &&
+    hasUsableToken(token) &&
+    isRefreshableSession() &&
+    /\/api\/v2\/workspaces\/[^/]+\/(runs|state-versions|vars|varsets|resources|dependency-graph|current-state-version-outputs|readme)$/.test(
+      url.split("?")[0] ?? url,
+    ) &&
+    !isAuthEndpoint(url)
+  );
 }
 
 async function throwApiError(response: ReadonlyResponse, token: string | null, url: string): Promise<never> {
@@ -315,8 +315,7 @@ async function throwApiError(response: ReadonlyResponse, token: string | null, u
   const title = isString(rawTitle) ? rawTitle : null;
   const rawCode = firstErr?.["code"];
   const code = isString(rawCode) && rawCode.trim() !== "" ? rawCode.trim() : `HTTP_${response.status}`;
-  const requestId = response.headers.get("X-Request-Id")
-    ?? response.headers.get("X-Correlation-Id");
+  const requestId = response.headers.get("X-Request-Id") ?? response.headers.get("X-Correlation-Id");
   throw new ApiError(
     response.status,
     detail ?? title ?? `API request failed (${response.status})`,
@@ -331,13 +330,11 @@ async function throwApiError(response: ReadonlyResponse, token: string | null, u
 async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
   // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
   // are used verbatim; everything else is relative to the v2 API base.
-  const url = endpoint.startsWith("/api/")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint}`;
+  const url = endpoint.startsWith("/api/") ? endpoint : `${API_BASE_URL}${endpoint}`;
   let token = getAuthToken();
   const expiresAt = getAuthTokenExpiry();
   if (shouldRefreshBeforeRequest(token, expiresAt)) {
-    token = await refreshAccessToken().catch((): null => null) ?? token;
+    token = (await refreshAccessToken().catch((): null => null)) ?? token;
   }
   let response = await sendApiRequest(url, options, token);
   if (response.status === 401 && hasUsableToken(token) && isRefreshableSession() && !isAuthEndpoint(url)) {
@@ -379,22 +376,40 @@ type PagedCollection<T> = {
 };
 
 function checkPaginationBudget(maxPages: number, maxRecords: number, retryAttempts: number): void {
-  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGINATED_PAGES
-    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS
-    || !Number.isSafeInteger(retryAttempts) || retryAttempts < 0 || retryAttempts > 3) {
+  if (
+    !Number.isSafeInteger(maxPages) ||
+    maxPages < 1 ||
+    maxPages > MAX_PAGINATED_PAGES ||
+    !Number.isSafeInteger(maxRecords) ||
+    maxRecords < 1 ||
+    maxRecords > MAX_PAGINATED_RECORDS ||
+    !Number.isSafeInteger(retryAttempts) ||
+    retryAttempts < 0 ||
+    retryAttempts > 3
+  ) {
     throw new Error("Invalid pagination budget.");
   }
 }
 
 async function sleepWithAbort(delay: number, signal: Readonly<AbortSignal> | undefined): Promise<void> {
   await new Promise<void>((resolve, reject): void => {
-    const abort = (): void => { clearTimeout(timer); reject(new DOMException("Export cancelled", "AbortError")); };
-    const timer = setTimeout((): void => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException("Export cancelled", "AbortError"));
+    };
+    const timer = setTimeout((): void => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delay);
     signal?.addEventListener("abort", abort, { once: true });
   });
 }
 
-async function fetchPageWithRetry<T>(pageEndpoint: string, signal: Readonly<AbortSignal> | undefined, retryAttempts: number): Promise<PagedCollection<T>> {
+async function fetchPageWithRetry<T>(
+  pageEndpoint: string,
+  signal: Readonly<AbortSignal> | undefined,
+  retryAttempts: number,
+): Promise<PagedCollection<T>> {
   let retries = 0;
   for (;;) {
     try {
@@ -413,7 +428,8 @@ async function fetchPageWithRetry<T>(pageEndpoint: string, signal: Readonly<Abor
 
 function nextPageEndpoint(pageEndpoint: string, nextPage: unknown): string | null {
   if (nextPage === undefined || nextPage === null) return null;
-  if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) throw new Error("The server returned invalid pagination metadata.");
+  if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1)
+    throw new Error("The server returned invalid pagination metadata.");
   const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
   nextUrl.searchParams.set("page[number]", String(nextPage));
   return `${nextUrl.pathname}${nextUrl.search}`;
@@ -421,7 +437,8 @@ function nextPageEndpoint(pageEndpoint: string, nextPage: unknown): string | nul
 
 function assertPageNotRepeated(alreadyVisited: boolean, visitedCount: number, maxPages: number): void {
   if (alreadyVisited) throw new Error("The server repeated a page; the result is incomplete.");
-  if (visitedCount >= maxPages) throw new Error(`The result exceeds ${maxPages} pages. Narrow the query and try again.`);
+  if (visitedCount >= maxPages)
+    throw new Error(`The result exceeds ${maxPages} pages. Narrow the query and try again.`);
 }
 
 /** Explicit traversal only: ordinary list views should request a single page. */
@@ -450,7 +467,8 @@ export async function fetchAllApiPages<T>(
     const response = await fetchPageWithRetry<T>(pageEndpoint, signal, retryAttempts);
     signal?.throwIfAborted();
     if (!Array.isArray(response.data)) throw new Error("The server returned an invalid collection.");
-    if (data.length + response.data.length > maxRecords) throw new Error(`The result exceeds ${maxRecords} records. Narrow the query and try again.`);
+    if (data.length + response.data.length > maxRecords)
+      throw new Error(`The result exceeds ${maxRecords} records. Narrow the query and try again.`);
     data.push(...response.data);
     options.onProgress?.(data.length);
     const next = nextPageEndpoint(pageEndpoint, response.meta?.pagination?.["next-page"]);
@@ -477,7 +495,7 @@ function asRecordOrNull(value: unknown): JsonObject | null {
 function reasoningEffortValue(value: unknown): ReasoningEffort | null {
   // SAFETY: the set membership check is the boundary validation; unknown
   // backend values degrade to null so the UI renders the default effort.
-  return isString(value) && REASONING_EFFORT_SET.has(value) ? value as ReasoningEffort : null;
+  return isString(value) && REASONING_EFFORT_SET.has(value) ? (value as ReasoningEffort) : null;
 }
 
 /** Parse a JSON:API error document from a failed response, or [] when it is not JSON. */
@@ -486,7 +504,7 @@ async function parseErrorBody(response: ReadonlyResponse): Promise<readonly Json
   const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
   // SAFETY: Array.isArray is the boundary check; entries are only read via
   // typeof-validated string fields in extractFieldErrors below.
-  return Array.isArray(rawErrors) ? rawErrors as JsonObject[] : [];
+  return Array.isArray(rawErrors) ? (rawErrors as JsonObject[]) : [];
 }
 
 /**
@@ -500,13 +518,42 @@ export type ExplainStreamEvent = Readonly<
   | { name: "thinking"; data: Readonly<{ text: string }> }
   | { name: "content"; data: Readonly<{ text: string }> }
   | { name: "content-reset"; data: Readonly<{ text: string }> }
-  | { name: "done"; data: Readonly<{ model: string; "reasoning-effort": ReasoningEffort | null; "generated-at": string; cached?: boolean }> }
+  | {
+      name: "done";
+      data: Readonly<{
+        model: string;
+        "reasoning-effort": ReasoningEffort | null;
+        "generated-at": string;
+        cached?: boolean;
+      }>;
+    }
   | { name: "error"; data: Readonly<{ message: string }> }
-  | { name: "progress"; data: Readonly<{ status: string; "job-id": string; runId: string; kind: ExplainKind; "created-at": string; "updated-at": string }> }
+  | {
+      name: "progress";
+      data: Readonly<{
+        status: string;
+        "job-id": string;
+        runId: string;
+        kind: ExplainKind;
+        "created-at": string;
+        "updated-at": string;
+      }>;
+    }
 >;
 
 /** GET the cached (or job-status) explanation envelope for a run. */
-export async function fetchExplanation(runId: string, kind: ExplainKind): Promise<{ explanation: string; model: string; reasoningEffort: ReasoningEffort | null; generatedAt: string; cached: boolean; status?: string | undefined; jobId?: string | undefined } | null> {
+export async function fetchExplanation(
+  runId: string,
+  kind: ExplainKind,
+): Promise<{
+  explanation: string;
+  model: string;
+  reasoningEffort: ReasoningEffort | null;
+  generatedAt: string;
+  cached: boolean;
+  status?: string | undefined;
+  jobId?: string | undefined;
+} | null> {
   let resp: unknown;
   try {
     resp = await fetchApi(`/runs/${encodeURIComponent(runId)}/explain?kind=${encodeURIComponent(kind)}`);
@@ -518,16 +565,33 @@ export async function fetchExplanation(runId: string, kind: ExplainKind): Promis
   if (data === undefined) return null;
   const d = data;
   if (typeof d["explanation"] === "string" && d["explanation"] !== "") {
-    return { explanation: d["explanation"], model: typeof d["model"] === "string" ? d["model"] : "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["generated-at"] === "string" ? d["generated-at"] : new Date().toISOString(), cached: d["cached"] === true };
+    return {
+      explanation: d["explanation"],
+      model: typeof d["model"] === "string" ? d["model"] : "",
+      reasoningEffort: reasoningEffortValue(d["reasoning-effort"]),
+      generatedAt: typeof d["generated-at"] === "string" ? d["generated-at"] : new Date().toISOString(),
+      cached: d["cached"] === true,
+    };
   }
   if (typeof d["status"] === "string") {
-    return { explanation: "", model: "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["updated-at"] === "string" ? d["updated-at"] : "", cached: false, status: d["status"], jobId: typeof d["job-id"] === "string" ? d["job-id"] : undefined };
+    return {
+      explanation: "",
+      model: "",
+      reasoningEffort: reasoningEffortValue(d["reasoning-effort"]),
+      generatedAt: typeof d["updated-at"] === "string" ? d["updated-at"] : "",
+      cached: false,
+      status: d["status"],
+      jobId: typeof d["job-id"] === "string" ? d["job-id"] : undefined,
+    };
   }
   return null;
 }
 
 /** Enqueue a durable explanation job (non-streaming). Returns the job envelope. */
-export async function enqueueExplanation(runId: string, kind: ExplainKind): Promise<{ status: string; jobId?: string | undefined }> {
+export async function enqueueExplanation(
+  runId: string,
+  kind: ExplainKind,
+): Promise<{ status: string; jobId?: string | undefined }> {
   // SAFETY: the endpoint contract returns this envelope; the autofix stripped
   // a redundant cast that also carried the type for the narrowing below.
   const resp = await fetchApi<{ data?: { attributes?: Record<string, unknown> } }>(
@@ -535,7 +599,8 @@ export async function enqueueExplanation(runId: string, kind: ExplainKind): Prom
     { method: "POST", body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind } } }) },
   );
   const attrs = resp.data?.attributes;
-  if (attrs !== undefined && typeof attrs["status"] === "string") return { status: attrs["status"], jobId: typeof attrs["job-id"] === "string" ? attrs["job-id"] : undefined };
+  if (attrs !== undefined && typeof attrs["status"] === "string")
+    return { status: attrs["status"], jobId: typeof attrs["job-id"] === "string" ? attrs["job-id"] : undefined };
   if (attrs !== undefined && typeof attrs["explanation"] === "string") return { status: "succeeded" };
   return { status: "queued" };
 }
@@ -630,7 +695,14 @@ async function replayCachedExplanation(
   const reasoningEffort = reasoningEffortValue(attributes["reasoning-effort"]);
   onEvent({ name: "meta", data: { kind, model: attributes.model ?? "", "reasoning-effort": reasoningEffort } });
   onEvent({ name: "content", data: { text: attributes.explanation } });
-  onEvent({ name: "done", data: { model: attributes.model ?? "", "reasoning-effort": reasoningEffort, "generated-at": new Date().toISOString() } });
+  onEvent({
+    name: "done",
+    data: {
+      model: attributes.model ?? "",
+      "reasoning-effort": reasoningEffort,
+      "generated-at": new Date().toISOString(),
+    },
+  });
   return true;
 }
 
@@ -769,7 +841,10 @@ function explainDoneEvent(object: ExplainPayloadFields): ExplainStreamEvent {
 }
 
 function explainErrorEvent(object: ExplainPayloadFields): ExplainStreamEvent {
-  const message = isString(object["message"]) && object["message"] !== "" ? object["message"] : "The explainer reported an unknown error";
+  const message =
+    isString(object["message"]) && object["message"] !== ""
+      ? object["message"]
+      : "The explainer reported an unknown error";
   return { name: "error", data: { message } };
 }
 
@@ -780,7 +855,10 @@ function explainProgressEvent(object: ExplainPayloadFields): ExplainStreamEvent 
   const kind: ExplainKind = object["kind"] === "apply" ? "apply" : "plan";
   const createdAt = isString(object["created-at"]) ? object["created-at"] : "";
   const updatedAt = isString(object["updated-at"]) ? object["updated-at"] : "";
-  return { name: "progress", data: { status, "job-id": jobId, runId, kind, "created-at": createdAt, "updated-at": updatedAt } };
+  return {
+    name: "progress",
+    data: { status, "job-id": jobId, runId, kind, "created-at": createdAt, "updated-at": updatedAt },
+  };
 }
 
 function parseExplainFrame(frame: string): ExplainStreamEvent | null {
@@ -892,7 +970,7 @@ export async function fetchRunLogTail(
 
   const token = await prepareAuthToken();
   const first = await send(token);
-  const response = await maybeRefreshLogResponse(send, token, first.status) ?? first;
+  const response = (await maybeRefreshLogResponse(send, token, first.status)) ?? first;
 
   if (!response.ok) {
     throw new ApiError(response.status, `Could not read the ${phase} log (${response.status})`);
@@ -928,14 +1006,8 @@ export async function fetchRunLogTail(
 export async function prepareAuthToken(): Promise<string | null> {
   let token = getAuthToken();
   const expiresAt = getAuthTokenExpiry();
-  if (
-    token !== null
-    && token !== ""
-    && expiresAt !== null
-    && expiresAt <= Date.now()
-    && isRefreshableSession()
-  ) {
-    token = await refreshAccessToken().catch((): null => null) ?? token;
+  if (token !== null && token !== "" && expiresAt !== null && expiresAt <= Date.now() && isRefreshableSession()) {
+    token = (await refreshAccessToken().catch((): null => null)) ?? token;
   }
   return token;
 }

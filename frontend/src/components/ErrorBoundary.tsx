@@ -21,7 +21,10 @@ export class ErrorBoundary extends Component<Readonly<{ children: ReactNode }>, 
 
     return (
       <main className="flex min-h-screen items-center justify-center bg-background p-6">
-        <section role="alert" className="flex max-w-md flex-col gap-4 rounded-lg border bg-card p-6 text-card-foreground shadow-sm">
+        <section
+          role="alert"
+          className="flex max-w-md flex-col gap-4 rounded-lg border bg-card p-6 text-card-foreground shadow-sm"
+        >
           <Terrence pose="failed" className="mx-auto w-44" />
           <div className="flex flex-col gap-2 text-center">
             <h1 className="font-heading text-2xl font-semibold">Something went wrong</h1>
@@ -29,7 +32,13 @@ export class ErrorBoundary extends Component<Readonly<{ children: ReactNode }>, 
               Reload the page to try again. Any unsaved changes on this page may be lost.
             </p>
           </div>
-          <Button onClick={(): void => { window.location.reload(); }}>Reload page</Button>
+          <Button
+            onClick={(): void => {
+              window.location.reload();
+            }}
+          >
+            Reload page
+          </Button>
         </section>
       </main>
     );

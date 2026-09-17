@@ -50,9 +50,10 @@ function safeParseScopes(raw: string | null): TokenScopes | null {
 /** Build per-request authorization context, rejecting missing or deleted token principals. */
 async function authenticatedSession(token: McpToken | null, tokenError: string | null): Promise<McpSession | null> {
   if (token === null || tokenError !== null) return null;
-  const team = token.teamId === null
-    ? undefined
-    : await db.query.teams.findFirst({ where: eq(teams.id, token.teamId), columns: { id: true, orgId: true } });
+  const team =
+    token.teamId === null
+      ? undefined
+      : await db.query.teams.findFirst({ where: eq(teams.id, token.teamId), columns: { id: true, orgId: true } });
   if (token.teamId !== null && team === undefined) return null;
   return {
     userId: token.userId,
@@ -100,8 +101,9 @@ function validOrigin(request: Request): boolean {
   }
   const configured = executionSetting("CORS_ORIGIN");
   if (configured.includes(origin)) return true;
-  return process.env.NODE_ENV !== "production"
-    && (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173");
+  return (
+    process.env.NODE_ENV !== "production" && (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173")
+  );
 }
 
 /** Reject the removed standalone SSE transport and advertise POST in Allow. */
@@ -117,7 +119,10 @@ function transportValidation(request: Request, parsed: ParsedMcpRequest): McpReq
     return { status: 415, response: mcpError(parsed.id, -32600, "Content-Type must be application/json") };
   }
   if (!acceptsModernMcp(request.headers)) {
-    return { status: 406, response: mcpError(parsed.id, -32600, "Accept must include application/json and text/event-stream") };
+    return {
+      status: 406,
+      response: mcpError(parsed.id, -32600, "Accept must include application/json and text/event-stream"),
+    };
   }
   return validateModernMcpHeaders(request.headers, parsed);
 }
@@ -162,7 +167,8 @@ function discover(id: JsonRpcId): DispatchResult {
     body: mcpSuccess(id, {
       supportedVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
       capabilities: MCP_SERVER_CAPABILITIES,
-      instructions: "Terrence exposes permission-scoped infrastructure workspace, run, state, project, and variable tools.",
+      instructions:
+        "Terrence exposes permission-scoped infrastructure workspace, run, state, project, and variable tools.",
       ttlMs: 300_000,
       cacheScope: "private",
     }),
@@ -172,7 +178,10 @@ function discover(id: JsonRpcId): DispatchResult {
 /** Return the permission-filtered, unpaginated tool catalog without cache reuse. */
 function listTools(id: JsonRpcId, session: McpSession, params: Readonly<Record<string, unknown>>): DispatchResult {
   if (params["cursor"] !== undefined) {
-    return { status: 200, body: mcpError(id, -32602, "Terrence MCP does not paginate its tool catalog; cursor must be omitted") };
+    return {
+      status: 200,
+      body: mcpError(id, -32602, "Terrence MCP does not paginate its tool catalog; cursor must be omitted"),
+    };
   }
   const tools = allMcpTools
     .filter((tool): boolean => toolPermittedTo(session, tool))
@@ -189,7 +198,11 @@ function listTools(id: JsonRpcId, session: McpSession, params: Readonly<Record<s
 }
 
 /** Authorize and execute a tool, exposing expected failures but logging unexpected exceptions privately. */
-async function callTool(id: JsonRpcId, session: McpSession, params: Readonly<Record<string, unknown>>): Promise<DispatchResult> {
+async function callTool(
+  id: JsonRpcId,
+  session: McpSession,
+  params: Readonly<Record<string, unknown>>,
+): Promise<DispatchResult> {
   const toolName = typeof params["name"] === "string" ? params["name"] : "";
   const tool = allMcpTools.find((candidate) => candidate.name === toolName);
   if (tool === undefined) return { status: 200, body: mcpError(id, -32602, `Unknown tool: ${toolName}`) };

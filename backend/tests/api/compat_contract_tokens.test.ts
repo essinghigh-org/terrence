@@ -101,7 +101,12 @@ describe("remote-workflow authentication tokens contract", () => {
   });
 
   it("deletes the organization token", async () => {
-    await expectNoContent(await request(`/api/v2/organizations/${seed.orgName}/authentication-token`, { method: "DELETE", headers }));
-    await expectErrorResponse(await request(`/api/v2/organizations/${seed.orgName}/authentication-token`, { headers }), 404);
+    await expectNoContent(
+      await request(`/api/v2/organizations/${seed.orgName}/authentication-token`, { method: "DELETE", headers }),
+    );
+    await expectErrorResponse(
+      await request(`/api/v2/organizations/${seed.orgName}/authentication-token`, { headers }),
+      404,
+    );
   });
 });

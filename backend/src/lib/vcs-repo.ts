@@ -56,14 +56,26 @@ function hasNestedQuantifiers(pattern: string): boolean {
   let escaped = false;
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index] ?? "";
-    if (escaped) { escaped = false; continue; }
-    if (char === "\\") { escaped = true; continue; }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
     if (inClass) {
       if (char === "]") inClass = false;
       continue;
     }
-    if (char === "[") { inClass = true; continue; }
-    if (char === "(") { openGroups.push(false); continue; }
+    if (char === "[") {
+      inClass = true;
+      continue;
+    }
+    if (char === "(") {
+      openGroups.push(false);
+      continue;
+    }
     if (char === ")") {
       if (closeRegexGroup(pattern, index, openGroups)) return true;
       continue;

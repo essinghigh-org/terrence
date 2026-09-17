@@ -15,18 +15,33 @@ import { join } from "node:path";
 import { inArray, eq, count } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, configurationVersions, organizationMemberships, organizations, runs, users, workspaceVariables, workspaces } from "../../src/db/schema";
+import {
+  apiTokens,
+  configurationVersions,
+  organizationMemberships,
+  organizations,
+  runs,
+  users,
+  workspaceVariables,
+  workspaces,
+} from "../../src/db/schema";
 import { isMaintenanceActive, exitMaintenance } from "../../src/lib/maintenance";
 import { readBootConfigFile } from "../../src/lib/boot-config";
 import { storageDir } from "../../src/db/driver";
 import { makeTestDbName } from "../setup";
-const isPostgresEnv = process.env["PG_TEST_ADMIN_URL"] !== undefined || process.env["PG_ADMIN_URL"] !== undefined || (process.env["DATABASE_URL"]?.startsWith("postgres") ?? false);
-
+const isPostgresEnv =
+  process.env["PG_TEST_ADMIN_URL"] !== undefined ||
+  process.env["PG_ADMIN_URL"] !== undefined ||
+  (process.env["DATABASE_URL"]?.startsWith("postgres") ?? false);
 
 process.env["TERRENCE_DISABLE_RESTART"] ??= "1";
 process.env["MIGRATION_SKIP_DRAIN"] = "true";
 
-const PG_ADMIN_URL = process.env["PG_TEST_ADMIN_URL"] ?? process.env["PG_ADMIN_URL"] ?? (process.env["DATABASE_URL"]?.startsWith("postgres") === true ? process.env["DATABASE_URL"] : undefined) ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
+const PG_ADMIN_URL =
+  process.env["PG_TEST_ADMIN_URL"] ??
+  process.env["PG_ADMIN_URL"] ??
+  (process.env["DATABASE_URL"]?.startsWith("postgres") === true ? process.env["DATABASE_URL"] : undefined) ??
+  "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
 
 let adminToken = "";
 let adminId = "";
@@ -38,7 +53,13 @@ let workspaceId = "";
 let runId = "";
 let encryptedValue = "";
 const fixtureTimestamp = 1_788_000_123_456;
-const fixtureMetadata = { identifier: "example/infrastructure", branch: "main", tags: ["one", "two"], enabled: false, nested: { value: null } };
+const fixtureMetadata = {
+  identifier: "example/infrastructure",
+  branch: "main",
+  tags: ["one", "two"],
+  enabled: false,
+  nested: { value: null },
+};
 
 async function seedAdmin(): Promise<void> {
   adminId = `mig-admin-${crypto.randomUUID()}`;
@@ -76,7 +97,8 @@ async function waitForTerminalPhase(timeoutMs = 90_000): Promise<{ phase: string
     if (phase === "ready_to_switch" || phase === "switched" || phase === "failed" || phase === "aborted") {
       return { phase, error: body.data.wizard.error };
     }
-    if (Date.now() > deadline) throw new Error(`Migration did not reach a terminal phase within ${timeoutMs}ms (last phase: ${phase})`);
+    if (Date.now() > deadline)
+      throw new Error(`Migration did not reach a terminal phase within ${timeoutMs}ms (last phase: ${phase})`);
     await Bun.sleep(250);
   }
 }
@@ -136,9 +158,21 @@ beforeAll(async (): Promise<void> => {
   const archivePath = join(storageDir, "round-trip-configuration.tar.gz");
   writeFileSync(archivePath, "retained-configuration-fixture");
   await db.insert(configurationVersions).values({ id: `cv-${orgId}`, workspaceId, status: "uploaded", archivePath });
-  await db.insert(organizationMemberships).values({ id: `membership-${orgId}`, orgId, userId: adminId, role: "member", status: "active", ssoSource: null });
+  await db
+    .insert(organizationMemberships)
+    .values({ id: `membership-${orgId}`, orgId, userId: adminId, role: "member", status: "active", ssoSource: null });
   encryptedValue = await encryptSecret("round-trip-test-secret", { force: true });
-  await db.insert(workspaceVariables).values({ id: `variable-${orgId}`, workspaceId, key: "credential", value: "", valueEncrypted: encryptedValue, sensitive: true, hcl: false, category: "env", description: null });
+  await db.insert(workspaceVariables).values({
+    id: `variable-${orgId}`,
+    workspaceId,
+    key: "credential",
+    value: "",
+    valueEncrypted: encryptedValue,
+    sensitive: true,
+    hcl: false,
+    category: "env",
+    description: null,
+  });
 
   if (!isPostgresEnv) return;
   try {
@@ -210,18 +244,22 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
   });
 
   test("validates a connection URL and reports failure for garbage", async (): Promise<void> => {
-    const bad = await app.handle(adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
-      data: { attributes: { url: "not a url" } },
-    }));
+    const bad = await app.handle(
+      adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
+        data: { attributes: { url: "not a url" } },
+      }),
+    );
     expect(bad.status).toBe(200);
     const body = (await bad.json()) as { data: { ok: boolean; error: string } };
     expect(body.data.ok).toBe(false);
     expect(body.data.error.toLowerCase()).toMatch(/postgres|invalid url|cannot be parsed/);
 
     if (postgresAvailable) {
-      const ok = await app.handle(adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
-        data: { attributes: { url: targetUrl } },
-      }));
+      const ok = await app.handle(
+        adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
+          data: { attributes: { url: targetUrl } },
+        }),
+      );
       expect(ok.status).toBe(200);
       const okBody = (await ok.json()) as { data: { ok: boolean } };
       expect(okBody.data.ok).toBe(true);
@@ -230,11 +268,15 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
 
   test("checks target compatibility on an empty database", async (): Promise<void> => {
     if (!postgresAvailable) return;
-    const response = await app.handle(adminRequest("/api/v2/admin/db-migration/compatibility", "POST", {
-      data: { attributes: { url: targetUrl } },
-    }));
+    const response = await app.handle(
+      adminRequest("/api/v2/admin/db-migration/compatibility", "POST", {
+        data: { attributes: { url: targetUrl } },
+      }),
+    );
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { data: { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] } };
+    const body = (await response.json()) as {
+      data: { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] };
+    };
     expect(body.data.ok).toBe(true);
     expect(body.data.checks.every((check): boolean => check.ok)).toBe(true);
   });
@@ -243,7 +285,9 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     if (!postgresAvailable || (process.env["DATABASE_URL"] ?? "").startsWith("postgres")) return;
     const archivePath = join(storageDir, "round-trip-configuration.tar.gz");
     rmSync(archivePath);
-    const start = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", { data: { attributes: { url: targetUrl } } }));
+    const start = await app.handle(
+      adminRequest("/api/v2/admin/db-migration/start", "POST", { data: { attributes: { url: targetUrl } } }),
+    );
     expect(start.status).toBe(202);
     const terminal = await waitForTerminalPhase();
     expect(terminal.phase).toBe("failed");
@@ -259,7 +303,7 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     const stored = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
     writeFileSync(statePath, JSON.stringify({ ...stored, phase: "verifying" }));
     const response = await app.handle(adminRequest("/api/v2/admin/db-migration/status"));
-    const body = await response.json() as { data: { wizard: { phase: string } } };
+    const body = (await response.json()) as { data: { wizard: { phase: string } } };
     expect(body.data.wizard.phase).toBe("interrupted");
   }, 90_000);
 
@@ -267,9 +311,11 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     if (!postgresAvailable) return;
     // Wizard is SQLite->Postgres only; skip when already on Postgres.
     if ((process.env["DATABASE_URL"] ?? "").startsWith("postgres")) return;
-    const start = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {
-      data: { attributes: { url: targetUrl } },
-    }));
+    const start = await app.handle(
+      adminRequest("/api/v2/admin/db-migration/start", "POST", {
+        data: { attributes: { url: targetUrl } },
+      }),
+    );
     expect(start.status).toBe(202);
 
     // Maintenance is entered by the async job shortly after start. A very
@@ -326,13 +372,27 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     expect(exported.verification.allPassed).toBe(true);
     const restored = new Database(exported.filePath, { readonly: true });
     try {
-      const workspace = restored.query("SELECT vcs_repo, created_at, updated_at FROM workspaces WHERE id = ?").get(workspaceId) as { vcs_repo: string; created_at: number; updated_at: number };
+      const workspace = restored
+        .query("SELECT vcs_repo, created_at, updated_at FROM workspaces WHERE id = ?")
+        .get(workspaceId) as { vcs_repo: string; created_at: number; updated_at: number };
       expect(JSON.parse(workspace.vcs_repo)).toEqual(fixtureMetadata);
       expect(workspace.created_at).toBe(fixtureTimestamp);
       expect(workspace.updated_at).toBe(fixtureTimestamp);
-      const membership = restored.query("SELECT user_id, role, status, sso_source FROM organization_memberships WHERE org_id = ?").get(orgId);
+      const membership = restored
+        .query("SELECT user_id, role, status, sso_source FROM organization_memberships WHERE org_id = ?")
+        .get(orgId);
       expect(membership).toEqual({ user_id: adminId, role: "member", status: "active", sso_source: null });
-      const variable = restored.query("SELECT value, value_encrypted, sensitive, hcl, description FROM workspace_variables WHERE workspace_id = ?").get(workspaceId) as { value: string; value_encrypted: string; sensitive: number; hcl: number; description: null };
+      const variable = restored
+        .query(
+          "SELECT value, value_encrypted, sensitive, hcl, description FROM workspace_variables WHERE workspace_id = ?",
+        )
+        .get(workspaceId) as {
+        value: string;
+        value_encrypted: string;
+        sensitive: number;
+        hcl: number;
+        description: null;
+      };
       expect(variable).toEqual({ value: "", value_encrypted: encryptedValue, sensitive: 1, hcl: 0, description: null });
       expect(await decryptSecret(variable.value_encrypted)).toBe("round-trip-test-secret");
       expect(restored.query("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -354,7 +414,10 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     };
     expect(manifest.source).toBe("sqlite");
     expect(manifest.destination).toBe("postgres");
-    expect(manifest.artifact_references.find((check) => check.table === "configuration_versions")).toMatchObject({ checked: 1, unavailable: 0 });
+    expect(manifest.artifact_references.find((check) => check.table === "configuration_versions")).toMatchObject({
+      checked: 1,
+      unavailable: 0,
+    });
     expect(manifest.tables["organizations"]).toBe(expectedOrgs);
     expect(manifest.tables["workspaces"]).toBe(expectedWorkspaces);
     expect(manifest.tables["runs"]).toBe(expectedRuns);
@@ -374,9 +437,11 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
   test("cannot start a second migration after switching", async (): Promise<void> => {
     if (!postgresAvailable) return;
     if ((process.env["DATABASE_URL"] ?? "").startsWith("postgres")) return;
-    const second = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {
-      data: { attributes: { url: targetUrl } },
-    }));
+    const second = await app.handle(
+      adminRequest("/api/v2/admin/db-migration/start", "POST", {
+        data: { attributes: { url: targetUrl } },
+      }),
+    );
     expect(second.status).toBe(409);
   });
 });

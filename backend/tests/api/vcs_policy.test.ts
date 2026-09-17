@@ -26,21 +26,21 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
   const workspaceId = `ws-pol-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
-    await db.insert(organizationMemberships).values([
-      { id: crypto.randomUUID(), userId, orgId, role: "owner" },
-    ]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId, role: "owner" }]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
   });
@@ -104,7 +104,7 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
       data: { attributes: { name: "In-use OAuth", "service-provider": "github" } },
     });
     expect(createOcRes.status).toBe(201);
-    const { data: client } = await createOcRes.json() as { data: { id: string } };
+    const { data: client } = (await createOcRes.json()) as { data: { id: string } };
     const tokenId = `ot-in-use-${crypto.randomUUID()}`;
     const inUseWorkspaceId = `ws-in-use-${crypto.randomUUID()}`;
     await db.insert(oauthTokens).values({
@@ -122,7 +122,7 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
 
     const blocked = await request(`/api/v2/oauth-clients/${client.id}`, "DELETE");
     expect(blocked.status).toBe(409);
-    const blockedBody = await blocked.json() as { errors?: { detail?: string }[] };
+    const blockedBody = (await blocked.json()) as { errors?: { detail?: string }[] };
     expect(blockedBody.errors?.[0]?.detail).toContain("oauth-connected-workspace");
 
     const tokenBlocked = await request(`/api/v2/oauth-tokens/${tokenId}`, "DELETE");
@@ -154,15 +154,19 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
 
     const [clientReference, clientDeletion] = await Promise.all([
       request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
-        data: { attributes: {
-          name: clientWorkspaceName,
-          "vcs-repo": { identifier: "acme/repository", "oauth-token-id": clientTokenId },
-        } },
+        data: {
+          attributes: {
+            name: clientWorkspaceName,
+            "vcs-repo": { identifier: "acme/repository", "oauth-token-id": clientTokenId },
+          },
+        },
       }),
       request(`/api/v2/oauth-clients/${clientId}`, "DELETE"),
     ]);
     const storedClient = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, clientId) });
-    const storedClientWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, clientWorkspaceName) });
+    const storedClientWorkspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.name, clientWorkspaceName),
+    });
     expect(storedClient === undefined && storedClientWorkspace !== undefined).toBe(false);
     if (storedClient === undefined) {
       expect(clientReference.status).toBe(422);
@@ -191,15 +195,19 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
 
     const [tokenReference, tokenDeletion] = await Promise.all([
       request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
-        data: { attributes: {
-          name: tokenWorkspaceName,
-          "vcs-repo": { identifier: "acme/repository", "oauth-token-id": tokenId },
-        } },
+        data: {
+          attributes: {
+            name: tokenWorkspaceName,
+            "vcs-repo": { identifier: "acme/repository", "oauth-token-id": tokenId },
+          },
+        },
       }),
       request(`/api/v2/oauth-tokens/${tokenId}`, "DELETE"),
     ]);
     const storedToken = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
-    const storedTokenWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.name, tokenWorkspaceName) });
+    const storedTokenWorkspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.name, tokenWorkspaceName),
+    });
     expect(storedToken === undefined && storedTokenWorkspace !== undefined).toBe(false);
     if (storedToken === undefined) {
       expect(tokenReference.status).toBe(422);
@@ -258,14 +266,16 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     const workspaceSetsRes = await request(`/api/v2/workspaces/${workspaceId}/policy-sets`);
     expect(workspaceSetsRes.status).toBe(200);
     const workspaceSetsBody = await workspaceSetsRes.json();
-    expect(workspaceSetsBody.data).toContainEqual(expect.objectContaining({
-      id: psId,
-      attributes: expect.objectContaining({
-        name: "Security Standard",
-        scope: "global",
-        "policy-count": 1,
+    expect(workspaceSetsBody.data).toContainEqual(
+      expect.objectContaining({
+        id: psId,
+        attributes: expect.objectContaining({
+          name: "Security Standard",
+          scope: "global",
+          "policy-count": 1,
+        }),
       }),
-    }));
+    );
 
     // 4. Create run & policy check
     const runId = `run-pol-${suffix}`;
@@ -312,8 +322,23 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     const opaId = `pol-opa-${suffix}`;
     const sentinelId = `pol-sent-${suffix}`;
     await db.insert(policies).values([
-      { id: opaId, orgId, policySetId: null, name: "OPA Guardrail", kind: "opa", enforcementLevel: "mandatory", query: "data.terraform.deny" },
-      { id: sentinelId, orgId, policySetId: null, name: "Sentinel Guard", kind: "sentinel", enforcementLevel: "hard-mandatory" },
+      {
+        id: opaId,
+        orgId,
+        policySetId: null,
+        name: "OPA Guardrail",
+        kind: "opa",
+        enforcementLevel: "mandatory",
+        query: "data.terraform.deny",
+      },
+      {
+        id: sentinelId,
+        orgId,
+        policySetId: null,
+        name: "Sentinel Guard",
+        kind: "sentinel",
+        enforcementLevel: "hard-mandatory",
+      },
     ]);
 
     try {

@@ -34,11 +34,12 @@ export function variableRelationshipResources(body: unknown): VarRelationshipRes
   const data = payload?.["data"];
   if (data === undefined || data === null) return undefined;
   const many = Array.isArray(data);
-  const resources = many ? data as unknown[] : [data];
+  const resources = many ? (data as unknown[]) : [data];
   if (
     resources.length > 0 &&
-    (resources.some((item: unknown): boolean => !isJsonApiData(item, "vars"))
-      || new Set(resources.map((item: unknown): string => (item as { readonly id: string }).id)).size !== resources.length)
-  ) return undefined;
+    (resources.some((item: unknown): boolean => !isJsonApiData(item, "vars")) ||
+      new Set(resources.map((item: unknown): string => (item as { readonly id: string }).id)).size !== resources.length)
+  )
+    return undefined;
   return { many, resources };
 }

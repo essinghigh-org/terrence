@@ -65,7 +65,7 @@ describe("Explorer API (the reference format Parity)", () => {
       new Request(`http://localhost/api/v2/organizations/${orgName}/explorer?type=workspaces`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     if (res.status !== 200) {
@@ -82,17 +82,23 @@ describe("Explorer API (the reference format Parity)", () => {
 
   test("uses indexed numeric queries and rejects unmapped fields before pagination", async () => {
     const indexed = await app.handle(
-      new Request(`http://localhost/api/v2/organizations/${orgName}/explorer?type=workspaces&filter[0][current_resource_count][gteq][0]=0&sort=-current_resource_count`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+      new Request(
+        `http://localhost/api/v2/organizations/${orgName}/explorer?type=workspaces&filter[0][current_resource_count][gteq][0]=0&sort=-current_resource_count`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      ),
     );
     expect(indexed.status).toBe(200);
     expect((await indexed.json()).data.length).toBeGreaterThan(0);
 
     const invalid = await app.handle(
-      new Request(`http://localhost/api/v2/organizations/${orgName}/explorer?type=workspaces&filter[0][unknown_field][is][0]=value`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+      new Request(
+        `http://localhost/api/v2/organizations/${orgName}/explorer?type=workspaces&filter[0][unknown_field][is][0]=value`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      ),
     );
     expect(invalid.status).toBe(422);
   });

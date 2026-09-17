@@ -53,9 +53,12 @@ describe("commitStateVersion", () => {
     expect(committed?.status).toBe("finalized");
     expect(committed?.uploadSha256).toBe(createHash("sha256").update(rawState).digest("hex"));
     expect(decodeStatePayload(committed?.statePayload ?? "")).toBe(rawState);
-    expect(await db.select({ name: stateOutputIndex.name }).from(stateOutputIndex).where(eq(stateOutputIndex.stateVersionId, stateVersionId))).toEqual([
-      { name: "answer" },
-    ]);
+    expect(
+      await db
+        .select({ name: stateOutputIndex.name })
+        .from(stateOutputIndex)
+        .where(eq(stateOutputIndex.stateVersionId, stateVersionId)),
+    ).toEqual([{ name: "answer" }]);
   });
 
   it("treats an identical retry as already committed and rejects different bytes", async () => {
@@ -71,7 +74,10 @@ describe("commitStateVersion", () => {
     });
     expect((await commitStateVersion({ stateVersionId, rawState })).kind).toBe("committed");
 
-    expect(await commitStateVersion({ stateVersionId, rawState })).toEqual({ kind: "already-committed", stateVersionId });
+    expect(await commitStateVersion({ stateVersionId, rawState })).toEqual({
+      kind: "already-committed",
+      stateVersionId,
+    });
     expect(await commitStateVersion({ stateVersionId, rawState: state(2, "other-lineage") })).toEqual({
       kind: "conflict",
       reason: "content-already-uploaded",
@@ -94,7 +100,9 @@ describe("commitStateVersion", () => {
       reason: "state-payload",
       detail: "State content must be a valid plaintext Terraform/OpenTofu v4 state file",
     });
-    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedId) }))?.status).toBe("pending");
+    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, malformedId) }))?.status).toBe(
+      "pending",
+    );
 
     const expiredId = `state-version-${crypto.randomUUID()}`;
     await db.insert(stateVersions).values({
@@ -110,6 +118,8 @@ describe("commitStateVersion", () => {
       reason: "reservation-obsolete",
       detail: "State upload reservation expired or its workspace lock changed",
     });
-    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, expiredId) }))?.status).toBe("pending");
+    expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, expiredId) }))?.status).toBe(
+      "pending",
+    );
   });
 });

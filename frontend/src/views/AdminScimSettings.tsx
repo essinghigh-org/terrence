@@ -36,8 +36,8 @@ export function AdminScimSettings(): React.JSX.Element {
     setLoading(true);
     setLoadError("");
     try {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/admin/scim-settings") as {
+      // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = (await fetchApi("/admin/scim-settings")) as {
         data?: { attributes?: ScimSettingsAttributes };
       };
       if (!mounted.current) return;
@@ -84,7 +84,9 @@ export function AdminScimSettings(): React.JSX.Element {
         // site-admin-group-display-name is read-only (derived from the SCIM
         // id, which has no write path) — do not submit it.
         ...(enabled ? { enabled: true } : undefined),
-        ...(siteAdminGroupScimId !== null && siteAdminGroupScimId !== "" ? { "site-admin-group-scim-id": siteAdminGroupScimId } : undefined),
+        ...(siteAdminGroupScimId !== null && siteAdminGroupScimId !== ""
+          ? { "site-admin-group-scim-id": siteAdminGroupScimId }
+          : undefined),
       };
       await fetchApi("/admin/scim-settings", {
         method: "PATCH",
@@ -108,14 +110,21 @@ export function AdminScimSettings(): React.JSX.Element {
     <PageShell variant="form">
       <PageHeader
         eyebrow="Site administration"
-        title={<span className="flex items-center gap-2"><UserCog className="size-7 text-primary" aria-hidden="true" />SCIM settings</span>}
+        title={
+          <span className="flex items-center gap-2">
+            <UserCog className="size-7 text-primary" aria-hidden="true" />
+            SCIM settings
+          </span>
+        }
         description="SCIM lets an identity provider create, update and deactivate accounts here automatically. Only useful if you already run one — otherwise add users directly."
       />
 
       <Card>
         <CardHeader variant="section">
           <CardTitle>SCIM connection</CardTitle>
-          <CardDescription>Provision users and groups from your identity provider while keeping the connection state visible here.</CardDescription>
+          <CardDescription>
+            Provision users and groups from your identity provider while keeping the connection state visible here.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -124,13 +133,35 @@ export function AdminScimSettings(): React.JSX.Element {
               Loading SCIM settings…
             </div>
           ) : loadError !== "" ? (
-            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
+            >
               <span>{loadError}</span>
-              <Button type="button" size="sm" variant="outline" onClick={(): void => { void load(); }} disabled={loading}>Try again</Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={(): void => {
+                  void load();
+                }}
+                disabled={loading}
+              >
+                Try again
+              </Button>
             </div>
           ) : (
-            <form onSubmit={(event): void => { event.preventDefault(); void save(); }} className="space-y-4">
-              <label htmlFor="scim-enabled" className="flex cursor-pointer items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/40">
+            <form
+              onSubmit={(event): void => {
+                event.preventDefault();
+                void save();
+              }}
+              className="space-y-4"
+            >
+              <label
+                htmlFor="scim-enabled"
+                className="flex cursor-pointer items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/40"
+              >
                 <div className="text-sm">
                   <div className="font-medium">Enabled</div>
                   <div className="text-muted-foreground">
@@ -140,12 +171,17 @@ export function AdminScimSettings(): React.JSX.Element {
                 <Checkbox
                   id="scim-enabled"
                   checked={enabled}
-                  onCheckedChange={(checked: boolean | "indeterminate"): void => { setEnabled(checked === true); }}
+                  onCheckedChange={(checked: boolean | "indeterminate"): void => {
+                    setEnabled(checked === true);
+                  }}
                   aria-label="Enabled"
                 />
               </label>
 
-              <label htmlFor="scim-paused" className="flex cursor-pointer items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/40">
+              <label
+                htmlFor="scim-paused"
+                className="flex cursor-pointer items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/40"
+              >
                 <div className="text-sm">
                   <div className="font-medium">Paused</div>
                   <div className="text-muted-foreground">
@@ -155,7 +191,9 @@ export function AdminScimSettings(): React.JSX.Element {
                 <Checkbox
                   id="scim-paused"
                   checked={paused}
-                  onCheckedChange={(checked: boolean | "indeterminate"): void => { setPaused(checked === true); }}
+                  onCheckedChange={(checked: boolean | "indeterminate"): void => {
+                    setPaused(checked === true);
+                  }}
                   aria-label="Paused"
                 />
               </label>
@@ -174,8 +212,19 @@ export function AdminScimSettings(): React.JSX.Element {
                 <p className="text-xs text-muted-foreground">Read-only — derived from the site-admin group SCIM id.</p>
               </div>
 
-              {saveError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{saveError}</div>}
-              {saved && <div role="status" aria-live="polite" className="text-sm text-success">Saved</div>}
+              {saveError !== "" && (
+                <div
+                  role="alert"
+                  className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+                >
+                  {saveError}
+                </div>
+              )}
+              {saved && (
+                <div role="status" aria-live="polite" className="text-sm text-success">
+                  Saved
+                </div>
+              )}
 
               <div className="flex justify-end">
                 <Button type="submit" disabled={saving || loading}>

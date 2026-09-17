@@ -12,13 +12,14 @@ export class OperationCanceledError extends Error {
   public readonly reason: OperationCancellationReason;
 
   constructor(reason: OperationCancellationReason, cause?: unknown) {
-    const detail = cause instanceof Error
-      ? `: ${cause.message}`
-      : cause === undefined
-        ? ""
-        : typeof cause === "string"
-          ? `: ${cause}`
-          : ": cancellation cause was not an Error";
+    const detail =
+      cause instanceof Error
+        ? `: ${cause.message}`
+        : cause === undefined
+          ? ""
+          : typeof cause === "string"
+            ? `: ${cause}`
+            : ": cancellation cause was not an Error";
     super(`Operation canceled (${reason})${detail}`, cause === undefined ? undefined : { cause });
     this.name = "OperationCanceledError";
     this.reason = reason;
@@ -106,7 +107,9 @@ export function createOperationContext(options: OperationContextOptions = {}): O
   return {
     signal: controller.signal,
     deadlineAt,
-    get reason(): OperationCancellationReason | null { return cancellationReason; },
+    get reason(): OperationCancellationReason | null {
+      return cancellationReason;
+    },
     cancel,
     dispose,
   };

@@ -15,11 +15,13 @@ describe("admin database metrics (kanban 4.18)", () => {
   const userTokenId = crypto.randomUUID();
 
   const request = (token: string): Promise<Response> =>
-    app.handle(new Request("http://terrence.test/api/v2/admin/database-metrics", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
-      body: null,
-    }));
+    app.handle(
+      new Request("http://terrence.test/api/v2/admin/database-metrics", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+        body: null,
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -41,7 +43,15 @@ describe("admin database metrics (kanban 4.18)", () => {
   it("serves database size metrics to site admins", async () => {
     const res = await request(adminToken);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: { sizeBytes: number; walSizeBytes: number | null; journalMode: string; pageSize: number; pageCount: number } };
+    const body = (await res.json()) as {
+      data: {
+        sizeBytes: number;
+        walSizeBytes: number | null;
+        journalMode: string;
+        pageSize: number;
+        pageCount: number;
+      };
+    };
     expect(body.data.sizeBytes).toBeGreaterThan(0);
     // PostgreSQL has no WAL sidecar to fold (WAL is server-side), so
     // walSizeBytes is null there by design; SQLite reports the -wal size.

@@ -21,7 +21,12 @@ import {
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { invalidateSettingsCache } from "../../src/lib/settings";
-import { deletePlanJsonArtifact, writePlanJsonArtifact, sanitizePlanJson, type PlanJson } from "../../src/lib/plan-json";
+import {
+  deletePlanJsonArtifact,
+  writePlanJsonArtifact,
+  sanitizePlanJson,
+  type PlanJson,
+} from "../../src/lib/plan-json";
 import { buildExplainSource, persistExplainerOutput, EXPLAIN_MAX_PROMPT_CHARS } from "../../src/lib/run-explanations";
 import { variableValueForWrite } from "../../src/lib/variable-crypto";
 import { encryptStatePayload } from "../../src/lib/validation";
@@ -64,14 +69,20 @@ describe("explainer secret egress (SEC-04)", () => {
     "Content-Type": "application/vnd.api+json",
   });
   const explain = (runId: string, kind: string, init?: RequestInit): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test/api/v2/runs/${runId}/explain`, {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind, stream: true, refresh: true } } }),
-      ...init,
-    }));
+    app.handle(
+      new Request(`http://terrence.test/api/v2/runs/${runId}/explain`, {
+        method: "POST",
+        headers: headers(token),
+        body: JSON.stringify({
+          data: { type: "plan-explanations", attributes: { kind, stream: true, refresh: true } },
+        }),
+        ...init,
+      }),
+    );
   const setExplainer = async (values: Record<string, unknown>): Promise<void> => {
-    await db.insert(adminSettings).values({ id: "plan-explainer", values, updatedAt: Date.now() })
+    await db
+      .insert(adminSettings)
+      .values({ id: "plan-explainer", values, updatedAt: Date.now() })
       .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
     invalidateSettingsCache();
   };
@@ -86,88 +97,128 @@ describe("explainer secret egress (SEC-04)", () => {
       { id: outsiderId, username: outsiderId, passwordHash: "unused" },
     ]);
     await db.insert(organizations).values({ id: orgId, name: `expl-${suffix}` });
-    await db.insert(organizationMemberships).values({ id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active" });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active" });
     await db.insert(apiTokens).values([
       { id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId },
       { id: `tok-out-${suffix}`, token: hashAuthenticationToken(outsiderToken), userId: outsiderId },
     ]);
     await db.insert(workspaces).values({ id: wsId, name: `expl-ws-${suffix}`, orgId, executionMode: "remote" });
     for (const [id, status] of [
-      [planRunId, "planned"], [applyRunId, "errored"], [echoRunId, "planned"],
-      [permRunId, "planned"], [evilRunId, "planned"], [timeoutRunId, "planned"], [cancelRunId, "planned"],
-      [thinkRunId, "planned"], [splitRunId, "planned"], [boundaryRunId, "planned"],
+      [planRunId, "planned"],
+      [applyRunId, "errored"],
+      [echoRunId, "planned"],
+      [permRunId, "planned"],
+      [evilRunId, "planned"],
+      [timeoutRunId, "planned"],
+      [cancelRunId, "planned"],
+      [thinkRunId, "planned"],
+      [splitRunId, "planned"],
+      [boundaryRunId, "planned"],
     ] as const) {
       await db.insert(runs).values({ id, workspaceId: wsId, status, createdAt: Date.now() });
     }
     const wsSecret = await variableValueForWrite(true, wsCanary);
     await db.insert(workspaceVariables).values({
-      id: `wsv-${suffix}`, workspaceId: wsId, key: "TF_VAR_db_password",
-      value: wsSecret.value, valueEncrypted: wsSecret.valueEncrypted, sensitive: true,
+      id: `wsv-${suffix}`,
+      workspaceId: wsId,
+      key: "TF_VAR_db_password",
+      value: wsSecret.value,
+      valueEncrypted: wsSecret.valueEncrypted,
+      sensitive: true,
     });
     await db.insert(variableSets).values({ id: `vst-${suffix}`, orgId, name: `expl-set-${suffix}` });
-    await db.insert(variableSetWorkspaces).values({ id: `vsw-${suffix}`, variableSetId: `vst-${suffix}`, workspaceId: wsId });
+    await db
+      .insert(variableSetWorkspaces)
+      .values({ id: `vsw-${suffix}`, variableSetId: `vst-${suffix}`, workspaceId: wsId });
     const vsSecret = await variableValueForWrite(true, vsCanary);
     await db.insert(variableSetVariables).values({
-      id: `vsv-${suffix}`, variableSetId: `vst-${suffix}`, key: "api_token",
-      value: vsSecret.value, valueEncrypted: vsSecret.valueEncrypted, sensitive: true,
+      id: `vsv-${suffix}`,
+      variableSetId: `vst-${suffix}`,
+      key: "api_token",
+      value: vsSecret.value,
+      valueEncrypted: vsSecret.valueEncrypted,
+      sensitive: true,
     });
     const stateRaw = JSON.stringify({
-      version: 4, serial: 1, lineage: `expl-lineage-${suffix}`,
+      version: 4,
+      serial: 1,
+      lineage: `expl-lineage-${suffix}`,
       outputs: { db_password: { value: outCanary, type: "string", sensitive: true } },
       resources: [],
     });
     await db.insert(stateVersions).values({
-      id: `sv-${suffix}`, workspaceId: wsId, serial: 1, status: "finalized",
-      statePayload: await encryptStatePayload(stateRaw), createdAt: Date.now(),
+      id: `sv-${suffix}`,
+      workspaceId: wsId,
+      serial: 1,
+      status: "finalized",
+      statePayload: await encryptStatePayload(stateRaw),
+      createdAt: Date.now(),
     });
     await writePlanJsonArtifact(planRunId, {
       format_version: "1.2",
-      resource_changes: [{
-        address: "aws_db_instance.main", mode: "managed",
-        change: {
-          actions: ["create"],
-          after: { password: planCanary },
-          after_sensitive: { password: true },
+      resource_changes: [
+        {
+          address: "aws_db_instance.main",
+          mode: "managed",
+          change: {
+            actions: ["create"],
+            after: { password: planCanary },
+            after_sensitive: { password: true },
+          },
         },
-      }, {
-        // A known secret (the sensitive state output) echoed where the
-        // structural sanitizer cannot see it: resource addresses pass
-        // through verbatim, so only value redaction stops it.
-        address: `aws_instance.backup_${outCanary}`, mode: "managed",
-        change: { actions: ["create"], after: { ami: "ami-999" } },
-      }],
+        {
+          // A known secret (the sensitive state output) echoed where the
+          // structural sanitizer cannot see it: resource addresses pass
+          // through verbatim, so only value redaction stops it.
+          address: `aws_instance.backup_${outCanary}`,
+          mode: "managed",
+          change: { actions: ["create"], after: { ami: "ami-999" } },
+        },
+      ],
     });
     await writePlanJsonArtifact(echoRunId, {
       format_version: "1.2",
-      resource_changes: [{
-        address: "aws_instance.web", mode: "managed",
-        change: { actions: ["create"], after: { ami: "ami-123" } },
-      }],
+      resource_changes: [
+        {
+          address: "aws_instance.web",
+          mode: "managed",
+          change: { actions: ["create"], after: { ami: "ami-123" } },
+        },
+      ],
     });
     for (const runId of [permRunId, timeoutRunId, cancelRunId, thinkRunId, splitRunId]) {
       await writePlanJsonArtifact(runId, {
         format_version: "1.2",
-        resource_changes: [{
-          address: "aws_instance.web", mode: "managed",
-          change: { actions: ["create"], after: { ami: "ami-123" } },
-        }],
+        resource_changes: [
+          {
+            address: "aws_instance.web",
+            mode: "managed",
+            change: { actions: ["create"], after: { ami: "ami-123" } },
+          },
+        ],
       });
     }
     await writePlanJsonArtifact(evilRunId, {
       format_version: "1.2",
-      resource_changes: [{
-        address: `aws_instance.evil with embedded instruction: ${evilInstruction}`,
-        mode: "managed",
-        change: {
-          actions: ["create"],
-          after: { password: planCanary },
-          after_sensitive: { password: true },
+      resource_changes: [
+        {
+          address: `aws_instance.evil with embedded instruction: ${evilInstruction}`,
+          mode: "managed",
+          change: {
+            actions: ["create"],
+            after: { password: planCanary },
+            after_sensitive: { password: true },
+          },
         },
-      }],
+      ],
     });
     for (const [id, runId] of [[`log-${suffix}`, applyRunId]] as const) {
       await db.insert(logs).values({
-        id, runId, phase: "apply",
+        id,
+        runId,
+        phase: "apply",
         // A known secret (the sensitive workspace variable) echoed by the
         // engine into unstructured log output: the prompt must scrub it even
         // though no structural redactor can see log text.
@@ -186,25 +237,30 @@ describe("explainer secret egress (SEC-04)", () => {
           // Hang until the client goes away; the abort also frees the
           // handler instead of leaking a pending promise per request.
           await new Promise((resolve): void => {
-            request.signal.addEventListener("abort", () => {
-              resolve(undefined);
-            }, { once: true });
+            request.signal.addEventListener(
+              "abort",
+              () => {
+                resolve(undefined);
+              },
+              { once: true },
+            );
           });
           return new Response(null, { status: 500 });
         }
         if (upstreamMode === "sse-think" || upstreamMode === "sse-split") {
           const encoder = new TextEncoder();
           const half = Math.floor(wsCanary.length / 2);
-          const deltas = upstreamMode === "sse-think"
-            ? [
-              { choices: [{ delta: { reasoning_content: `Checking ${wsCanary} first. ` } }] },
-              { choices: [{ delta: { content: "The plan adds one instance. " } }] },
-              { choices: [{ delta: { content: `Secret ${outCanary} noted.` } }] },
-            ]
-            : [
-              { choices: [{ delta: { content: `Value ${wsCanary.slice(0, half)}` } }] },
-              { choices: [{ delta: { content: `${wsCanary.slice(half)} end.` } }] },
-            ];
+          const deltas =
+            upstreamMode === "sse-think"
+              ? [
+                  { choices: [{ delta: { reasoning_content: `Checking ${wsCanary} first. ` } }] },
+                  { choices: [{ delta: { content: "The plan adds one instance. " } }] },
+                  { choices: [{ delta: { content: `Secret ${outCanary} noted.` } }] },
+                ]
+              : [
+                  { choices: [{ delta: { content: `Value ${wsCanary.slice(0, half)}` } }] },
+                  { choices: [{ delta: { content: `${wsCanary.slice(half)} end.` } }] },
+                ];
           const sse = new ReadableStream<Uint8Array>({
             start(controller: ReadableStreamDefaultController<Uint8Array>) {
               for (const chunk of deltas) {
@@ -216,9 +272,10 @@ describe("explainer secret egress (SEC-04)", () => {
           });
           return new Response(sse, { headers: { "content-type": "text/event-stream" } });
         }
-        const content = upstreamMode === "echo"
-          ? `The secrets are ${wsCanary} and ${outCanary}.`
-          : "The plan adds one instance and leaves existing resources untouched.";
+        const content =
+          upstreamMode === "echo"
+            ? `The secrets are ${wsCanary} and ${outCanary}.`
+            : "The plan adds one instance and leaves existing resources untouched.";
         return Response.json({ choices: [{ message: { content } }] });
       },
     });
@@ -229,14 +286,34 @@ describe("explainer secret egress (SEC-04)", () => {
   afterAll(async () => {
     await upstream?.stop(true);
     delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
-    for (const runId of [planRunId, echoRunId, evilRunId, permRunId, timeoutRunId, cancelRunId, thinkRunId, splitRunId]) {
+    for (const runId of [
+      planRunId,
+      echoRunId,
+      evilRunId,
+      permRunId,
+      timeoutRunId,
+      cancelRunId,
+      thinkRunId,
+      splitRunId,
+    ]) {
       await deletePlanJsonArtifact(runId).catch((): void => {
         return;
       });
     }
     await db.delete(stateVersions).where(eq(stateVersions.workspaceId, wsId));
     await db.delete(logs).where(eq(logs.runId, applyRunId));
-    for (const runId of [planRunId, applyRunId, echoRunId, permRunId, evilRunId, timeoutRunId, cancelRunId, thinkRunId, splitRunId, boundaryRunId]) {
+    for (const runId of [
+      planRunId,
+      applyRunId,
+      echoRunId,
+      permRunId,
+      evilRunId,
+      timeoutRunId,
+      cancelRunId,
+      thinkRunId,
+      splitRunId,
+      boundaryRunId,
+    ]) {
       await db.delete(runExplanations).where(eq(runExplanations.runId, runId));
       await db.delete(auditLogs).where(eq(auditLogs.resourceId, runId));
     }
@@ -299,9 +376,11 @@ describe("explainer secret egress (SEC-04)", () => {
     expect(text).not.toContain(wsCanary);
     expect(text).not.toContain(outCanary);
     expect(text).toContain("[redacted]");
-    const cached = await app.handle(new Request(`http://terrence.test/api/v2/runs/${echoRunId}/explain?kind=plan`, {
-      headers: headers(token),
-    }));
+    const cached = await app.handle(
+      new Request(`http://terrence.test/api/v2/runs/${echoRunId}/explain?kind=plan`, {
+        headers: headers(token),
+      }),
+    );
     const body = (await cached.json()) as { data: { attributes: { explanation: string } } };
     expect(body.data.attributes.explanation).not.toContain(wsCanary);
     expect(body.data.attributes.explanation).toContain("[redacted]");
@@ -322,16 +401,22 @@ describe("explainer secret egress (SEC-04)", () => {
   it("denies cached explanations once access is gone", async () => {
     upstreamMode = "ok";
     await streamText(await explain(permRunId, "plan"));
-    const outsider = await app.handle(new Request(`http://terrence.test/api/v2/runs/${permRunId}/explain?kind=plan`, {
-      headers: headers(outsiderToken),
-    }));
+    const outsider = await app.handle(
+      new Request(`http://terrence.test/api/v2/runs/${permRunId}/explain?kind=plan`, {
+        headers: headers(outsiderToken),
+      }),
+    );
     expect(outsider.status).toBe(404);
     await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`));
-    const revoked = await app.handle(new Request(`http://terrence.test/api/v2/runs/${permRunId}/explain?kind=plan`, {
-      headers: headers(token),
-    }));
+    const revoked = await app.handle(
+      new Request(`http://terrence.test/api/v2/runs/${permRunId}/explain?kind=plan`, {
+        headers: headers(token),
+      }),
+    );
     expect(revoked.status).toBe(404);
-    await db.insert(organizationMemberships).values({ id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active" });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active" });
   });
 
   it("surfaces an upstream timeout without caching anything", async () => {
@@ -342,7 +427,9 @@ describe("explainer secret egress (SEC-04)", () => {
       expect(text).toContain("event: error");
       expect(text).toContain("timed out");
       expect(text).not.toContain("event: done");
-      expect(await db.query.runExplanations.findFirst({ where: eq(runExplanations.runId, timeoutRunId) })).toBeUndefined();
+      expect(
+        await db.query.runExplanations.findFirst({ where: eq(runExplanations.runId, timeoutRunId) }),
+      ).toBeUndefined();
     } finally {
       delete process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"];
     }
@@ -351,12 +438,16 @@ describe("explainer secret egress (SEC-04)", () => {
   it("aborts cleanly on client cancellation without caching anything", async () => {
     upstreamMode = "hang";
     const controller = new AbortController();
-    const pending = app.handle(new Request(`http://terrence.test/api/v2/runs/${cancelRunId}/explain`, {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind: "plan", stream: true, refresh: true } } }),
-      signal: controller.signal,
-    }));
+    const pending = app.handle(
+      new Request(`http://terrence.test/api/v2/runs/${cancelRunId}/explain`, {
+        method: "POST",
+        headers: headers(token),
+        body: JSON.stringify({
+          data: { type: "plan-explanations", attributes: { kind: "plan", stream: true, refresh: true } },
+        }),
+        signal: controller.signal,
+      }),
+    );
     setTimeout(() => {
       controller.abort();
     }, 300);
@@ -367,12 +458,16 @@ describe("explainer secret egress (SEC-04)", () => {
     expect(text).not.toContain("event: content");
     expect(text).not.toContain("event: done");
     expect(await db.query.runExplanations.findFirst({ where: eq(runExplanations.runId, cancelRunId) })).toBeUndefined();
-    const preAborted = await app.handle(new Request(`http://terrence.test/api/v2/runs/${cancelRunId}/explain`, {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind: "plan", stream: true, refresh: true } } }),
-      signal: AbortSignal.abort(),
-    }));
+    const preAborted = await app.handle(
+      new Request(`http://terrence.test/api/v2/runs/${cancelRunId}/explain`, {
+        method: "POST",
+        headers: headers(token),
+        body: JSON.stringify({
+          data: { type: "plan-explanations", attributes: { kind: "plan", stream: true, refresh: true } },
+        }),
+        signal: AbortSignal.abort(),
+      }),
+    );
     expect(preAborted.status).toBe(499);
   });
 
@@ -397,10 +492,13 @@ describe("explainer secret egress (SEC-04)", () => {
   it("redacts before truncating so no fragment straddles the cut", async () => {
     const addressOf = (filler: string): PlanJson => ({
       format_version: "1.2",
-      resource_changes: [{
-        address: `${filler}${wsCanary}`, mode: "managed",
-        change: { actions: ["create"], after: { ami: "ami-123" } },
-      }],
+      resource_changes: [
+        {
+          address: `${filler}${wsCanary}`,
+          mode: "managed",
+          change: { actions: ["create"], after: { ami: "ami-123" } },
+        },
+      ],
     });
     const canaryAt = (fillerLength: number): number =>
       JSON.stringify(sanitizePlanJson(addressOf("P".repeat(fillerLength)))).indexOf(wsCanary);

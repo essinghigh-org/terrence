@@ -6,10 +6,12 @@ import { cn } from "../lib/utils";
 
 export type PageShellVariant = "standard" | "wide" | "form";
 
-type PageShellProps = Readonly<React.ComponentProps<"div"> & {
-  children: ReactNode;
-  variant?: PageShellVariant;
-}>;
+type PageShellProps = Readonly<
+  React.ComponentProps<"div"> & {
+    children: ReactNode;
+    variant?: PageShellVariant;
+  }
+>;
 
 type PageHeaderProps = Readonly<{
   action?: ReactNode;
@@ -63,17 +65,13 @@ export function PageHeader({ action, breadcrumbs, description, eyebrow, title }:
     <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
       <div className="min-w-0">
         {breadcrumbs !== undefined && breadcrumbs.length > 0 && <Breadcrumbs items={breadcrumbs} />}
-        {eyebrow !== undefined && (
-          <div className="mb-3 text-xs font-medium text-muted-foreground">{eyebrow}</div>
-        )}
+        {eyebrow !== undefined && <div className="mb-3 text-xs font-medium text-muted-foreground">{eyebrow}</div>}
         <h1 className="font-heading text-balance text-3xl font-bold tracking-tight text-foreground">{title}</h1>
         {description !== undefined && (
           <p className="mt-2 max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">{description}</p>
         )}
       </div>
-      {action !== undefined && (
-        <div className="flex shrink-0 items-center gap-2">{action}</div>
-      )}
+      {action !== undefined && <div className="flex shrink-0 items-center gap-2">{action}</div>}
     </header>
   );
 }
@@ -99,13 +97,7 @@ export function SettingsSection({
   tone = "default",
 }: SettingsSectionProps): React.JSX.Element {
   return (
-    <Card
-      className={cn(
-        "@container/settings-section",
-        tone === "danger" && "ring-destructive/30",
-        className,
-      )}
-    >
+    <Card className={cn("@container/settings-section", tone === "danger" && "ring-destructive/30", className)}>
       {/* Two columns only once the card itself is wide enough to seat a 16rem
           rail beside a usable control column (@3xl = 48rem). */}
       <div className="grid gap-x-10 gap-y-4 px-(--card-spacing) @3xl/settings-section:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
@@ -113,16 +105,11 @@ export function SettingsSection({
           {createElement(
             headingLevel,
             {
-              className: cn(
-                "font-heading text-base font-medium leading-snug",
-                tone === "danger" && "text-destructive",
-              ),
+              className: cn("font-heading text-base font-medium leading-snug", tone === "danger" && "text-destructive"),
             },
             title,
           )}
-          {description !== undefined && (
-            <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
-          )}
+          {description !== undefined && <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>}
         </div>
         <div className="min-w-0">{children}</div>
       </div>

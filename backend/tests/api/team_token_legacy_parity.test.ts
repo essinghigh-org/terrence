@@ -3,13 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { toComparableString } from "../../src/lib/utils";
-import {
-  apiTokens,
-  organizationMemberships,
-  organizations,
-  teams,
-  users,
-} from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, teams, users } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 // TFE parity regression tests: the singular legacy team-token endpoints
@@ -34,14 +28,16 @@ describe("team token legacy/plural separation (TFE parity)", () => {
   const authC = `owner-c-token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, token = authA) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   let teamId = "";
   let legacySecret = "";
@@ -99,11 +95,20 @@ describe("team token legacy/plural separation (TFE parity)", () => {
   });
 
   const countTeamTokens = async (legacy: boolean): Promise<number> =>
-    (await db.select({ id: apiTokens.id }).from(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, legacy)))).length;
+    (
+      await db
+        .select({ id: apiTokens.id })
+        .from(apiTokens)
+        .where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, legacy)))
+    ).length;
 
   const legacyHashExists = async (secret: string): Promise<boolean> =>
-    (await db.select({ id: apiTokens.id }).from(apiTokens)
-      .where(eq(apiTokens.token, hashAuthenticationToken(secret)))).length > 0;
+    (
+      await db
+        .select({ id: apiTokens.id })
+        .from(apiTokens)
+        .where(eq(apiTokens.token, hashAuthenticationToken(secret)))
+    ).length > 0;
 
   it("rotating the legacy token leaves all modern tokens intact", async () => {
     expect(await countTeamTokens(true)).toBe(1);
@@ -153,9 +158,14 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     // Validation POSTs run as owner B: owner A's sensitive-limiter window
     // (5/60s) is already fully consumed by seeding + rotation above.
     const pacedPost = async (attributes: Record<string, unknown>): Promise<Response> =>
-      request(`/api/v2/teams/${teamId}/authentication-tokens`, "POST", {
-        data: { attributes },
-      }, authB);
+      request(
+        `/api/v2/teams/${teamId}/authentication-tokens`,
+        "POST",
+        {
+          data: { attributes },
+        },
+        authB,
+      );
 
     // Description is required.
     const noDesc = await pacedPost({});
@@ -170,7 +180,10 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     expect(badDate.status).toBe(422);
 
     // Past expiry is rejected.
-    const pastDate = await pacedPost({ description: "past-date", "expired-at": new Date(Date.now() - 1000).toISOString() });
+    const pastDate = await pacedPost({
+      description: "past-date",
+      "expired-at": new Date(Date.now() - 1000).toISOString(),
+    });
     expect(pastDate.status).toBe(422);
 
     // Explicit future expiry is honored (5th and final POST in B's window).

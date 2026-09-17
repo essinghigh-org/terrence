@@ -98,7 +98,6 @@ describe("effectiveWorkspaceVariables precedence", (): void => {
   });
 });
 
-
 test("variable set ordering covers scope, ownership, priority and Unicode ties", () => {
   const sets = [
     { id: "g", global: true, parentProjectId: null },
@@ -109,10 +108,25 @@ test("variable set ordering covers scope, ownership, priority and Unicode ties",
   ].map((set) => ({ ...set, name: set.id, priority: false }));
   const workspaceLinks = new Set(["ow", "pw"]);
   const projectLinks = new Set(["op", "pp"]);
-  const compare = (left: typeof sets[number], right: typeof sets[number]) => compareVariableSets(left, right, workspaceLinks, projectLinks);
-  expect([...sets].reverse().sort(compare).map((set) => set.id)).toEqual(["g", "op", "ow", "pp", "pw"]);
-  expect(sets.map((set) => ({ ...set, priority: true })).sort(compare).map((set) => set.id)).toEqual(["pw", "pp", "ow", "op", "g"]);
+  const compare = (left: (typeof sets)[number], right: (typeof sets)[number]) =>
+    compareVariableSets(left, right, workspaceLinks, projectLinks);
+  expect(
+    [...sets]
+      .reverse()
+      .sort(compare)
+      .map((set) => set.id),
+  ).toEqual(["g", "op", "ow", "pp", "pw"]);
+  expect(
+    sets
+      .map((set) => ({ ...set, priority: true }))
+      .sort(compare)
+      .map((set) => set.id),
+  ).toEqual(["pw", "pp", "ow", "op", "g"]);
   const names = ["a", "A", "_", "é", "\uE000", "😀"];
-  expect(names.map((name) => ({ id: name, name, priority: false, global: true, parentProjectId: null })).sort(compare).map((set) => set.name))
-    .toEqual(["😀", "\uE000", "é", "a", "_", "A"]);
+  expect(
+    names
+      .map((name) => ({ id: name, name, priority: false, global: true, parentProjectId: null }))
+      .sort(compare)
+      .map((set) => set.name),
+  ).toEqual(["😀", "\uE000", "é", "a", "_", "A"]);
 });

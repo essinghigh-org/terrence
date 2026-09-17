@@ -2,14 +2,20 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, auditLogs, organizationMemberships, organizations, policySetParameters, policySets,
-  users, variableSetVariables, variableSets, workspaceVariables, workspaces,
+  apiTokens,
+  auditLogs,
+  organizationMemberships,
+  organizations,
+  policySetParameters,
+  policySets,
+  users,
+  variableSetVariables,
+  variableSets,
+  workspaceVariables,
+  workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
-import {
-  variableSetVariableResource,
-  workspaceVariableResource,
-} from "../../src/lib/response";
+import { variableSetVariableResource, workspaceVariableResource } from "../../src/lib/response";
 import { eq } from "drizzle-orm";
 
 // Issue #577: decrypted sensitive values must never persist in API payloads
@@ -28,57 +34,112 @@ describe("sensitive value redaction contract (#577)", () => {
   const psMarker = `ps-secret-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
-    await db.insert(workspaces).values([
-      { id: wsId, name: `redact-ws-${suffix}`, orgId, executionMode: "remote" },
-    ]);
+    await db.insert(workspaces).values([{ id: wsId, name: `redact-ws-${suffix}`, orgId, executionMode: "remote" }]);
   });
 
   afterAll(async () => {
-    await db.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, wsId)).catch((): void => undefined);
-    await db.delete(variableSetVariables).where(eq(variableSetVariables.key, `VS_KEY_${suffix}`)).catch((): void => undefined);
-    await db.delete(variableSets).where(eq(variableSets.orgId, orgId)).catch((): void => undefined);
-    await db.delete(policySetParameters).where(eq(policySetParameters.key, `PS_KEY_${suffix}`)).catch((): void => undefined);
-    await db.delete(policySets).where(eq(policySets.orgId, orgId)).catch((): void => undefined);
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
+    await db
+      .delete(workspaceVariables)
+      .where(eq(workspaceVariables.workspaceId, wsId))
+      .catch((): void => undefined);
+    await db
+      .delete(variableSetVariables)
+      .where(eq(variableSetVariables.key, `VS_KEY_${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(variableSets)
+      .where(eq(variableSets.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(policySetParameters)
+      .where(eq(policySetParameters.key, `PS_KEY_${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(policySets)
+      .where(eq(policySets.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(eq(workspaces.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.id, `tok-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizationMemberships)
+      .where(eq(organizationMemberships.id, `mem-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .catch((): void => undefined);
   });
 
   it("serializers null sensitive values", () => {
-    const wsAttrs = (workspaceVariableResource({
-      id: "v", workspaceId: wsId, key: "K", value: "", valueEncrypted: "enc",
-      category: "terraform", sensitive: true, hcl: false, description: null,
-    }) as { attributes: { value: unknown } }).attributes;
+    const wsAttrs = (
+      workspaceVariableResource({
+        id: "v",
+        workspaceId: wsId,
+        key: "K",
+        value: "",
+        valueEncrypted: "enc",
+        category: "terraform",
+        sensitive: true,
+        hcl: false,
+        description: null,
+      }) as { attributes: { value: unknown } }
+    ).attributes;
     expect(wsAttrs.value).toBeNull();
 
-    const vsAttrs = (variableSetVariableResource({
-      id: "v", variableSetId: "s", key: "K", value: "", valueEncrypted: "enc",
-      category: "terraform", sensitive: true, hcl: false, description: null,
-    }) as { attributes: { value: unknown } }).attributes;
+    const vsAttrs = (
+      variableSetVariableResource({
+        id: "v",
+        variableSetId: "s",
+        key: "K",
+        value: "",
+        valueEncrypted: "enc",
+        category: "terraform",
+        sensitive: true,
+        hcl: false,
+        description: null,
+      }) as { attributes: { value: unknown } }
+    ).attributes;
     expect(vsAttrs.value).toBeNull();
   });
 
   it("workspace variable API never returns or audits the secret", async () => {
     const res = await request(`/api/v2/workspaces/${wsId}/vars`, "POST", {
-      data: { type: "vars", attributes: { key: `WS_KEY_${suffix}`, value: wsMarker, category: "terraform", sensitive: true } },
+      data: {
+        type: "vars",
+        attributes: { key: `WS_KEY_${suffix}`, value: wsMarker, category: "terraform", sensitive: true },
+      },
     });
     expect(res.status).toBe(201);
     expect(((await res.json()) as { data: { attributes: { value: unknown } } }).data.attributes.value).toBeNull();
@@ -93,11 +154,16 @@ describe("sensitive value redaction contract (#577)", () => {
     expect(setRes.status).toBe(201);
     const setId = ((await setRes.json()) as { data: { id: string } }).data.id;
     const res = await request(`/api/v2/varsets/${setId}/relationships/vars`, "POST", {
-      data: { type: "vars", attributes: { key: `VS_KEY_${suffix}`, value: vsMarker, category: "terraform", sensitive: true } },
+      data: {
+        type: "vars",
+        attributes: { key: `VS_KEY_${suffix}`, value: vsMarker, category: "terraform", sensitive: true },
+      },
     });
     expect(res.status).toBe(201);
     expect(((await res.json()) as { data: { attributes: { value: unknown } } }).data.attributes.value).toBeNull();
-    const stored = await db.query.variableSetVariables.findMany({ where: eq(variableSetVariables.variableSetId, setId) });
+    const stored = await db.query.variableSetVariables.findMany({
+      where: eq(variableSetVariables.variableSetId, setId),
+    });
     expect(stored.some((v): boolean => v.value === vsMarker)).toBe(false);
   });
 

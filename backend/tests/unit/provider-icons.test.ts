@@ -35,9 +35,13 @@ afterEach(async (): Promise<void> => {
 });
 
 test("preserves provider sources without inventing namespaces or registries", async () => {
-  expect(normalizeProvider("registry.terraform.io/cloudflare/cloudflare")).toBe("registry.terraform.io/cloudflare/cloudflare");
+  expect(normalizeProvider("registry.terraform.io/cloudflare/cloudflare")).toBe(
+    "registry.terraform.io/cloudflare/cloudflare",
+  );
   expect(normalizeProvider("cloudflare/cloudflare")).toBe("cloudflare/cloudflare");
-  expect(normalizeProvider("registry.terraform.io/integrations/github")).toBe("registry.terraform.io/integrations/github");
+  expect(normalizeProvider("registry.terraform.io/integrations/github")).toBe(
+    "registry.terraform.io/integrations/github",
+  );
   expect(normalizeProvider("acme/widgets")).toBe("acme/widgets");
   expect(normalizeProvider("registry.opentofu.org/acme/widgets")).toBe("registry.opentofu.org/acme/widgets");
   expect(normalizeProvider("cloudflare")).toBeNull();
@@ -84,11 +88,13 @@ test("returns dedicated provider-icon URLs instead of generic avatar URLs", asyn
   primeProviderIconCache("integrations/github", "/api/v2/avatars/github");
   primeProviderIconCache("hashicorp/tfe", "/api/v2/avatars/tfe");
 
-  const response = await app.handle(new Request(
-    "http://terrence.test/api/v2/provider-icons?provider-name=cloudflare%2Fcloudflare&provider-name=integrations%2Fgithub&provider-name=hashicorp%2Ftfe",
-  ));
+  const response = await app.handle(
+    new Request(
+      "http://terrence.test/api/v2/provider-icons?provider-name=cloudflare%2Fcloudflare&provider-name=integrations%2Fgithub&provider-name=hashicorp%2Ftfe",
+    ),
+  );
   expect(response.status).toBe(200);
-  const body = await response.json() as {
+  const body = (await response.json()) as {
     data: { id: string; attributes: { "icon-url": string | null } }[];
   };
   expect(body.data.map((item): string => item.id)).toEqual([
@@ -119,26 +125,29 @@ test("resolves exact provider artwork through the Terraform Registry v2 API", as
     expect(parsed.pathname).toBe("/v2/providers");
     expect(parsed.searchParams.get("filter[namespace]")).toBe("cloudflare");
     expect(parsed.searchParams.get("filter[name]")).toBe("cloudflare");
-    return new Response(JSON.stringify({
-      data: [
-        {
-          attributes: {
-            namespace: "other",
-            name: "cloudflare",
-            "full-name": "other/cloudflare",
-            "logo-url": "https://registry.terraform.io/images/providers/wrong.svg",
+    return new Response(
+      JSON.stringify({
+        data: [
+          {
+            attributes: {
+              namespace: "other",
+              name: "cloudflare",
+              "full-name": "other/cloudflare",
+              "logo-url": "https://registry.terraform.io/images/providers/wrong.svg",
+            },
           },
-        },
-        {
-          attributes: {
-            namespace: "cloudflare",
-            name: "cloudflare",
-            "full-name": "cloudflare/cloudflare",
-            "logo-url": "images/providers/cloudflare.svg",
+          {
+            attributes: {
+              namespace: "cloudflare",
+              name: "cloudflare",
+              "full-name": "cloudflare/cloudflare",
+              "logo-url": "images/providers/cloudflare.svg",
+            },
           },
-        },
-      ],
-    }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/vnd.api+json" } },
+    );
   }) as unknown as typeof fetch;
 
   try {
@@ -163,11 +172,13 @@ test("resolves exact provider artwork through the Terraform Registry v2 API", as
       clock.mockRestore();
     }
 
-    const response = await app.handle(new Request(
-      "http://terrence.test/api/v2/provider-icons?provider-name=registry.terraform.io%2Fcloudflare%2Fcloudflare",
-    ));
+    const response = await app.handle(
+      new Request(
+        "http://terrence.test/api/v2/provider-icons?provider-name=registry.terraform.io%2Fcloudflare%2Fcloudflare",
+      ),
+    );
     expect(response.status).toBe(200);
-    const body = await response.json() as {
+    const body = (await response.json()) as {
       data: { attributes: { "icon-url": string | null } }[];
     };
     expect(body.data[0]?.attributes["icon-url"]).toBe(
@@ -193,22 +204,30 @@ test("resolves legacy GitHub slug artwork through the Registry owner avatar", as
     if (parsed.pathname === "/v2/providers") {
       expect(parsed.searchParams.get("filter[namespace]")).toBe("cloudflare");
       expect(parsed.searchParams.get("filter[name]")).toBe("cloudflare");
-      return new Response(JSON.stringify({
-        data: [{
-          attributes: {
-            namespace: "cloudflare",
-            name: "cloudflare",
-            "full-name": "cloudflare/cloudflare",
-            "logo-url": "https://avatars3.githubusercontent.com/cloudflare",
-          },
-        }],
-      }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              attributes: {
+                namespace: "cloudflare",
+                name: "cloudflare",
+                "full-name": "cloudflare/cloudflare",
+                "logo-url": "https://avatars3.githubusercontent.com/cloudflare",
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/vnd.api+json" } },
+      );
     }
     expect(parsed.pathname).toBe("/github/users/cloudflare");
-    return new Response(JSON.stringify({
-      login: "cloudflare",
-      avatar_url: expectedArtworkUrl,
-    }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(
+      JSON.stringify({
+        login: "cloudflare",
+        avatar_url: expectedArtworkUrl,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as unknown as typeof fetch;
 
   try {
@@ -233,16 +252,21 @@ test("does not use a legacy GitHub slug when the Registry owner lookup fails", a
     requestedUrls.push(requestUrl);
     const parsed = new URL(requestUrl);
     if (parsed.pathname === "/v2/providers") {
-      return new Response(JSON.stringify({
-        data: [{
-          attributes: {
-            namespace: "cloudflare",
-            name: "cloudflare",
-            "full-name": "cloudflare/cloudflare",
-            "logo-url": "https://avatars3.githubusercontent.com/cloudflare",
-          },
-        }],
-      }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              attributes: {
+                namespace: "cloudflare",
+                name: "cloudflare",
+                "full-name": "cloudflare/cloudflare",
+                "logo-url": "https://avatars3.githubusercontent.com/cloudflare",
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/vnd.api+json" } },
+      );
     }
     expect(parsed.pathname).toBe("/github/users/cloudflare");
     return new Response(null, { status: 404 });
@@ -263,16 +287,21 @@ test("returns no artwork when the v2 response has no exact provider identity", a
   globalThis.fetch = (async (input: string | Request): Promise<Response> => {
     const requestUrl = typeof input === "string" ? input : input.url;
     requestedUrls.push(requestUrl);
-    return new Response(JSON.stringify({
-      data: [{
-        attributes: {
-          namespace: "other",
-          name: "widgets",
-          "full-name": "other/widgets",
-          "logo-url": "/images/providers/wrong.svg",
-        },
-      }],
-    }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+    return new Response(
+      JSON.stringify({
+        data: [
+          {
+            attributes: {
+              namespace: "other",
+              name: "widgets",
+              "full-name": "other/widgets",
+              "logo-url": "/images/providers/wrong.svg",
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/vnd.api+json" } },
+    );
   }) as unknown as typeof fetch;
 
   try {
@@ -283,7 +312,6 @@ test("returns no artwork when the v2 response has no exact provider identity", a
     expect(parsed.searchParams.get("filter[namespace]")).toBe("acme");
     expect(parsed.searchParams.get("filter[name]")).toBe("widgets");
     expect(requestedUrls[0]).not.toContain("/v1/providers/");
-
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -298,25 +326,28 @@ test("serves cached artwork through the provider-icon image route", async () => 
   const bytes = Buffer.from("provider-icon-fixture");
   const contentHash = createHash("sha256").update(bytes).digest("hex");
   await mkdir(join(fixtureDirectory, "avatars", key.slice(0, 2)), { recursive: true });
-  await writeFile(metaPath(key), JSON.stringify({
-    key,
-    providerId: "provider-icon",
-    url: sourceUrl,
-    state: "fetched",
-    contentType: "image/svg+xml",
-    etag: null,
-    lastModified: null,
-    fetchedAt: Date.now() - 180 * 24 * 60 * 60 * 1000,
-    expiresAt: Date.now() - 60_000,
-    bytes: bytes.byteLength,
-    contentHash,
-  }));
+  await writeFile(
+    metaPath(key),
+    JSON.stringify({
+      key,
+      providerId: "provider-icon",
+      url: sourceUrl,
+      state: "fetched",
+      contentType: "image/svg+xml",
+      etag: null,
+      lastModified: null,
+      fetchedAt: Date.now() - 180 * 24 * 60 * 60 * 1000,
+      expiresAt: Date.now() - 60_000,
+      bytes: bytes.byteLength,
+      contentHash,
+    }),
+  );
   await writeFile(imgPath(key), bytes);
   primeProviderIconCache("cloudflare/cloudflare", `/api/v2/avatars/${key}`);
 
-  const response = await app.handle(new Request(
-    "http://terrence.test/api/v2/provider-icons/registry.terraform.io/cloudflare/cloudflare",
-  ));
+  const response = await app.handle(
+    new Request("http://terrence.test/api/v2/provider-icons/registry.terraform.io/cloudflare/cloudflare"),
+  );
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("image/svg+xml");
   expect(response.headers.get("cache-control")).toBe("private, max-age=15984000");
@@ -328,7 +359,9 @@ test("serves cached artwork through the provider-icon image route", async () => 
 test("serves a deterministic fallback while registry discovery runs in the background", async () => {
   const originalFetch = globalThis.fetch;
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   let requests = 0;
   globalThis.fetch = (async (): Promise<Response> => {
     requests++;
@@ -338,9 +371,9 @@ test("serves a deterministic fallback while registry discovery runs in the backg
   try {
     const expected = providerIconFallbackSvg("acme/widgets");
     if (expected === null) throw new Error("Expected a provider fallback fixture");
-    const response = await app.handle(new Request(
-      "http://terrence.test/api/v2/provider-icons/registry.terraform.io/acme/widgets",
-    ));
+    const response = await app.handle(
+      new Request("http://terrence.test/api/v2/provider-icons/registry.terraform.io/acme/widgets"),
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("image/svg+xml");
     expect(response.headers.get("etag")).toBe(expected.etag);
@@ -359,7 +392,9 @@ test("a distinct-source flood stays bounded, deduplicates canonical names, and p
   const originalFetch = globalThis.fetch;
   const before = discoveryStats();
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   let fetches = 0;
   globalThis.fetch = (async () => {
     fetches++;
@@ -373,7 +408,11 @@ test("a distinct-source flood stays bounded, deduplicates canonical names, and p
     await Bun.sleep(0);
     expect(discoveryStats()).toMatchObject({ active: 2, queued: 30, rejected: before.rejected + 4968 });
     expect(fetches).toBe(2);
-    if (process.env["DISCOVERY_LOAD"] === "1") console.log("DISCOVERY_LOAD_RESULT " + JSON.stringify({ requests: 5000, ...discoveryStats(), kernelPeakRss: process.resourceUsage().maxRSS * 1024 }));
+    if (process.env["DISCOVERY_LOAD"] === "1")
+      console.log(
+        "DISCOVERY_LOAD_RESULT " +
+          JSON.stringify({ requests: 5000, ...discoveryStats(), kernelPeakRss: process.resourceUsage().maxRSS * 1024 }),
+      );
     expect(await resolveProviderIconUrl("cached/icon")).toBe("/api/v2/avatars/" + "a".repeat(64));
   } finally {
     release();
@@ -390,7 +429,9 @@ test("bounds pending avatar records while preserving existing metadata", async (
   const cached = AvatarService.resolveUrl("probe", "https://example.com/cached.png");
   expect(cached).not.toBeNull();
   await AvatarService.readMeta(cached?.split("/").at(-1) ?? "");
-  const admitted = Array.from({ length: 1000 }, (_, i) => AvatarService.resolveUrl("probe", `https://example.com/icon-${i}.png`)).filter((value): value is string => value !== null);
+  const admitted = Array.from({ length: 1000 }, (_, i) =>
+    AvatarService.resolveUrl("probe", `https://example.com/icon-${i}.png`),
+  ).filter((value): value is string => value !== null);
   expect(admitted).toHaveLength(128);
   expect(AvatarService.resolveUrl("probe", "https://example.com/cached.png")).toBe(cached);
   await Promise.all(admitted.map(async (url) => AvatarService.readMeta(url.split("/").at(-1) ?? "")));
@@ -402,15 +443,23 @@ test("rejects oversized registry metadata and negatively caches the failure", as
   let requests = 0;
   globalThis.fetch = (async () => {
     requests++;
-    return new Response(new ReadableStream({
-      start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
-      cancel() { canceled = true; },
-    }));
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+    );
   }) as unknown as typeof fetch;
   try {
     expect(await resolveProviderIconUrl("oversized/icon")).toBeNull();
     expect(canceled).toBe(true);
     expect(await resolveProviderIconUrl("oversized/icon")).toBeNull();
     expect(requests).toBe(1);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

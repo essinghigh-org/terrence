@@ -30,7 +30,7 @@ function mockOrgDefault(value: string | null): void {
     }
     return json({ data: [] }, 404);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 }
 
 function agentWorkspace(explicit: string | null): Record<string, unknown> {
@@ -58,10 +58,14 @@ test("shows the effective engine and warns when agents ignore a tofu org default
     <WorkspaceSettings
       orgName="acme"
       workspace={agentWorkspace(null) as never}
-      onSaved={(): void => { /* assertions read the DOM, not the callback */ }}
+      onSaved={(): void => {
+        /* assertions read the DOM, not the callback */
+      }}
     />,
   );
-  await view.findByText(exactText("Binary used for plans and applies. Effective engine: Terraform (agent execution default)."));
+  await view.findByText(
+    exactText("Binary used for plans and applies. Effective engine: Terraform (agent execution default)."),
+  );
   await view.findByText(exactText("Agent runs will use Terraform."));
 });
 
@@ -71,7 +75,9 @@ test("shows the workspace value when an engine is set explicitly", async () => {
     <WorkspaceSettings
       orgName="acme"
       workspace={agentWorkspace("terraform") as never}
-      onSaved={(): void => { /* assertions read the DOM, not the callback */ }}
+      onSaved={(): void => {
+        /* assertions read the DOM, not the callback */
+      }}
     />,
   );
   await view.findByText(exactText("Binary used for plans and applies. Effective engine: Terraform (this workspace)."));
@@ -84,9 +90,13 @@ test("stays quiet for agent runs when the org default is already terraform", asy
     <WorkspaceSettings
       orgName="acme"
       workspace={agentWorkspace(null) as never}
-      onSaved={(): void => { /* assertions read the DOM, not the callback */ }}
+      onSaved={(): void => {
+        /* assertions read the DOM, not the callback */
+      }}
     />,
   );
-  await view.findByText(exactText("Binary used for plans and applies. Effective engine: Terraform (agent execution default)."));
+  await view.findByText(
+    exactText("Binary used for plans and applies. Effective engine: Terraform (agent execution default)."),
+  );
   expect(view.queryByText(exactText("Agent runs will use Terraform."))).toBeNull();
 });

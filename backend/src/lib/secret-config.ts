@@ -1,4 +1,8 @@
-export const deploymentSecretNames = ["SIGNED_URL_SECRET", "TERRENCE_TOKEN_HASH_SECRET", "ENCRYPTION_PASSWORD"] as const;
+export const deploymentSecretNames = [
+  "SIGNED_URL_SECRET",
+  "TERRENCE_TOKEN_HASH_SECRET",
+  "ENCRYPTION_PASSWORD",
+] as const;
 export type DeploymentSecretName = (typeof deploymentSecretNames)[number];
 export type SecretConfiguration = Readonly<Record<DeploymentSecretName, string | undefined>>;
 
@@ -13,10 +17,15 @@ export function parseDeploymentSecret(name: DeploymentSecretName, raw: string | 
   return value;
 }
 
-export function parseSecretConfiguration(environment: Readonly<Record<string, string | undefined>>): SecretConfiguration {
+export function parseSecretConfiguration(
+  environment: Readonly<Record<string, string | undefined>>,
+): SecretConfiguration {
   return Object.freeze({
     SIGNED_URL_SECRET: parseDeploymentSecret("SIGNED_URL_SECRET", environment["SIGNED_URL_SECRET"]),
-    TERRENCE_TOKEN_HASH_SECRET: parseDeploymentSecret("TERRENCE_TOKEN_HASH_SECRET", environment["TERRENCE_TOKEN_HASH_SECRET"]),
+    TERRENCE_TOKEN_HASH_SECRET: parseDeploymentSecret(
+      "TERRENCE_TOKEN_HASH_SECRET",
+      environment["TERRENCE_TOKEN_HASH_SECRET"],
+    ),
     ENCRYPTION_PASSWORD: parseDeploymentSecret("ENCRYPTION_PASSWORD", environment["ENCRYPTION_PASSWORD"]),
   });
 }

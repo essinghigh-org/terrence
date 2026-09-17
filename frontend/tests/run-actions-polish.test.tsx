@@ -102,10 +102,7 @@ function renderDetail(runId: string): ReturnType<typeof render> {
   return render(
     <MemoryRouter initialEntries={[`/app/acme/workspaces/production/runs/${runId}`]}>
       <Routes>
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<RunDetail />}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -118,32 +115,48 @@ afterEach((): void => {
 
 test("failed apply keeps the raw log visible beside diagnostics (issue #589)", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-failed", runFixture({
-    id: "run-failed",
-    status: "failed",
-    extraAttributes: { "status-timestamps": { "applying-at": "2026-07-29T09:05:00.000Z" } },
-  }), (url) => {
-    if (url === "/api/v2/applies/apply-run-failed") {
-      return json({ data: { attributes: { status: "errored" } } });
-    }
-    if (url.startsWith("/api/v2/runs/run-failed/apply/log")) {
-      return rawLog("Error: Apply failed\n\n  on main.tf line 1:\n  boom\n", url);
-    }
-    return null;
-  }, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-failed",
+      runFixture({
+        id: "run-failed",
+        status: "failed",
+        extraAttributes: { "status-timestamps": { "applying-at": "2026-07-29T09:05:00.000Z" } },
+      }),
+      (url) => {
+        if (url === "/api/v2/applies/apply-run-failed") {
+          return json({ data: { attributes: { status: "errored" } } });
+        }
+        if (url.startsWith("/api/v2/runs/run-failed/apply/log")) {
+          return rawLog("Error: Apply failed\n\n  on main.tf line 1:\n  boom\n", url);
+        }
+        return null;
+      },
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-failed");
-  await waitFor((): void => { expect(view.getByText("Raw apply log")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Raw apply log")).toBeTruthy();
+  });
   expect(seen).toEqual([]);
 });
 
 test("a blocked action names its blocker on the button it blocks (issue #597)", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-planned", runFixture({
-    id: "run-planned",
-    actions: { "is-confirmable": true, "is-discardable": true },
-    permissions: { "can-apply": false, "can-discard": true },
-  }), () => null, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-planned",
+      runFixture({
+        id: "run-planned",
+        actions: { "is-confirmable": true, "is-discardable": true },
+        permissions: { "can-apply": false, "can-discard": true },
+      }),
+      () => null,
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-planned");
   const apply = await waitFor((): HTMLElement => view.getByRole("button", { name: "Apply changes" }));
@@ -157,17 +170,26 @@ test("a blocked action names its blocker on the button it blocks (issue #597)", 
 
 test("actions the run cannot take at all are not rendered as dead buttons", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-quiet", runFixture({
-    id: "run-quiet",
-    status: "planning",
-    actions: { "is-cancelable": false, "is-force-cancelable": false },
-  }), () => null, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-quiet",
+      runFixture({
+        id: "run-quiet",
+        status: "planning",
+        actions: { "is-cancelable": false, "is-force-cancelable": false },
+      }),
+      () => null,
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-quiet");
   // "Planning" renders in several places at once (breadcrumb, status badge,
   // decision panel), so wait for all of them instead of a getByText that
   // throws on multiple matches.
-  await waitFor((): void => { expect(view.getAllByText("Planning").length).toBeGreaterThan(0); });
+  await waitFor((): void => {
+    expect(view.getAllByText("Planning").length).toBeGreaterThan(0);
+  });
   expect(view.queryByRole("button", { name: "Force cancel" })).toBeNull();
   // And no panel asking the user to review changes that do not exist yet.
   expect(view.queryByText(/review the planned changes/i)).toBeNull();
@@ -175,72 +197,114 @@ test("actions the run cannot take at all are not rendered as dead buttons", asyn
 
 test("cancel during apply warns about partial state before firing (issue #604)", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-applying", runFixture({
-    id: "run-applying",
-    status: "applying",
-    actions: { "is-cancelable": true },
-    permissions: { "can-cancel": true },
-    extraAttributes: { "status-timestamps": { "applying-at": "2026-07-29T09:05:00.000Z" } },
-  }), (url) => {
-    if (url === "/api/v2/runs/run-applying/actions/cancel") return new Response(null, { status: 202 });
-    return null;
-  }, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-applying",
+      runFixture({
+        id: "run-applying",
+        status: "applying",
+        actions: { "is-cancelable": true },
+        permissions: { "can-cancel": true },
+        extraAttributes: { "status-timestamps": { "applying-at": "2026-07-29T09:05:00.000Z" } },
+      }),
+      (url) => {
+        if (url === "/api/v2/runs/run-applying/actions/cancel") return new Response(null, { status: 202 });
+        return null;
+      },
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-applying");
-  await waitFor((): void => { expect(view.getByRole("button", { name: "Cancel run" })).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Cancel run" })).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("button", { name: "Cancel run" }));
-  await waitFor((): void => { expect(view.getByRole("heading", { name: "Cancel this run?" })).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Cancel this run?" })).toBeTruthy();
+  });
   expect(view.getByText(/partial state/).textContent).toBeTruthy();
   expect(seen).toEqual([]);
   fireEvent.click(view.getByRole("button", { name: "Yes, cancel the run" }));
-  await waitFor((): void => { expect(seen).toContain("POST /api/v2/runs/run-applying/actions/cancel"); });
+  await waitFor((): void => {
+    expect(seen).toContain("POST /api/v2/runs/run-applying/actions/cancel");
+  });
 }, 15000);
 
 test("force cancel and override route through confirmation with copy (issue #610)", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-stuck", runFixture({
-    id: "run-stuck",
-    status: "applying",
-    actions: { "is-force-cancelable": true },
-    permissions: { "can-force-cancel": true },
-    extraAttributes: { "status-timestamps": { "applying-at": "2026-07-29T09:05:00.000Z" } },
-  }), () => null, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-stuck",
+      runFixture({
+        id: "run-stuck",
+        status: "applying",
+        actions: { "is-force-cancelable": true },
+        permissions: { "can-force-cancel": true },
+        extraAttributes: { "status-timestamps": { "applying-at": "2026-07-29T09:05:00.000Z" } },
+      }),
+      () => null,
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-stuck");
-  await waitFor((): void => { expect(view.getByRole("button", { name: "Force cancel" })).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Force cancel" })).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("button", { name: "Force cancel" }));
-  await waitFor((): void => { expect(view.getByRole("heading", { name: "Force cancel this run?" })).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Force cancel this run?" })).toBeTruthy();
+  });
   expect(view.getByText(/without waiting for the process to exit/).textContent).toBeTruthy();
   expect(seen).toEqual([]);
 }, 15000);
 
 test("destroy runs show a disabled re-run with a reason (issue #630)", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-destroy", runFixture({
-    id: "run-destroy",
-    extraAttributes: { "is-destroy": true },
-  }), () => null, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-destroy",
+      runFixture({
+        id: "run-destroy",
+        extraAttributes: { "is-destroy": true },
+      }),
+      () => null,
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-destroy");
-  await waitFor((): void => { expect(view.getByText("Rerun is unavailable for destroy runs.")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Rerun is unavailable for destroy runs.")).toBeTruthy();
+  });
   expect(view.getByRole("button", { name: "Re-run" }).hasAttribute("disabled")).toBe(true);
 });
 
 test("speculative runs get a badge and a never-applies note (issue #603)", async () => {
   const seen: string[] = [];
-  globalThis.fetch = mock(baseMock("run-spec", runFixture({
-    id: "run-spec",
-    extraAttributes: { "plan-only": true },
-    cvId: "cv-spec",
-  }), (url) => {
-    if (url === "/api/v2/configuration-versions/cv-spec") {
-      return json({ data: { id: "cv-spec", type: "configuration-versions", attributes: { speculative: true } } });
-    }
-    return null;
-  }, seen)) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-spec",
+      runFixture({
+        id: "run-spec",
+        extraAttributes: { "plan-only": true },
+        cvId: "cv-spec",
+      }),
+      (url) => {
+        if (url === "/api/v2/configuration-versions/cv-spec") {
+          return json({ data: { id: "cv-spec", type: "configuration-versions", attributes: { speculative: true } } });
+        }
+        return null;
+      },
+      seen,
+    ),
+  ) as unknown as typeof fetch;
 
   const view = renderDetail("run-spec");
-  await waitFor((): void => { expect(view.getByText("Speculative")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Speculative")).toBeTruthy();
+  });
   await waitFor((): void => {
     expect(view.getByRole("heading", { name: /Speculative plan .* never applies/ })).toBeTruthy();
   });
@@ -272,31 +336,35 @@ test("destroy runs from the dialog confirm and pin auto-apply false (issue #586)
           path="/app/:orgName/workspaces/:workspaceName/runs"
           element={<RunList workspaceId="ws-1" orgName="acme" workspaceName="production" canStartRun />}
         />
-        <Route
-          path="/app/:orgName/workspaces/:workspaceName/runs/:runId"
-          element={<p>Destroy run detail</p>}
-        />
+        <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<p>Destroy run detail</p>} />
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getAllByRole("button", { name: "Start new run" }).length).toBeGreaterThan(0); });
+  await waitFor((): void => {
+    expect(view.getAllByRole("button", { name: "Start new run" }).length).toBeGreaterThan(0);
+  });
   const startButtons = view.getAllByRole("button", { name: "Start new run" });
   const startButton = startButtons[0];
   if (startButton === undefined) throw new Error("Start new run button not found");
   fireEvent.click(startButton);
-  await waitFor((): void => { expect(view.getByRole("dialog")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("dialog")).toBeTruthy();
+  });
   fireEvent.click(view.getByLabelText("Destroy infrastructure"));
   fireEvent.click(view.getByRole("button", { name: "Start run" }));
-  await waitFor((): void => { expect(view.getByRole("heading", { name: "Destroy infrastructure?" })).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Destroy infrastructure?" })).toBeTruthy();
+  });
   expect(createBody).toBeUndefined();
   fireEvent.click(view.getByRole("button", { name: "Start destroy run" }));
-  await waitFor((): void => { expect(view.getByText("Destroy run detail")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("Destroy run detail")).toBeTruthy();
+  });
   expect(createBody).toMatchObject({
     data: { attributes: { "auto-apply": false, "is-destroy": true } },
   });
 }, 15000);
-
 
 test("an explicit apply collapse survives the apply starting", async () => {
   let status = "planned";
@@ -306,18 +374,27 @@ test("an explicit apply collapse survives the apply starting", async () => {
     emit = listener;
     return { close: (): void => undefined };
   };
-  globalThis.fetch = mock(baseMock("run-expand", runFixture({ id: "run-expand" }), (url) => {
-    if (url === "/api/v2/runs/run-expand") return json(runFixture({ id: "run-expand", status }));
-    if (url === "/api/v2/applies/apply-run-expand") {
-      applyReads += 1;
-      return json({ data: { attributes: { status: status === "applying" ? "running" : "pending" } } });
-    }
-    return null;
-  }, [])) as unknown as typeof fetch;
+  globalThis.fetch = mock(
+    baseMock(
+      "run-expand",
+      runFixture({ id: "run-expand" }),
+      (url) => {
+        if (url === "/api/v2/runs/run-expand") return json(runFixture({ id: "run-expand", status }));
+        if (url === "/api/v2/applies/apply-run-expand") {
+          applyReads += 1;
+          return json({ data: { attributes: { status: status === "applying" ? "running" : "pending" } } });
+        }
+        return null;
+      },
+      [],
+    ),
+  ) as unknown as typeof fetch;
   const view = render(
     <EventProvider streamFactory={streamFactory}>
       <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-expand"]}>
-        <Routes><Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} /></Routes>
+        <Routes>
+          <Route path="/app/:orgName/workspaces/:workspaceName/runs/:runId" element={<RunDetail />} />
+        </Routes>
       </MemoryRouter>
     </EventProvider>,
   );
@@ -328,11 +405,15 @@ test("an explicit apply collapse survives the apply starting", async () => {
   });
   const summary = section.querySelector("summary")!;
   fireEvent.click(summary);
-  await waitFor((): void => { expect(section.open).toBe(true); });
+  await waitFor((): void => {
+    expect(section.open).toBe(true);
+  });
   const raw = view.getByText("Raw apply log").closest("details")!;
   expect(raw.open).toBe(false);
   fireEvent.click(summary);
-  await waitFor((): void => { expect(section.open).toBe(false); });
+  await waitFor((): void => {
+    expect(section.open).toBe(false);
+  });
   const readsBeforeApply = applyReads;
   act((): void => {
     status = "applying";
@@ -341,8 +422,12 @@ test("an explicit apply collapse survives the apply starting", async () => {
   // The refresh lands (the apply section re-reads and its heading reports
   // the new Running state) but the explicit collapse is preserved instead
   // of being forced back open.
-  await waitFor((): void => { expect(applyReads).toBeGreaterThan(readsBeforeApply); });
-  await waitFor((): void => { expect(within(section).getByText("Running")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(applyReads).toBeGreaterThan(readsBeforeApply);
+  });
+  await waitFor((): void => {
+    expect(within(section).getByText("Running")).toBeTruthy();
+  });
   expect(section.open).toBe(false);
   expect(raw.open).toBe(false);
 });
@@ -356,14 +441,18 @@ test("double-submitting a comment sends one request", async () => {
     return json({ data: [] });
   }) as unknown as typeof fetch;
 
-  const hook = renderHook(() => useRunActions({
-    runId: "run-comment-guard",
-    markActionSent: (): void => undefined,
-    markActionSettled: (): void => undefined,
-    refreshAll: (): void => undefined,
-    refresh: (): void => undefined,
-  }));
-  act((): void => { hook.result.current.setCommentBody("Double-click guard"); });
+  const hook = renderHook(() =>
+    useRunActions({
+      runId: "run-comment-guard",
+      markActionSent: (): void => undefined,
+      markActionSettled: (): void => undefined,
+      refreshAll: (): void => undefined,
+      refresh: (): void => undefined,
+    }),
+  );
+  act((): void => {
+    hook.result.current.setCommentBody("Double-click guard");
+  });
   const submit = hook.result.current.handleCommentSubmit;
   const event = { preventDefault: (): void => undefined } as unknown as SyntheticEvent<HTMLFormElement>;
   // Two submissions from the same render closure: the synchronous in-flight
@@ -383,13 +472,15 @@ test("double-confirming apply sends one action request", async () => {
     return json({ data: [] });
   }) as unknown as typeof fetch;
 
-  const hook = renderHook(() => useRunActions({
-    runId: "run-apply-guard",
-    markActionSent: (): void => undefined,
-    markActionSettled: (): void => undefined,
-    refreshAll: (): void => undefined,
-    refresh: (): void => undefined,
-  }));
+  const hook = renderHook(() =>
+    useRunActions({
+      runId: "run-apply-guard",
+      markActionSent: (): void => undefined,
+      markActionSettled: (): void => undefined,
+      refreshAll: (): void => undefined,
+      refresh: (): void => undefined,
+    }),
+  );
   const send = hook.result.current.performRunAction;
   await act(async (): Promise<void> => {
     const [first, second] = await Promise.all([send("apply", "Applied"), send("apply", "Applied")]);

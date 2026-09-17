@@ -52,7 +52,13 @@ const pageEnvelope = (items: ApiRun[], total: number, next: number | null): Json
 });
 
 // Five-run history across three pages; the search query matches one run.
-const allRuns = [run("run-1", "first deploy"), run("run-2", "second deploy"), run("run-3", "needle-haystack"), run("run-4", "fourth"), run("run-5", "fifth")];
+const allRuns = [
+  run("run-1", "first deploy"),
+  run("run-2", "second deploy"),
+  run("run-3", "needle-haystack"),
+  run("run-4", "fourth"),
+  run("run-5", "fifth"),
+];
 
 function installFetchMock(): void {
   const fetchMock = mock((input: string | URL | Request): Promise<Response> => {
@@ -60,7 +66,8 @@ function installFetchMock(): void {
     if (url.includes("/api/v2/workspaces/ws-1/runs")) {
       const params = new URL(url, "http://terrence.local").searchParams;
       const search = params.get("search[basic]") ?? "";
-      const pool = search === "" ? allRuns : allRuns.filter((item) => item.attributes["message"]?.includes(search) === true);
+      const pool =
+        search === "" ? allRuns : allRuns.filter((item) => item.attributes["message"]?.includes(search) === true);
       const page = Number(params.get("page[number]") ?? "1");
       const size = 2;
       const items = pool.slice((page - 1) * size, page * size);
@@ -69,7 +76,7 @@ function installFetchMock(): void {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 }
 
 function renderList(): ReturnType<typeof render> {
@@ -110,9 +117,7 @@ test("run filter builds a server-side whole-history search URL (issue #591)", ()
   // never updates, even for a bare fireEvent.change), so the filter box
   // itself is covered in browser E2E; the query contract is pinned here.
   expect(runHistoryPageUrl("ws-1", null, "", "")).toBe("/api/v2/workspaces/ws-1/runs");
-  expect(runHistoryPageUrl("ws-1", null, "-created-at", "")).toBe(
-    "/api/v2/workspaces/ws-1/runs?sort=-created-at",
-  );
+  expect(runHistoryPageUrl("ws-1", null, "-created-at", "")).toBe("/api/v2/workspaces/ws-1/runs?sort=-created-at");
   expect(runHistoryPageUrl("ws-1", 2, "", "")).toBe("/api/v2/workspaces/ws-1/runs?page%5Bnumber%5D=2");
   expect(runHistoryPageUrl("ws-1", null, "", "  needle  ")).toBe(
     "/api/v2/workspaces/ws-1/runs?search%5Bbasic%5D=needle",

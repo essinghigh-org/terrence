@@ -18,11 +18,7 @@ export const RUN_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
  * token hash is stored, so the API layer can authenticate it later without
  * being able to recover the plaintext.
  */
-export async function mintRunToken(
-  runId: string,
-  workspaceId: string,
-  organizationId: string,
-): Promise<string> {
+export async function mintRunToken(runId: string, workspaceId: string, organizationId: string): Promise<string> {
   const token = `trun_${randomBytes(32).toString("base64url")}`;
   const now = Date.now();
   await db.insert(runTokens).values({
@@ -58,7 +54,10 @@ export async function rotateOrgRunLogTokens(orgId: string): Promise<number> {
   if (orgWorkspaces.length === 0) return 0;
   const live = await db.query.runs.findMany({
     where: and(
-      inArray(runs.workspaceId, orgWorkspaces.map((row): string => row.id)),
+      inArray(
+        runs.workspaceId,
+        orgWorkspaces.map((row): string => row.id),
+      ),
       isNotNull(runs.logToken),
       isNull(runs.softDeletedAt),
     ),
@@ -79,17 +78,14 @@ export function hashRunToken(token: string): string {
  * registry hostname, into the run workdir's private secrets directory
  * (mode 0600). Returns the path to set as TF_CLI_CONFIG_FILE.
  */
-export async function writeRunCliConfig(
-  workDir: string,
-  hostname: string,
-  token: string,
-): Promise<string> {
+export async function writeRunCliConfig(workDir: string, hostname: string, token: string): Promise<string> {
   const secretsDir = join(workDir, "secrets");
   await mkdir(secretsDir, { recursive: true, mode: 0o700 });
   const configPath = join(secretsDir, "terraform.tfrc");
   // HCL double-quoted strings use JSON-compatible escapes, so JSON.stringify
   // (with JSON_HEX_TAG etc.) is the correct escaping for both fields.
-  const hclValue = (value: string): string => JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+  const hclValue = (value: string): string =>
+    JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
   const content = `credentials ${hclValue(hostname)} {
   token = ${hclValue(token)}
 }

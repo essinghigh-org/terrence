@@ -11,7 +11,14 @@ import { Spinner } from "../components/ui/spinner";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../components/ui/dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { Layers, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
@@ -93,11 +100,20 @@ function vcsRepo(stack: Stack): VcsRepo {
 
 function stackHasVcsRemote(stack: Stack): boolean {
   const repo = vcsRepo(stack);
-  return ((repo?.identifier ?? "").trim()) !== "" || ((repo?.["repository-http-url"] ?? "").trim()) !== "";
+  return (repo?.identifier ?? "").trim() !== "" || (repo?.["repository-http-url"] ?? "").trim() !== "";
 }
 
-function stackVcsFormFields(repo: VcsRepo): Pick<StackForm,
-  "vcsIdentifier" | "vcsBranch" | "vcsServiceProvider" | "vcsDisplayIdentifier" | "vcsRepositoryHttpUrl" | "vcsTagsRegex" | "vcsSparseCheckoutPattern"
+function stackVcsFormFields(
+  repo: VcsRepo,
+): Pick<
+  StackForm,
+  | "vcsIdentifier"
+  | "vcsBranch"
+  | "vcsServiceProvider"
+  | "vcsDisplayIdentifier"
+  | "vcsRepositoryHttpUrl"
+  | "vcsTagsRegex"
+  | "vcsSparseCheckoutPattern"
 > {
   return {
     vcsIdentifier: repo?.identifier ?? "",
@@ -158,36 +174,51 @@ function stackVcsPayload(form: StackForm): Record<string, unknown> | undefined {
 function stackSubmitAttributes(form: StackForm, editingStack: Stack | null): Record<string, unknown> {
   const vcs = stackVcsPayload(form);
   const originalVcs = editingStack?.attributes["vcs-repo"];
-  const originalVcsConfigured = (originalVcs?.identifier ?? "").trim() !== ""
-    || (originalVcs?.["repository-http-url"] ?? "").trim() !== "";
+  const originalVcsConfigured =
+    (originalVcs?.identifier ?? "").trim() !== "" || (originalVcs?.["repository-http-url"] ?? "").trim() !== "";
   return {
     name: form.name.trim(),
     description: form.description,
-    "working-directory": form.workingDirectory === "" ? (editingStack === null ? undefined : form.workingDirectory) : form.workingDirectory,
+    "working-directory":
+      form.workingDirectory === ""
+        ? editingStack === null
+          ? undefined
+          : form.workingDirectory
+        : form.workingDirectory,
     "speculative-enabled": form.speculative,
     "trigger-disabled": form.triggerDisabled,
     "debugging-mode": form.debuggingMode,
     "execution-mode": form.executionMode,
     ...(vcs === undefined
-      ? (editingStack !== null && originalVcsConfigured
-        // Editing a stack that currently has a VCS repo but the identifier was
-        // cleared: explicitly clear the stored VCS config.
-        ? { "vcs-repo": null }
-        : undefined)
+      ? editingStack !== null && originalVcsConfigured
+        ? // Editing a stack that currently has a VCS repo but the identifier was
+          // cleared: explicitly clear the stored VCS config.
+          { "vcs-repo": null }
+        : undefined
       : { "vcs-repo": vcs }),
   };
 }
 
 function StackTriggerFlags({ stack }: Readonly<{ stack: Stack }>): React.JSX.Element | null {
-  const triggersDisabled = stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true;
+  const triggersDisabled =
+    stack.attributes["trigger-disabled"] === true || vcsRepo(stack)?.["trigger-disabled"] === true;
   const debugging = stack.attributes["debugging-mode"] === true;
   if (!triggersDisabled && !debugging) return null;
   return (
-    <div className="text-xs">{triggersDisabled ? "Triggers disabled" : ""}{triggersDisabled && debugging ? " · " : ""}{debugging ? "Debugging" : ""}</div>
+    <div className="text-xs">
+      {triggersDisabled ? "Triggers disabled" : ""}
+      {triggersDisabled && debugging ? " · " : ""}
+      {debugging ? "Debugging" : ""}
+    </div>
   );
 }
 
-function StackLatestCell({ latest, canManage, busy, onPrepare }: Readonly<{
+function StackLatestCell({
+  latest,
+  canManage,
+  busy,
+  onPrepare,
+}: Readonly<{
   latest: LatestConfiguration | undefined;
   canManage: boolean;
   busy: boolean;
@@ -196,11 +227,19 @@ function StackLatestCell({ latest, canManage, busy, onPrepare }: Readonly<{
   if (latest === "loading" || latest === undefined) return <span>Loading…</span>;
   if (latest === "error") return <span>Unavailable</span>;
   if (latest === null) {
-    return canManage
-      ? <Button variant="outline" size="sm" onClick={onPrepare} disabled={busy}>Prepare</Button>
-      : <span>—</span>;
+    return canManage ? (
+      <Button variant="outline" size="sm" onClick={onPrepare} disabled={busy}>
+        Prepare
+      </Button>
+    ) : (
+      <span>—</span>
+    );
   }
-  return <span>#{latest.attributes["sequence-number"] ?? "—"} · {latest.attributes.status ?? "pending"}</span>;
+  return (
+    <span>
+      #{latest.attributes["sequence-number"] ?? "—"} · {latest.attributes.status ?? "pending"}
+    </span>
+  );
 }
 
 function StackFormDialog({
@@ -244,7 +283,15 @@ function StackFormDialog({
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="stack-name">Name</Label>
-            <Input id="stack-name" name="name" autoComplete="off" spellCheck={false} value={form.name} onChange={onField("name")} placeholder="my-stack…" />
+            <Input
+              id="stack-name"
+              name="name"
+              autoComplete="off"
+              spellCheck={false}
+              value={form.name}
+              onChange={onField("name")}
+              placeholder="my-stack…"
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stack-project">Project</Label>
@@ -253,40 +300,74 @@ function StackFormDialog({
               name="project"
               value={form.projectId}
               onChange={onField("projectId")}
-
               disabled={editingStack !== null}
             >
               <option value="">Select a project</option>
-              {projects.map((project): React.JSX.Element => (
-                <option key={project.id} value={project.id}>{project.attributes.name}</option>
-              ))}
+              {projects.map(
+                (project): React.JSX.Element => (
+                  <option key={project.id} value={project.id}>
+                    {project.attributes.name}
+                  </option>
+                ),
+              )}
             </Select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stack-vcs">VCS repository identifier</Label>
-            <Input id="stack-vcs" name="vcs-repository" autoComplete="off" spellCheck={false} value={form.vcsIdentifier} onChange={onField("vcsIdentifier")} placeholder="owner/repository…" />
+            <Input
+              id="stack-vcs"
+              name="vcs-repository"
+              autoComplete="off"
+              spellCheck={false}
+              value={form.vcsIdentifier}
+              onChange={onField("vcsIdentifier")}
+              placeholder="owner/repository…"
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stack-execution-mode">Execution mode</Label>
-            <Select id="stack-execution-mode" name="execution-mode" value={form.executionMode} onChange={onField("executionMode")} >
+            <Select
+              id="stack-execution-mode"
+              name="execution-mode"
+              value={form.executionMode}
+              onChange={onField("executionMode")}
+            >
               <option value="remote">Remote</option>
               <option value="agent">Agent</option>
             </Select>
-            {form.executionMode === "agent" && <p className="text-xs text-muted-foreground">Agent mode requires an agent-pool relationship.</p>}
+            {form.executionMode === "agent" && (
+              <p className="text-xs text-muted-foreground">Agent mode requires an agent-pool relationship.</p>
+            )}
           </div>
           {form.executionMode === "agent" && agentPoolsAvailable && (
             <div className="space-y-1.5">
               <Label htmlFor="stack-agent-pool">Agent pool</Label>
-              <Select id="stack-agent-pool" name="agent-pool" value={form.agentPoolId} onChange={onField("agentPoolId")} >
+              <Select
+                id="stack-agent-pool"
+                name="agent-pool"
+                value={form.agentPoolId}
+                onChange={onField("agentPoolId")}
+              >
                 <option value="">Select an agent pool</option>
-                {agentPools.map((pool): React.JSX.Element => <option key={pool.id} value={pool.id}>{pool.attributes.name ?? pool.id}</option>)}
+                {agentPools.map(
+                  (pool): React.JSX.Element => (
+                    <option key={pool.id} value={pool.id}>
+                      {pool.attributes.name ?? pool.id}
+                    </option>
+                  ),
+                )}
               </Select>
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="stack-provider">VCS service provider</Label>
-              <Select id="stack-provider" name="service-provider" value={form.vcsServiceProvider} onChange={onField("vcsServiceProvider")} >
+              <Select
+                id="stack-provider"
+                name="service-provider"
+                value={form.vcsServiceProvider}
+                onChange={onField("vcsServiceProvider")}
+              >
                 <option value="github">GitHub</option>
                 <option value="github_enterprise">GitHub Enterprise</option>
                 <option value="gitlab_hosted">GitLab</option>
@@ -297,54 +378,119 @@ function StackFormDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-branch">Branch</Label>
-              <Input id="stack-branch" name="branch" autoComplete="off" value={form.vcsBranch} onChange={onField("vcsBranch")} placeholder="main (optional)…" />
+              <Input
+                id="stack-branch"
+                name="branch"
+                autoComplete="off"
+                value={form.vcsBranch}
+                onChange={onField("vcsBranch")}
+                placeholder="main (optional)…"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-working-dir">Working directory</Label>
-              <Input id="stack-working-dir" name="working-directory" autoComplete="off" value={form.workingDirectory} onChange={onField("workingDirectory")} placeholder="terraform (optional)…" />
+              <Input
+                id="stack-working-dir"
+                name="working-directory"
+                autoComplete="off"
+                value={form.workingDirectory}
+                onChange={onField("workingDirectory")}
+                placeholder="terraform (optional)…"
+              />
             </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stack-repository-url">Repository HTTP URL</Label>
-            <Input id="stack-repository-url" name="repository-http-url" autoComplete="url" value={form.vcsRepositoryHttpUrl} onChange={onField("vcsRepositoryHttpUrl")} placeholder="https://git.example.com/org/repo.git" />
+            <Input
+              id="stack-repository-url"
+              name="repository-http-url"
+              autoComplete="url"
+              value={form.vcsRepositoryHttpUrl}
+              onChange={onField("vcsRepositoryHttpUrl")}
+              placeholder="https://git.example.com/org/repo.git"
+            />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="stack-display-identifier">Display identifier</Label>
-              <Input id="stack-display-identifier" name="display-identifier" autoComplete="off" value={form.vcsDisplayIdentifier} onChange={onField("vcsDisplayIdentifier")} placeholder="Optional label…" />
+              <Input
+                id="stack-display-identifier"
+                name="display-identifier"
+                autoComplete="off"
+                value={form.vcsDisplayIdentifier}
+                onChange={onField("vcsDisplayIdentifier")}
+                placeholder="Optional label…"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-tags-regex">Tags regex</Label>
-              <Input id="stack-tags-regex" name="tags-regex" autoComplete="off" value={form.vcsTagsRegex} onChange={onField("vcsTagsRegex")} placeholder="Optional tag pattern…" />
+              <Input
+                id="stack-tags-regex"
+                name="tags-regex"
+                autoComplete="off"
+                value={form.vcsTagsRegex}
+                onChange={onField("vcsTagsRegex")}
+                placeholder="Optional tag pattern…"
+              />
             </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stack-sparse-checkout">Sparse checkout pattern</Label>
-            <Input id="stack-sparse-checkout" name="sparse-checkout-pattern" autoComplete="off" value={form.vcsSparseCheckoutPattern} onChange={onField("vcsSparseCheckoutPattern")} placeholder="Optional path pattern…" />
+            <Input
+              id="stack-sparse-checkout"
+              name="sparse-checkout-pattern"
+              autoComplete="off"
+              value={form.vcsSparseCheckoutPattern}
+              onChange={onField("vcsSparseCheckoutPattern")}
+              placeholder="Optional path pattern…"
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="stack-description">Description</Label>
-            <Input id="stack-description" name="description" autoComplete="off" value={form.description} onChange={onField("description")} placeholder="Optional…" />
+            <Input
+              id="stack-description"
+              name="description"
+              autoComplete="off"
+              value={form.description}
+              onChange={onField("description")}
+              placeholder="Optional…"
+            />
           </div>
           <label htmlFor="stack-speculative" className="flex cursor-pointer items-center gap-2 text-sm">
             <Checkbox
               id="stack-speculative"
               checked={form.speculative}
-              onCheckedChange={(checked: boolean | "indeterminate"): void => { updateForm((prev): StackForm => ({ ...prev, speculative: checked === true })); }}
+              onCheckedChange={(checked: boolean | "indeterminate"): void => {
+                updateForm((prev): StackForm => ({ ...prev, speculative: checked === true }));
+              }}
             />
             Speculative planner enabled
           </label>
           <label htmlFor="stack-trigger-disabled" className="flex cursor-pointer items-center gap-2 text-sm">
-            <Checkbox id="stack-trigger-disabled" checked={form.triggerDisabled} onCheckedChange={(checked: boolean | "indeterminate"): void => { updateForm((prev): StackForm => ({ ...prev, triggerDisabled: checked === true })); }} />
+            <Checkbox
+              id="stack-trigger-disabled"
+              checked={form.triggerDisabled}
+              onCheckedChange={(checked: boolean | "indeterminate"): void => {
+                updateForm((prev): StackForm => ({ ...prev, triggerDisabled: checked === true }));
+              }}
+            />
             Disable VCS-triggered runs
           </label>
           <label htmlFor="stack-debugging" className="flex cursor-pointer items-center gap-2 text-sm">
-            <Checkbox id="stack-debugging" checked={form.debuggingMode} onCheckedChange={(checked: boolean | "indeterminate"): void => { updateForm((prev): StackForm => ({ ...prev, debuggingMode: checked === true })); }} />
+            <Checkbox
+              id="stack-debugging"
+              checked={form.debuggingMode}
+              onCheckedChange={(checked: boolean | "indeterminate"): void => {
+                updateForm((prev): StackForm => ({ ...prev, debuggingMode: checked === true }));
+              }}
+            />
             Enable debugging mode
           </label>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
           <Button onClick={onSubmit} disabled={saving}>
             {saving ? "Saving…" : editingStack === null ? "Create stack" : "Save changes"}
           </Button>
@@ -424,8 +570,12 @@ export function StackSettings(): React.JSX.Element {
     try {
       // SAFETY: both endpoints return the JSON:API list envelope per contract.
       const [stacksResponse, projectsResponse] = await Promise.all([
-        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/stacks`) as Promise<{ data: Stack[] }>,
-        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{ data: Project[] }>,
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/stacks`) as Promise<{
+          data: Stack[];
+        }>,
+        fetchApi(`/organizations/${encodeURIComponent(requestedOrganizationName)}/projects`) as Promise<{
+          data: Project[];
+        }>,
       ]);
       if (!isCurrentLoad()) return;
       const configurations: Record<string, LatestConfiguration> = Object.fromEntries(
@@ -452,7 +602,9 @@ export function StackSettings(): React.JSX.Element {
         });
       const loadConfiguration = async (stack: Stack): Promise<void> => {
         try {
-          const response = await fetchApi(`/stacks/${encodeURIComponent(stack.id)}/stack-configurations?page[size]=1`) as { data: StackConfiguration[] };
+          const response = (await fetchApi(
+            `/stacks/${encodeURIComponent(stack.id)}/stack-configurations?page[size]=1`,
+          )) as { data: StackConfiguration[] };
           configurations[stack.id] = response.data[0] ?? null;
         } catch {
           configurations[stack.id] = "error";
@@ -484,8 +636,11 @@ export function StackSettings(): React.JSX.Element {
     setDialogOpen(true);
   };
 
-  const set = (key: keyof StackForm): ((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void) =>
-    (e): void => { setForm((prev): StackForm => ({ ...prev, [key]: e.target.value })); };
+  const set =
+    (key: keyof StackForm): ((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void) =>
+    (e): void => {
+      setForm((prev): StackForm => ({ ...prev, [key]: e.target.value }));
+    };
 
   const submit = async (): Promise<void> => {
     setSaving(true);
@@ -504,14 +659,26 @@ export function StackSettings(): React.JSX.Element {
           body: JSON.stringify({
             data: {
               attributes,
-              relationships: { project: { data: { id: form.projectId, type: "projects" } }, ...(form.agentPoolId === "" ? {} : { "agent-pool": { data: { id: form.agentPoolId, type: "agent-pools" } } }) },
+              relationships: {
+                project: { data: { id: form.projectId, type: "projects" } },
+                ...(form.agentPoolId === ""
+                  ? {}
+                  : { "agent-pool": { data: { id: form.agentPoolId, type: "agent-pools" } } }),
+              },
             },
           }),
         });
       } else {
         await fetchApi(`/stacks/${editingStack.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ data: { attributes, relationships: { "agent-pool": { data: form.agentPoolId === "" ? null : { id: form.agentPoolId, type: "agent-pools" } } } } }),
+          body: JSON.stringify({
+            data: {
+              attributes,
+              relationships: {
+                "agent-pool": { data: form.agentPoolId === "" ? null : { id: form.agentPoolId, type: "agent-pools" } },
+              },
+            },
+          }),
         });
       }
       setDialogOpen(false);
@@ -542,8 +709,15 @@ export function StackSettings(): React.JSX.Element {
     setBusyStackIds(new Set(busyStackIdsRef.current));
     setError("");
     try {
-      const response = await fetchApi(`/stacks/${stack.id}/stack-configurations?source=manual`, { method: "POST", body: JSON.stringify({ data: { attributes: { speculative: stack.attributes["speculative-enabled"] === true } } }) }) as { data: StackConfiguration };
-      setLatestConfigurations((previous): Record<string, LatestConfiguration> => ({ ...previous, [stack.id]: response.data }));
+      const response = (await fetchApi(`/stacks/${stack.id}/stack-configurations?source=manual`, {
+        method: "POST",
+        body: JSON.stringify({
+          data: { attributes: { speculative: stack.attributes["speculative-enabled"] === true } },
+        }),
+      })) as { data: StackConfiguration };
+      setLatestConfigurations(
+        (previous): Record<string, LatestConfiguration> => ({ ...previous, [stack.id]: response.data }),
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to prepare stack configuration.");
     } finally {
@@ -577,15 +751,19 @@ export function StackSettings(): React.JSX.Element {
         ]}
         title="Stacks"
         description="A stack groups workspaces that are deployed together and depend on each other, so one change can roll through them in order. Most setups do not need one."
-        action={canManage ? (
-          <Button onClick={openCreate}>
-            <span className="mr-1.5 text-base leading-none">+</span> New stack
-          </Button>
-        ) : undefined}
+        action={
+          canManage ? (
+            <Button onClick={openCreate}>
+              <span className="mr-1.5 text-base leading-none">+</span> New stack
+            </Button>
+          ) : undefined
+        }
       />
 
       {error !== "" && !loading && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
       )}
 
       <Card>
@@ -615,61 +793,95 @@ export function StackSettings(): React.JSX.Element {
               ) : stacks.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
-                    <EmptyState compact title={error === "" ? "No stacks yet" : "Stacks unavailable"} description={error === "" ? "Group related components and deployments in a stack." : error} docsHref="/app/docs/stacks" />
+                    <EmptyState
+                      compact
+                      title={error === "" ? "No stacks yet" : "Stacks unavailable"}
+                      description={error === "" ? "Group related components and deployments in a stack." : error}
+                      docsHref="/app/docs/stacks"
+                    />
                   </TableCell>
                 </TableRow>
-              ) : stacks.map((stack): React.JSX.Element => {
-                const latest = latestConfigurations[stack.id];
-                return (
-                <TableRow key={stack.id}>
-                  <TableCell className="font-medium">
-                    <div className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-muted-foreground" />
-                      {stack.attributes.name}
-                    </div>
-                    {isString(stack.attributes.description) && stack.attributes.description !== "" && (
-                      <div className="text-xs text-muted-foreground">{stack.attributes.description}</div>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {vcsRepo(stack)?.identifier ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {vcsRepo(stack)?.branch ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {stack.attributes["working-directory"] ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {stack.attributes["execution-mode"] === "agent" ? "Agent" : "Remote"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
+              ) : (
+                stacks.map((stack): React.JSX.Element => {
+                  const latest = latestConfigurations[stack.id];
+                  return (
+                    <TableRow key={stack.id}>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          <Layers className="h-4 w-4 text-muted-foreground" />
+                          {stack.attributes.name}
+                        </div>
+                        {isString(stack.attributes.description) && stack.attributes.description !== "" && (
+                          <div className="text-xs text-muted-foreground">{stack.attributes.description}</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{vcsRepo(stack)?.identifier ?? "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">{vcsRepo(stack)?.branch ?? "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {stack.attributes["working-directory"] ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {stack.attributes["execution-mode"] === "agent" ? "Agent" : "Remote"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
                         {stack.attributes["speculative-enabled"] === true ? "Enabled" : "Disabled"}
                         <StackTriggerFlags stack={stack} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    <StackLatestCell latest={latest} canManage={canManage} busy={busyStackIds.has(stack.id)} onPrepare={(): void => { void prepareConfiguration(stack); }} />
-                  </TableCell>
-                  <TableCell>
-                    {canManage && (
-                      <div className="flex items-center justify-end gap-1">
-                        {stackHasVcsRemote(stack) && (
-                          <Button variant="ghost" size="icon" onClick={(): void => { void fetchLatest(stack); }} aria-label={`Fetch latest for ${stack.attributes.name}`} disabled={fetchingStackId === stack.id}>
-                            <RefreshCw className={`h-4 w-4 ${fetchingStackId === stack.id ? "animate-spin" : ""}`} />
-                          </Button>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        <StackLatestCell
+                          latest={latest}
+                          canManage={canManage}
+                          busy={busyStackIds.has(stack.id)}
+                          onPrepare={(): void => {
+                            void prepareConfiguration(stack);
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {canManage && (
+                          <div className="flex items-center justify-end gap-1">
+                            {stackHasVcsRemote(stack) && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={(): void => {
+                                  void fetchLatest(stack);
+                                }}
+                                aria-label={`Fetch latest for ${stack.attributes.name}`}
+                                disabled={fetchingStackId === stack.id}
+                              >
+                                <RefreshCw
+                                  className={`h-4 w-4 ${fetchingStackId === stack.id ? "animate-spin" : ""}`}
+                                />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={(): void => {
+                                openEdit(stack);
+                              }}
+                              aria-label={`Edit ${stack.attributes.name}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={(): void => {
+                                setStackToDelete(stack);
+                              }}
+                              aria-label={`Delete ${stack.attributes.name}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         )}
-                        <Button variant="ghost" size="icon" onClick={(): void => { openEdit(stack); }} aria-label={`Edit ${stack.attributes.name}`}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={(): void => { setStackToDelete(stack); }} aria-label={`Delete ${stack.attributes.name}`}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </TableCell>
-                </TableRow>
-                );
-              })}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
             </TableBody>
           </Table>
         </CardContent>
@@ -687,12 +899,16 @@ export function StackSettings(): React.JSX.Element {
         onField={set}
         updateForm={setForm}
         onSubmit={submit}
-        onCancel={(): void => { setDialogOpen(false); }}
+        onCancel={(): void => {
+          setDialogOpen(false);
+        }}
       />
 
       <ConfirmDialog
         open={stackToDelete !== null}
-        onOpenChange={(open): void => { if (!open) setStackToDelete(null); }}
+        onOpenChange={(open): void => {
+          if (!open) setStackToDelete(null);
+        }}
         title="Delete stack"
         description="Deleting a stack removes it and its deployments. This cannot be undone."
         confirmText="Delete"

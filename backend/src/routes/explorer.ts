@@ -43,7 +43,27 @@ type ExplorerQuery = Readonly<{
 }>;
 
 const viewTypes = new Set<ViewType>(["workspaces", "tf_versions", "providers", "modules"]);
-const filterOperators = new Set(["contains", "does not contain", "starts-with", "ends-with", "is", "is_not", "not-is", "is-null", "is_not_empty", "is_empty", "is-not-null", "greater-than", "less-than", "gt", "lt", "gteq", "lteq", "is_before", "is_after"]);
+const filterOperators = new Set([
+  "contains",
+  "does not contain",
+  "starts-with",
+  "ends-with",
+  "is",
+  "is_not",
+  "not-is",
+  "is-null",
+  "is_not_empty",
+  "is_empty",
+  "is-not-null",
+  "greater-than",
+  "less-than",
+  "gt",
+  "lt",
+  "gteq",
+  "lteq",
+  "is_before",
+  "is_after",
+]);
 
 function safeIsoDate(val: unknown): string | null {
   if (val === null || val === undefined || val === "") return null;
@@ -51,7 +71,11 @@ function safeIsoDate(val: unknown): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-function error(status: string, title: string, detail?: string): { errors: { status: string; title: string; detail?: string }[] } {
+function error(
+  status: string,
+  title: string,
+  detail?: string,
+): { errors: { status: string; title: string; detail?: string }[] } {
   return { errors: [{ status, title, ...(detail === undefined ? {} : { detail }) }] };
 }
 
@@ -62,13 +86,20 @@ function queryBudgetError(set: SetObj, cause: unknown): Record<string, unknown> 
   return error("503", "Service Unavailable", "Explorer query capacity is busy; retry shortly");
 }
 
-async function canExplore(orgId: string, userId: string | undefined, tokenOrgId: string | null, tokenTeamId: string | null): Promise<boolean> {
-  return await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "read-workspaces")
-    || await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "read-projects");
+async function canExplore(
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<boolean> {
+  return (
+    (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "read-workspaces")) ||
+    (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "read-projects"))
+  );
 }
 
 function viewType(value: unknown): ViewType | undefined {
-  return typeof value === "string" && viewTypes.has(value as ViewType) ? value as ViewType : undefined;
+  return typeof value === "string" && viewTypes.has(value as ViewType) ? (value as ViewType) : undefined;
 }
 
 function queryObject(value: unknown, fallbackType?: unknown): ExplorerQuery | undefined {
@@ -81,7 +112,9 @@ function queryObject(value: unknown, fallbackType?: unknown): ExplorerQuery | un
     ? raw["filter"].flatMap((item): ExplorerFilter[] => {
         if (typeof item !== "object" || item === null) return [];
         const filter = item as Record<string, unknown>;
-        const values = Array.isArray(filter["value"]) ? filter["value"].filter((v): v is string => typeof v === "string") : [];
+        const values = Array.isArray(filter["value"])
+          ? filter["value"].filter((v): v is string => typeof v === "string")
+          : [];
         if (typeof filter["operator"] === "string" && !filterOperators.has(filter["operator"])) invalidOperator = true;
         return typeof filter["field"] === "string" && typeof filter["operator"] === "string"
           ? [{ field: filter["field"], operator: filter["operator"], value: values }]
@@ -89,10 +122,14 @@ function queryObject(value: unknown, fallbackType?: unknown): ExplorerQuery | un
       })
     : [];
   if (invalidOperator) return undefined;
-  const fields = Array.isArray(raw["fields"]) ? raw["fields"].filter((field): field is string => typeof field === "string") : [];
+  const fields = Array.isArray(raw["fields"])
+    ? raw["fields"].filter((field): field is string => typeof field === "string")
+    : [];
   const sort = Array.isArray(raw["sort"])
     ? raw["sort"].filter((field): field is string => typeof field === "string")
-    : typeof raw["sort"] === "string" ? raw["sort"].split(",").filter(Boolean) : [];
+    : typeof raw["sort"] === "string"
+      ? raw["sort"].split(",").filter(Boolean)
+      : [];
   const query = { type, filter: filters, fields, sort };
   return invalidQueryField(query) === null ? query : undefined;
 }
@@ -127,24 +164,34 @@ function fieldValue(row: ExplorerRow, field: string): unknown {
 
 function textFilterMatch(operator: string, values: string[], actual: string): boolean | undefined {
   switch (operator) {
-    case "contains": return values.some((item) => actual.includes(item));
-    case "does not contain": return values.every((item) => !actual.includes(item));
-    case "starts-with": return values.some((item) => actual.startsWith(item));
-    case "ends-with": return values.some((item) => actual.endsWith(item));
-    case "is": return values.some((item) => actual === item);
+    case "contains":
+      return values.some((item) => actual.includes(item));
+    case "does not contain":
+      return values.every((item) => !actual.includes(item));
+    case "starts-with":
+      return values.some((item) => actual.startsWith(item));
+    case "ends-with":
+      return values.some((item) => actual.endsWith(item));
+    case "is":
+      return values.some((item) => actual === item);
     case "not-is":
-    case "is_not": return values.every((item) => actual !== item);
-    default: return undefined;
+    case "is_not":
+      return values.every((item) => actual !== item);
+    default:
+      return undefined;
   }
 }
 
 function nullFilterMatch(operator: string, actual: string, value: unknown): boolean | undefined {
   switch (operator) {
     case "is-null":
-    case "is_empty": return value === null || value === undefined || actual === "";
+    case "is_empty":
+      return value === null || value === undefined || actual === "";
     case "is-not-null":
-    case "is_not_empty": return value !== null && value !== undefined && actual !== "";
-    default: return undefined;
+    case "is_not_empty":
+      return value !== null && value !== undefined && actual !== "";
+    default:
+      return undefined;
   }
 }
 
@@ -152,34 +199,44 @@ function numericFilterMatch(operator: string, values: string[], value: unknown):
   switch (operator) {
     case "greater-than":
     case "gt":
-    case "is_after": return values.some((item) => compare(value, item) > 0);
+    case "is_after":
+      return values.some((item) => compare(value, item) > 0);
     case "less-than":
     case "lt":
-    case "is_before": return values.some((item) => compare(value, item) < 0);
-    case "gteq": return values.some((item) => compare(value, item) >= 0);
-    case "lteq": return values.some((item) => compare(value, item) <= 0);
-    default: return undefined;
+    case "is_before":
+      return values.some((item) => compare(value, item) < 0);
+    case "gteq":
+      return values.some((item) => compare(value, item) >= 0);
+    case "lteq":
+      return values.some((item) => compare(value, item) <= 0);
+    default:
+      return undefined;
   }
 }
 
 function filterMatch(value: unknown, operator: string, expected: string[]): boolean {
   const values = expected.map((item) => item.toLocaleLowerCase());
   const actual = value === null || value === undefined ? "" : toComparableString(value).toLocaleLowerCase();
-  return textFilterMatch(operator, values, actual)
-    ?? nullFilterMatch(operator, actual, value)
-    ?? numericFilterMatch(operator, values, value)
-    ?? false;
+  return (
+    textFilterMatch(operator, values, actual) ??
+    nullFilterMatch(operator, actual, value) ??
+    numericFilterMatch(operator, values, value) ??
+    false
+  );
 }
 
 function compare(value: unknown, expected: string): number {
-  const actualNumber = typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : Number.NaN;
+  const actualNumber =
+    typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : Number.NaN;
   const expectedNumber = expected.trim() === "" ? Number.NaN : Number(expected);
   if (!Number.isNaN(actualNumber) && !Number.isNaN(expectedNumber)) return actualNumber - expectedNumber;
   return toComparableString(value ?? "").localeCompare(expected);
 }
 
 function applyQuery(rows: ExplorerRow[], query: ExplorerQuery): ExplorerRow[] {
-  let result = rows.filter((row) => query.filter.every((filter) => filterMatch(fieldValue(row, filter.field), filter.operator, filter.value)));
+  let result = rows.filter((row) =>
+    query.filter.every((filter) => filterMatch(fieldValue(row, filter.field), filter.operator, filter.value)),
+  );
   if (query.sort.length > 0) {
     result = [...result].sort((left, right) => {
       for (const sortField of query.sort) {
@@ -188,7 +245,10 @@ function applyQuery(rows: ExplorerRow[], query: ExplorerQuery): ExplorerRow[] {
         const a = fieldValue(left, field);
         const b = fieldValue(right, field);
         if (a === b) continue;
-        const comparison = toComparableString(a ?? "").localeCompare(toComparableString(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
+        const comparison = toComparableString(a ?? "").localeCompare(toComparableString(b ?? ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
         return descending ? -comparison : comparison;
       }
       return 0;
@@ -198,8 +258,9 @@ function applyQuery(rows: ExplorerRow[], query: ExplorerQuery): ExplorerRow[] {
   return result.map((row) => {
     const attributes: Record<string, unknown> = {};
     for (const field of query.fields) {
-      const key = [field, field.replaceAll("_", "-"), field.replaceAll("-", "_")]
-        .find((candidate) => Object.prototype.hasOwnProperty.call(row.attributes, candidate));
+      const key = [field, field.replaceAll("_", "-"), field.replaceAll("-", "_")].find((candidate) =>
+        Object.prototype.hasOwnProperty.call(row.attributes, candidate),
+      );
       if (key !== undefined) attributes[key] = row.attributes[key];
     }
     return { ...row, attributes };
@@ -250,12 +311,32 @@ const catalogColumns: Readonly<Record<string, string>> = {
 };
 
 const numericExplorerColumns = new Set([
-  "current_resource_count", "resources_drifted", "resources_undrifted", "checks_passed", "checks_failed",
-  "checks_errored", "checks_unknown", "provider_count", "module_count", "workspace_count",
+  "current_resource_count",
+  "resources_drifted",
+  "resources_undrifted",
+  "checks_passed",
+  "checks_failed",
+  "checks_errored",
+  "checks_unknown",
+  "provider_count",
+  "module_count",
+  "workspace_count",
 ]);
 const dateExplorerColumns = new Set(["workspace_created_at", "workspace_updated_at", "current_run_applied_at"]);
 const booleanExplorerColumns = new Set(["drifted", "all_checks_succeeded"]);
-const comparisonOperators = new Set(["is", "not-is", "is_not", "greater-than", "gt", "is_after", "less-than", "lt", "is_before", "gteq", "lteq"]);
+const comparisonOperators = new Set([
+  "is",
+  "not-is",
+  "is_not",
+  "greater-than",
+  "gt",
+  "is_after",
+  "less-than",
+  "lt",
+  "is_before",
+  "gteq",
+  "lteq",
+]);
 const negativeFilterOperators = new Set(["does not contain", "not-is", "is_not"]);
 
 function columnFor(field: string, columns: Readonly<Record<string, string>>): string | undefined {
@@ -276,7 +357,7 @@ function invalidQueryField(query: ExplorerQuery): string | null {
   const fields = [
     ...query.filter.map((filter) => filter.field),
     ...query.fields,
-    ...query.sort.map((sort) => sort.startsWith("-") ? sort.slice(1) : sort),
+    ...query.sort.map((sort) => (sort.startsWith("-") ? sort.slice(1) : sort)),
   ];
   for (const field of fields) {
     if (query.type === "workspaces" && (field === "organization_name" || field === "organization-name")) continue;
@@ -291,16 +372,22 @@ function sqlColumn(name: string): SQL {
 
 type ExplorerColumnType = "boolean" | "numeric" | "date" | "text";
 
-function bulkActionAttributes(body: unknown): { dataObject: Record<string, unknown>; attributes: Record<string, unknown>; inputs: Record<string, unknown> } {
-  const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+function bulkActionAttributes(body: unknown): {
+  dataObject: Record<string, unknown>;
+  attributes: Record<string, unknown>;
+  inputs: Record<string, unknown>;
+} {
+  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"];
-  const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-  const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
-    ? dataObject["attributes"] as Record<string, unknown>
-    : {};
-  const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
-    ? attributes["action_inputs"] as Record<string, unknown>
-    : {};
+  const dataObject = data !== null && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const attributes =
+    dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
+      ? (dataObject["attributes"] as Record<string, unknown>)
+      : {};
+  const inputs =
+    attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
+      ? (attributes["action_inputs"] as Record<string, unknown>)
+      : {};
   return { dataObject, attributes, inputs };
 }
 
@@ -315,23 +402,40 @@ function parseBulkActionInputs(
   const targetIds = attributes["target_ids"];
   const query = attributes["query"];
   if (
-    dataObject["type"] !== "bulk_actions"
-    || (actionType !== "change_request" && actionType !== "change_requests")
-    || subject === ""
-    || message === ""
-    || (targetIds === undefined) === (query === undefined)
-  ) return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", "Valid bulk-action inputs and exactly one target selector are required") };
+    dataObject["type"] !== "bulk_actions" ||
+    (actionType !== "change_request" && actionType !== "change_requests") ||
+    subject === "" ||
+    message === "" ||
+    (targetIds === undefined) === (query === undefined)
+  )
+    return {
+      error: explorerBulkActionError(
+        set,
+        422,
+        "Unprocessable Entity",
+        "Valid bulk-action inputs and exactly one target selector are required",
+      ),
+    };
   return { subject, message, targetIds, query };
 }
 
-async function validateBulkTargetMembership(organizationId: string, requestedIds: string[], set: SetObj): Promise<unknown> {
+async function validateBulkTargetMembership(
+  organizationId: string,
+  requestedIds: string[],
+  set: SetObj,
+): Promise<unknown> {
   const candidates = await db.query.workspaces.findMany({
     columns: { id: true },
     where: and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, requestedIds)),
   });
   const candidateIds = new Set(candidates.map((workspace): string => workspace.id));
   if (requestedIds.some((id): boolean => !candidateIds.has(id))) {
-    return explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces");
+    return explorerBulkActionError(
+      set,
+      422,
+      "Unprocessable Entity",
+      "The target selector did not resolve to workspaces",
+    );
   }
   return null;
 }
@@ -353,13 +457,27 @@ async function resolveBulkActionQuerySelection(
   const selectedIds = selection?.ids;
   const selectedTotal = selection?.total;
   if (selectedIds === undefined || selectedIds.length === 0) {
-    return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces") };
+    return {
+      error: explorerBulkActionError(
+        set,
+        422,
+        "Unprocessable Entity",
+        "The target selector did not resolve to workspaces",
+      ),
+    };
   }
   if (
-    selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
-    || (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
+    selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS ||
+    (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
   ) {
-    return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`) };
+    return {
+      error: explorerBulkActionError(
+        set,
+        422,
+        "Unprocessable Entity",
+        `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`,
+      ),
+    };
   }
   return { selectedIds };
 }
@@ -373,12 +491,19 @@ async function resolveBulkActionTargetIds(
 ): Promise<{ selectedIds: string[] } | { error: unknown }> {
   if (targetIds !== undefined) {
     if (
-      !Array.isArray(targetIds)
-      || targetIds.length === 0
-      || targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
-      || targetIds.some((id): boolean => typeof id !== "string")
+      !Array.isArray(targetIds) ||
+      targetIds.length === 0 ||
+      targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS ||
+      targetIds.some((id): boolean => typeof id !== "string")
     ) {
-      return { error: explorerBulkActionError(set, 422, "Unprocessable Entity", `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`) };
+      return {
+        error: explorerBulkActionError(
+          set,
+          422,
+          "Unprocessable Entity",
+          `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`,
+        ),
+      };
     }
     const requestedIds = [...new Set(targetIds as string[])];
     const membershipError = await validateBulkTargetMembership(organization.id, requestedIds, set);
@@ -397,32 +522,41 @@ async function createBulkActionRecords(
   set: SetObj,
 ): Promise<unknown> {
   const now = Date.now();
-  const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
-    explorerBulkActionRecordValues(workspaceId, subject, message, userId, now));
+  const records = selectedIds.map(
+    (workspaceId): ExplorerBulkActionRecord =>
+      explorerBulkActionRecordValues(workspaceId, subject, message, userId, now),
+  );
   const firstRecord = records[0];
   if (firstRecord === undefined) throw new Error("Bulk change requests require at least one workspace");
   await db.transaction(async (tx): Promise<void> => {
     await tx.insert(explorerBulkActionRecords).values(records);
-    await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
-      orgId: organization.id,
-      userId,
-      action: "create",
-      resourceType: "explorer-bulk-action-records",
-      resourceId: record.id,
-      details: {
-        workspaceId: record.workspaceId,
-        toStatus: "pending",
-      },
-      createdAt: now,
-    }) as typeof auditLogs.$inferInsert));
+    await tx.insert(auditLogs).values(
+      records.map(
+        (record) =>
+          auditLogValues({
+            orgId: organization.id,
+            userId,
+            action: "create",
+            resourceType: "explorer-bulk-action-records",
+            resourceId: record.id,
+            details: {
+              workspaceId: record.workspaceId,
+              toStatus: "pending",
+            },
+            createdAt: now,
+          }) as typeof auditLogs.$inferInsert,
+      ),
+    );
   });
   // Notifications reread the committed Explorer bulk-action rows. Dispatching only
   // after commit prevents a failed transaction from producing a notification
   // for a row that never became durable.
   for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
-    await Promise.all(records
-      .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
-      .map(async (record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
+    await Promise.all(
+      records
+        .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
+        .map(async (record): Promise<void> => queueExplorerBulkActionNotification(record.id)),
+    );
   }
   (set as { status: number }).status = 201;
   return {
@@ -435,10 +569,7 @@ async function createBulkActionRecords(
   };
 }
 
-function parseSavedViewCreate(
-  body: unknown,
-  set: SetObj,
-): { name: string; query: ExplorerQuery } | { error: unknown } {
+function parseSavedViewCreate(body: unknown, set: SetObj): { name: string; query: ExplorerQuery } | { error: unknown } {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const data = payload["data"] as Record<string, unknown> | undefined;
   if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
@@ -446,9 +577,15 @@ function parseSavedViewCreate(
     return { error: error("422", "Unprocessable Entity", "Invalid type") };
   }
   const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
-  if (name.length > 255) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "Name too long") }; }
+  if (name.length > 255) {
+    (set as { status: number }).status = 422;
+    return { error: error("422", "Unprocessable Entity", "Name too long") };
+  }
   const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
-  if (name === "" || query === undefined) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "name, query_type, and query are required") }; }
+  if (name === "" || query === undefined) {
+    (set as { status: number }).status = 422;
+    return { error: error("422", "Unprocessable Entity", "name, query_type, and query are required") };
+  }
   return { name, query };
 }
 
@@ -461,11 +598,18 @@ function parseSavedViewUpdate(
   const data = payload["data"] as Record<string, unknown> | undefined;
   const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
   const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? defaultQueryType);
-  if (name === "" || query === undefined) { (set as { status: number }).status = 422; return { error: error("422", "Unprocessable Entity", "name and query are required") }; }
+  if (name === "" || query === undefined) {
+    (set as { status: number }).status = 422;
+    return { error: error("422", "Unprocessable Entity", "name and query are required") };
+  }
   return { name, query };
 }
 
-function sqlBoundValue(value: string, operator: string, columnType: ExplorerColumnType): string | number | boolean | undefined {
+function sqlBoundValue(
+  value: string,
+  operator: string,
+  columnType: ExplorerColumnType,
+): string | number | boolean | undefined {
   const comparison = comparisonOperators.has(operator);
   if (columnType === "boolean" && comparison) {
     return value.toLowerCase() === "true" ? true : value.toLowerCase() === "false" ? false : undefined;
@@ -475,40 +619,72 @@ function sqlBoundValue(value: string, operator: string, columnType: ExplorerColu
   return value;
 }
 
-function sqlBoundGuard(bound: string | number | boolean | undefined, operator: string, numeric: boolean, date: boolean, booleanColumn: boolean): SQL | null {
+function sqlBoundGuard(
+  bound: string | number | boolean | undefined,
+  operator: string,
+  numeric: boolean,
+  date: boolean,
+  booleanColumn: boolean,
+): SQL | null {
   if (booleanColumn && comparisonOperators.has(operator) && typeof bound !== "boolean") return sql`1 = 0`;
-  if ((numeric || date) && comparisonOperators.has(operator) && typeof bound === "number" && !Number.isFinite(bound)) return sql`1 = 0`;
+  if ((numeric || date) && comparisonOperators.has(operator) && typeof bound === "number" && !Number.isFinite(bound))
+    return sql`1 = 0`;
   return null;
 }
 
-function sqlTextPredicate(operator: string, column: SQL, textColumn: SQL, value: string, bound: string | number | boolean | undefined, typed: boolean): SQL | undefined {
+function sqlTextPredicate(
+  operator: string,
+  column: SQL,
+  textColumn: SQL,
+  value: string,
+  bound: string | number | boolean | undefined,
+  typed: boolean,
+): SQL | undefined {
   switch (operator) {
-    case "contains": return sql`lower(${textColumn}) LIKE lower(${`%${value}%`})`;
-    case "does not contain": return sql`lower(${textColumn}) NOT LIKE lower(${`%${value}%`})`;
-    case "starts-with": return sql`lower(${textColumn}) LIKE lower(${`${value}%`})`;
-    case "ends-with": return sql`lower(${textColumn}) LIKE lower(${`%${value}`})`;
-    case "is": return typed ? sql`${column} = ${bound}` : sql`lower(${textColumn}) = lower(${value})`;
+    case "contains":
+      return sql`lower(${textColumn}) LIKE lower(${`%${value}%`})`;
+    case "does not contain":
+      return sql`lower(${textColumn}) NOT LIKE lower(${`%${value}%`})`;
+    case "starts-with":
+      return sql`lower(${textColumn}) LIKE lower(${`${value}%`})`;
+    case "ends-with":
+      return sql`lower(${textColumn}) LIKE lower(${`%${value}`})`;
+    case "is":
+      return typed ? sql`${column} = ${bound}` : sql`lower(${textColumn}) = lower(${value})`;
     case "not-is":
-    case "is_not": return typed ? sql`${column} <> ${bound}` : sql`lower(${textColumn}) <> lower(${value})`;
+    case "is_not":
+      return typed ? sql`${column} <> ${bound}` : sql`lower(${textColumn}) <> lower(${value})`;
     case "is-null":
-    case "is_empty": return sql`(${column} IS NULL OR ${textColumn} = '')`;
+    case "is_empty":
+      return sql`(${column} IS NULL OR ${textColumn} = '')`;
     case "is-not-null":
-    case "is_not_empty": return sql`(${column} IS NOT NULL AND ${textColumn} <> '')`;
-    default: return undefined;
+    case "is_not_empty":
+      return sql`(${column} IS NOT NULL AND ${textColumn} <> '')`;
+    default:
+      return undefined;
   }
 }
 
-function sqlComparisonPredicate(operator: string, column: SQL, bound: string | number | boolean | undefined): SQL | undefined {
+function sqlComparisonPredicate(
+  operator: string,
+  column: SQL,
+  bound: string | number | boolean | undefined,
+): SQL | undefined {
   switch (operator) {
     case "greater-than":
     case "gt":
-    case "is_after": return sql`${column} > ${bound}`;
+    case "is_after":
+      return sql`${column} > ${bound}`;
     case "less-than":
     case "lt":
-    case "is_before": return sql`${column} < ${bound}`;
-    case "gteq": return sql`${column} >= ${bound}`;
-    case "lteq": return sql`${column} <= ${bound}`;
-    default: return undefined;
+    case "is_before":
+      return sql`${column} < ${bound}`;
+    case "gteq":
+      return sql`${column} >= ${bound}`;
+    case "lteq":
+      return sql`${column} <= ${bound}`;
+    default:
+      return undefined;
   }
 }
 
@@ -518,19 +694,21 @@ function sqlFilter(columnName: string, filter: ExplorerFilter): SQL | undefined 
   const numeric = numericExplorerColumns.has(columnName);
   const date = dateExplorerColumns.has(columnName);
   const boolean = booleanExplorerColumns.has(columnName);
-  const textColumn = boolean
-    ? sql`CASE WHEN ${column} THEN 'true' ELSE 'false' END`
-    : sql`CAST(${column} AS TEXT)`;
+  const textColumn = boolean ? sql`CASE WHEN ${column} THEN 'true' ELSE 'false' END` : sql`CAST(${column} AS TEXT)`;
   const make = (value: string): SQL => {
     const columnType: ExplorerColumnType = boolean ? "boolean" : numeric ? "numeric" : date ? "date" : "text";
     const bound = sqlBoundValue(value, filter.operator, columnType);
     const guard = sqlBoundGuard(bound, filter.operator, numeric, date, boolean);
     if (guard !== null) return guard;
-    return sqlTextPredicate(filter.operator, column, textColumn, value, bound, numeric || date || boolean)
-      ?? sqlComparisonPredicate(filter.operator, column, bound)
-      ?? sql`1 = 1`;
+    return (
+      sqlTextPredicate(filter.operator, column, textColumn, value, bound, numeric || date || boolean) ??
+      sqlComparisonPredicate(filter.operator, column, bound) ??
+      sql`1 = 1`
+    );
   };
-  return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
+  return values.length === 1
+    ? make(values[0] ?? "")
+    : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
 
 function indexedWhere(
@@ -553,7 +731,12 @@ function indexedWhere(
   return and(...predicates);
 }
 
-function indexedOrders(query: ExplorerQuery, columns: Readonly<Record<string, string>>, fallback: string, expressions: Readonly<Record<string, SQL>> = {}): SQL[] {
+function indexedOrders(
+  query: ExplorerQuery,
+  columns: Readonly<Record<string, string>>,
+  fallback: string,
+  expressions: Readonly<Record<string, SQL>> = {},
+): SQL[] {
   const orders = query.sort.flatMap((raw): SQL[] => {
     const descending = raw.startsWith("-");
     const field = descending ? raw.slice(1) : raw;
@@ -603,14 +786,16 @@ function inventoryResource(row: typeof explorerWorkspaceInventory.$inferSelect, 
   return { id: row.workspaceId, type: "workspaces", attributes };
 }
 
-function membershipCatalogResource(row: Readonly<{
-  kind: string;
-  name: string;
-  source: string;
-  version: string;
-  workspaceCount: number;
-  workspaces: string | null;
-}>): ExplorerRow {
+function membershipCatalogResource(
+  row: Readonly<{
+    kind: string;
+    name: string;
+    source: string;
+    version: string;
+    workspaceCount: number;
+    workspaces: string | null;
+  }>,
+): ExplorerRow {
   const key = [row.kind, row.name, row.source, row.version].join("|");
   return {
     id: `eci-${encodeURIComponent(key)}`,
@@ -628,10 +813,13 @@ function membershipCatalogResource(row: Readonly<{
 
 function aggregateEqualityPredicate(operator: string, expression: SQL, bound: number): SQL | undefined {
   switch (operator) {
-    case "is": return Number.isFinite(bound) ? sql`${expression} = ${bound}` : sql`1 = 0`;
+    case "is":
+      return Number.isFinite(bound) ? sql`${expression} = ${bound}` : sql`1 = 0`;
     case "not-is":
-    case "is_not": return Number.isFinite(bound) ? sql`${expression} <> ${bound}` : sql`1 = 1`;
-    default: return undefined;
+    case "is_not":
+      return Number.isFinite(bound) ? sql`${expression} <> ${bound}` : sql`1 = 1`;
+    default:
+      return undefined;
   }
 }
 
@@ -640,25 +828,35 @@ function aggregateOrderingPredicate(operator: string, expression: SQL, bound: nu
   switch (operator) {
     case "greater-than":
     case "gt":
-    case "is_after": return finite ? sql`${expression} > ${bound}` : sql`1 = 0`;
+    case "is_after":
+      return finite ? sql`${expression} > ${bound}` : sql`1 = 0`;
     case "less-than":
     case "lt":
-    case "is_before": return finite ? sql`${expression} < ${bound}` : sql`1 = 0`;
-    case "gteq": return finite ? sql`${expression} >= ${bound}` : sql`1 = 0`;
-    case "lteq": return finite ? sql`${expression} <= ${bound}` : sql`1 = 0`;
-    default: return undefined;
+    case "is_before":
+      return finite ? sql`${expression} < ${bound}` : sql`1 = 0`;
+    case "gteq":
+      return finite ? sql`${expression} >= ${bound}` : sql`1 = 0`;
+    case "lteq":
+      return finite ? sql`${expression} <= ${bound}` : sql`1 = 0`;
+    default:
+      return undefined;
   }
 }
 
 function aggregateTextPredicate(operator: string, expression: SQL, value: string): SQL | undefined {
   switch (operator) {
-    case "contains": return sql`CAST(${expression} AS TEXT) LIKE ${`%${value}%`}`;
-    case "does not contain": return sql`CAST(${expression} AS TEXT) NOT LIKE ${`%${value}%`}`;
+    case "contains":
+      return sql`CAST(${expression} AS TEXT) LIKE ${`%${value}%`}`;
+    case "does not contain":
+      return sql`CAST(${expression} AS TEXT) NOT LIKE ${`%${value}%`}`;
     case "is-null":
-    case "is_empty": return sql`(${expression} IS NULL OR CAST(${expression} AS TEXT) = '')`;
+    case "is_empty":
+      return sql`(${expression} IS NULL OR CAST(${expression} AS TEXT) = '')`;
     case "is-not-null":
-    case "is_not_empty": return sql`(${expression} IS NOT NULL AND CAST(${expression} AS TEXT) <> '')`;
-    default: return undefined;
+    case "is_not_empty":
+      return sql`(${expression} IS NOT NULL AND CAST(${expression} AS TEXT) <> '')`;
+    default:
+      return undefined;
   }
 }
 
@@ -667,12 +865,16 @@ function aggregateFilter(expression: SQL, filter: ExplorerFilter): SQL {
   const make = (value: string): SQL => {
     const numeric = Number(value);
     const bound = Number.isFinite(numeric) ? numeric : Number.NaN;
-    return aggregateEqualityPredicate(filter.operator, expression, bound)
-      ?? aggregateOrderingPredicate(filter.operator, expression, bound)
-      ?? aggregateTextPredicate(filter.operator, expression, value)
-      ?? sql`1 = 1`;
+    return (
+      aggregateEqualityPredicate(filter.operator, expression, bound) ??
+      aggregateOrderingPredicate(filter.operator, expression, bound) ??
+      aggregateTextPredicate(filter.operator, expression, value) ??
+      sql`1 = 1`
+    );
   };
-  return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
+  return values.length === 1
+    ? make(values[0] ?? "")
+    : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
 
 function aggregateTextFilter(expression: SQL, filter: ExplorerFilter): SQL {
@@ -681,21 +883,32 @@ function aggregateTextFilter(expression: SQL, filter: ExplorerFilter): SQL {
     const text = sql`lower(CAST(${expression} AS TEXT))`;
     const expected = value.toLowerCase();
     switch (filter.operator) {
-      case "contains": return sql`${text} LIKE ${`%${expected}%`}`;
-      case "does not contain": return sql`${text} NOT LIKE ${`%${expected}%`}`;
-      case "starts-with": return sql`${text} LIKE ${`${expected}%`}`;
-      case "ends-with": return sql`${text} LIKE ${`%${expected}`}`;
-      case "is": return sql`${text} = ${expected}`;
+      case "contains":
+        return sql`${text} LIKE ${`%${expected}%`}`;
+      case "does not contain":
+        return sql`${text} NOT LIKE ${`%${expected}%`}`;
+      case "starts-with":
+        return sql`${text} LIKE ${`${expected}%`}`;
+      case "ends-with":
+        return sql`${text} LIKE ${`%${expected}`}`;
+      case "is":
+        return sql`${text} = ${expected}`;
       case "not-is":
-      case "is_not": return sql`${text} <> ${expected}`;
+      case "is_not":
+        return sql`${text} <> ${expected}`;
       case "is-null":
-      case "is_empty": return sql`(${expression} IS NULL OR ${text} = '')`;
+      case "is_empty":
+        return sql`(${expression} IS NULL OR ${text} = '')`;
       case "is-not-null":
-      case "is_not_empty": return sql`(${expression} IS NOT NULL AND ${text} <> '')`;
-      default: return sql`1 = 1`;
+      case "is_not_empty":
+        return sql`(${expression} IS NOT NULL AND ${text} <> '')`;
+      default:
+        return sql`1 = 1`;
     }
   };
-  return values.length === 1 ? make(values[0] ?? "") : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
+  return values.length === 1
+    ? make(values[0] ?? "")
+    : sql`(${sql.join(values.map(make), negativeFilterOperators.has(filter.operator) ? sql` AND ` : sql` OR `)})`;
 }
 
 async function indexedExplorerRows(
@@ -707,10 +920,14 @@ async function indexedExplorerRows(
   budget: DbQueryBudgetKind = "index",
   signal?: AbortSignal,
 ): Promise<Readonly<{ rows: ExplorerRow[]; total: number }>> {
-  return withDbQueryBudget(budget, async (): Promise<Readonly<{ rows: ExplorerRow[]; total: number }>> => {
-    if (ensureInventory) await ensureExplorerInventory(orgId);
-    return indexedExplorerRowsUnbudgeted(orgId, orgName, query, page);
-  }, { signal });
+  return withDbQueryBudget(
+    budget,
+    async (): Promise<Readonly<{ rows: ExplorerRow[]; total: number }>> => {
+      if (ensureInventory) await ensureExplorerInventory(orgId);
+      return indexedExplorerRowsUnbudgeted(orgId, orgName, query, page);
+    },
+    { signal },
+  );
 }
 
 async function indexedExplorerRowsUnbudgeted(
@@ -722,12 +939,22 @@ async function indexedExplorerRowsUnbudgeted(
   if (query.type === "workspaces") {
     const where = indexedWhere(query, orgId, orgName, workspaceInventoryColumns);
     const [rows, total] = await Promise.all([
-      db.query.explorerWorkspaceInventory.findMany({ where, orderBy: [...indexedOrders(query, workspaceInventoryColumns, "workspace_updated_at"), asc(sqlColumn("workspace_id"))], ...(page ?? {}) }),
+      db.query.explorerWorkspaceInventory.findMany({
+        where,
+        orderBy: [
+          ...indexedOrders(query, workspaceInventoryColumns, "workspace_updated_at"),
+          asc(sqlColumn("workspace_id")),
+        ],
+        ...(page ?? {}),
+      }),
       db.select({ total: count() }).from(explorerWorkspaceInventory).where(where),
     ]);
     return { rows: rows.map((row) => inventoryResource(row, orgName)), total: total[0]?.total ?? 0 };
   }
-  const keyFilters = query.filter.filter((filter) => filter.field !== "workspace_count" && filter.field !== "workspace-count" && filter.field !== "workspaces");
+  const keyFilters = query.filter.filter(
+    (filter) =>
+      filter.field !== "workspace_count" && filter.field !== "workspace-count" && filter.field !== "workspaces",
+  );
   const where = and(
     eq(explorerCatalogMemberships.orgId, orgId),
     eq(explorerCatalogMemberships.kind, query.type),
@@ -744,17 +971,28 @@ async function indexedExplorerRowsUnbudgeted(
   const having = query.filter
     .filter((filter) => filter.field === "workspace_count" || filter.field === "workspace-count")
     .map((filter) => aggregateFilter(workspaceCount, filter));
-  having.push(...query.filter.filter((filter) => filter.field === "workspaces").map((filter) => aggregateTextFilter(workspaces, filter)));
-  const groupedBase = db.select({
-    kind: explorerCatalogMemberships.kind,
-    name: explorerCatalogMemberships.name,
-    source: explorerCatalogMemberships.source,
-    version: explorerCatalogMemberships.version,
-    workspaceCount,
-    workspaces,
-  }).from(explorerCatalogMemberships)
+  having.push(
+    ...query.filter
+      .filter((filter) => filter.field === "workspaces")
+      .map((filter) => aggregateTextFilter(workspaces, filter)),
+  );
+  const groupedBase = db
+    .select({
+      kind: explorerCatalogMemberships.kind,
+      name: explorerCatalogMemberships.name,
+      source: explorerCatalogMemberships.source,
+      version: explorerCatalogMemberships.version,
+      workspaceCount,
+      workspaces,
+    })
+    .from(explorerCatalogMemberships)
     .where(where)
-    .groupBy(explorerCatalogMemberships.kind, explorerCatalogMemberships.name, explorerCatalogMemberships.source, explorerCatalogMemberships.version)
+    .groupBy(
+      explorerCatalogMemberships.kind,
+      explorerCatalogMemberships.name,
+      explorerCatalogMemberships.source,
+      explorerCatalogMemberships.version,
+    )
     .having(having.length === 0 ? undefined : and(...having))
     .orderBy(
       ...indexedOrders(query, catalogColumns, "name", { workspace_count: workspaceCount, workspaces }),
@@ -766,11 +1004,16 @@ async function indexedExplorerRowsUnbudgeted(
       asc(explorerCatalogMemberships.version),
     );
   const grouped = page === undefined ? groupedBase : groupedBase.limit(page.limit).offset(page.offset);
-  const keyQuery = db.select({ name: explorerCatalogMemberships.name, source: explorerCatalogMemberships.source, version: explorerCatalogMemberships.version })
-      .from(explorerCatalogMemberships)
-      .where(where)
-      .groupBy(explorerCatalogMemberships.name, explorerCatalogMemberships.source, explorerCatalogMemberships.version)
-      .having(having.length === 0 ? undefined : and(...having));
+  const keyQuery = db
+    .select({
+      name: explorerCatalogMemberships.name,
+      source: explorerCatalogMemberships.source,
+      version: explorerCatalogMemberships.version,
+    })
+    .from(explorerCatalogMemberships)
+    .where(where)
+    .groupBy(explorerCatalogMemberships.name, explorerCatalogMemberships.source, explorerCatalogMemberships.version)
+    .having(having.length === 0 ? undefined : and(...having));
   const [rows, total] = await Promise.all([
     grouped,
     db.select({ total: count() }).from(keyQuery.as("explorer_catalog_keys")),
@@ -778,9 +1021,22 @@ async function indexedExplorerRowsUnbudgeted(
   return { rows: rows.map(membershipCatalogResource), total: total[0]?.total ?? 0 };
 }
 
-async function executeQuery(orgId: string, orgName: string, query: ExplorerQuery, request: Readonly<{ url: string; signal?: AbortSignal }>): Promise<{ rows: ExplorerRow[]; number: number; size: number; total: number }> {
+async function executeQuery(
+  orgId: string,
+  orgName: string,
+  query: ExplorerQuery,
+  request: Readonly<{ url: string; signal?: AbortSignal }>,
+): Promise<{ rows: ExplorerRow[]; number: number; size: number; total: number }> {
   const { number, size } = pageRequest(request);
-  const indexed = await indexedExplorerRows(orgId, orgName, query, { offset: (number - 1) * size, limit: size }, true, "index", request.signal);
+  const indexed = await indexedExplorerRows(
+    orgId,
+    orgName,
+    query,
+    { offset: (number - 1) * size, limit: size },
+    true,
+    "index",
+    request.signal,
+  );
   return { rows: applyQuery(indexed.rows, { ...query, filter: [], sort: [] }), number, size, total: indexed.total };
 }
 
@@ -803,12 +1059,35 @@ function csvFields(query: ExplorerQuery): string[] {
   if (query.fields.length > 0) return [...new Set(query.fields.map((field) => field.replaceAll("-", "_")))];
   return query.type === "workspaces"
     ? [
-        "organization_name", "workspace_name", "workspace_created_at", "workspace_updated_at", "terraform_version",
-        "execution_mode", "source_module_id", "current_run_status", "current_run_applied_at", "current_run_external_id",
-        "current_resource_count", "drifted", "resources_drifted", "resources_undrifted", "all_checks_succeeded",
-        "checks_passed", "checks_failed", "checks_errored", "checks_unknown", "vcs_repo_identifier", "tags",
-        "project_name", "project_external_id", "providers", "modules", "provider_count", "module_count",
-        "state_version_terraform_version", "external_id",
+        "organization_name",
+        "workspace_name",
+        "workspace_created_at",
+        "workspace_updated_at",
+        "terraform_version",
+        "execution_mode",
+        "source_module_id",
+        "current_run_status",
+        "current_run_applied_at",
+        "current_run_external_id",
+        "current_resource_count",
+        "drifted",
+        "resources_drifted",
+        "resources_undrifted",
+        "all_checks_succeeded",
+        "checks_passed",
+        "checks_failed",
+        "checks_errored",
+        "checks_unknown",
+        "vcs_repo_identifier",
+        "tags",
+        "project_name",
+        "project_external_id",
+        "providers",
+        "modules",
+        "provider_count",
+        "module_count",
+        "state_version_terraform_version",
+        "external_id",
       ]
     : ["name", "source", "version", "workspace_count", "workspaces"];
 }
@@ -819,7 +1098,9 @@ function csvChunk(fields: readonly string[], rows: readonly ExplorerRow[], inclu
     const safe = /^[=+\-@\t\r]/.test(text) ? `\t${text}` : text;
     return `"${safe.replaceAll('"', '""')}"`;
   };
-  const lines = rows.map((row) => fields.map((field) => quote(row.attributes[field] ?? row.attributes[field.replaceAll("_", "-")])).join(","));
+  const lines = rows.map((row) =>
+    fields.map((field) => quote(row.attributes[field] ?? row.attributes[field.replaceAll("_", "-")])).join(","),
+  );
   if (includeHeader) lines.unshift(fields.join(","));
   return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
@@ -842,7 +1123,15 @@ function streamingExplorerCsv(
       if (done || reading) return;
       reading = true;
       try {
-        const page = await indexedExplorerRows(orgId, orgName, query, { offset, limit: pageSize }, false, "export", signal);
+        const page = await indexedExplorerRows(
+          orgId,
+          orgName,
+          query,
+          { offset, limit: pageSize },
+          false,
+          "export",
+          signal,
+        );
         const rows = applyQuery(page.rows, { ...query, filter: [], sort: [] });
         if (first || rows.length > 0) controller.enqueue(encoder.encode(csvChunk(fields, rows, first)));
         first = false;
@@ -871,13 +1160,24 @@ async function explorerCsvResponse(
   // Admit the inventory refresh before sending headers. Subsequent pages use
   // the independent export budget so a large download cannot starve normal
   // explorer/index reads.
-  await withDbQueryBudget("export", async (): Promise<void> => { await ensureExplorerInventory(orgId); }, { signal });
+  await withDbQueryBudget(
+    "export",
+    async (): Promise<void> => {
+      await ensureExplorerInventory(orgId);
+    },
+    { signal },
+  );
   return new Response(streamingExplorerCsv(orgId, orgName, query, signal), {
-    headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename=${filename}.csv` },
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename=${filename}.csv`,
+    },
   });
 }
 
-async function organizationFor(params: Readonly<Record<string, string>>): Promise<typeof organizations.$inferSelect | undefined> {
+async function organizationFor(
+  params: Readonly<Record<string, string>>,
+): Promise<typeof organizations.$inferSelect | undefined> {
   return db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
 }
 
@@ -984,147 +1284,313 @@ async function queryWorkspaceIds(
 
 export const explorerRoutes = new Elysia({ name: "explorer" })
   .use(authPlugin)
-  .post("/api/v2/organizations/:org_name/explorer/bulk-actions", async ({ params, body, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const organization = await organizationFor(params);
-    if (
-      organization === undefined
-      || !(await checkOrganizationPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "manage-workspaces"))
-    ) return explorerBulkActionError(set, 404, "Not Found");
+  .post(
+    "/api/v2/organizations/:org_name/explorer/bulk-actions",
+    async ({
+      params,
+      body,
+      user,
+      request,
+      orgId: tokenOrgId,
+      teamId: tokenTeamId,
+      set,
+    }: ParamCtx): Promise<unknown> => {
+      const organization = await organizationFor(params);
+      if (
+        organization === undefined ||
+        !(await checkOrganizationPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "manage-workspaces"))
+      )
+        return explorerBulkActionError(set, 404, "Not Found");
 
-    const parsed = parseBulkActionInputs(body, set);
-    if ("error" in parsed) return parsed.error;
+      const parsed = parseBulkActionInputs(body, set);
+      if ("error" in parsed) return parsed.error;
 
-    const resolved = await resolveBulkActionTargetIds(organization, parsed.targetIds, parsed.query, request, set);
-    if ("error" in resolved) return resolved.error;
+      const resolved = await resolveBulkActionTargetIds(organization, parsed.targetIds, parsed.query, request, set);
+      if ("error" in resolved) return resolved.error;
 
-    return createBulkActionRecords(organization, resolved.selectedIds, parsed.subject, parsed.message, user?.id ?? null, set);
-  })
-  .get("/api/v2/organizations/:org_name/explorer", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const query = urlQuery(new URL(request.url));
-    if (query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "type must be one of workspaces, tf_versions, providers, or modules"); }
-    try {
-      const result = await executeQuery(org.id, org.name, query, request);
-      return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
-    } catch (cause: unknown) {
-      const response = queryBudgetError(set, cause);
-      if (response !== undefined) return response;
-      throw cause;
-    }
-  })
-  .get("/api/v2/organizations/:org_name/explorer/export/csv", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const query = urlQuery(new URL(request.url));
-    if (query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "type is required"); }
-    try {
-      return await explorerCsvResponse(org.id, org.name, query, `explorer-${query.type}`, request.signal);
-    } catch (cause: unknown) {
-      const response = queryBudgetError(set, cause);
-      if (response !== undefined) return response;
-      throw cause;
-    }
-  })
-  .get("/api/v2/organizations/:org_name/explorer/views", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const { number, size } = pageRequest(request);
-    const offset = (number - 1) * size;
-    const [views, total] = await Promise.all([
-      db.query.explorerSavedQueries.findMany({ where: eq(explorerSavedQueries.orgId, org.id), orderBy: [desc(explorerSavedQueries.createdAt)], limit: size, offset }),
-      db.select({ total: count() }).from(explorerSavedQueries).where(eq(explorerSavedQueries.orgId, org.id)).then((rows) => rows[0]?.total ?? 0),
-    ]);
-    try {
-      return { data: views.map(savedQueryResource), ...pagination(request, number, size, total) };
-    } catch {
-      (set as { status: number }).status = 500;
-      return error("500", "Internal Server Error");
-    }
-  })
-  .post("/api/v2/organizations/:org_name/explorer/views", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const parsed = parseSavedViewCreate(body, set);
-    if ("error" in parsed) return parsed.error;
-    const saved: typeof explorerSavedQueries.$inferInsert = { id: newResourceId("sq"), orgId: org.id, name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort }, createdAt: Date.now() };
-    await db.insert(explorerSavedQueries).values(saved);
-    (set as { status: number }).status = 201;
-    return { data: savedQueryResource(saved as typeof explorerSavedQueries.$inferSelect) };
-  })
-  .get("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    try {
+      return createBulkActionRecords(
+        organization,
+        resolved.selectedIds,
+        parsed.subject,
+        parsed.message,
+        user?.id ?? null,
+        set,
+      );
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/explorer",
+    async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const query = urlQuery(new URL(request.url));
+      if (query === undefined) {
+        (set as { status: number }).status = 422;
+        return error(
+          "422",
+          "Unprocessable Entity",
+          "type must be one of workspaces, tf_versions, providers, or modules",
+        );
+      }
+      try {
+        const result = await executeQuery(org.id, org.name, query, request);
+        return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
+      } catch (cause: unknown) {
+        const response = queryBudgetError(set, cause);
+        if (response !== undefined) return response;
+        throw cause;
+      }
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/explorer/export/csv",
+    async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const query = urlQuery(new URL(request.url));
+      if (query === undefined) {
+        (set as { status: number }).status = 422;
+        return error("422", "Unprocessable Entity", "type is required");
+      }
+      try {
+        return await explorerCsvResponse(org.id, org.name, query, `explorer-${query.type}`, request.signal);
+      } catch (cause: unknown) {
+        const response = queryBudgetError(set, cause);
+        if (response !== undefined) return response;
+        throw cause;
+      }
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/explorer/views",
+    async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const { number, size } = pageRequest(request);
+      const offset = (number - 1) * size;
+      const [views, total] = await Promise.all([
+        db.query.explorerSavedQueries.findMany({
+          where: eq(explorerSavedQueries.orgId, org.id),
+          orderBy: [desc(explorerSavedQueries.createdAt)],
+          limit: size,
+          offset,
+        }),
+        db
+          .select({ total: count() })
+          .from(explorerSavedQueries)
+          .where(eq(explorerSavedQueries.orgId, org.id))
+          .then((rows) => rows[0]?.total ?? 0),
+      ]);
+      try {
+        return { data: views.map(savedQueryResource), ...pagination(request, number, size, total) };
+      } catch {
+        (set as { status: number }).status = 500;
+        return error("500", "Internal Server Error");
+      }
+    },
+  )
+  .post(
+    "/api/v2/organizations/:org_name/explorer/views",
+    async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      if (
+        org === undefined ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))
+      ) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const parsed = parseSavedViewCreate(body, set);
+      if ("error" in parsed) return parsed.error;
+      const saved: typeof explorerSavedQueries.$inferInsert = {
+        id: newResourceId("sq"),
+        orgId: org.id,
+        name: parsed.name,
+        queryType: parsed.query.type,
+        query: {
+          type: parsed.query.type,
+          filter: parsed.query.filter,
+          fields: parsed.query.fields,
+          sort: parsed.query.sort,
+        },
+        createdAt: Date.now(),
+      };
+      await db.insert(explorerSavedQueries).values(saved);
+      (set as { status: number }).status = 201;
+      return { data: savedQueryResource(saved as typeof explorerSavedQueries.$inferSelect) };
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/explorer/views/:view_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      const view =
+        org === undefined
+          ? undefined
+          : await db.query.explorerSavedQueries.findFirst({
+              where: eq(explorerSavedQueries.id, params["view_id"] ?? ""),
+            });
+      if (
+        org === undefined ||
+        view === undefined ||
+        view.orgId !== org.id ||
+        !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))
+      ) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      try {
+        return { data: savedQueryResource(view) };
+      } catch {
+        (set as { status: number }).status = 500;
+        return error("500", "Internal Server Error");
+      }
+    },
+  )
+  .patch(
+    "/api/v2/organizations/:org_name/explorer/views/:view_id",
+    async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      const view =
+        org === undefined
+          ? undefined
+          : await db.query.explorerSavedQueries.findFirst({
+              where: eq(explorerSavedQueries.id, params["view_id"] ?? ""),
+            });
+      if (
+        org === undefined ||
+        view === undefined ||
+        view.orgId !== org.id ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))
+      ) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const parsed = parseSavedViewUpdate(body, view.queryType, set);
+      if ("error" in parsed) return parsed.error;
+      await db
+        .update(explorerSavedQueries)
+        .set({
+          name: parsed.name,
+          queryType: parsed.query.type,
+          query: {
+            type: parsed.query.type,
+            filter: parsed.query.filter,
+            fields: parsed.query.fields,
+            sort: parsed.query.sort,
+          },
+        })
+        .where(eq(explorerSavedQueries.id, view.id));
+      const updated = {
+        ...view,
+        name: parsed.name,
+        queryType: parsed.query.type,
+        query: {
+          type: parsed.query.type,
+          filter: parsed.query.filter,
+          fields: parsed.query.fields,
+          sort: parsed.query.sort,
+        },
+      };
+      return { data: savedQueryResource(updated) };
+    },
+  )
+  .delete(
+    "/api/v2/organizations/:org_name/explorer/views/:view_id",
+    async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      const view =
+        org === undefined
+          ? undefined
+          : await db.query.explorerSavedQueries.findFirst({
+              where: eq(explorerSavedQueries.id, params["view_id"] ?? ""),
+            });
+      if (
+        org === undefined ||
+        view === undefined ||
+        view.orgId !== org.id ||
+        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))
+      ) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      await db.delete(explorerSavedQueries).where(eq(explorerSavedQueries.id, view.id));
       return { data: savedQueryResource(view) };
-    } catch {
-      (set as { status: number }).status = 500;
-      return error("500", "Internal Server Error");
-    }
-  })
-  .patch("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const parsed = parseSavedViewUpdate(body, view.queryType, set);
-    if ("error" in parsed) return parsed.error;
-    await db.update(explorerSavedQueries).set({ name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort } }).where(eq(explorerSavedQueries.id, view.id));
-    const updated = { ...view, name: parsed.name, queryType: parsed.query.type, query: { type: parsed.query.type, filter: parsed.query.filter, fields: parsed.query.fields, sort: parsed.query.sort } };
-    return { data: savedQueryResource(updated) };
-  })
-  .delete("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    await db.delete(explorerSavedQueries).where(eq(explorerSavedQueries.id, view.id));
-    return { data: savedQueryResource(view) };
-  })
-  .get("/api/v2/organizations/:org_name/explorer/views/:view_id/results", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const query = queryObject(view.query, view.queryType);
-    if (query === undefined) { (set as { status: number }).status = 500; return error("500", "Internal Server Error"); }
-    try {
-      const result = await executeQuery(org.id, org.name, query, request);
-      return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
-    } catch (cause: unknown) {
-      const response = queryBudgetError(set, cause);
-      if (response !== undefined) return response;
-      throw cause;
-    }
-  })
-  .get("/api/v2/organizations/:org_name/explorer/views/:view_id/csv", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
-      (set as { status: number }).status = 404; return error("404", "Not Found");
-    }
-    const query = queryObject(view.query, view.queryType);
-    if (query === undefined) { (set as { status: number }).status = 500; return error("500", "Internal Server Error"); }
-    try {
-      return await explorerCsvResponse(org.id, org.name, query, view.id, request.signal);
-    } catch (cause: unknown) {
-      const response = queryBudgetError(set, cause);
-      if (response !== undefined) return response;
-      throw cause;
-    }
-  })
-  ;
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/explorer/views/:view_id/results",
+    async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      const view =
+        org === undefined
+          ? undefined
+          : await db.query.explorerSavedQueries.findFirst({
+              where: eq(explorerSavedQueries.id, params["view_id"] ?? ""),
+            });
+      if (
+        org === undefined ||
+        view === undefined ||
+        view.orgId !== org.id ||
+        !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))
+      ) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const query = queryObject(view.query, view.queryType);
+      if (query === undefined) {
+        (set as { status: number }).status = 500;
+        return error("500", "Internal Server Error");
+      }
+      try {
+        const result = await executeQuery(org.id, org.name, query, request);
+        return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
+      } catch (cause: unknown) {
+        const response = queryBudgetError(set, cause);
+        if (response !== undefined) return response;
+        throw cause;
+      }
+    },
+  )
+  .get(
+    "/api/v2/organizations/:org_name/explorer/views/:view_id/csv",
+    async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+      const org = await organizationFor(params);
+      const view =
+        org === undefined
+          ? undefined
+          : await db.query.explorerSavedQueries.findFirst({
+              where: eq(explorerSavedQueries.id, params["view_id"] ?? ""),
+            });
+      if (
+        org === undefined ||
+        view === undefined ||
+        view.orgId !== org.id ||
+        !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))
+      ) {
+        (set as { status: number }).status = 404;
+        return error("404", "Not Found");
+      }
+      const query = queryObject(view.query, view.queryType);
+      if (query === undefined) {
+        (set as { status: number }).status = 500;
+        return error("500", "Internal Server Error");
+      }
+      try {
+        return await explorerCsvResponse(org.id, org.name, query, view.id, request.signal);
+      } catch (cause: unknown) {
+        const response = queryBudgetError(set, cause);
+        if (response !== undefined) return response;
+        throw cause;
+      }
+    },
+  );

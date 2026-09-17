@@ -2,7 +2,18 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, organizationMemberships, projects, workspaces, runs, taskStages, policyEvaluations, policySetOutcomes } from "../../src/db/schema";
+import {
+  users,
+  apiTokens,
+  organizations,
+  organizationMemberships,
+  projects,
+  workspaces,
+  runs,
+  taskStages,
+  policyEvaluations,
+  policySetOutcomes,
+} from "../../src/db/schema";
 
 describe("Policy Evaluations & Outcomes API", () => {
   let token: string;
@@ -103,7 +114,7 @@ describe("Policy Evaluations & Outcomes API", () => {
       new Request(`http://localhost/api/v2/task-stages/${stageId}/policy-evaluations`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -117,7 +128,7 @@ describe("Policy Evaluations & Outcomes API", () => {
       new Request(`http://localhost/api/v2/policy-evaluations/${evalId}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -131,7 +142,7 @@ describe("Policy Evaluations & Outcomes API", () => {
       new Request(`http://localhost/api/v2/policy-evaluations/${evalId}/policy-set-outcomes`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
-      })
+      }),
     );
 
     expect(res.status).toBe(200);

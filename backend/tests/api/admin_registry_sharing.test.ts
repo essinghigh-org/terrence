@@ -35,14 +35,16 @@ describe("Admin registry sharing", () => {
   const providerVersionId = `sharing-provider-version-${suffix}`;
 
   const request = (path: string, token: string, method = "GET", body?: unknown): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -61,8 +63,16 @@ describe("Admin registry sharing", () => {
     ]);
     await db.insert(apiTokens).values([
       { id: crypto.randomUUID(), token: createHash("sha256").update(adminToken).digest("hex"), userId: adminId },
-      { id: crypto.randomUUID(), token: createHash("sha256").update(consumerToken).digest("hex"), userId: consumerUserId },
-      { id: crypto.randomUUID(), token: createHash("sha256").update(outsiderToken).digest("hex"), userId: outsiderUserId },
+      {
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(consumerToken).digest("hex"),
+        userId: consumerUserId,
+      },
+      {
+        id: crypto.randomUUID(),
+        token: createHash("sha256").update(outsiderToken).digest("hex"),
+        userId: outsiderUserId,
+      },
     ]);
     await db.insert(registryModules).values({
       id: moduleId,
@@ -101,14 +111,18 @@ describe("Admin registry sharing", () => {
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, moduleVersionId));
     await db.delete(registryModules).where(eq(registryModules.id, moduleId));
     await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, consumerUserId, outsiderUserId]));
-    await db.delete(organizationMemberships).where(inArray(organizationMemberships.orgId, [producerId, consumerId, outsiderId]));
+    await db
+      .delete(organizationMemberships)
+      .where(inArray(organizationMemberships.orgId, [producerId, consumerId, outsiderId]));
     await db.delete(organizations).where(inArray(organizations.id, [producerId, consumerId, outsiderId]));
     await db.delete(users).where(inArray(users.id, [adminId, consumerUserId, outsiderUserId]));
   });
 
   it("creates, lists, enforces, and deletes explicit module sharing", async () => {
     expect((await request(`/api/v2/organizations/${producerName}/registry-modules`, outsiderToken)).status).toBe(404);
-    expect((await request(`/api/registry/v1/modules/${producerName}/network/aws/versions`, outsiderToken)).status).toBe(404);
+    expect((await request(`/api/registry/v1/modules/${producerName}/network/aws/versions`, outsiderToken)).status).toBe(
+      404,
+    );
 
     const create = await request("/api/v2/admin/module-sharing", adminToken, "POST", {
       data: {
@@ -125,7 +139,9 @@ describe("Admin registry sharing", () => {
 
     expect((await request(`/api/v2/organizations/${producerName}/registry-modules`, consumerToken)).status).toBe(200);
     expect((await request(`/api/v2/registry-modules/${moduleId}/versions`, consumerToken)).status).toBe(200);
-    expect((await request(`/api/registry/v1/modules/${producerName}/network/aws/versions`, consumerToken)).status).toBe(200);
+    expect((await request(`/api/registry/v1/modules/${producerName}/network/aws/versions`, consumerToken)).status).toBe(
+      200,
+    );
     expect((await request(`/api/v2/registry-modules/${moduleId}/versions`, outsiderToken)).status).toBe(404);
 
     expect((await request(`/api/v2/admin/module-sharing/${sharingId}`, adminToken, "DELETE")).status).toBe(204);
@@ -133,20 +149,32 @@ describe("Admin registry sharing", () => {
   });
 
   it("updates canonical module/provider partnerships and global sharing", async () => {
-    const update = await request(`/api/v2/admin/organizations/${producerName}/registry-partnerships`, adminToken, "PUT", {
-      data: {
-        type: "registry-partnerships",
-        attributes: {
-          module_consumers: [consumerName],
-          provider_consumers: [consumerName],
+    const update = await request(
+      `/api/v2/admin/organizations/${producerName}/registry-partnerships`,
+      adminToken,
+      "PUT",
+      {
+        data: {
+          type: "registry-partnerships",
+          attributes: {
+            module_consumers: [consumerName],
+            provider_consumers: [consumerName],
+          },
         },
       },
-    });
+    );
     expect(update.status).toBe(204);
-    expect((await request(`/api/v2/admin/organizations/${producerName}/relationships/module-consumers`, adminToken)).status).toBe(200);
-    expect((await request(`/api/v2/admin/organizations/${producerName}/relationships/provider-consumers`, adminToken)).status).toBe(200);
+    expect(
+      (await request(`/api/v2/admin/organizations/${producerName}/relationships/module-consumers`, adminToken)).status,
+    ).toBe(200);
+    expect(
+      (await request(`/api/v2/admin/organizations/${producerName}/relationships/provider-consumers`, adminToken))
+        .status,
+    ).toBe(200);
     expect((await request(`/api/v2/organizations/${producerName}/registry-providers`, consumerToken)).status).toBe(200);
-    expect((await request(`/api/registry/v1/providers/${producerName}/custom/versions`, consumerToken)).status).toBe(200);
+    expect((await request(`/api/registry/v1/providers/${producerName}/custom/versions`, consumerToken)).status).toBe(
+      200,
+    );
 
     const global = await request(`/api/v2/admin/organizations/${producerName}`, adminToken, "PATCH", {
       data: { type: "organizations", attributes: { "global-module-sharing": true } },
@@ -154,15 +182,25 @@ describe("Admin registry sharing", () => {
     expect(global.status).toBe(200);
     expect((await global.json()).data.attributes["global-module-sharing"]).toBeTrue();
     expect((await request(`/api/v2/organizations/${producerName}/registry-modules`, outsiderToken)).status).toBe(200);
-    const moduleConsumers = await request(`/api/v2/admin/organizations/${producerName}/relationships/module-consumers`, adminToken);
+    const moduleConsumers = await request(
+      `/api/v2/admin/organizations/${producerName}/relationships/module-consumers`,
+      adminToken,
+    );
     expect((await moduleConsumers.json()).data).toEqual([]);
   });
 
   it("rejects malformed sharing payloads and non-admin callers", async () => {
     expect((await request("/api/v2/admin/module-sharing", consumerToken)).status).toBe(404);
     expect((await request("/api/v2/admin/module-sharing", adminToken, "POST", { data: {} })).status).toBe(422);
-    expect((await request(`/api/v2/admin/organizations/${producerName}/registry-partnerships`, adminToken, "PUT", {
-      data: { type: "registry-partnerships", attributes: { module_consumers: [producerName], provider_consumers: [] } },
-    })).status).toBe(422);
+    expect(
+      (
+        await request(`/api/v2/admin/organizations/${producerName}/registry-partnerships`, adminToken, "PUT", {
+          data: {
+            type: "registry-partnerships",
+            attributes: { module_consumers: [producerName], provider_consumers: [] },
+          },
+        })
+      ).status,
+    ).toBe(422);
   });
 });

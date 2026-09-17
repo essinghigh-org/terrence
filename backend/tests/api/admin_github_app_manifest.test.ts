@@ -11,21 +11,27 @@ const token = `manifest-token-${suffix}`;
 const tokenHash = createHash("sha256").update(token).digest("hex");
 
 function request(accept = "application/vnd.api+json", query = "", credential = token): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test/api/v2/admin/github-app/manifest/setup${query}`, {
-    headers: { Authorization: `Bearer ${credential}`, Accept: accept },
-  }));
+  return app.handle(
+    new Request(`http://terrence.test/api/v2/admin/github-app/manifest/setup${query}`, {
+      headers: { Authorization: `Bearer ${credential}`, Accept: accept },
+    }),
+  );
 }
 
 async function handoffUrl(query = "", credential = token): Promise<URL> {
   const response = await request("application/vnd.api+json", query, credential);
   expect(response.status).toBe(200);
-  const body = await response.json() as { data: { attributes: { "authorization-url": string } } };
+  const body = (await response.json()) as { data: { attributes: { "authorization-url": string } } };
   return new URL(body.data.attributes["authorization-url"]);
 }
 
 function decodeAttribute(value: string): string {
-  return value.replaceAll("&quot;", '"').replaceAll("&#39;", "'")
-    .replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 }
 
 function form(html: string): { action: URL; manifest: Record<string, unknown> } {
@@ -33,7 +39,10 @@ function form(html: string): { action: URL; manifest: Record<string, unknown> } 
   const manifest = /name="manifest" value="([^"]*)"/.exec(html)?.[1];
   expect(action).toBeDefined();
   expect(manifest).toBeDefined();
-  return { action: new URL(decodeAttribute(action ?? "")), manifest: JSON.parse(decodeAttribute(manifest ?? "")) as Record<string, unknown> };
+  return {
+    action: new URL(decodeAttribute(action ?? "")),
+    manifest: JSON.parse(decodeAttribute(manifest ?? "")) as Record<string, unknown>,
+  };
 }
 
 beforeAll(async () => {
@@ -51,7 +60,7 @@ test("JSON:API setup returns a same-origin handoff, not a GitHub GET with a mani
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
   expect(response.headers.get("cache-control")).toBe("no-store");
-  const body = await response.json() as { data: { attributes: { "authorization-url": string } } };
+  const body = (await response.json()) as { data: { attributes: { "authorization-url": string } } };
   const url = new URL(body.data.attributes["authorization-url"]);
   expect(url.pathname).toBe("/api/v2/admin/github-app/manifest/redirect");
   expect(url.searchParams.get("state")).toBeTruthy();
@@ -71,7 +80,13 @@ test("handoff navigation needs no bearer header and posts the preconfigured mani
   expect(action.searchParams.has("manifest")).toBe(false);
   expect(manifest["public"]).toBe(false);
   expect(manifest["setup_on_update"]).toBe(true);
-  expect(manifest["default_permissions"]).toEqual({ contents: "read", metadata: "read", pull_requests: "read", repository_hooks: "read", statuses: "write" });
+  expect(manifest["default_permissions"]).toEqual({
+    contents: "read",
+    metadata: "read",
+    pull_requests: "read",
+    repository_hooks: "read",
+    statuses: "write",
+  });
   expect(new URL(String(manifest["redirect_url"])).pathname).toBe("/api/v2/admin/github-app/manifest/callback");
   expect(new URL(String(manifest["setup_url"])).pathname).toBe("/api/v2/admin/github-app/manifest/install-callback");
   expect(JSON.stringify(manifest)).not.toContain(token);
@@ -121,7 +136,10 @@ test("a handoff is one-use but its callback state remains available", async () =
 });
 
 test("unknown handoff state and callbacks before submission are rejected", async () => {
-  expect((await app.handle(new Request("http://terrence.test/api/v2/admin/github-app/manifest/redirect?state=unknown"))).status).toBe(400);
+  expect(
+    (await app.handle(new Request("http://terrence.test/api/v2/admin/github-app/manifest/redirect?state=unknown")))
+      .status,
+  ).toBe(400);
   const url = await handoffUrl();
   url.pathname = "/api/v2/admin/github-app/manifest/callback";
   expect((await app.handle(new Request(url))).status).toBe(400);
@@ -141,13 +159,18 @@ test("an expired initiating token cannot use its handoff", async () => {
   const id = crypto.randomUUID();
   await db.insert(apiTokens).values([{ id, token: createHash("sha256").update(credential).digest("hex"), userId }]);
   const url = await handoffUrl("", credential);
-  await db.update(apiTokens).set({ expiresAt: Date.now() - 1 }).where(eq(apiTokens.id, id));
+  await db
+    .update(apiTokens)
+    .set({ expiresAt: Date.now() - 1 })
+    .where(eq(apiTokens.id, id));
   expect((await app.handle(new Request(url))).status).toBe(403);
 });
 
 test("anonymous callers cannot create or resume an administrator setup flow", async () => {
   for (const path of ["setup", "resume"]) {
-    expect((await app.handle(new Request(`http://terrence.test/api/v2/admin/github-app/manifest/${path}`))).status).toBe(404);
+    expect(
+      (await app.handle(new Request(`http://terrence.test/api/v2/admin/github-app/manifest/${path}`))).status,
+    ).toBe(404);
   }
 });
 

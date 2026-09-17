@@ -29,14 +29,16 @@ describe("sensitive variable encryption at rest", () => {
   const SECRET = "super-secret-value-do-not-leak";
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   let varsetId = "";
 
@@ -77,7 +79,10 @@ describe("sensitive variable encryption at rest", () => {
 
   it("workspace sensitive variable is stored encrypted; plaintext column empty", async () => {
     const res = await request(`/api/v2/workspaces/${workspaceId}/vars`, "POST", {
-      data: { type: "vars", attributes: { key: "api_key", value: SECRET, category: "terraform", sensitive: true, hcl: false } },
+      data: {
+        type: "vars",
+        attributes: { key: "api_key", value: SECRET, category: "terraform", sensitive: true, hcl: false },
+      },
     });
     expect(res.status).toBe(201);
     const row = await db.query.workspaceVariables.findFirst({
@@ -93,7 +98,10 @@ describe("sensitive variable encryption at rest", () => {
 
   it("flipping sensitive false->true encrypts the existing plaintext value", async () => {
     const createRes = await request(`/api/v2/workspaces/${workspaceId}/vars`, "POST", {
-      data: { type: "vars", attributes: { key: "flip_key", value: SECRET, category: "terraform", sensitive: false, hcl: false } },
+      data: {
+        type: "vars",
+        attributes: { key: "flip_key", value: SECRET, category: "terraform", sensitive: false, hcl: false },
+      },
     });
     expect(createRes.status).toBe(201);
     const varId = ((await createRes.json()) as { data: { id: string } }).data.id;
@@ -115,7 +123,10 @@ describe("sensitive variable encryption at rest", () => {
 
   it("variable-set sensitive variable is stored encrypted and re-encrypted on PATCH", async () => {
     const createRes = await request(`/api/v2/varsets/${varsetId}/relationships/vars`, "POST", {
-      data: { type: "vars", attributes: { key: "set_key", value: SECRET, category: "terraform", sensitive: true, hcl: false } },
+      data: {
+        type: "vars",
+        attributes: { key: "set_key", value: SECRET, category: "terraform", sensitive: true, hcl: false },
+      },
     });
     expect(createRes.status).toBe(201);
     const varId = ((await createRes.json()) as { data: { id: string } }).data.id;
@@ -140,7 +151,9 @@ describe("sensitive variable encryption at rest", () => {
   it("list APIs never decrypt merely to serialize; sensitive values read as null", async () => {
     const listRes = await request(`/api/v2/workspaces/${workspaceId}/vars`);
     expect(listRes.status).toBe(200);
-    const list = (await listRes.json()) as { data: { attributes: { key: string; value: string | null; sensitive: boolean } }[] };
+    const list = (await listRes.json()) as {
+      data: { attributes: { key: string; value: string | null; sensitive: boolean } }[];
+    };
     const sensitiveItem = list.data.find((v) => v.attributes.key === "api_key");
     expect(sensitiveItem).toBeDefined();
     expect(sensitiveItem!.attributes.sensitive).toBe(true);
@@ -162,9 +175,15 @@ describe("sensitive variable encryption at rest", () => {
       expect(isEncryptedSecret(row.valueEncrypted!)).toBe(true);
     }
     // Defense in depth: no plaintext column anywhere holds the secret.
-    const allWs = await db.select().from(workspaceVariables).where(like(workspaceVariables.value, `%${SECRET}%`));
+    const allWs = await db
+      .select()
+      .from(workspaceVariables)
+      .where(like(workspaceVariables.value, `%${SECRET}%`));
     expect(allWs).toHaveLength(0);
-    const allSet = await db.select().from(variableSetVariables).where(like(variableSetVariables.value, `%${SECRET}%`));
+    const allSet = await db
+      .select()
+      .from(variableSetVariables)
+      .where(like(variableSetVariables.value, `%${SECRET}%`));
     expect(allSet).toHaveLength(0);
   });
 });

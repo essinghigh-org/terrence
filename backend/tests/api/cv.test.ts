@@ -10,7 +10,17 @@ describe("the reference format API v2 - Configuration Versions", () => {
 
   beforeAll(async () => {
     // Clear and setup
-    const { runs, configurationVersions, stateVersions, apiTokens, users, logs, workspaceTags, organizationMemberships, organizations } = await import("../../src/db/schema");
+    const {
+      runs,
+      configurationVersions,
+      stateVersions,
+      apiTokens,
+      users,
+      logs,
+      workspaceTags,
+      organizationMemberships,
+      organizations,
+    } = await import("../../src/db/schema");
     await db.delete(logs);
     await db.delete(runs);
     await db.delete(configurationVersions);
@@ -29,7 +39,7 @@ describe("the reference format API v2 - Configuration Versions", () => {
         body: JSON.stringify({
           data: { type: "users", attributes: { username: "cv-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
 
     const loginRes = await app.handle(
@@ -39,7 +49,7 @@ describe("the reference format API v2 - Configuration Versions", () => {
         body: JSON.stringify({
           data: { attributes: { username: "cv-owner", password: "securepassword" } },
         }),
-      })
+      }),
     );
     userToken = (await loginRes.json()).data.attributes.token;
 
@@ -50,21 +60,24 @@ describe("the reference format API v2 - Configuration Versions", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
-          "Authorization": `Bearer ${userToken}`
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
-          data: { type: "organizations", attributes: { name: orgName } }
-        })
-      })
+          data: { type: "organizations", attributes: { name: orgName } },
+        }),
+      }),
     );
     expect(orgRes.status).toBe(201);
     const orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
 
-    const ws = await db.insert(workspaces).values({
-      id: "ws-cv-test",
-      name: "cv-workspace",
-      orgId: orgId,
-    }).returning();
+    const ws = await db
+      .insert(workspaces)
+      .values({
+        id: "ws-cv-test",
+        name: "cv-workspace",
+        orgId: orgId,
+      })
+      .returning();
     workspaceId = ws[0]!.id;
   });
 
@@ -73,9 +86,9 @@ describe("the reference format API v2 - Configuration Versions", () => {
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/configuration-versions`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${userToken}`,
+          Authorization: `Bearer ${userToken}`,
         },
-      })
+      }),
     );
 
     expect(response.status).toBe(201);

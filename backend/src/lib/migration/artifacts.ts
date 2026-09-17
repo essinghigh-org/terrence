@@ -26,7 +26,9 @@ export async function verifyArtifactReferences(source: Readonly<Database>): Prom
     if (!columns.some((column) => column.name === reference.column)) continue;
     let checked = 0;
     let unavailable = 0;
-    const rows = source.query(`SELECT "${reference.column}" AS path FROM "${reference.table}" WHERE "${reference.column}" IS NOT NULL`).iterate();
+    const rows = source
+      .query(`SELECT "${reference.column}" AS path FROM "${reference.table}" WHERE "${reference.column}" IS NOT NULL`)
+      .iterate();
     for (const row of rows) {
       checked += 1;
       const path = (row as { path: unknown }).path;

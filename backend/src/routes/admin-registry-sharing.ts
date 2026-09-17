@@ -8,7 +8,6 @@ import type { DeepReadonly } from "../lib/utils";
 import { apiError, pageRequest, pagination } from "../lib/utils";
 import { organizationResource } from "../lib/response";
 
-
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   query?: Readonly<Record<string, string>>;
@@ -21,24 +20,28 @@ type ParamCtx = Readonly<{
 type Organization = DeepReadonly<typeof organizations.$inferSelect>;
 type Partnership = DeepReadonly<typeof registryPartnerships.$inferSelect>;
 
-
 function dataObject(body: unknown): Record<string, unknown> {
   if (body === null || typeof body !== "object") return {};
   const data = (body as Record<string, unknown>)["data"];
-  return data !== null && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+  return data !== null && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
 }
 
 function attributes(body: unknown): Record<string, unknown> {
   const value = dataObject(body)["attributes"];
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function stringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value) || value.some((item): boolean => typeof item !== "string" || item.trim() === "")) return null;
+  if (!Array.isArray(value) || value.some((item): boolean => typeof item !== "string" || item.trim() === ""))
+    return null;
   return [...new Set(value.map((item): string => String(item).trim()))];
 }
 
-function partnershipResource(partnership: Partnership, producer: Organization, consumer: Organization): Record<string, unknown> {
+function partnershipResource(
+  partnership: Partnership,
+  producer: Organization,
+  consumer: Organization,
+): Record<string, unknown> {
   return {
     id: partnership.id,
     type: "module-partnerships",
@@ -104,7 +107,8 @@ async function replaceConsumers(
       if (!desired && !otherEnabled) {
         await t.delete(registryPartnerships).where(eq(registryPartnerships.id, partnership.id));
       } else if ((kind === "modules" ? partnership.modules : partnership.providers) !== desired) {
-        await t.update(registryPartnerships)
+        await t
+          .update(registryPartnerships)
           .set(kind === "modules" ? { modules: desired } : { providers: desired })
           .where(eq(registryPartnerships.id, partnership.id));
       }
@@ -120,13 +124,17 @@ async function replaceConsumers(
         createdAt: now,
       });
     }
-    await t.update(organizations)
+    await t
+      .update(organizations)
       .set(kind === "modules" ? { globalModuleSharing: false } : { globalProviderSharing: false })
       .where(eq(organizations.id, producer.id));
   });
 }
 
-async function consumerResources(producerId: string, kind: "modules" | "providers"): Promise<Record<string, unknown>[]> {
+async function consumerResources(
+  producerId: string,
+  kind: "modules" | "providers",
+): Promise<Record<string, unknown>[]> {
   const partnerships = await db.query.registryPartnerships.findMany({
     where: and(
       eq(registryPartnerships.producerOrgId, producerId),
@@ -135,7 +143,10 @@ async function consumerResources(producerId: string, kind: "modules" | "provider
   });
   if (partnerships.length === 0) return [];
   const consumers = await db.query.organizations.findMany({
-    where: inArray(organizations.id, partnerships.map((partnership): string => partnership.consumerOrgId)),
+    where: inArray(
+      organizations.id,
+      partnerships.map((partnership): string => partnership.consumerOrgId),
+    ),
   });
   return Promise.all(consumers.map(organizationResource));
 }
@@ -148,7 +159,8 @@ function relationshipIdentifiers(body: unknown): string[] | null {
   for (const item of data) {
     if (item === null || typeof item !== "object") return null;
     const resource = item as Record<string, unknown>;
-    if (resource["type"] !== "organizations" || typeof resource["id"] !== "string" || resource["id"] === "") return null;
+    if (resource["type"] !== "organizations" || typeof resource["id"] !== "string" || resource["id"] === "")
+      return null;
     identifiers.push(resource["id"]);
   }
   return [...new Set(identifiers)];
@@ -157,9 +169,10 @@ function relationshipIdentifiers(body: unknown): string[] | null {
 function explicitSharingIdentifiers(body: unknown): Readonly<{ producer: string; consumer: string }> | null {
   const attrs = attributes(body);
   const data = dataObject(body);
-  const relationships = data["relationships"] !== null && typeof data["relationships"] === "object"
-    ? data["relationships"] as Record<string, unknown>
-    : {};
+  const relationships =
+    data["relationships"] !== null && typeof data["relationships"] === "object"
+      ? (data["relationships"] as Record<string, unknown>)
+      : {};
   const relationshipId = (name: string): string | undefined => {
     const relationship = relationships[name];
     if (relationship === null || typeof relationship !== "object") return undefined;
@@ -168,8 +181,10 @@ function explicitSharingIdentifiers(body: unknown): Readonly<{ producer: string;
     const id = (resource as Record<string, unknown>)["id"];
     return typeof id === "string" ? id : undefined;
   };
-  const producer = attrs["producing-organization-id"] ?? attrs["producer-organization-id"] ?? relationshipId("producer");
-  const consumer = attrs["consuming-organization-id"] ?? attrs["consumer-organization-id"] ?? relationshipId("consumer");
+  const producer =
+    attrs["producing-organization-id"] ?? attrs["producer-organization-id"] ?? relationshipId("producer");
+  const consumer =
+    attrs["consuming-organization-id"] ?? attrs["consumer-organization-id"] ?? relationshipId("consumer");
   return typeof producer === "string" && producer !== "" && typeof consumer === "string" && consumer !== ""
     ? { producer, consumer }
     : null;
@@ -186,14 +201,17 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
       data: rows.flatMap((partnership): Record<string, unknown>[] => {
         const producer = byId.get(partnership.producerOrgId);
         const consumer = byId.get(partnership.consumerOrgId);
-        return producer === undefined || consumer === undefined ? [] : [partnershipResource(partnership, producer, consumer)];
+        return producer === undefined || consumer === undefined
+          ? []
+          : [partnershipResource(partnership, producer, consumer)];
       }),
     };
   })
   .post("/api/v2/admin/module-sharing", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
     const identifiers = explicitSharingIdentifiers(body);
-    if (identifiers === null) return apiError(set, 422, "Unprocessable Entity", "Producing and consuming organization IDs are required");
+    if (identifiers === null)
+      return apiError(set, 422, "Unprocessable Entity", "Producing and consuming organization IDs are required");
     const [producer, consumer] = await Promise.all([
       findOrganization(identifiers.producer),
       findOrganization(identifiers.consumer),
@@ -202,7 +220,10 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
       return apiError(set, 422, "Unprocessable Entity", "Sharing organizations must exist and be different");
     }
     const existing = await db.query.registryPartnerships.findFirst({
-      where: and(eq(registryPartnerships.producerOrgId, producer.id), eq(registryPartnerships.consumerOrgId, consumer.id)),
+      where: and(
+        eq(registryPartnerships.producerOrgId, producer.id),
+        eq(registryPartnerships.consumerOrgId, consumer.id),
+      ),
     });
     const partnership = existing ?? {
       id: newResourceId("rp"),
@@ -220,7 +241,9 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
   })
   .delete("/api/v2/admin/module-sharing/:id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
-    const partnership = await db.query.registryPartnerships.findFirst({ where: eq(registryPartnerships.id, params["id"] ?? "") });
+    const partnership = await db.query.registryPartnerships.findFirst({
+      where: eq(registryPartnerships.id, params["id"] ?? ""),
+    });
     if (partnership === undefined) return apiError(set, 404, "Not Found");
     if (!partnership.modules) return apiError(set, 404, "Not Found");
     if (partnership.providers) {
@@ -231,78 +254,108 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
     (set as { status: number }).status = 204;
     return undefined;
   })
-  .get("/api/v2/admin/organizations/:org_name/relationships/:kind", async ({ params, request, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
-    const kind = params["kind"];
-    if (kind !== "module-consumers" && kind !== "provider-consumers") return apiError(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
-    if (producer === undefined) return apiError(set, 404, "Not Found");
-    const resources = await consumerResources(producer.id, kind === "module-consumers" ? "modules" : "providers");
-    const { number, size } = pageRequest(request);
-    return { data: resources.slice((number - 1) * size, number * size), ...pagination(request, number, size, resources.length) };
-  })
-  .patch("/api/v2/admin/organizations/:org_name/relationships/module-consumers", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
-    const identifiers = relationshipIdentifiers(body);
-    if (producer === undefined) return apiError(set, 404, "Not Found");
-    if (identifiers === null) return apiError(set, 422, "Unprocessable Entity", "data must contain organization resource identifiers");
-    const consumers = await resolveOrganizations(identifiers);
-    if (consumers === null || consumers.some((consumer): boolean => consumer.id === producer.id)) {
-      return apiError(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
-    }
-    await replaceConsumers(producer, "modules", consumers);
-    (set as { status: number }).status = 204;
-    return undefined;
-  })
-  .patch("/api/v2/admin/organizations/:org_name/module-consumers", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
-    const attrs = attributes(body);
-    const identifiers = stringArray(attrs["module-consuming-organization-ids"]);
-    if (producer === undefined) return apiError(set, 404, "Not Found");
-    if (dataObject(body)["type"] !== "module-partnerships" || identifiers === null) {
-      return apiError(set, 422, "Unprocessable Entity", "A module-partnerships payload with consumer IDs is required");
-    }
-    const consumers = await resolveOrganizations(identifiers);
-    if (consumers === null || consumers.some((consumer): boolean => consumer.id === producer.id)) {
-      return apiError(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
-    }
-    await replaceConsumers(producer, "modules", consumers);
-    const rows = await db.query.registryPartnerships.findMany({
-      where: and(eq(registryPartnerships.producerOrgId, producer.id), eq(registryPartnerships.modules, true)),
-    });
-    const byId = new Map(consumers.map((consumer): [string, Organization] => [consumer.id, consumer]));
-    return {
-      data: rows.flatMap((row): Record<string, unknown>[] => {
-        const consumer = byId.get(row.consumerOrgId);
-        return consumer === undefined ? [] : [partnershipResource(row, producer, consumer)];
-      }),
-    };
-  })
-  .put("/api/v2/admin/organizations/:org_name/registry-partnerships", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
-    const producer = await findOrganizationByName(params["org_name"] ?? "");
-    const attrs = attributes(body);
-    const moduleIdentifiers = stringArray(attrs["module-consumers"] ?? attrs["module_consumers"]);
-    const providerIdentifiers = stringArray(attrs["provider-consumers"] ?? attrs["provider_consumers"]);
-    if (producer === undefined) return apiError(set, 404, "Not Found");
-    if (dataObject(body)["type"] !== "registry-partnerships" || moduleIdentifiers === null || providerIdentifiers === null) {
-      return apiError(set, 422, "Unprocessable Entity", "A registry-partnerships payload with module and provider consumers is required");
-    }
-    const [moduleConsumers, providerConsumers] = await Promise.all([
-      resolveOrganizations(moduleIdentifiers),
-      resolveOrganizations(providerIdentifiers),
-    ]);
-    if (
-      moduleConsumers === null
-      || providerConsumers === null
-      || [...moduleConsumers, ...providerConsumers].some((consumer): boolean => consumer.id === producer.id)
-    ) {
-      return apiError(set, 422, "Unprocessable Entity", "Registry consumers must identify other organizations");
-    }
-    await replaceConsumers(producer, "modules", moduleConsumers);
-    await replaceConsumers(producer, "providers", providerConsumers);
-    (set as { status: number }).status = 204;
-    return undefined;
-  });
+  .get(
+    "/api/v2/admin/organizations/:org_name/relationships/:kind",
+    async ({ params, request, user, set }: ParamCtx): Promise<unknown> => {
+      if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
+      const kind = params["kind"];
+      if (kind !== "module-consumers" && kind !== "provider-consumers") return apiError(set, 404, "Not Found");
+      const producer = await findOrganizationByName(params["org_name"] ?? "");
+      if (producer === undefined) return apiError(set, 404, "Not Found");
+      const resources = await consumerResources(producer.id, kind === "module-consumers" ? "modules" : "providers");
+      const { number, size } = pageRequest(request);
+      return {
+        data: resources.slice((number - 1) * size, number * size),
+        ...pagination(request, number, size, resources.length),
+      };
+    },
+  )
+  .patch(
+    "/api/v2/admin/organizations/:org_name/relationships/module-consumers",
+    async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
+      if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
+      const producer = await findOrganizationByName(params["org_name"] ?? "");
+      const identifiers = relationshipIdentifiers(body);
+      if (producer === undefined) return apiError(set, 404, "Not Found");
+      if (identifiers === null)
+        return apiError(set, 422, "Unprocessable Entity", "data must contain organization resource identifiers");
+      const consumers = await resolveOrganizations(identifiers);
+      if (consumers === null || consumers.some((consumer): boolean => consumer.id === producer.id)) {
+        return apiError(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
+      }
+      await replaceConsumers(producer, "modules", consumers);
+      (set as { status: number }).status = 204;
+      return undefined;
+    },
+  )
+  .patch(
+    "/api/v2/admin/organizations/:org_name/module-consumers",
+    async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
+      if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
+      const producer = await findOrganizationByName(params["org_name"] ?? "");
+      const attrs = attributes(body);
+      const identifiers = stringArray(attrs["module-consuming-organization-ids"]);
+      if (producer === undefined) return apiError(set, 404, "Not Found");
+      if (dataObject(body)["type"] !== "module-partnerships" || identifiers === null) {
+        return apiError(
+          set,
+          422,
+          "Unprocessable Entity",
+          "A module-partnerships payload with consumer IDs is required",
+        );
+      }
+      const consumers = await resolveOrganizations(identifiers);
+      if (consumers === null || consumers.some((consumer): boolean => consumer.id === producer.id)) {
+        return apiError(set, 422, "Unprocessable Entity", "Module consumers must identify other organizations");
+      }
+      await replaceConsumers(producer, "modules", consumers);
+      const rows = await db.query.registryPartnerships.findMany({
+        where: and(eq(registryPartnerships.producerOrgId, producer.id), eq(registryPartnerships.modules, true)),
+      });
+      const byId = new Map(consumers.map((consumer): [string, Organization] => [consumer.id, consumer]));
+      return {
+        data: rows.flatMap((row): Record<string, unknown>[] => {
+          const consumer = byId.get(row.consumerOrgId);
+          return consumer === undefined ? [] : [partnershipResource(row, producer, consumer)];
+        }),
+      };
+    },
+  )
+  .put(
+    "/api/v2/admin/organizations/:org_name/registry-partnerships",
+    async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
+      if (user?.isSiteAdmin !== true) return apiError(set, 404, "Not Found");
+      const producer = await findOrganizationByName(params["org_name"] ?? "");
+      const attrs = attributes(body);
+      const moduleIdentifiers = stringArray(attrs["module-consumers"] ?? attrs["module_consumers"]);
+      const providerIdentifiers = stringArray(attrs["provider-consumers"] ?? attrs["provider_consumers"]);
+      if (producer === undefined) return apiError(set, 404, "Not Found");
+      if (
+        dataObject(body)["type"] !== "registry-partnerships" ||
+        moduleIdentifiers === null ||
+        providerIdentifiers === null
+      ) {
+        return apiError(
+          set,
+          422,
+          "Unprocessable Entity",
+          "A registry-partnerships payload with module and provider consumers is required",
+        );
+      }
+      const [moduleConsumers, providerConsumers] = await Promise.all([
+        resolveOrganizations(moduleIdentifiers),
+        resolveOrganizations(providerIdentifiers),
+      ]);
+      if (
+        moduleConsumers === null ||
+        providerConsumers === null ||
+        [...moduleConsumers, ...providerConsumers].some((consumer): boolean => consumer.id === producer.id)
+      ) {
+        return apiError(set, 422, "Unprocessable Entity", "Registry consumers must identify other organizations");
+      }
+      await replaceConsumers(producer, "modules", moduleConsumers);
+      await replaceConsumers(producer, "providers", providerConsumers);
+      (set as { status: number }).status = 204;
+      return undefined;
+    },
+  );

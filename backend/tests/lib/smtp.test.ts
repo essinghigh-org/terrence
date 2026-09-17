@@ -75,10 +75,15 @@ function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string; startTlsC
 
   return {
     port: server.port,
-    stop: (): void => { server.stop(true); },
+    stop: (): void => {
+      server.stop(true);
+    },
     received: (): string[] => received,
     commands: (): string[] => commands,
-    reset: (): void => { received = []; commands = []; },
+    reset: (): void => {
+      received = [];
+      commands = [];
+    },
   };
 }
 
@@ -109,11 +114,14 @@ describe("sendEmail", () => {
       try {
         let failure: unknown;
         try {
-          await sendEmail({ ...settings, port: unsupported.port }, {
-            to: ["one@example.com"],
-            subject: "Secure default",
-            text: "body",
-          });
+          await sendEmail(
+            { ...settings, port: unsupported.port },
+            {
+              to: ["one@example.com"],
+              subject: "Secure default",
+              text: "body",
+            },
+          );
         } catch (reason) {
           failure = reason;
         }
@@ -174,7 +182,9 @@ describe("sendEmail", () => {
       html: "<html><body><strong>Status:</strong> applied £</body></html>",
     });
     const lines = fake.received();
-    const contentTypeLine = lines.find((line): boolean => line.startsWith("Content-Type: multipart/alternative; boundary=\""));
+    const contentTypeLine = lines.find((line): boolean =>
+      line.startsWith('Content-Type: multipart/alternative; boundary="'),
+    );
     expect(contentTypeLine).toBeDefined();
     const separatorIndex = lines.indexOf("");
     expect(separatorIndex).toBeGreaterThan(-1);
@@ -190,21 +200,27 @@ describe("sendEmail", () => {
   });
 
   test("honors LOGIN authentication", async () => {
-    await sendEmail({ ...testSettings, auth: "login" }, {
-      to: ["one@example.com"],
-      subject: "Login auth",
-      text: "body",
-    });
+    await sendEmail(
+      { ...testSettings, auth: "login" },
+      {
+        to: ["one@example.com"],
+        subject: "Login auth",
+        text: "body",
+      },
+    );
     expect(fake.received()).toContain("body");
   });
 
   test("does not authenticate an explicitly anonymous plaintext relay", async () => {
     fake.reset();
-    await sendEmail({ ...testSettings, username: null, password: null, auth: "none", encryption: "plain" }, {
-      to: ["one@example.com"],
-      subject: "Anonymous relay",
-      text: "body",
-    });
+    await sendEmail(
+      { ...testSettings, username: null, password: null, auth: "none", encryption: "plain" },
+      {
+        to: ["one@example.com"],
+        subject: "Anonymous relay",
+        text: "body",
+      },
+    );
     expect(fake.commands().some((line): boolean => line.startsWith("AUTH "))).toBeFalse();
     expect(fake.received()).toContain("body");
   });
@@ -242,28 +258,37 @@ describe("sendEmail", () => {
   test("fails when a recipient is rejected", async () => {
     const strict = createFakeSmtpServer({ rejectRcpt: "ghost@example.com" });
     try {
-      expect(sendEmail(
-        { ...settings, port: strict.port, encryption: "plain" },
-        { to: ["ghost@example.com"], subject: "s", text: "b" },
-      )).rejects.toThrow(/RCPT TO rejected/);
+      expect(
+        sendEmail(
+          { ...settings, port: strict.port, encryption: "plain" },
+          { to: ["ghost@example.com"], subject: "s", text: "b" },
+        ),
+      ).rejects.toThrow(/RCPT TO rejected/);
     } finally {
       strict.stop();
     }
   });
 
   test("rejects header-injection addresses before connecting", async () => {
-    expect(sendEmail(testSettings, {
-      to: ["victim@example.com\r\nBcc: attacker@example.com"],
-      subject: "s",
-      text: "b",
-    })).rejects.toThrow("Invalid SMTP recipient address");
+    expect(
+      sendEmail(testSettings, {
+        to: ["victim@example.com\r\nBcc: attacker@example.com"],
+        subject: "s",
+        text: "b",
+      }),
+    ).rejects.toThrow("Invalid SMTP recipient address");
   });
 
   test("rejects an empty SMTP host before connecting", async () => {
-    expect(sendEmail({ ...testSettings, host: "" }, {
-      to: ["one@example.com"],
-      subject: "s",
-      text: "b",
-    })).rejects.toThrow("Invalid SMTP host");
+    expect(
+      sendEmail(
+        { ...testSettings, host: "" },
+        {
+          to: ["one@example.com"],
+          subject: "s",
+          text: "b",
+        },
+      ),
+    ).rejects.toThrow("Invalid SMTP host");
   });
 });

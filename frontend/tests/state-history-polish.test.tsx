@@ -25,8 +25,15 @@ afterEach((): void => {
 });
 
 test("encrypted state keeps raw download available and explains unavailable inspection", async () => {
-  globalThis.fetch = mock(async (): Promise<Response> => json({ data: [{ id: "sv-encrypted", attributes: { serial: 7, "state-representation": "opentofu-encrypted" } }] })) as unknown as typeof fetch;
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({ data: [{ id: "sv-encrypted", attributes: { serial: 7, "state-representation": "opentofu-encrypted" } }] }),
+  ) as unknown as typeof fetch;
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" />
+    </MemoryRouter>,
+  );
   await view.findByText("sv-encrypted");
   expect((view.getByRole("button", { name: "View JSON" }) as HTMLButtonElement).disabled).toBe(true);
   expect((view.getByRole("button", { name: "Download raw state" }) as HTMLButtonElement).disabled).toBe(false);
@@ -44,24 +51,30 @@ test("loads every state-version page without showing a false empty state", async
     if (url === "/api/v2/workspaces/ws-1/state-versions") return await firstPage;
     if (url === "/api/v2/workspaces/ws-1/state-versions?page%5Bnumber%5D=2") {
       return json({
-        data: [{ id: "sv-1", attributes: { serial: 1, state: "{\"name\":\"secondary\"}" } }],
+        data: [{ id: "sv-1", attributes: { serial: 1, state: '{"name":"secondary"}' } }],
         meta: { pagination: { "next-page": null } },
       });
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" />
+    </MemoryRouter>,
+  );
 
   expect(view.getByRole("status").textContent).toContain("Loading state versions");
   expect(view.queryByText("No state versions recorded yet.")).toBeNull();
 
   await act(async (): Promise<void> => {
-    resolveFirstPage?.(json({
-      data: [{ id: "sv-2", attributes: { serial: 2, state: "{\"name\":\"primary\"}" } }],
-      meta: { pagination: { "next-page": 2 } },
-    }));
+    resolveFirstPage?.(
+      json({
+        data: [{ id: "sv-2", attributes: { serial: 2, state: '{"name":"primary"}' } }],
+        meta: { pagination: { "next-page": 2 } },
+      }),
+    );
     await firstPage;
   });
 
@@ -73,7 +86,7 @@ test("loads every state-version page without showing a false empty state", async
   expect(view.getAllByRole("button", { name: "Download raw state" })).toHaveLength(2);
 
   fireEvent.click(view.getAllByRole("button", { name: "View JSON" })[0]!);
-  expect(view.getByRole("dialog").textContent).toContain("\"name\": \"primary\"");
+  expect(view.getByRole("dialog").textContent).toContain('"name": "primary"');
 });
 
 test("shows a retryable error separately from the empty state", async () => {
@@ -88,9 +101,13 @@ test("shows a retryable error separately from the empty state", async () => {
       ? json({ errors: [{ status: "503", detail: "State service unavailable" }] }, 503)
       : json({ data: [], meta: { pagination: { "next-page": null } } });
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" />
+    </MemoryRouter>,
+  );
 
   await waitFor((): void => {
     expect(view.getByRole("alert").textContent).toContain("State service unavailable");
@@ -110,7 +127,8 @@ test("uploads a Terraform state file and adds the new state version", async () =
   const uploadedState = JSON.stringify({ version: 4, serial: 17, lineage: "lineage", resources: [] });
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
-    if (url === "/api/v2/workspaces/ws-1/state-versions") return json({ data: [], meta: { pagination: { "next-page": null } } });
+    if (url === "/api/v2/workspaces/ws-1/state-versions")
+      return json({ data: [], meta: { pagination: { "next-page": null } } });
     if (url === "/api/v2/workspaces/ws-1/state-versions/upload") {
       expect(init?.method).toBe("POST");
       expect(init?.body).toBe(uploadedState);
@@ -118,9 +136,13 @@ test("uploads a Terraform state file and adds the new state version", async () =
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" />
+    </MemoryRouter>,
+  );
   await waitFor((): void => {
     expect(view.getByText("No state versions recorded yet.")).toBeTruthy();
   });
@@ -162,7 +184,7 @@ test("rollback explains provenance and promotes an older state as a new version"
       status: "finalized",
     },
   };
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     calls.push({ url, method: init?.method ?? "GET" });
     if (url === "/api/v2/workspaces/ws-1/state-versions") {
@@ -172,10 +194,16 @@ test("rollback explains provenance and promotes an older state as a new version"
       return json({ data: promoted }, 201);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" canRollback /></MemoryRouter>);
-  await waitFor((): void => { expect(view.getByText("sv-old")).toBeTruthy(); });
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" canRollback />
+    </MemoryRouter>,
+  );
+  await waitFor((): void => {
+    expect(view.getByText("sv-old")).toBeTruthy();
+  });
   fireEvent.click(view.getByRole("button", { name: "Rollback as new current" }));
 
   const dialog = await view.findByRole("dialog");
@@ -186,29 +214,41 @@ test("rollback explains provenance and promotes an older state as a new version"
   fireEvent.click(within(dialog).getByLabelText(/I understand that promotion changes/));
   fireEvent.click(within(dialog).getByRole("button", { name: "Rollback as new current" }));
 
-  await waitFor((): void => { expect(view.getByText("sv-promoted")).toBeTruthy(); });
+  await waitFor((): void => {
+    expect(view.getByText("sv-promoted")).toBeTruthy();
+  });
   expect(calls).toContainEqual({ url: "/api/v2/state-versions/sv-old/actions/rollback", method: "POST" });
 });
 
 test("unreadable state files error without opening the confirm dialog", async () => {
   const seen: string[] = [];
-  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     seen.push(`${init?.method ?? "GET"} ${url}`);
-    if (url === "/api/v2/workspaces/ws-1/state-versions") return json({ data: [], meta: { pagination: { "next-page": null } } });
+    if (url === "/api/v2/workspaces/ws-1/state-versions")
+      return json({ data: [], meta: { pagination: { "next-page": null } } });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" />
+    </MemoryRouter>,
+  );
   await waitFor((): void => {
     expect(view.getByText("No state versions recorded yet.")).toBeTruthy();
   });
 
   const file = new File(["unreadable"], "terraform.tfstate", { type: "application/json" });
-  Object.defineProperty(file, "text", { value: (): Promise<string> => Promise.reject(new Error("disk gone")), configurable: true });
+  Object.defineProperty(file, "text", {
+    value: (): Promise<string> => Promise.reject(new Error("disk gone")),
+    configurable: true,
+  });
   fireEvent.change(view.getByLabelText("Upload Terraform/OpenTofu state"), { target: { files: [file] } });
 
-  await new Promise((resolve): void => { setTimeout(resolve, 100); });
+  await new Promise((resolve): void => {
+    setTimeout(resolve, 100);
+  });
   expect(view.queryByRole("dialog")).toBeNull();
   expect(seen.some((entry: string): boolean => entry.includes("state-versions/upload"))).toBe(false);
 });
@@ -226,9 +266,13 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" />
+    </MemoryRouter>,
+  );
   await waitFor((): void => {
     expect(view.getByText("sv-raw")).toBeTruthy();
   });
@@ -242,22 +286,24 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
 });
 
 test("uses the canonical run status label in state history", async () => {
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     expect(requestUrl(input)).toBe("/api/v2/workspaces/ws-1/state-versions");
     return json({
-      data: [{
-        id: "sv-run",
-        attributes: {
-          serial: 1,
-          status: "finalized",
-          "run-message": "Awaiting confirmation",
-          "run-status": "planned",
+      data: [
+        {
+          id: "sv-run",
+          attributes: {
+            serial: 1,
+            status: "finalized",
+            "run-message": "Awaiting confirmation",
+            "run-status": "planned",
+          },
+          relationships: { run: { data: { id: "run-1", type: "runs" } } },
         },
-        relationships: { run: { data: { id: "run-1", type: "runs" } } },
-      }],
+      ],
       meta: { pagination: { "next-page": null } },
     });
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>

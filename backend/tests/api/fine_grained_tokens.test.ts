@@ -6,7 +6,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaceVariables, workspaces, workspaceTags, configurationVersions } from "../../src/db/schema";
+import {
+  agents,
+  agentPools,
+  apiTokens,
+  organizationMemberships,
+  organizations,
+  policies,
+  policySetParameters,
+  policySets,
+  projects,
+  runs,
+  teams,
+  teamMemberships,
+  users,
+  workspaceVariables,
+  workspaces,
+  workspaceTags,
+  configurationVersions,
+} from "../../src/db/schema";
 import { MAX_TAG_RULE_DEPTH } from "../../src/lib/token-scopes";
 import { variableValueForRead } from "../../src/lib/variable-crypto";
 import { modernMcpInit } from "./mcp_test_helpers";
@@ -30,7 +48,7 @@ type ScopedSeed = {
   tagWsId: string;
   wsA3: string;
   policySetId: string | null;
-}
+};
 
 function seed(): ScopedSeed {
   const suffix = crypto.randomUUID();
@@ -72,7 +90,9 @@ async function startFgServer(): Promise<{ proc: Bun.Subprocess; port: number; lo
     srv.once("error", reject);
     srv.listen(0, "127.0.0.1", () => {
       const addr = srv.address() as { port: number };
-      srv.close(() => { resolve(addr.port); });
+      srv.close(() => {
+        resolve(addr.port);
+      });
     });
   });
   const logPath = join(mkdtempSync(join(tmpdir(), "terrence-fg-tests-")), "server.log");
@@ -96,7 +116,9 @@ async function startFgServer(): Promise<{ proc: Bun.Subprocess; port: number; lo
     await Bun.sleep(200);
   }
   proc.kill();
-  const tail = await Bun.file(logPath).text().catch((): string => "");
+  const tail = await Bun.file(logPath)
+    .text()
+    .catch((): string => "");
   throw new Error(`backend failed to start within 15s\n${tail.slice(-4000)}`);
 }
 
@@ -114,14 +136,22 @@ const request = (path: string, init?: RequestInit): Promise<Response> => {
 async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUsers?: boolean } = {}): Promise<void> {
   await db.insert(users).values({ id: s.userId, username: s.username, passwordHash: "unused" });
   if (opts.includeUsers === true) {
-    await db.insert(users).values({ id: `fg-rate-${s.suffix}`, username: `fg-rate-${s.suffix}`, passwordHash: "unused" });
+    await db
+      .insert(users)
+      .values({ id: `fg-rate-${s.suffix}`, username: `fg-rate-${s.suffix}`, passwordHash: "unused" });
   }
   await db.insert(organizations).values({ id: s.orgId, name: s.orgName });
-  await db.insert(organizationMemberships).values({ id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner" });
+  await db
+    .insert(organizationMemberships)
+    .values({ id: s.membershipId, userId: s.userId, orgId: s.orgId, role: "owner" });
   if (opts.includeUsers === true) {
-    await db.insert(organizationMemberships).values({ id: `fg-rate-mem-${s.suffix}`, userId: `fg-rate-${s.suffix}`, orgId: s.orgId, role: "owner" });
+    await db
+      .insert(organizationMemberships)
+      .values({ id: `fg-rate-mem-${s.suffix}`, userId: `fg-rate-${s.suffix}`, orgId: s.orgId, role: "owner" });
   }
-  await db.insert(apiTokens).values({ id: s.adminTokenId, token: createHash("sha256").update(s.adminToken).digest("hex"), userId: s.userId });
+  await db
+    .insert(apiTokens)
+    .values({ id: s.adminTokenId, token: createHash("sha256").update(s.adminToken).digest("hex"), userId: s.userId });
   await db.insert(projects).values([
     { id: s.projectA, orgId: s.orgId, name: "proj-a" },
     { id: s.projectB, orgId: s.orgId, name: "proj-b" },
@@ -137,7 +167,9 @@ async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUse
   // on wsA1 so run-creation helpers keep working (workers never run here,
   // so no archive on disk is needed).
   await db.insert(configurationVersions).values({
-    id: `cv-seed-${s.suffix}`, workspaceId: s.wsA1, status: "uploaded",
+    id: `cv-seed-${s.suffix}`,
+    workspaceId: s.wsA1,
+    status: "uploaded",
   });
   if (opts.tags === true) {
     await db.insert(workspaceTags).values([
@@ -150,7 +182,10 @@ async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUse
   }
 }
 
-async function teardownOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUsers?: boolean } = {}): Promise<void> {
+async function teardownOrgFixtures(
+  s: ScopedSeed,
+  opts: { tags?: boolean; includeUsers?: boolean } = {},
+): Promise<void> {
   await db.delete(runs).where(eq(runs.workspaceId, s.wsA1));
   if (opts.tags === true) {
     await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, s.wsA1));
@@ -184,7 +219,7 @@ async function createScopedToken(
     }),
   });
   expect(res.status).toBe(201);
-  const body = await res.json() as { data: { id: string; attributes: { token: string | null } } };
+  const body = (await res.json()) as { data: { id: string; attributes: { token: string | null } } };
   return { id: body.data.id, secret: body.data.attributes.token! };
 }
 
@@ -257,8 +292,24 @@ describe("fine-grained user tokens", () => {
     await db.insert(organizations).values({ id: outsideOrgId, name: outsideOrgId });
     await db.insert(workspaces).values({ id: outsideWorkspaceId, orgId: outsideOrgId, name: outsideWorkspaceId });
     await db.insert(workspaceVariables).values([
-      { id: inScopeVariableId, workspaceId: s.wsA1, key: "IN_SCOPE", value: "allowed", category: "terraform", sensitive: false, hcl: false },
-      { id: outsideVariableId, workspaceId: outsideWorkspaceId, key: "OUTSIDE_SCOPE", value: "denied", category: "terraform", sensitive: false, hcl: false },
+      {
+        id: inScopeVariableId,
+        workspaceId: s.wsA1,
+        key: "IN_SCOPE",
+        value: "allowed",
+        category: "terraform",
+        sensitive: false,
+        hcl: false,
+      },
+      {
+        id: outsideVariableId,
+        workspaceId: outsideWorkspaceId,
+        key: "OUTSIDE_SCOPE",
+        value: "denied",
+        category: "terraform",
+        sensitive: false,
+        hcl: false,
+      },
     ]);
     const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
@@ -270,7 +321,7 @@ describe("fine-grained user tokens", () => {
     try {
       const response = await request("/api/v2/vars", { headers: headers(created.secret) });
       expect(response.status).toBe(200);
-      const body = await response.json() as { data: { id: string }[] };
+      const body = (await response.json()) as { data: { id: string }[] };
       const ids = body.data.map((item): string => item.id);
       expect(ids).toContain(inScopeVariableId);
       expect(ids).not.toContain(outsideVariableId);
@@ -305,7 +356,7 @@ describe("fine-grained user tokens", () => {
       // Listing workspaces only returns the scoped one
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string }[] };
+      const listBody = (await list.json()) as { data: { id: string }[] };
       const ids = listBody.data.map((w): string => w.id);
       expect(ids).toContain(s.wsA1);
       expect(ids).not.toContain(s.wsB1);
@@ -325,7 +376,9 @@ describe("fine-grained user tokens", () => {
       },
     });
     try {
-      const res = await request(`/api/v2/workspaces/${s.wsA1}/current-state-version`, { headers: headers(created.secret) });
+      const res = await request(`/api/v2/workspaces/${s.wsA1}/current-state-version`, {
+        headers: headers(created.secret),
+      });
       // Even though the token can read the workspace, state:read is not
       // granted, so this must not return state.
       expect(res.status).toBe(404);
@@ -344,7 +397,9 @@ describe("fine-grained user tokens", () => {
       },
     });
     try {
-      const res = await request(`/api/v2/workspaces/${s.wsA1}/current-state-version`, { headers: headers(created.secret) });
+      const res = await request(`/api/v2/workspaces/${s.wsA1}/current-state-version`, {
+        headers: headers(created.secret),
+      });
       // No state exists yet; the important part is this is not 403/404 due to
       // missing state:read — it should be a "not found" for state, or 200.
       expect([200, 404]).toContain(res.status);
@@ -365,7 +420,7 @@ describe("fine-grained user tokens", () => {
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string }[] };
+      const listBody = (await list.json()) as { data: { id: string }[] };
       const ids = listBody.data.map((w): string => w.id);
       expect(ids).toContain(s.wsA1);
       expect(ids).toContain(s.wsA2);
@@ -396,23 +451,33 @@ describe("fine-grained user tokens", () => {
       return raw;
     };
     const readOnlySecret = await mkToken(`fg-ro-${s.suffix}`, `fg-ro-secret-${s.suffix}`, {
-      version: 1, orgs: [s.orgId], permissions: { "workspaces:read": true },
+      version: 1,
+      orgs: [s.orgId],
+      permissions: { "workspaces:read": true },
     });
     const withSettingsSecret = await mkToken(`fg-ws-${s.suffix}`, `fg-ws-secret-${s.suffix}`, {
-      version: 1, orgs: [s.orgId], permissions: { "workspaces:read": true, "settings:read": true },
+      version: 1,
+      orgs: [s.orgId],
+      permissions: { "workspaces:read": true, "settings:read": true },
     });
     try {
       // Without settings:read, org-settings reads are denied (404).
       const denied = await request(`/api/v2/organizations/${s.orgName}`, { headers: headers(readOnlySecret) });
       expect(denied.status).toBe(404);
-      const deniedTags = await request(`/api/v2/organizations/${s.orgName}/reserved-tag-keys`, { headers: headers(readOnlySecret) });
+      const deniedTags = await request(`/api/v2/organizations/${s.orgName}/reserved-tag-keys`, {
+        headers: headers(readOnlySecret),
+      });
       expect(deniedTags.status).toBe(404);
-      const deniedEntitlements = await request(`/api/v2/organizations/${s.orgName}/entitlement-set`, { headers: headers(readOnlySecret) });
+      const deniedEntitlements = await request(`/api/v2/organizations/${s.orgName}/entitlement-set`, {
+        headers: headers(readOnlySecret),
+      });
       expect(deniedEntitlements.status).toBe(404);
       // With settings:read, the same reads succeed.
       const allowed = await request(`/api/v2/organizations/${s.orgName}`, { headers: headers(withSettingsSecret) });
       expect(allowed.status).toBe(200);
-      const allowedTags = await request(`/api/v2/organizations/${s.orgName}/reserved-tag-keys`, { headers: headers(withSettingsSecret) });
+      const allowedTags = await request(`/api/v2/organizations/${s.orgName}/reserved-tag-keys`, {
+        headers: headers(withSettingsSecret),
+      });
       expect(allowedTags.status).toBe(200);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, `fg-ro-${s.suffix}`));
@@ -491,7 +556,7 @@ describe("fine-grained user tokens", () => {
         }),
       });
       expect(res.status).toBe(201);
-      const body = await res.json() as { data?: { id?: string }; errors?: { title: string }[] };
+      const body = (await res.json()) as { data?: { id?: string }; errors?: { title: string }[] };
       const createdWsId = body.data?.id;
       expect(typeof createdWsId).toBe("string");
       await db.delete(workspaces).where(eq(workspaces.id, createdWsId ?? ""));
@@ -507,7 +572,9 @@ describe("fine-grained user tokens", () => {
 
   it("allows run reads with runs:read even without workspaces:read", async () => {
     const runId = `fg-run-${s.suffix}`;
-    await db.insert(runs).values({ id: runId, workspaceId: s.wsA1, status: "planned", message: "scoped", createdAt: Date.now() });
+    await db
+      .insert(runs)
+      .values({ id: runId, workspaceId: s.wsA1, status: "planned", message: "scoped", createdAt: Date.now() });
     // Direct inserts under the rate-limit user (no HTTP token creation).
     const rateUserId = `fg-rate-${s.suffix}`;
     const mkToken = async (id: string, raw: string, scopes: unknown): Promise<string> => {
@@ -526,10 +593,16 @@ describe("fine-grained user tokens", () => {
       return raw;
     };
     const runOnlySecret = await mkToken(`fg-rr-${s.suffix}`, `fg-rr-secret-${s.suffix}`, {
-      version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "runs:read": true },
+      version: 1,
+      orgs: [s.orgId],
+      workspaces: [s.wsA1],
+      permissions: { "runs:read": true },
     });
     const wsOnlySecret = await mkToken(`fg-rw-${s.suffix}`, `fg-rw-secret-${s.suffix}`, {
-      version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true },
+      version: 1,
+      orgs: [s.orgId],
+      workspaces: [s.wsA1],
+      permissions: { "workspaces:read": true },
     });
     try {
       // runs:read alone unlocks run reads...
@@ -543,7 +616,10 @@ describe("fine-grained user tokens", () => {
       expect(runViaWs.status).toBe(404);
       // A token with both grants reads runs AND the workspace.
       const bothSecret = await mkToken(`fg-rb-${s.suffix}`, `fg-rb-secret-${s.suffix}`, {
-        version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true },
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true },
       });
       const bothRun = await request(`/api/v2/runs/${runId}`, { headers: headers(bothSecret) });
       expect(bothRun.status).toBe(200);
@@ -567,7 +643,7 @@ describe("fine-grained user tokens", () => {
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string }[] };
+      const listBody = (await list.json()) as { data: { id: string }[] };
       const ids = listBody.data.map((w): string => w.id);
       expect(ids).toContain(s.tagWsId);
       expect(ids).not.toContain(s.wsA1);
@@ -582,7 +658,10 @@ describe("fine-grained user tokens", () => {
     const otherOrgName = `fg-other-${s.suffix}`;
     await db.insert(organizations).values({ id: otherOrgId, name: otherOrgName });
     await db.insert(organizationMemberships).values({
-      id: `fg-other-mem-${s.suffix}`, userId: s.userId, orgId: otherOrgId, role: "owner",
+      id: `fg-other-mem-${s.suffix}`,
+      userId: s.userId,
+      orgId: otherOrgId,
+      role: "owner",
     });
     const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {
@@ -619,10 +698,15 @@ describe("fine-grained user tokens", () => {
       const orgs = await request("/mcp", {
         method: "POST",
         headers: { ...headers(created.secret), "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_organizations", arguments: {} } }),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "list_organizations", arguments: {} },
+        }),
       });
       expect(orgs.status).toBe(200);
-      const body = await orgs.json() as { result: { content: { text: string }[] } };
+      const body = (await orgs.json()) as { result: { content: { text: string }[] } };
       const parsed = JSON.parse(body.result.content[0]?.text ?? "[]") as { id: string }[];
       expect(parsed.map((o): string => o.id)).toEqual([s.orgId]);
     } finally {
@@ -642,7 +726,7 @@ describe("fine-grained user tokens", () => {
     try {
       const list = await request(`/api/v2/users/${s.userId}/authentication-tokens`, { headers: headers(s.adminToken) });
       expect(list.status).toBe(200);
-      const body = await list.json() as { data: { id: string; attributes: { scopes: unknown } }[] };
+      const body = (await list.json()) as { data: { id: string; attributes: { scopes: unknown } }[] };
       const mine = body.data.find((t): boolean => t.id === created.id);
       expect(mine).toBeDefined();
       expect(mine?.attributes.scopes).toEqual({
@@ -690,7 +774,7 @@ describe("fine-grained user tokens", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
       });
       expect(res.status).toBe(200);
-      const body = await res.json() as { result: { tools: { name: string }[] } };
+      const body = (await res.json()) as { result: { tools: { name: string }[] } };
       return body.result.tools;
     };
     try {
@@ -725,11 +809,13 @@ describe("fine-grained user tokens", () => {
         method: "POST",
         headers: { ...headers(readOnly.secret), "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 2, method: "tools/call",
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
           params: { name: "get_workspace_state", arguments: { workspace_id: s.wsA1 } },
         }),
       });
-      const callBody = await call.json() as { error?: { code: number } };
+      const callBody = (await call.json()) as { error?: { code: number } };
       expect(callBody.error?.code).toBe(-32001);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, readOnly.id));
@@ -757,7 +843,7 @@ describe("fine-grained user tokens", () => {
       }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json() as { data: { id: string; attributes: { token: string; scopes: unknown } } };
+    const body = (await res.json()) as { data: { id: string; attributes: { token: string; scopes: unknown } } };
     expect(body.data.attributes.token).toBeTruthy();
     expect(body.data.attributes.scopes).toEqual({
       version: 1,
@@ -789,10 +875,15 @@ describe("fine-grained user tokens", () => {
       const orgs = await request("/mcp", {
         method: "POST",
         headers: { ...headers(created.secret), "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_organizations", arguments: {} } }),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "list_organizations", arguments: {} },
+        }),
       });
       expect(orgs.status).toBe(200);
-      const orgsBody = await orgs.json() as { result: { content: { text: string }[] } };
+      const orgsBody = (await orgs.json()) as { result: { content: { text: string }[] } };
       const orgsText = orgsBody.result.content[0]?.text ?? "";
       const parsed = JSON.parse(orgsText) as { id: string }[];
       expect(parsed.map((o): string => o.id)).toEqual([s.orgId]);
@@ -802,11 +893,13 @@ describe("fine-grained user tokens", () => {
         method: "POST",
         headers: { ...headers(created.secret), "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 2, method: "tools/call",
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
           params: { name: "get_workspace", arguments: { org: s.orgName, name: "ws-a1" } },
         }),
       });
-      const insideBody = await inside.json() as { result: { content: { text: string }[] } };
+      const insideBody = (await inside.json()) as { result: { content: { text: string }[] } };
       const insideText = insideBody.result.content[0]?.text ?? "";
       expect(inside.status).toBe(200);
       expect(insideText).not.toContain("error");
@@ -816,12 +909,18 @@ describe("fine-grained user tokens", () => {
         method: "POST",
         headers: { ...headers(created.secret), "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 3, method: "tools/call",
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
           params: { name: "get_workspace", arguments: { org: s.orgName, name: "ws-b1" } },
         }),
       });
-      const outsideBody = await outside.json() as {
-        result?: { isError?: boolean; content?: { text?: string }[]; structuredContent?: { error?: { category?: string } } };
+      const outsideBody = (await outside.json()) as {
+        result?: {
+          isError?: boolean;
+          content?: { text?: string }[];
+          structuredContent?: { error?: { category?: string } };
+        };
       };
       // Resource-level authorization failures are successful tools/call RPCs
       // carrying a CallToolResult with isError=true.
@@ -865,7 +964,11 @@ describe("fine-grained user tokens", () => {
         permissions: { "workspaces:write": true },
       },
     });
-    const call = async (secret: string, name: string, args: Record<string, unknown>): Promise<{ status: number; text: string }> => {
+    const call = async (
+      secret: string,
+      name: string,
+      args: Record<string, unknown>,
+    ): Promise<{ status: number; text: string }> => {
       const res = await request("/mcp", {
         method: "POST",
         headers: { ...headers(secret), "Content-Type": "application/json" },
@@ -881,13 +984,17 @@ describe("fine-grained user tokens", () => {
       // Without variables:write, variable writes are blocked at discovery
       // AND at call time (defense in depth).
       const varDenied = await call(wsOnly.secret, "create_workspace_variable", {
-        workspace_id: s.wsA1, key: "K", value: "v",
+        workspace_id: s.wsA1,
+        key: "K",
+        value: "v",
       });
       expect(await deniedBy(varDenied)).toBe(true);
 
       // With variables:write, the tool works on a scoped workspace.
       const varOk = await call(varWrite.secret, "create_workspace_variable", {
-        workspace_id: s.wsA1, key: "MCP_KEY", value: "mcp-value",
+        workspace_id: s.wsA1,
+        key: "MCP_KEY",
+        value: "mcp-value",
       });
       expect(varOk.status).toBe(200);
       const varBody = JSON.parse(varOk.text) as { result: { content: { text: string }[] } };
@@ -898,40 +1005,72 @@ describe("fine-grained user tokens", () => {
 
       // Sensitive variable values are masked (null) on read, matching the REST API.
       const secretOk = await call(varWrite.secret, "create_workspace_variable", {
-        workspace_id: s.wsA1, key: "MCP_SECRET", value: "top-secret", sensitive: true,
+        workspace_id: s.wsA1,
+        key: "MCP_SECRET",
+        value: "top-secret",
+        sensitive: true,
       });
       expect(secretOk.status).toBe(200);
       const secretBody = JSON.parse(secretOk.text) as { result: { content: { text: string }[] } };
-      const secretCreated = JSON.parse(secretBody.result.content[0]?.text ?? "{}") as { id: string; value: string | null };
+      const secretCreated = JSON.parse(secretBody.result.content[0]?.text ?? "{}") as {
+        id: string;
+        value: string | null;
+      };
       expect(secretCreated.value).toBeNull();
       const listVars = await call(varWrite.secret, "get_workspace_vars", { workspace_id: s.wsA1 });
       const varsList = JSON.parse(listVars.text) as { result: { content: { text: string }[] } };
-      const readRows = JSON.parse(varsList.result.content[0]?.text ?? "[]") as { key: string; value: string | null; sensitive: boolean }[];
+      const readRows = JSON.parse(varsList.result.content[0]?.text ?? "[]") as {
+        key: string;
+        value: string | null;
+        sensitive: boolean;
+      }[];
       const secretRow = readRows.find((r): boolean => r.key === "MCP_SECRET");
       expect(secretRow?.sensitive).toBe(true);
       expect(secretRow?.value).toBeNull();
       // Sensitive values are encrypted at rest, never stored plaintext (issue #577).
-      const stored = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, secretCreated.id) });
+      const stored = await db.query.workspaceVariables.findFirst({
+        where: eq(workspaceVariables.id, secretCreated.id),
+      });
       expect(stored?.value).toBe("");
       expect(stored?.valueEncrypted).toBeTruthy();
-      expect(await variableValueForRead({ value: stored?.value ?? "", valueEncrypted: stored?.valueEncrypted ?? null })).toBe("top-secret");
+      expect(
+        await variableValueForRead({ value: stored?.value ?? "", valueEncrypted: stored?.valueEncrypted ?? null }),
+      ).toBe("top-secret");
       // Rotation via update persists the new value (issue #577).
       const rotated = await call(varWrite.secret, "update_workspace_variable", {
-        workspace_id: s.wsA1, variable_id: secretCreated.id, value: "rotated-secret",
+        workspace_id: s.wsA1,
+        variable_id: secretCreated.id,
+        value: "rotated-secret",
       });
       expect(rotated.status).toBe(200);
-      const storedAfter = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, secretCreated.id) });
+      const storedAfter = await db.query.workspaceVariables.findFirst({
+        where: eq(workspaceVariables.id, secretCreated.id),
+      });
       expect(storedAfter?.value).toBe("");
       expect(storedAfter?.valueEncrypted).not.toBe(stored?.valueEncrypted);
-      expect(await variableValueForRead({ value: storedAfter?.value ?? "", valueEncrypted: storedAfter?.valueEncrypted ?? null })).toBe("rotated-secret");
+      expect(
+        await variableValueForRead({
+          value: storedAfter?.value ?? "",
+          valueEncrypted: storedAfter?.valueEncrypted ?? null,
+        }),
+      ).toBe("rotated-secret");
       // A metadata-only update keeps the stored secret untouched (issue #577).
       const touched = await call(varWrite.secret, "update_workspace_variable", {
-        workspace_id: s.wsA1, variable_id: secretCreated.id, description: "rotated",
+        workspace_id: s.wsA1,
+        variable_id: secretCreated.id,
+        description: "rotated",
       });
       expect(touched.status).toBe(200);
-      const storedTouched = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, secretCreated.id) });
+      const storedTouched = await db.query.workspaceVariables.findFirst({
+        where: eq(workspaceVariables.id, secretCreated.id),
+      });
       expect(storedTouched?.valueEncrypted).toBe(storedAfter?.valueEncrypted);
-      expect(await variableValueForRead({ value: storedTouched?.value ?? "", valueEncrypted: storedTouched?.valueEncrypted ?? null })).toBe("rotated-secret");
+      expect(
+        await variableValueForRead({
+          value: storedTouched?.value ?? "",
+          valueEncrypted: storedTouched?.valueEncrypted ?? null,
+        }),
+      ).toBe("rotated-secret");
       await db.delete(workspaceVariables).where(eq(workspaceVariables.id, secretCreated.id));
 
       // Without workspaces:lock, lock is blocked; with it, lock/unlock work.
@@ -944,8 +1083,13 @@ describe("fine-grained user tokens", () => {
       expect(unlockOk.status).toBe(200);
 
       // create_workspace requires workspaces:write; wsOnly lacks it.
-      expect(await deniedBy(await call(wsOnly.secret, "create_workspace", { org: s.orgName, name: "nope" }))).toBe(true);
-      const createdWs = await call(wsWrite.secret, "create_workspace", { org: s.orgName, name: `fg-mcp-ws-${s.suffix}` });
+      expect(await deniedBy(await call(wsOnly.secret, "create_workspace", { org: s.orgName, name: "nope" }))).toBe(
+        true,
+      );
+      const createdWs = await call(wsWrite.secret, "create_workspace", {
+        org: s.orgName,
+        name: `fg-mcp-ws-${s.suffix}`,
+      });
       expect(createdWs.status).toBe(200);
       const wsBody = JSON.parse(createdWs.text) as { result: { content: { text: string }[] } };
       const wsCreated = JSON.parse(wsBody.result.content[0]?.text ?? "{}") as { id: string };
@@ -967,7 +1111,7 @@ async function createRunWith(token: string, workspaceId: string): Promise<{ id: 
     body: JSON.stringify({ data: { type: "runs", attributes: { message: "fg-test" } } }),
   });
   const text = await res.text();
-  const body = text !== "" ? JSON.parse(text) as { data?: { id: string } } : {};
+  const body = text !== "" ? (JSON.parse(text) as { data?: { id: string } }) : {};
   return { id: (body.data?.id as string | undefined) ?? "", status: res.status };
 }
 
@@ -991,7 +1135,13 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
         tags: {
           combinator: "OR",
           rules: [
-            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            {
+              combinator: "AND",
+              rules: [
+                { key: "foo", value: "bar" },
+                { key: "baz", value: "bing" },
+              ],
+            },
             { key: "xyz", value: "abc" },
           ],
         },
@@ -1001,7 +1151,7 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string }[] };
+      const listBody = (await list.json()) as { data: { id: string }[] };
       const ids = listBody.data.map((w): string => w.id);
       expect(ids).toContain(s.wsA1); // foo=bar AND baz=bing
       expect(ids).toContain(s.wsA2); // xyz=abc
@@ -1021,7 +1171,13 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
         tags: {
           combinator: "OR",
           rules: [
-            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            {
+              combinator: "AND",
+              rules: [
+                { key: "foo", value: "bar" },
+                { key: "baz", value: "bing" },
+              ],
+            },
             { key: "xyz", value: "abc" },
           ],
         },
@@ -1030,7 +1186,7 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
     });
     try {
       const list = await request(`/api/v2/users/${s.userId}/authentication-tokens`, { headers: headers(s.adminToken) });
-      const listBody = await list.json() as { data: { id: string; attributes: { scopes: unknown } }[] };
+      const listBody = (await list.json()) as { data: { id: string; attributes: { scopes: unknown } }[] };
       const mine = listBody.data.find((t): boolean => t.id === created.id);
       expect(mine?.attributes.scopes).toEqual({
         version: 1,
@@ -1040,7 +1196,13 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
         tags: {
           combinator: "OR",
           rules: [
-            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            {
+              combinator: "AND",
+              rules: [
+                { key: "foo", value: "bar" },
+                { key: "baz", value: "bing" },
+              ],
+            },
             { key: "xyz", value: "abc" },
           ],
         },
@@ -1082,7 +1244,7 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(legacy.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string }[] };
+      const listBody = (await list.json()) as { data: { id: string }[] };
       const ids = listBody.data.map((w): string => w.id);
       expect(ids).toContain(s.wsA1);
       expect(ids).toContain(s.wsB1); // tagless workspace must not be skipped
@@ -1093,7 +1255,10 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
 
     // An explicit expression object with no rules is a token whose intent is
     // unclear; rejecting it fails closed instead of silently widening scope.
-    for (const tags of [{ combinator: "OR", rules: [] }, { combinator: "AND", rules: [] }]) {
+    for (const tags of [
+      { combinator: "OR", rules: [] },
+      { combinator: "AND", rules: [] },
+    ]) {
       const denied = await request(`/api/v2/users/${s.userId}/authentication-tokens`, {
         method: "POST",
         headers: headers(s.adminToken),
@@ -1108,7 +1273,7 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
         }),
       });
       expect(denied.status).toBe(422);
-      const deniedBody = await denied.json() as { errors: { detail?: string }[] };
+      const deniedBody = (await denied.json()) as { errors: { detail?: string }[] };
       expect(deniedBody.errors[0]?.detail).toContain("at least one rule");
     }
   });
@@ -1122,7 +1287,13 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
         tags: {
           combinator: "OR",
           rules: [
-            { combinator: "AND", rules: [{ key: "foo", value: "bar" }, { key: "baz", value: "bing" }] },
+            {
+              combinator: "AND",
+              rules: [
+                { key: "foo", value: "bar" },
+                { key: "baz", value: "bing" },
+              ],
+            },
             { key: "xyz", value: "abc" },
           ],
         },
@@ -1132,7 +1303,7 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(created.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string }[] };
+      const listBody = (await list.json()) as { data: { id: string }[] };
       const ids = listBody.data.map((w): string => w.id);
       expect(ids).toContain(s.wsA1); // has both AND branches
       expect(ids).toContain(s.wsA2); // matches the OR leaf
@@ -1147,24 +1318,30 @@ describe("fine-grained tag expressions (AND/OR combinators)", () => {
     for (let i = 0; i < MAX_TAG_RULE_DEPTH; i++) {
       rules = [{ combinator: "AND", rules }];
     }
-    const post = (rulesValue: unknown): Promise<Response> => request(`/api/v2/users/${s.userId}/authentication-tokens`, {
-      method: "POST",
-      headers: headers(s.adminToken),
-      body: JSON.stringify({
-        data: {
-          type: "authentication-tokens",
-          attributes: {
-            description: "depth",
-            scopes: { version: 1, orgs: [s.orgId], tags: { combinator: "OR", rules: rulesValue }, permissions: { "workspaces:read": true } },
+    const post = (rulesValue: unknown): Promise<Response> =>
+      request(`/api/v2/users/${s.userId}/authentication-tokens`, {
+        method: "POST",
+        headers: headers(s.adminToken),
+        body: JSON.stringify({
+          data: {
+            type: "authentication-tokens",
+            attributes: {
+              description: "depth",
+              scopes: {
+                version: 1,
+                orgs: [s.orgId],
+                tags: { combinator: "OR", rules: rulesValue },
+                permissions: { "workspaces:read": true },
+              },
+            },
           },
-        },
-      }),
-    });
+        }),
+      });
     expect((await post(rules)).status).toBe(201); // innermost rule at depth MAX_TAG_RULE_DEPTH
 
     const denied = await post([{ combinator: "AND", rules }]);
     expect(denied.status).toBe(422); // one level past the limit
-    const deniedBody = await denied.json() as { errors: { detail?: string }[] };
+    const deniedBody = (await denied.json()) as { errors: { detail?: string }[] };
     expect(deniedBody.errors[0]?.detail).toContain("nesting depth");
   });
 
@@ -1229,16 +1406,30 @@ describe("fine-grained run action grants", () => {
   it("runs:plan creates a run but cannot discard/cancel", async () => {
     const created = await createScopedToken(s.userId, s.adminToken, {
       description: "run-actions",
-      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:plan": true } },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true, "runs:plan": true },
+      },
     });
     try {
       const run = await createRunWith(created.secret, s.wsA1);
       expect(run.status).toBe(201);
-      const discard = await request(`/api/v2/runs/${run.id}/actions/discard`, { method: "POST", headers: headers(created.secret) });
+      const discard = await request(`/api/v2/runs/${run.id}/actions/discard`, {
+        method: "POST",
+        headers: headers(created.secret),
+      });
       expect(discard.status).toBe(403);
-      const cancel = await request(`/api/v2/runs/${run.id}/actions/cancel`, { method: "POST", headers: headers(created.secret) });
+      const cancel = await request(`/api/v2/runs/${run.id}/actions/cancel`, {
+        method: "POST",
+        headers: headers(created.secret),
+      });
       expect(cancel.status).toBe(403);
-      const apply = await request(`/api/v2/runs/${run.id}/actions/apply`, { method: "POST", headers: headers(created.secret) });
+      const apply = await request(`/api/v2/runs/${run.id}/actions/apply`, {
+        method: "POST",
+        headers: headers(created.secret),
+      });
       expect(apply.status).toBe(403);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
@@ -1248,7 +1439,12 @@ describe("fine-grained run action grants", () => {
   it("runs:apply does not imply discard, cancel, or run creation", async () => {
     const created = await createScopedToken(s.userId, s.adminToken, {
       description: "run-actions",
-      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:apply": true } },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true, "runs:apply": true },
+      },
     });
     try {
       // Creating a run requires the plan action; runs:apply must not imply it.
@@ -1259,23 +1455,37 @@ describe("fine-grained run action grants", () => {
       // a run it did not plan must not be able to terminate other runs.
       const seeded = await createRunWith(s.adminToken, s.wsA1);
       expect(seeded.status).toBe(201);
-      const discard = await request(`/api/v2/runs/${seeded.id}/actions/discard`, { method: "POST", headers: headers(created.secret) });
+      const discard = await request(`/api/v2/runs/${seeded.id}/actions/discard`, {
+        method: "POST",
+        headers: headers(created.secret),
+      });
       expect(discard.status).toBe(403);
 
       const seeded2 = await createRunWith(s.adminToken, s.wsA1);
       expect(seeded2.status).toBe(201);
-      const cancel = await request(`/api/v2/runs/${seeded2.id}/actions/cancel`, { method: "POST", headers: headers(created.secret) });
+      const cancel = await request(`/api/v2/runs/${seeded2.id}/actions/cancel`, {
+        method: "POST",
+        headers: headers(created.secret),
+      });
       expect(cancel.status).toBe(403);
 
       // An explicit runs:discard grant restores exactly that one action.
       const discarder = await createScopedToken(s.userId, s.adminToken, {
         description: "run-actions",
-        scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:apply": true, "runs:discard": true } },
+        scopes: {
+          version: 1,
+          orgs: [s.orgId],
+          workspaces: [s.wsA1],
+          permissions: { "workspaces:read": true, "runs:read": true, "runs:apply": true, "runs:discard": true },
+        },
       });
       try {
         const seeded3 = await createRunWith(s.adminToken, s.wsA1);
         expect(seeded3.status).toBe(201);
-        const discardOk = await request(`/api/v2/runs/${seeded3.id}/actions/discard`, { method: "POST", headers: headers(discarder.secret) });
+        const discardOk = await request(`/api/v2/runs/${seeded3.id}/actions/discard`, {
+          method: "POST",
+          headers: headers(discarder.secret),
+        });
         expect(discardOk.status).toBe(202);
       } finally {
         await db.delete(apiTokens).where(eq(apiTokens.id, discarder.id));
@@ -1288,32 +1498,54 @@ describe("fine-grained run action grants", () => {
   it("runs:discard and runs:cancel are distinct grants", async () => {
     const discardOnly = await createScopedToken(s.userId, s.adminToken, {
       description: "run-actions",
-      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true } },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true },
+      },
     });
     const cancelOnly = await createScopedToken(s.userId, s.adminToken, {
       description: "run-actions",
-      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:cancel": true } },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true, "runs:cancel": true },
+      },
     });
     try {
       const a = await createRunWith(s.adminToken, s.wsA1);
       expect(a.status).toBe(201);
-      const discard = await request(`/api/v2/runs/${a.id}/actions/discard`, { method: "POST", headers: headers(discardOnly.secret) });
+      const discard = await request(`/api/v2/runs/${a.id}/actions/discard`, {
+        method: "POST",
+        headers: headers(discardOnly.secret),
+      });
       expect(discard.status).toBe(202);
 
       // Fresh run for the negative assertion: a run whose state already
       // changed could mask a permission failure with a state failure.
       const a2 = await createRunWith(s.adminToken, s.wsA1);
       expect(a2.status).toBe(201);
-      const cancelByDiscard = await request(`/api/v2/runs/${a2.id}/actions/cancel`, { method: "POST", headers: headers(discardOnly.secret) });
+      const cancelByDiscard = await request(`/api/v2/runs/${a2.id}/actions/cancel`, {
+        method: "POST",
+        headers: headers(discardOnly.secret),
+      });
       expect(cancelByDiscard.status).toBe(403);
 
       const b = await createRunWith(s.adminToken, s.wsA1);
       expect(b.status).toBe(201);
-      const cancel = await request(`/api/v2/runs/${b.id}/actions/cancel`, { method: "POST", headers: headers(cancelOnly.secret) });
+      const cancel = await request(`/api/v2/runs/${b.id}/actions/cancel`, {
+        method: "POST",
+        headers: headers(cancelOnly.secret),
+      });
       expect(cancel.status).toBe(202);
       const b2 = await createRunWith(s.adminToken, s.wsA1);
       expect(b2.status).toBe(201);
-      const discardByCancel = await request(`/api/v2/runs/${b2.id}/actions/discard`, { method: "POST", headers: headers(cancelOnly.secret) });
+      const discardByCancel = await request(`/api/v2/runs/${b2.id}/actions/discard`, {
+        method: "POST",
+        headers: headers(cancelOnly.secret),
+      });
       expect(discardByCancel.status).toBe(403);
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, discardOnly.id));
@@ -1324,11 +1556,21 @@ describe("fine-grained run action grants", () => {
   it("MCP run action tools are exposed and enforced by their grants", async () => {
     const planOnly = await createScopedToken(s.userId, s.adminToken, {
       description: "run-actions",
-      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:plan": true } },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true, "runs:plan": true },
+      },
     });
     const discard = await createScopedToken(s.userId, s.adminToken, {
       description: "run-actions",
-      scopes: { version: 1, orgs: [s.orgId], workspaces: [s.wsA1], permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true } },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        workspaces: [s.wsA1],
+        permissions: { "workspaces:read": true, "runs:read": true, "runs:discard": true },
+      },
     });
     const listTools = async (secret: string): Promise<{ name: string }[]> => {
       const res = await request("/mcp", {
@@ -1337,7 +1579,7 @@ describe("fine-grained run action grants", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
       });
       expect(res.status).toBe(200);
-      const body = await res.json() as { result: { tools: { name: string }[] } };
+      const body = (await res.json()) as { result: { tools: { name: string }[] } };
       return body.result.tools;
     };
     try {
@@ -1362,11 +1604,13 @@ describe("fine-grained run action grants", () => {
         method: "POST",
         headers: { ...headers(planOnly.secret), "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 2, method: "tools/call",
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
           params: { name: "discard_run", arguments: { run_id: run.id } },
         }),
       });
-      const deniedBody = await denied.json() as { error?: { code: number } };
+      const deniedBody = (await denied.json()) as { error?: { code: number } };
       expect(deniedBody.error?.code).toBe(-32001);
 
       // A runs:discard token CAN discard the run via MCP.
@@ -1374,7 +1618,9 @@ describe("fine-grained run action grants", () => {
         method: "POST",
         headers: { ...headers(discard.secret), "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0", id: 3, method: "tools/call",
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
           params: { name: "discard_run", arguments: { run_id: run.id } },
         }),
       });
@@ -1426,7 +1672,7 @@ describe("fine-grained run action grants", () => {
         headers: { ...headers(raw), "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
       });
-      const listBody = await listed.json() as { result: { tools: { name: string }[] } };
+      const listBody = (await listed.json()) as { result: { tools: { name: string }[] } };
       const names = listBody.result.tools.map((t): string => t.name);
       expect(names).toContain("discard_run");
       expect(names).toContain("cancel_run");
@@ -1466,10 +1712,6 @@ describe("fine-grained org-level read grants", () => {
     await teardownOrgFixtures(s);
   });
 
-
-
-
-
   const endpoints: { path: string; grant: string }[] = [
     { path: "/api/v2/organizations/:org/agent-pools", grant: "agent-pools:read" },
     { path: "/api/v2/organizations/:org/policy-sets", grant: "policies:read" },
@@ -1508,14 +1750,14 @@ describe("fine-grained org-level read grants", () => {
       for (const path of ["/api/v2/organization-audit-trailers", "/api/v2/audit-trails"]) {
         const denied = await request(path, { headers: headers(without.secret) });
         expect(denied.status).toBe(200);
-        const deniedBody = await denied.json() as { data: unknown[] };
+        const deniedBody = (await denied.json()) as { data: unknown[] };
         // A scoped token without the grant must fail closed to no records,
         // not widen the aliases across every org the user can reach.
         expect(deniedBody.data.length).toBe(0);
 
         const allowed = await request(path, { headers: headers(withGrant.secret) });
         expect(allowed.status).toBe(200);
-        const allowedBody = await allowed.json() as { data: unknown[] };
+        const allowedBody = (await allowed.json()) as { data: unknown[] };
         expect(Array.isArray(allowedBody.data)).toBe(true);
       }
     } finally {
@@ -1527,7 +1769,11 @@ describe("fine-grained org-level read grants", () => {
   it("allows each org-level read with its matching grant", async () => {
     const created = await createScopedToken(s.userId, s.adminToken, {
       description: "org-read",
-      scopes: { version: 1, orgs: [s.orgId], permissions: Object.fromEntries(endpoints.map((e): [string, boolean] => [e.grant, true])) },
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        permissions: Object.fromEntries(endpoints.map((e): [string, boolean] => [e.grant, true])),
+      },
     });
     try {
       for (const { path } of endpoints) {
@@ -1548,23 +1794,24 @@ describe("fine-grained org-level read grants", () => {
       description: "org-read",
       scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:write": true } },
     });
-    const post = (token: string): Promise<Response> => request(`/api/v2/organizations/${s.orgName}/workspaces`, {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({
-        data: {
-          type: "workspaces",
-          attributes: { name: `fg-ws-create-${s.suffix}` },
-        },
-      }),
-    });
+    const post = (token: string): Promise<Response> =>
+      request(`/api/v2/organizations/${s.orgName}/workspaces`, {
+        method: "POST",
+        headers: headers(token),
+        body: JSON.stringify({
+          data: {
+            type: "workspaces",
+            attributes: { name: `fg-ws-create-${s.suffix}` },
+          },
+        }),
+      });
     try {
       const denied = await post(readOnly.secret);
       expect(denied.status).toBe(403);
 
       const allowed = await post(writeOnly.secret);
       expect(allowed.status).toBe(201);
-      const body = await allowed.json() as { data: { id: string } };
+      const body = (await allowed.json()) as { data: { id: string } };
       expect(body.data.id).toBeTruthy();
     } finally {
       await db.delete(apiTokens).where(eq(apiTokens.id, readOnly.id));
@@ -1657,27 +1904,38 @@ describe("fine-grained org-level read grants", () => {
     try {
       const list = await request(`/api/v2/organizations/${s.orgName}/teams`, { headers: headers(teamsOnly.secret) });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { data: { id: string; relationships: { users?: { data: { id: string }[] } } }[] };
+      const listBody = (await list.json()) as {
+        data: { id: string; relationships: { users?: { data: { id: string }[] } } }[];
+      };
       const mine = listBody.data.find((t): boolean => t.id === teamId);
       expect(mine?.relationships.users?.data.length ?? 0).toBe(0);
 
-      const listFull = await request(`/api/v2/organizations/${s.orgName}/teams`, { headers: headers(withMembers.secret) });
+      const listFull = await request(`/api/v2/organizations/${s.orgName}/teams`, {
+        headers: headers(withMembers.secret),
+      });
       expect(listFull.status).toBe(200);
-      const fullBody = await listFull.json() as { data: { id: string; relationships: { users?: { data: { id: string }[] } } }[] };
+      const fullBody = (await listFull.json()) as {
+        data: { id: string; relationships: { users?: { data: { id: string }[] } } }[];
+      };
       const fullMine = fullBody.data.find((t): boolean => t.id === teamId);
       expect(fullMine?.relationships.users?.data.map((u): string => u.id)).toContain(s.userId);
 
       const detail = await request(`/api/v2/teams/${teamId}?include=users`, { headers: headers(teamsOnly.secret) });
       expect(detail.status).toBe(200);
-      const detailBody = await detail.json() as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> }; included?: unknown[] };
+      const detailBody = (await detail.json()) as {
+        data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> };
+        included?: unknown[];
+      };
       expect(detailBody.included).toBeUndefined();
       expect(detailBody.data.relationships["users"]).toBeUndefined();
       // The team size is roster data too; without members:read it must not leak.
       expect(detailBody.data.attributes["users-count"]).toBe(0);
 
-      const detailFull = await request(`/api/v2/teams/${teamId}?include=users`, { headers: headers(withMembers.secret) });
+      const detailFull = await request(`/api/v2/teams/${teamId}?include=users`, {
+        headers: headers(withMembers.secret),
+      });
       expect(detailFull.status).toBe(200);
-      const detailFullBody = await detailFull.json() as { data: { attributes: Record<string, unknown> } };
+      const detailFullBody = (await detailFull.json()) as { data: { attributes: Record<string, unknown> } };
       expect(detailFullBody.data.attributes["users-count"]).toBe(1);
     } finally {
       await db.delete(teamMemberships).where(eq(teamMemberships.id, `fg-tm-${s.suffix}`));
@@ -1692,7 +1950,9 @@ describe("fine-grained org-level read grants", () => {
       scopes: { version: 1, orgs: [s.orgId], permissions: { "workspaces:write": true, "runs:plan": true } },
     });
     try {
-      const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, { headers: headers(writeOnly.secret) });
+      const list = await request(`/api/v2/organizations/${s.orgName}/workspaces`, {
+        headers: headers(writeOnly.secret),
+      });
       expect(list.status).toBe(200);
       const wsRes = await request(`/api/v2/organizations/${s.orgName}/workspaces`, {
         method: "POST",
@@ -1700,10 +1960,12 @@ describe("fine-grained org-level read grants", () => {
         body: JSON.stringify({ data: { type: "workspaces", attributes: { name: `fg-ws-read-${s.suffix}` } } }),
       });
       expect(wsRes.status).toBe(201);
-      const wsBody = await wsRes.json() as { data: { id: string } };
+      const wsBody = (await wsRes.json()) as { data: { id: string } };
       // Runs require an uploaded configuration version (issue #574).
       await db.insert(configurationVersions).values({
-        id: `cv-seed-${s.suffix}-read`, workspaceId: wsBody.data.id, status: "uploaded",
+        id: `cv-seed-${s.suffix}-read`,
+        workspaceId: wsBody.data.id,
+        status: "uploaded",
       });
       const run = await createRunWith(s.adminToken, wsBody.data.id);
       expect(run.status).toBe(201);

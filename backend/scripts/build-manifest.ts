@@ -22,11 +22,13 @@ export type BuildManifest = Readonly<{
 
 async function filesUnder(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const files = await Promise.all(entries.map(async (entry): Promise<string[]> => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return filesUnder(path);
-    return entry.isFile() ? [path] : [];
-  }));
+  const files = await Promise.all(
+    entries.map(async (entry): Promise<string[]> => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return filesUnder(path);
+      return entry.isFile() ? [path] : [];
+    }),
+  );
   return files.flat().sort();
 }
 
@@ -42,33 +44,40 @@ async function digestDirectory(directory: string): Promise<string> {
 }
 
 async function digestFile(file: string): Promise<string> {
-  return createHash("sha256").update(await readFile(file)).digest("hex");
+  return createHash("sha256")
+    .update(await readFile(file))
+    .digest("hex");
 }
 
-export async function buildManifest(input: Readonly<{
-  version: string;
-  commit: string;
-  imageReference: string;
-  imageDigest: string;
-  sqliteMigrations: string;
-  postgresMigrations: string;
-  compatibilityMatrix: string;
-  dependencyManifest: string;
-  dependencySbom: string;
-  dependencyChangeSummary: string;
-  dependencyExceptions: string;
-  evidenceDirectory?: string;
-}>): Promise<BuildManifest> {
+export async function buildManifest(
+  input: Readonly<{
+    version: string;
+    commit: string;
+    imageReference: string;
+    imageDigest: string;
+    sqliteMigrations: string;
+    postgresMigrations: string;
+    compatibilityMatrix: string;
+    dependencyManifest: string;
+    dependencySbom: string;
+    dependencyChangeSummary: string;
+    dependencyExceptions: string;
+    evidenceDirectory?: string;
+  }>,
+): Promise<BuildManifest> {
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(input.version)) throw new Error("Invalid release version");
   if (!/^[0-9a-f]{40,64}$/.test(input.commit)) throw new Error("Invalid source commit");
   if (!/^sha256:[0-9a-f]{64}$/.test(input.imageDigest)) throw new Error("Invalid image digest");
   const evidenceDirectory = input.evidenceDirectory;
-  const evidence = evidenceDirectory === undefined
-    ? []
-    : await Promise.all((await filesUnder(evidenceDirectory)).map(async (file) => ({
-      file: relative(evidenceDirectory, file),
-      sha256: await digestFile(file),
-    })));
+  const evidence =
+    evidenceDirectory === undefined
+      ? []
+      : await Promise.all(
+          (await filesUnder(evidenceDirectory)).map(async (file) => ({
+            file: relative(evidenceDirectory, file),
+            sha256: await digestFile(file),
+          })),
+        );
   return {
     schema: 2,
     version: input.version,
@@ -107,13 +116,27 @@ if (import.meta.main) {
   const dependencyChangeSummary = argument("dependency-summary");
   const dependencyExceptions = argument("dependency-exceptions");
   const evidencePath = argument("evidence-dir");
-  if (output === undefined || version === undefined || commit === undefined || imageReference === undefined || imageDigest === undefined
-    || dependencyManifest === undefined || dependencySbom === undefined || dependencyChangeSummary === undefined || dependencyExceptions === undefined) {
-    throw new Error("Usage: build-manifest.ts --output FILE --version VERSION --commit SHA --image REF --digest sha256:DIGEST --dependency-manifest FILE --dependency-sbom FILE --dependency-summary FILE --dependency-exceptions FILE [--evidence-dir DIR]");
+  if (
+    output === undefined ||
+    version === undefined ||
+    commit === undefined ||
+    imageReference === undefined ||
+    imageDigest === undefined ||
+    dependencyManifest === undefined ||
+    dependencySbom === undefined ||
+    dependencyChangeSummary === undefined ||
+    dependencyExceptions === undefined
+  ) {
+    throw new Error(
+      "Usage: build-manifest.ts --output FILE --version VERSION --commit SHA --image REF --digest sha256:DIGEST --dependency-manifest FILE --dependency-sbom FILE --dependency-summary FILE --dependency-exceptions FILE [--evidence-dir DIR]",
+    );
   }
   const root = resolve(import.meta.dir, "../..");
   const manifest = await buildManifest({
-    version, commit, imageReference, imageDigest,
+    version,
+    commit,
+    imageReference,
+    imageDigest,
     sqliteMigrations: join(root, "backend/drizzle"),
     postgresMigrations: join(root, "backend/drizzle/pg"),
     compatibilityMatrix: join(root, "backend/tests/e2e/cli_matrix.json"),

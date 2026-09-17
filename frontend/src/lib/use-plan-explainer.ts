@@ -54,10 +54,7 @@ async function pollExplanationUntilReady(session: ExplainSession, timeoutMs = 18
   }
 }
 
-function applyStreamEvent(
-  event: Readonly<ExplainStreamEvent>,
-  session: ExplainSession,
-): boolean {
+function applyStreamEvent(event: Readonly<ExplainStreamEvent>, session: ExplainSession): boolean {
   if (!session.isCurrent()) return false;
   if (event.name === "meta") {
     session.setExplainerModel(event.data.model);
@@ -188,7 +185,9 @@ export function usePlanExplainer(runId: string): PlanExplainer {
     updateElapsed();
     if (!explaining) return undefined;
     const timer = window.setInterval(updateElapsed, 1000);
-    return (): void => { window.clearInterval(timer); };
+    return (): void => {
+      window.clearInterval(timer);
+    };
   }, [explainerStartedAt, explaining]);
 
   async function handleExplain(kind: ExplainKind, refresh: boolean): Promise<void> {
@@ -225,7 +224,9 @@ export function usePlanExplainer(runId: string): PlanExplainer {
         runId,
         kind,
         refresh,
-        (event): void => { if (applyStreamEvent(event, session)) progress.seen = true; },
+        (event): void => {
+          if (applyStreamEvent(event, session)) progress.seen = true;
+        },
         controller.signal,
       );
       await settleStreamSession(session, progress.seen);

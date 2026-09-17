@@ -2,7 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, configurationVersions, logs, organizationMemberships, organizations, runs, users, workspaces,
+  apiTokens,
+  configurationVersions,
+  logs,
+  organizationMemberships,
+  organizations,
+  runs,
+  users,
+  workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { and, eq } from "drizzle-orm";
@@ -21,28 +28,35 @@ describe("local execution mode never runs remotely (#567)", () => {
   const remoteWsId = `ws-remote-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
 
-  const createRun = (workspaceId: string) => request("/api/v2/runs", "POST", {
-    data: {
-      type: "runs",
-      attributes: { message: "local mode probe" },
-      relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
-    },
-  });
+  const createRun = (workspaceId: string) =>
+    request("/api/v2/runs", "POST", {
+      data: {
+        type: "runs",
+        attributes: { message: "local mode probe" },
+        relationships: { workspace: { data: { id: workspaceId, type: "workspaces" } } },
+      },
+    });
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
+      id: `mem-${suffix}`,
+      userId,
+      orgId,
+      role: "owner",
+      status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(workspaces).values([
@@ -61,22 +75,52 @@ describe("local execution mode never runs remotely (#567)", () => {
   });
 
   afterAll(async () => {
-    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, remoteWsId)).catch((): void => undefined);
-    await db.delete(logs).where(eq(logs.runId, `run-local-pending-${suffix}`)).catch((): void => undefined);
-    await db.delete(logs).where(eq(logs.runId, `run-local-confirmed-${suffix}`)).catch((): void => undefined);
-    await db.delete(runs).where(eq(runs.workspaceId, localWsId)).catch((): void => undefined);
-    await db.delete(runs).where(eq(runs.workspaceId, remoteWsId)).catch((): void => undefined);
-    await db.delete(workspaces).where(eq(workspaces.orgId, orgId)).catch((): void => undefined);
-    await db.delete(apiTokens).where(eq(apiTokens.id, `tok-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`)).catch((): void => undefined);
-    await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => undefined);
-    await db.delete(users).where(eq(users.id, userId)).catch((): void => undefined);
+    await db
+      .delete(configurationVersions)
+      .where(eq(configurationVersions.workspaceId, remoteWsId))
+      .catch((): void => undefined);
+    await db
+      .delete(logs)
+      .where(eq(logs.runId, `run-local-pending-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(logs)
+      .where(eq(logs.runId, `run-local-confirmed-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(eq(runs.workspaceId, localWsId))
+      .catch((): void => undefined);
+    await db
+      .delete(runs)
+      .where(eq(runs.workspaceId, remoteWsId))
+      .catch((): void => undefined);
+    await db
+      .delete(workspaces)
+      .where(eq(workspaces.orgId, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(apiTokens)
+      .where(eq(apiTokens.id, `tok-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizationMemberships)
+      .where(eq(organizationMemberships.id, `mem-${suffix}`))
+      .catch((): void => undefined);
+    await db
+      .delete(organizations)
+      .where(eq(organizations.id, orgId))
+      .catch((): void => undefined);
+    await db
+      .delete(users)
+      .where(eq(users.id, userId))
+      .catch((): void => undefined);
   });
 
   it("rejects remote run creation on local workspaces with 422", async () => {
     const res = await createRun(localWsId);
     expect(res.status).toBe(422);
-    const body = await res.json() as { errors?: { detail?: string }[] };
+    const body = (await res.json()) as { errors?: { detail?: string }[] };
     expect(body.errors?.[0]?.detail).toContain("local execution mode");
   });
 
@@ -86,7 +130,7 @@ describe("local execution mode never runs remotely (#567)", () => {
     // Remove it immediately so the worker-poll test below observes only the
     // local-workspace fixture (the shared per-file DB would otherwise let
     // the poller claim this run too).
-    const body = await res.json() as { data: { id: string } };
+    const body = (await res.json()) as { data: { id: string } };
     await db.delete(runs).where(eq(runs.id, body.data.id));
   });
 

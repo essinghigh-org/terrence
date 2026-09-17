@@ -7,7 +7,11 @@ import { readdirSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { sparseJournalReconcilePlan, readBundledMigrationJournal, readBundledMigrationJournalRows } from "../../src/db/reconcile";
+import {
+  sparseJournalReconcilePlan,
+  readBundledMigrationJournal,
+  readBundledMigrationJournalRows,
+} from "../../src/db/reconcile";
 
 /**
  * Sparse-journal reconciliation (2026-08-23 prod incident).
@@ -92,7 +96,11 @@ test("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
 
@@ -175,7 +183,17 @@ test("plan classifier: skips existing objects, runs missing ones, leaves untouch
   // as already-present.
   const fullFacts = {
     appliedRows: [{ hash: "legacy-row", createdAt: entry25When(entries) }],
-    tables: new Set(["api_tokens", "users", "configuration_versions", "refresh_sessions", "user_2fa", "workspace_variables", "variable_set_variables", "identity_links", "organization_invitations"]),
+    tables: new Set([
+      "api_tokens",
+      "users",
+      "configuration_versions",
+      "refresh_sessions",
+      "user_2fa",
+      "workspace_variables",
+      "variable_set_variables",
+      "identity_links",
+      "organization_invitations",
+    ]),
     indexes: new Set([
       "identity_links_provider_external_idx",
       "identity_links_user_idx",
@@ -198,8 +216,12 @@ test("plan classifier: skips existing objects, runs missing ones, leaves untouch
     ]),
   };
   const planFull = sparseJournalReconcilePlan(DRIZZLE_DIR, [entry26, entry27], fullFacts);
-  expect(planFull.find((entry) => entry.tag === entry26.tag)?.statements.every((statement) => statement.skip)).toBe(true);
-  expect(planFull.find((entry) => entry.tag === entry27.tag)?.statements.every((statement) => statement.skip)).toBe(true);
+  expect(planFull.find((entry) => entry.tag === entry26.tag)?.statements.every((statement) => statement.skip)).toBe(
+    true,
+  );
+  expect(planFull.find((entry) => entry.tag === entry27.tag)?.statements.every((statement) => statement.skip)).toBe(
+    true,
+  );
 });
 
 function entry25When(entries: ReturnType<typeof readBundledMigrationJournal>): number {
@@ -225,7 +247,11 @@ test("fresh database: reconciliation is inert and the migrator still applies eve
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
     const bundled = JSON.parse(readFileSync(join(DRIZZLE_DIR, "meta/_journal.json"), "utf8")) as { entries: unknown[] };
@@ -262,7 +288,11 @@ test("boots when a migration index already exists outside the journal", async ()
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout.trim().split("\n").pop()!);
@@ -279,14 +309,20 @@ test("deduplicates workspace variables before enforcing the composite key", asyn
   try {
     const dbPath = await buildSparseDatabase(dir, 40);
     const seed = new Database(dbPath);
-    seed.run(
-      "INSERT INTO workspace_variables (id, workspace_id, key, value, category) VALUES (?, ?, ?, ?, ?)",
-      ["variable-keep", "workspace-duplicate", "DUPLICATE", "first", "terraform"],
-    );
-    seed.run(
-      "INSERT INTO workspace_variables (id, workspace_id, key, value, category) VALUES (?, ?, ?, ?, ?)",
-      ["variable-drop", "workspace-duplicate", "DUPLICATE", "second", "terraform"],
-    );
+    seed.run("INSERT INTO workspace_variables (id, workspace_id, key, value, category) VALUES (?, ?, ?, ?, ?)", [
+      "variable-keep",
+      "workspace-duplicate",
+      "DUPLICATE",
+      "first",
+      "terraform",
+    ]);
+    seed.run("INSERT INTO workspace_variables (id, workspace_id, key, value, category) VALUES (?, ?, ?, ?, ?)", [
+      "variable-drop",
+      "workspace-duplicate",
+      "DUPLICATE",
+      "second",
+      "terraform",
+    ]);
     seed.close();
 
     const script = `
@@ -305,10 +341,17 @@ test("deduplicates workspace variables before enforcing the composite key", asyn
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout.trim().split("\n").pop()!) as { rows: { id: string; value: string }[]; indexCount: number };
+    const result = JSON.parse(stdout.trim().split("\n").pop()!) as {
+      rows: { id: string; value: string }[];
+      indexCount: number;
+    };
     expect(result.rows).toEqual([{ id: "variable-keep", value: "first" }]);
     expect(result.indexCount).toBe(1);
   } finally {
@@ -341,7 +384,11 @@ test("reconciles a retired table that was already removed before boot", async ()
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout.trim().split("\n").pop()!);
@@ -387,7 +434,11 @@ test("boots past a partially applied migration stranded past fully-absent ones (
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
     if (exitCode !== 0) console.error(stderr);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout.trim().split("\n").pop()!);

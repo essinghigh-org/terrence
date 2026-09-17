@@ -43,8 +43,9 @@ describe("variable-transport corpus", () => {
   });
 
   it("passes raw HCL expressions through verbatim", () => {
-    expect(terraformVariableLine("cidrs", `["10.0.0.0/8", "192.168.0.0/16"]`, true))
-      .toBe(`cidrs = ["10.0.0.0/8", "192.168.0.0/16"]`);
+    expect(terraformVariableLine("cidrs", `["10.0.0.0/8", "192.168.0.0/16"]`, true)).toBe(
+      `cidrs = ["10.0.0.0/8", "192.168.0.0/16"]`,
+    );
     expect(terraformVariableLine("tags", `{ Env = "prod" }`, true)).toBe(`tags = { Env = "prod" }`);
     expect(terraformVariableLine("enabled", `true`, true)).toBe(`enabled = true`);
   });
@@ -64,14 +65,15 @@ describe("variable-transport corpus", () => {
     // The agent receives { key, value, hcl, sensitive } and must produce the
     // same tfvars this function produces locally.
     const agentParameter = { key: "region", value: "us-east-1", hcl: false, sensitive: false };
-    expect(terraformVariableLine(agentParameter.key, agentParameter.value, agentParameter.hcl))
-      .toBe(`region = "us-east-1"`);
+    expect(terraformVariableLine(agentParameter.key, agentParameter.value, agentParameter.hcl)).toBe(
+      `region = "us-east-1"`,
+    );
     const agentHcl = { key: "cidrs", value: `["10.0.0.0/8"]`, hcl: true, sensitive: false };
     expect(terraformVariableLine(agentHcl.key, agentHcl.value, agentHcl.hcl)).toBe(`cidrs = ["10.0.0.0/8"]`);
   });
 
   it("joins lines into file content without a trailing newline", () => {
-    expect(toTfvarsContent(["a = \"1\"", "b = \"2\""])).toBe("a = \"1\"\nb = \"2\"");
+    expect(toTfvarsContent(['a = "1"', 'b = "2"'])).toBe('a = "1"\nb = "2"');
     expect(toTfvarsContent([])).toBe("");
   });
 });

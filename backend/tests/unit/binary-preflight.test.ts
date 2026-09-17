@@ -155,7 +155,8 @@ describe("fetchBinaryArchive", (): void => {
   });
 
   test("404 fails fast as non-retryable", async (): Promise<void> => {
-    globalThis.fetch = (async (): Promise<Response> => new Response("nope", { status: 404 })) as unknown as typeof fetch;
+    globalThis.fetch = (async (): Promise<Response> =>
+      new Response("nope", { status: 404 })) as unknown as typeof fetch;
     const failure = await fetchBinaryArchive("https://example.invalid/pkg.zip", 5000).then(
       (): null => null,
       (err: unknown): unknown => err,
@@ -166,7 +167,8 @@ describe("fetchBinaryArchive", (): void => {
   });
 
   test("500 is retryable", async (): Promise<void> => {
-    globalThis.fetch = (async (): Promise<Response> => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    globalThis.fetch = (async (): Promise<Response> =>
+      new Response("boom", { status: 500 })) as unknown as typeof fetch;
     const failure = await fetchBinaryArchive("https://example.invalid/pkg.zip", 5000).then(
       (): null => null,
       (err: unknown): unknown => err,
@@ -197,13 +199,13 @@ describe("fetchBinaryArchive", (): void => {
   test("a hung download surfaces a retryable timeout", async (): Promise<void> => {
     // A signal-aware hang: rejects with the signal reason on abort, like the
     // real fetch does when AbortSignal.timeout fires.
-    globalThis.fetch = (((_input: unknown, init?: { signal?: AbortSignal }): Promise<Response> =>
+    globalThis.fetch = ((_input: unknown, init?: { signal?: AbortSignal }): Promise<Response> =>
       new Promise((_resolve, reject): void => {
         init?.signal?.addEventListener("abort", (): void => {
           const reason = init.signal?.reason;
           reject(reason instanceof Error ? reason : new Error("aborted"));
         });
-      })) as unknown) as typeof fetch;
+      })) as unknown as typeof fetch;
     const failure = await fetchBinaryArchive("https://example.invalid/pkg.zip", 10).then(
       (): null => null,
       (err: unknown): unknown => err,

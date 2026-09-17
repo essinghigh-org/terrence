@@ -24,9 +24,9 @@ test("confirm stays disabled until the checkbox is ticked (kanban 26.17)", () =>
     />,
   );
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const confirmButton = view.getByRole("button", { name: "Delete Organization" }) as HTMLButtonElement;
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const checkbox = view.getByRole("checkbox") as HTMLInputElement;
 
   expect(confirmButton.disabled).toBeTrue();
@@ -44,7 +44,14 @@ test("checkbox requirement resets when the dialog closes and reopens (kanban 26.
     const [open, setOpen] = useState(true);
     return (
       <>
-        <button type="button" onClick={(): void => { setOpen((v): boolean => !v); }}>Toggle</button>
+        <button
+          type="button"
+          onClick={(): void => {
+            setOpen((v): boolean => !v);
+          }}
+        >
+          Toggle
+        </button>
         <ConfirmDialog
           open={open}
           onOpenChange={setOpen}
@@ -58,9 +65,9 @@ test("checkbox requirement resets when the dialog closes and reopens (kanban 26.
 
   const view = render(<Wrapper />);
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const confirmButton = view.getByRole("button", { name: "Confirm" }) as HTMLButtonElement;
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   fireEvent.click(view.getByRole("checkbox") as HTMLInputElement);
   expect(confirmButton.disabled).toBeFalse();
 
@@ -68,9 +75,9 @@ test("checkbox requirement resets when the dialog closes and reopens (kanban 26.
   fireEvent.click(view.getByRole("button", { name: "Toggle" }));
   fireEvent.click(view.getByRole("button", { name: "Toggle" }));
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const freshCheckbox = view.getByRole("checkbox") as HTMLInputElement;
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const freshConfirmButton = view.getByRole("button", { name: "Confirm" }) as HTMLButtonElement;
   expect(freshCheckbox.checked).toBeFalse();
   expect(freshConfirmButton.disabled).toBeTrue();
@@ -92,11 +99,11 @@ test("destructive confirm stays disabled until the exact object name is typed (k
     />,
   );
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const confirmButton = view.getByRole("button", { name: "Delete Pool" }) as HTMLButtonElement;
 
   // Wrong text: stays disabled.
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const input = view.getByRole("textbox") as HTMLInputElement;
   fireEvent.input(input, { target: { value: "staging-pool" } });
   expect(confirmButton.disabled).toBeTrue();
@@ -104,7 +111,7 @@ test("destructive confirm stays disabled until the exact object name is typed (k
   // Exact name: becomes enabled.
   fireEvent.input(input, { target: { value: "production-pool" } });
 
-// SAFETY: the component renders this element type for the queried role/label.
+  // SAFETY: the component renders this element type for the queried role/label.
   const enabledButton = view.getByRole("button", { name: "Delete Pool" }) as HTMLButtonElement;
   expect(enabledButton.disabled).toBeFalse();
 

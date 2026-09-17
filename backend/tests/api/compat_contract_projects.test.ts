@@ -67,7 +67,11 @@ describe("remote-workflow projects contract", () => {
   });
 
   it("shows a project", async () => {
-    const resource = await expectSuccessResponse(await request(`/api/v2/projects/${projectId}`, { headers }), 200, "projects");
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/projects/${projectId}`, { headers }),
+      200,
+      "projects",
+    );
     expect(resource.attributes["name"]).toBe(`contract-project-${seed.suffix}`);
     expect(resource.relationships?.["organization"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
@@ -75,7 +79,9 @@ describe("remote-workflow projects contract", () => {
   });
 
   it("lists projects with pagination metadata", async () => {
-    const response = await request(`/api/v2/organizations/${seed.orgName}/projects?page[number]=1&page[size]=10`, { headers });
+    const response = await request(`/api/v2/organizations/${seed.orgName}/projects?page[number]=1&page[size]=10`, {
+      headers,
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     const items = expectCollection(body, "projects");

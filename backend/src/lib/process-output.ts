@@ -28,10 +28,16 @@ function safePrefix(prefix: string): string {
 }
 
 function normalizedCaptureError(reason: unknown): Error {
-  return reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Process output capture failed");
+  return reason instanceof Error
+    ? reason
+    : new Error(typeof reason === "string" ? reason : "Process output capture failed");
 }
 
-async function captureStream(stream: ProcessStream, path: string, signal?: Readonly<AbortSignal>): Promise<CapturedProcessStream> {
+async function captureStream(
+  stream: ProcessStream,
+  path: string,
+  signal?: Readonly<AbortSignal>,
+): Promise<CapturedProcessStream> {
   const writer = Bun.file(path).writer();
   const reader = stream?.getReader();
   const decoder = new TextDecoder();
@@ -50,7 +56,11 @@ async function captureStream(stream: ProcessStream, path: string, signal?: Reado
     if (text.length > remaining) truncated = true;
   };
 
-  const onAbort = (): void => { void reader?.cancel(signal?.reason).catch(() => { /* stream is already closed */ }); };
+  const onAbort = (): void => {
+    void reader?.cancel(signal?.reason).catch(() => {
+      /* stream is already closed */
+    });
+  };
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
     signal?.throwIfAborted();
@@ -70,7 +80,11 @@ async function captureStream(stream: ProcessStream, path: string, signal?: Reado
     await chmod(path, 0o600);
     return { path, bytes, preview, truncated };
   } catch (error: unknown) {
-    try { await writer.end(); } catch { /* already closed */ }
+    try {
+      await writer.end();
+    } catch {
+      /* already closed */
+    }
     await rm(path, { force: true });
     throw error;
   } finally {
@@ -96,15 +110,13 @@ export async function captureProcessOutput(
     captureStream(stderr, stderrPath, options.signal),
   ]);
   if (stdoutResult.status === "rejected" || stderrResult.status === "rejected") {
-    await Promise.allSettled([
-      rm(stdoutPath, { force: true }),
-      rm(stderrPath, { force: true }),
-    ]);
-    const failure = stdoutResult.status === "rejected"
-      ? normalizedCaptureError(stdoutResult.reason as unknown)
-      : stderrResult.status === "rejected"
-        ? normalizedCaptureError(stderrResult.reason as unknown)
-        : new Error("Process output capture failed");
+    await Promise.allSettled([rm(stdoutPath, { force: true }), rm(stderrPath, { force: true })]);
+    const failure =
+      stdoutResult.status === "rejected"
+        ? normalizedCaptureError(stdoutResult.reason as unknown)
+        : stderrResult.status === "rejected"
+          ? normalizedCaptureError(stderrResult.reason as unknown)
+          : new Error("Process output capture failed");
     throw failure;
   }
   return { stdout: stdoutResult.value, stderr: stderrResult.value };
@@ -121,10 +133,7 @@ export function processOutputPreview(output: CapturedProcessOutput): string {
 
 function isWordCharacter(character: string): boolean {
   const code = character.charCodeAt(0);
-  return (code >= 48 && code <= 57)
-    || (code >= 65 && code <= 90)
-    || (code >= 97 && code <= 122)
-    || code === 95;
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95;
 }
 
 async function fileContainsWholeWord(path: string, word: string): Promise<boolean> {
@@ -177,15 +186,14 @@ async function fileContainsWholeWord(path: string, word: string): Promise<boolea
 export async function processOutputContainsWord(output: CapturedProcessOutput, word: string): Promise<boolean> {
   const normalized = word.toLowerCase();
   if (normalized === "") return false;
-  return await fileContainsWholeWord(output.stdout.path, normalized)
-    || await fileContainsWholeWord(output.stderr.path, normalized);
+  return (
+    (await fileContainsWholeWord(output.stdout.path, normalized)) ||
+    (await fileContainsWholeWord(output.stderr.path, normalized))
+  );
 }
 
 /** Compose private process-output files without materializing them in JavaScript. */
-export async function writeProcessOutputFile(
-  target: string,
-  parts: readonly ProcessOutputPart[],
-): Promise<void> {
+export async function writeProcessOutputFile(target: string, parts: readonly ProcessOutputPart[]): Promise<void> {
   const temporary = `${target}.${randomUUID()}.tmp`;
   const writer = Bun.file(temporary).writer();
   let published = false;
@@ -211,7 +219,11 @@ export async function writeProcessOutputFile(
     await rename(temporary, target);
     published = true;
   } finally {
-    try { await writer.end(); } catch { /* already closed */ }
+    try {
+      await writer.end();
+    } catch {
+      /* already closed */
+    }
     await rm(temporary, { force: true });
   }
   if (!published) throw new Error("Process output artifact was not published");

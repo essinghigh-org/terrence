@@ -1,8 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  classifyCancellationPoll,
-  MISSING_RUN_POLLS_BEFORE_CANCEL,
-} from "../../src/worker";
+import { classifyCancellationPoll, MISSING_RUN_POLLS_BEFORE_CANCEL } from "../../src/worker";
 
 // Issue #693: a deleted run record must stop its tracked process
 // cooperatively (SIGINT, never SIGKILL) so the engine halts at a state

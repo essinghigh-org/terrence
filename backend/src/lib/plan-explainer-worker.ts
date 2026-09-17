@@ -1,5 +1,12 @@
 import { getSettings, resolvePlanExplainerSettings } from "./settings";
-import { buildExplainSource, fetchUpstream, parseCompletionBody, persistExplainerOutput, scrubExplanationContent, type ExplainKind } from "./run-explanations";
+import {
+  buildExplainSource,
+  fetchUpstream,
+  parseCompletionBody,
+  persistExplainerOutput,
+  scrubExplanationContent,
+  type ExplainKind,
+} from "./run-explanations";
 import type { DurableJob, DurableJobContext } from "./durable-jobs";
 import type { DeepReadonly } from "./types";
 import { db } from "../db";
@@ -13,7 +20,10 @@ import { log } from "./log";
 async function explanationRunOrgId(runId: string): Promise<string | null> {
   const owner = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true } });
   if (owner === undefined) return null;
-  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, owner.workspaceId), columns: { orgId: true } });
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, owner.workspaceId),
+    columns: { orgId: true },
+  });
   return workspace?.orgId ?? null;
 }
 
@@ -40,7 +50,9 @@ export async function runPlanExplanationJob(job: DeepReadonly<DurableJob>, conte
 
   const source = await buildExplainSource(runId, kind);
   if (source === undefined) {
-    throw new Error(kind === "plan" ? "No plan JSON is available for this run" : "No apply log is available for this run");
+    throw new Error(
+      kind === "plan" ? "No plan JSON is available for this run" : "No apply log is available for this run",
+    );
   }
   await context.heartbeat();
   if (await context.canceled()) return;
@@ -70,9 +82,12 @@ export async function runPlanExplanationJob(job: DeepReadonly<DurableJob>, conte
   if (await context.canceled()) return;
   const scrubbed = scrubExplanationContent(content, source.secrets);
   await persistExplainerOutput({
-    runId, kind, model,
+    runId,
+    kind,
+    model,
     settings: resolved,
-    userId: null, orgId: await explanationRunOrgId(runId),
+    userId: null,
+    orgId: await explanationRunOrgId(runId),
     content: scrubbed.content,
     redactedInputSecrets: source.redactedInputSecrets,
     scrubbedOutputSecrets: scrubbed.scrubbed,

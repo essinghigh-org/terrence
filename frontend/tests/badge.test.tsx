@@ -47,7 +47,11 @@ describe("Badge", (): void => {
   });
 
   it("forwards extra span attributes", (): void => {
-    const { container } = render(<Badge data-testid="badge" aria-label="label">x</Badge>);
+    const { container } = render(
+      <Badge data-testid="badge" aria-label="label">
+        x
+      </Badge>,
+    );
     const el = container.querySelector('[data-testid="badge"]');
     expect(el?.getAttribute("aria-label")).toBe("label");
   });

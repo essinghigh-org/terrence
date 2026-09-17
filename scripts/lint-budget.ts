@@ -5,17 +5,17 @@ import { fileURLToPath } from "node:url";
 type Baseline = {
   errors: number;
   warnings: number;
-}
+};
 
 type LintMessage = {
   ruleId: string | null;
   severity: number;
-}
+};
 
 type LintReport = {
   errorCount: number;
   messages: readonly LintMessage[];
-}
+};
 
 const rawBaseline = readFileSync(new URL("../.eslint-baseline.json", import.meta.url), "utf8");
 const localBaseline = JSON.parse(rawBaseline) as Baseline;
@@ -51,20 +51,17 @@ try {
   const stdout = typeof result.stdout === "string" && result.stdout !== "" ? result.stdout : "[]";
   reports = JSON.parse(stdout) as LintReport[];
 } catch {
-  const stderr = typeof result.stderr === "string" && result.stderr !== "" ? result.stderr : "ESLint did not return JSON output";
+  const stderr =
+    typeof result.stderr === "string" && result.stderr !== "" ? result.stderr : "ESLint did not return JSON output";
   console.error(stderr);
   process.exit(1);
 }
-const errors = reports.reduce(
-  (total, report): number => total + report.errorCount,
-  0,
-);
+const errors = reports.reduce((total, report): number => total + report.errorCount, 0);
 // Complexity hot-spot backlog is fully split (zero warnings at limit 15),
 // so complexity warnings are budgeted like every other warning: any new
 // over-limit function fails the gate.
 const warnings = reports.reduce(
-  (total, report): number =>
-    total + report.messages.filter(({ severity }): boolean => severity === 1).length,
+  (total, report): number => total + report.messages.filter(({ severity }): boolean => severity === 1).length,
   0,
 );
 console.log(
@@ -72,8 +69,6 @@ console.log(
 );
 const expectedStatus = errors === 0 && warnings === 0 ? 0 : 1;
 if (errors > localBaseline.errors || warnings > localBaseline.warnings || result.status !== expectedStatus) {
-  console.error(
-    "Lint debt increased; fix new findings or update the baseline with an intentional cleanup.",
-  );
+  console.error("Lint debt increased; fix new findings or update the baseline with an intentional cleanup.");
   process.exit(1);
 }

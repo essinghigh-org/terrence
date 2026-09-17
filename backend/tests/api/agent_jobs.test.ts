@@ -496,7 +496,10 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       "planned-at": expect.any(String),
       "apply-queued-at": expect.any(String),
     },
-    jobsAfterPlan: [["plan", "completed"], ["apply", "queued"]],
+    jobsAfterPlan: [
+      ["plan", "completed"],
+      ["apply", "queued"],
+    ],
     applyClaimStatus: 200,
     applyPhase: "apply",
     applyPlanResult: { "plan-handle": "saved-plan" },
@@ -525,7 +528,10 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       ["plan", "Plan: 2 to import, 0 to add, 0 to change, 0 to destroy."],
       ["apply", "Apply complete! Resources: 2 imported, 0 added, 0 changed, 0 destroyed."],
     ],
-    finalAgentStatuses: [["agent-a", "idle"], ["agent-b", "idle"]],
+    finalAgentStatuses: [
+      ["agent-a", "idle"],
+      ["agent-b", "idle"],
+    ],
     runRelationshipPool: "pool",
     runHasChanges: true,
     runResourceImports: 2,
@@ -534,15 +540,18 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     planJsonStatus: 200,
     persistedPlanJson: {
       format_version: "1.2",
-      resource_changes: [{
-        address: "terraform_data.imported_one",
-        mode: "managed",
-        change: { actions: ["no-op"], importing: { id: "existing-one" } },
-      }, {
-        address: "terraform_data.imported_two",
-        mode: "managed",
-        change: { actions: ["no-op"], importing: { id: "existing-two" } },
-      }],
+      resource_changes: [
+        {
+          address: "terraform_data.imported_one",
+          mode: "managed",
+          change: { actions: ["no-op"], importing: { id: "existing-one" } },
+        },
+        {
+          address: "terraform_data.imported_two",
+          mode: "managed",
+          change: { actions: ["no-op"], importing: { id: "existing-two" } },
+        },
+      ],
     },
   });
   expect(["agent-a", "agent-b"]).toContain(result["finalRunAgentId"] as string);
@@ -952,22 +961,18 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
     policyToolVersion: "0.40.0",
     policyIds: ["hard-policy", "soft-policy"],
     policyLevels: ["mandatory", "mandatory"],
-    parameters: [{
-      key: "environment",
-      value: "production",
-      sensitive: true,
-      hcl: false,
-    }],
+    parameters: [
+      {
+        key: "environment",
+        value: "production",
+        sensitive: true,
+        hcl: false,
+      },
+    ],
     containsCostData: false,
     completionStatus: 200,
     completedRunStatus: "policy_soft_failed",
-    statusKeys: [
-      "planning-at",
-      "planned-at",
-      "policy-checking-at",
-      "policy-override-at",
-      "policy-soft-failed-at",
-    ],
+    statusKeys: ["planning-at", "planned-at", "policy-checking-at", "policy-override-at", "policy-soft-failed-at"],
     completedJobs: [["plan", "completed"]],
     checks: [
       ["hard-policy", "soft_failed", { passed: false, reason: "denied by agent" }],

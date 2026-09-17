@@ -22,19 +22,17 @@ describe("account, token, and variable schema contracts", () => {
   const expiredToken = `user-${crypto.randomUUID()}`;
   const orgName = `tokens-${crypto.randomUUID()}`;
 
-  const request = (
-    path: string,
-    method = "GET",
-    body?: unknown,
-    token = authToken,
-  ) => app.handle(new Request(`http://localhost${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-    },
-    body: body === undefined ? null : JSON.stringify(body),
-  }));
+  const request = (path: string, method = "GET", body?: unknown, token = authToken) =>
+    app.handle(
+      new Request(`http://localhost${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({
@@ -235,12 +233,16 @@ describe("account, token, and variable schema contracts", () => {
       type: "organizations",
     });
 
-    expect((await request(
-      `/api/v2/organizations/${orgName}/authentication-token`,
-      "DELETE",
-      undefined,
-      genericData.attributes.token,
-    )).status).toBe(204);
+    expect(
+      (
+        await request(
+          `/api/v2/organizations/${orgName}/authentication-token`,
+          "DELETE",
+          undefined,
+          genericData.attributes.token,
+        )
+      ).status,
+    ).toBe(204);
     expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.orgId, orgId) })).toBeUndefined();
   });
 

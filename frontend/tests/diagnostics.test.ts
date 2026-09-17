@@ -11,7 +11,7 @@ describe("extractDiagnostics", () => {
       "\u2577", // ╷
       "\u2502 Warning: Deprecated Parameter",
       "\u2502 ",
-      "\u2502   on modules/repo.tf line 5, in resource \"github_repository_file\" \"release_workflow\":",
+      '\u2502   on modules/repo.tf line 5, in resource "github_repository_file" "release_workflow":',
       "\u2502  42: lifecycle {",
       "\u2502 ",
       "\u2502 (and 2 more similar warnings elsewhere)",
@@ -25,9 +25,9 @@ describe("extractDiagnostics", () => {
     expect(diagnostics[0]?.severity).toBe("warning");
     expect(diagnostics[0]?.title).toBe("Deprecated Parameter");
     expect(diagnostics[0]?.body).toBe(
-      "\n  on modules/repo.tf line 5, in resource \"github_repository_file\" \"release_workflow\":\n"
-      + " 42: lifecycle {\n\n"
-      + "(and 2 more similar warnings elsewhere)",
+      '\n  on modules/repo.tf line 5, in resource "github_repository_file" "release_workflow":\n' +
+        " 42: lifecycle {\n\n" +
+        "(and 2 more similar warnings elsewhere)",
     );
   });
 
@@ -36,10 +36,10 @@ describe("extractDiagnostics", () => {
       "\u2577",
       "\u2502 Error: No value for required variable",
       "\u2502 ",
-      "\u2502   on main.tf line 12, in variable \"token\":",
-      "\u2502  12:   description = \"GitHub token\"",
+      '\u2502   on main.tf line 12, in variable "token":',
+      '\u2502  12:   description = "GitHub token"',
       "\u2502 ",
-      "\u2502 The module root variable \"token\" is not set, and has no default value.",
+      '\u2502 The module root variable "token" is not set, and has no default value.',
       "\u2575",
     ].join("\n");
 
@@ -48,7 +48,7 @@ describe("extractDiagnostics", () => {
     expect(diagnostics[0]).toEqual({
       severity: "error",
       title: "No value for required variable",
-      body: "\n  on main.tf line 12, in variable \"token\":\n 12:   description = \"GitHub token\"\n\nThe module root variable \"token\" is not set, and has no default value.",
+      body: '\n  on main.tf line 12, in variable "token":\n 12:   description = "GitHub token"\n\nThe module root variable "token" is not set, and has no default value.',
     });
   });
 
@@ -65,10 +65,7 @@ describe("extractDiagnostics", () => {
     ].join("\n");
 
     const diagnostics = extractDiagnostics(log);
-    expect(diagnostics.map((diagnostic): string => diagnostic.title)).toEqual([
-      "First warning",
-      "Second warning",
-    ]);
+    expect(diagnostics.map((diagnostic): string => diagnostic.title)).toEqual(["First warning", "Second warning"]);
     expect(diagnostics[1]?.body).toBe("extra detail");
   });
 
@@ -108,7 +105,7 @@ describe("extractDiagnostics", () => {
       "Warning: Argument is deprecated",
       "",
       "  with module.aws_docs.github_repository_file.opencode_review,",
-      "  on .terraform/modules/aws_docs/main.tf line 62, in resource \"github_repository_file\" \"opencode_review\":",
+      '  on .terraform/modules/aws_docs/main.tf line 62, in resource "github_repository_file" "opencode_review":',
       "  62:   autocreate_branch = true",
       "",
       "Use `github_branch` resource instead",
@@ -124,13 +121,13 @@ describe("extractDiagnostics", () => {
     expect(diagnostics[0]?.severity).toBe("warning");
     expect(diagnostics[0]?.title).toBe("Argument is deprecated");
     expect(diagnostics[0]?.body).toBe(
-      "\n  with module.aws_docs.github_repository_file.opencode_review,\n"
-      + "  on .terraform/modules/aws_docs/main.tf line 62, in resource \"github_repository_file\" \"opencode_review\":\n"
-      + "  62:   autocreate_branch = true\n"
-      + "\n"
-      + "Use `github_branch` resource instead\n"
-      + "\n"
-      + "(and 65 more similar warnings elsewhere)",
+      "\n  with module.aws_docs.github_repository_file.opencode_review,\n" +
+        '  on .terraform/modules/aws_docs/main.tf line 62, in resource "github_repository_file" "opencode_review":\n' +
+        "  62:   autocreate_branch = true\n" +
+        "\n" +
+        "Use `github_branch` resource instead\n" +
+        "\n" +
+        "(and 65 more similar warnings elsewhere)",
     );
   });
 
@@ -155,10 +152,10 @@ describe("extractDiagnostics", () => {
     const log = [
       "Error: No value for required variable",
       "",
-      "  on main.tf line 12, in variable \"token\":",
-      "  12:   description = \"GitHub token\"",
+      '  on main.tf line 12, in variable "token":',
+      '  12:   description = "GitHub token"',
       "",
-      "The module root variable \"token\" is not set, and has no default value.",
+      'The module root variable "token" is not set, and has no default value.',
     ].join("\n");
 
     const diagnostics = extractDiagnostics(log);
@@ -166,7 +163,7 @@ describe("extractDiagnostics", () => {
     expect(diagnostics[0]).toEqual({
       severity: "error",
       title: "No value for required variable",
-      body: "\n  on main.tf line 12, in variable \"token\":\n  12:   description = \"GitHub token\"\n\nThe module root variable \"token\" is not set, and has no default value.",
+      body: '\n  on main.tf line 12, in variable "token":\n  12:   description = "GitHub token"\n\nThe module root variable "token" is not set, and has no default value.',
     });
   });
 

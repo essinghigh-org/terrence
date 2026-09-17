@@ -11,11 +11,14 @@ const username = `email-verify-${suffix}`;
 const email = `${username}@example.com`;
 const apiToken = `email-verify-api-${suffix}`;
 
-const request = (path: string, init: RequestInit = {}): Promise<Response> => app.handle(new Request(`http://terrence.test${path}`, init));
+const request = (path: string, init: RequestInit = {}): Promise<Response> =>
+  app.handle(new Request(`http://terrence.test${path}`, init));
 
 beforeAll(async () => {
   await db.insert(users).values({ id: userId, username, email, passwordHash: "unused" });
-  await db.insert(apiTokens).values({ id: `email-verify-token-${suffix}`, token: hashAuthenticationToken(apiToken), userId });
+  await db
+    .insert(apiTokens)
+    .values({ id: `email-verify-token-${suffix}`, token: hashAuthenticationToken(apiToken), userId });
 });
 
 afterAll(async () => {
@@ -30,7 +33,7 @@ test("requires configured SMTP before issuing an email verification token", asyn
     headers: { Authorization: `Bearer ${apiToken}` },
   });
   expect(response.status).toBe(503);
-  const body = await response.json() as { errors: [{ title: string; detail: string }] };
+  const body = (await response.json()) as { errors: [{ title: string; detail: string }] };
   expect(body.errors[0]).toMatchObject({ title: "Service Unavailable", detail: "Email delivery is not configured" });
 });
 
@@ -51,7 +54,9 @@ test("verifies an email token once and rejects replay or changed addresses", asy
   expect(first.headers.get("Location")).toBe("/app/account?email-verified=1");
   const verified = await db.query.users.findFirst({ where: eq(users.id, userId) });
   expect(verified?.emailVerifiedAt).toBeTypeOf("number");
-  const claimed = await db.query.emailVerificationTokens.findFirst({ where: eq(emailVerificationTokens.userId, userId) });
+  const claimed = await db.query.emailVerificationTokens.findFirst({
+    where: eq(emailVerificationTokens.userId, userId),
+  });
   expect(claimed?.usedAt).toBeTypeOf("number");
 
   const replay = await request(`/api/v2/account/email/verify?token=${encodeURIComponent(rawToken)}`);
@@ -59,7 +64,10 @@ test("verifies an email token once and rejects replay or changed addresses", asy
   expect(replay.headers.get("Location")).toBe("/app/account?email-verification=expired");
 
   const changedToken = `email-verify-changed-${crypto.randomUUID()}`;
-  await db.update(users).set({ email: `changed-${email}`, emailVerifiedAt: null }).where(eq(users.id, userId));
+  await db
+    .update(users)
+    .set({ email: `changed-${email}`, emailVerifiedAt: null })
+    .where(eq(users.id, userId));
   await db.insert(emailVerificationTokens).values({
     id: `email-verification-changed-${suffix}`,
     userId,
@@ -72,7 +80,14 @@ test("verifies an email token once and rejects replay or changed addresses", asy
   expect(changed.status).toBe(302);
   expect(changed.headers.get("Location")).toBe("/app/account?email-verification=changed");
   await db.update(users).set({ email, emailVerifiedAt: null }).where(eq(users.id, userId));
-  await db.delete(emailVerificationTokens).where(and(eq(emailVerificationTokens.userId, userId), eq(emailVerificationTokens.tokenHash, hashAuthenticationToken(changedToken))));
+  await db
+    .delete(emailVerificationTokens)
+    .where(
+      and(
+        eq(emailVerificationTokens.userId, userId),
+        eq(emailVerificationTokens.tokenHash, hashAuthenticationToken(changedToken)),
+      ),
+    );
 });
 
 test("does not verify an email for a suspended account", async () => {
@@ -92,7 +107,9 @@ test("does not verify an email for a suspended account", async () => {
     expect(response.headers.get("Location")).toBe("/app/account?email-verification=suspended");
   } finally {
     await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
-    await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, hashAuthenticationToken(rawToken)));
+    await db
+      .delete(emailVerificationTokens)
+      .where(eq(emailVerificationTokens.tokenHash, hashAuthenticationToken(rawToken)));
   }
 });
 

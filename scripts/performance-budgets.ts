@@ -190,10 +190,7 @@ function timingBudgetViolations(measurement: PerformanceMeasurement, budget: Per
 }
 
 /** Return every violated budget so CI can print one actionable report. */
-export function budgetViolations(
-  measurement: PerformanceMeasurement,
-  options: BudgetCheckOptions = {},
-): string[] {
+export function budgetViolations(measurement: PerformanceMeasurement, options: BudgetCheckOptions = {}): string[] {
   const budget = PERFORMANCE_BUDGETS[measurement.journey];
   const violations: string[] = [
     ...integerBudgetViolations("requests", measurement.requests, budget.maxRequests),
@@ -205,15 +202,12 @@ export function budgetViolations(
   return [...violations, ...timingBudgetViolations(measurement, budget)];
 }
 
-export function assertPerformanceBudget(
-  measurement: PerformanceMeasurement,
-  options: BudgetCheckOptions = {},
-): void {
+export function assertPerformanceBudget(measurement: PerformanceMeasurement, options: BudgetCheckOptions = {}): void {
   const violations = budgetViolations(measurement, options);
   if (violations.length > 0) {
     throw new Error(
-      `${measurement.journey}/${measurement.fixture} exceeded its performance budget: ${violations.join(", ")}. `
-      + "If intentional, update the budget and explain the measurement.",
+      `${measurement.journey}/${measurement.fixture} exceeded its performance budget: ${violations.join(", ")}. ` +
+        "If intentional, update the budget and explain the measurement.",
     );
   }
 }

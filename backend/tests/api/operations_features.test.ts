@@ -4,26 +4,14 @@ import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { toComparableString } from "../../src/lib/utils";
-import {
-  adminSettings,
-  apiTokens,
-  logs,
-  organizations,
-  runExplanations,
-  runs,
-  users,
-} from "../../src/db/schema";
+import { adminSettings, apiTokens, logs, organizations, runExplanations, runs, users } from "../../src/db/schema";
 import {
   getSettings,
   invalidateSettingsCache,
   normalizePlanExplainerBaseUrl,
   resolvePlanExplainerSettings,
 } from "../../src/lib/settings";
-import {
-  inMaintenanceWindow,
-  maintenanceWindowsBlockApply,
-  type MaintenanceWindow,
-} from "../../src/lib/operations";
+import { inMaintenanceWindow, maintenanceWindowsBlockApply, type MaintenanceWindow } from "../../src/lib/operations";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
 import { resetModelCatalogCache, parseModelCatalog } from "../../src/lib/model-catalog";
 import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
@@ -85,20 +73,29 @@ let orgId = "";
 let workspaceId = "";
 let webhookWorkspaceId = "";
 
-function request(path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}): Promise<Response> {
-  return app.handle(new Request(`http://terrence.test${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      ...headers,
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+function request(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return app.handle(
+    new Request(`http://terrence.test${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        ...headers,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
 }
 
 async function setSettings(group: string, values: Record<string, unknown>): Promise<void> {
-  await db.insert(adminSettings).values({ id: group, values, updatedAt: Date.now() })
+  await db
+    .insert(adminSettings)
+    .values({ id: group, values, updatedAt: Date.now() })
     .onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
   invalidateSettingsCache();
 }
@@ -124,7 +121,11 @@ beforeAll(async () => {
   ]);
   await db.insert(apiTokens).values([
     { id: `ops-token-id-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId },
-    { id: `ops-admin-token-id-${suffix}`, token: createHash("sha256").update(adminToken).digest("hex"), userId: adminUserId },
+    {
+      id: `ops-admin-token-id-${suffix}`,
+      token: createHash("sha256").update(adminToken).digest("hex"),
+      userId: adminUserId,
+    },
   ]);
   const orgResponse = await request("/api/v2/organizations", "POST", {
     data: { type: "organizations", attributes: { name: orgName } },
@@ -166,7 +167,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await db.delete(adminSettings).where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer", "logging"]));
+  await db
+    .delete(adminSettings)
+    .where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer", "logging"]));
   invalidateSettingsCache();
   await deletePlanJsonArtifact(explainerRunId).catch((): void => undefined);
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
@@ -224,7 +227,10 @@ describe("maintenance windows (21.6)", () => {
 
   it("rejects applies outside maintenance windows with 409", async () => {
     // Enabled with a window that never matches (empty day list).
-    await setSettings("maintenance-windows", { enabled: true, windows: [{ days: [], "start-time": "00:00", "end-time": "23:59", timezone: "UTC" }] });
+    await setSettings("maintenance-windows", {
+      enabled: true,
+      windows: [{ days: [], "start-time": "00:00", "end-time": "23:59", timezone: "UTC" }],
+    });
     const response = await request(`/api/v2/runs/${planRunId}/actions/apply`, "POST", {
       data: { type: "runs", attributes: { comment: "should be blocked" } },
     });
@@ -258,18 +264,22 @@ describe("external approval webhook (21.8)", () => {
 
   it("rejects unsigned or wrongly signed webhook calls", async () => {
     const payload = JSON.stringify({ run: webhookRunId });
-    const unsigned = await app.handle(new Request("http://terrence.test/api/v2/webhooks/run-approval", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: payload,
-    }));
+    const unsigned = await app.handle(
+      new Request("http://terrence.test/api/v2/webhooks/run-approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }),
+    );
     expect(unsigned.status).toBe(401);
 
-    const wrong = await app.handle(new Request("http://terrence.test/api/v2/webhooks/run-approval", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Terrence-Signature": "deadbeef" },
-      body: payload,
-    }));
+    const wrong = await app.handle(
+      new Request("http://terrence.test/api/v2/webhooks/run-approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Terrence-Signature": "deadbeef" },
+        body: payload,
+      }),
+    );
     expect(wrong.status).toBe(401);
   });
 
@@ -277,11 +287,13 @@ describe("external approval webhook (21.8)", () => {
     const payload = JSON.stringify({ run: webhookRunId, action: "confirm" });
     const { createHmac } = await import("node:crypto");
     const signature = createHmac("sha256", "test-secret").update(payload).digest("hex");
-    const response = await app.handle(new Request("http://terrence.test/api/v2/webhooks/run-approval", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Terrence-Signature": signature },
-      body: payload,
-    }));
+    const response = await app.handle(
+      new Request("http://terrence.test/api/v2/webhooks/run-approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Terrence-Signature": signature },
+        body: payload,
+      }),
+    );
     expect(response.status).toBe(200);
     const body = (await response.json()) as { data: { attributes: { status: string } } };
     expect(["confirmed", "apply_queued", "applying"]).toContain(body.data.attributes.status);
@@ -293,18 +305,22 @@ describe("external approval webhook (21.8)", () => {
     const payload = JSON.stringify({ run: webhookRunId, action: "approve" });
     const { createHmac } = await import("node:crypto");
     const signature = createHmac("sha256", "test-secret").update(payload).digest("hex");
-    const response = await app.handle(new Request("http://terrence.test/api/v2/webhooks/run-approval", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Terrence-Signature": signature },
-      body: payload,
-    }));
+    const response = await app.handle(
+      new Request("http://terrence.test/api/v2/webhooks/run-approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Terrence-Signature": signature },
+        body: payload,
+      }),
+    );
     expect(response.status).toBe(422);
   });
 });
 
 describe("AI plan explainer (21.2)", () => {
   it("normalizes a full completion endpoint into an optional base URL", async () => {
-    expect(normalizePlanExplainerBaseUrl("https://api.example.com/v1/chat/completions")).toBe("https://api.example.com/v1");
+    expect(normalizePlanExplainerBaseUrl("https://api.example.com/v1/chat/completions")).toBe(
+      "https://api.example.com/v1",
+    );
     expect(normalizePlanExplainerBaseUrl("file:///etc/passwd")).toBeNull();
     const resolved = await resolvePlanExplainerSettings({
       enabled: true,
@@ -324,7 +340,12 @@ describe("AI plan explainer (21.2)", () => {
   });
 
   it("exposes capabilities.plan-explainer=true on the org resource when configured", async () => {
-    await setSettings("plan-explainer", { enabled: true, "endpoint-url": "http://127.0.0.1:1/v1/chat/completions", "api-key": null, model: "test-model" });
+    await setSettings("plan-explainer", {
+      enabled: true,
+      "endpoint-url": "http://127.0.0.1:1/v1/chat/completions",
+      "api-key": null,
+      model: "test-model",
+    });
     const response = await request(`/api/v2/organizations/${orgName}`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as { data: { attributes: { capabilities: Record<string, boolean> } } };
@@ -338,7 +359,12 @@ describe("AI plan explainer (21.2)", () => {
   });
 
   it("returns 409 when no plan JSON artifact exists", async () => {
-    await setSettings("plan-explainer", { enabled: true, "endpoint-url": "http://127.0.0.1:1/v1/chat/completions", "api-key": null, model: "test-model" });
+    await setSettings("plan-explainer", {
+      enabled: true,
+      "endpoint-url": "http://127.0.0.1:1/v1/chat/completions",
+      "api-key": null,
+      model: "test-model",
+    });
     const response = await request(`/api/v2/runs/${explainerRunId}/explain`, "POST", {});
     expect(response.status).toBe(409);
     const body = (await response.json()) as { errors: { detail: string }[] };
@@ -361,7 +387,9 @@ describe("AI plan explainer (21.2)", () => {
       expect(body.errors[0]?.detail ?? "").toContain("unreachable");
     } else {
       const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(toComparableString(body.data.attributes["status"] ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
+      expect(toComparableString(body.data.attributes["status"] ?? body.data.attributes["job-id"] ?? "queued")).toMatch(
+        /queued|running|failed/,
+      );
     }
   });
 
@@ -383,7 +411,14 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   let upstreamCalls = 0;
   let upstreamMode: "json" | "json-reasoning" | "sse" = "json";
   let endpointUrl = "";
-  let upstreamBodies: Readonly<{ stream: unknown; model: unknown; maxTokens: unknown; reasoning: unknown; reasoningEffort: unknown; prompt: string | null }>[] = [];
+  let upstreamBodies: Readonly<{
+    stream: unknown;
+    model: unknown;
+    maxTokens: unknown;
+    reasoning: unknown;
+    reasoningEffort: unknown;
+    prompt: string | null;
+  }>[] = [];
 
   beforeAll(async () => {
     await db.insert(runs).values([
@@ -467,7 +502,9 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
         }
         if (upstreamMode === "json-reasoning") {
           return Response.json({
-            choices: [{ message: { reasoning_content: "Inspecting the diff.", content: "The plan adds one instance." } }],
+            choices: [
+              { message: { reasoning_content: "Inspecting the diff.", content: "The plan adds one instance." } },
+            ],
           });
         }
         return Response.json({
@@ -476,7 +513,14 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       },
     });
     endpointUrl = `http://127.0.0.1:${upstream.port}/v1/chat/completions`;
-    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });
+    await setSettings("plan-explainer", {
+      enabled: true,
+      provider: "openrouter",
+      "endpoint-url": endpointUrl,
+      "api-key": null,
+      model: "test-model",
+      "reasoning-effort": "xhigh",
+    });
   });
 
   afterAll(async () => {
@@ -493,14 +537,26 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       data: { type: "plan-explanations", attributes: { kind: "plan" } },
     });
     expect([200, 202]).toContain(first.status);
-    if (first.status === 202) { await new Promise(r => setTimeout(r, 200)); }
+    if (first.status === 202) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
     if (first.status === 202) {
       const env = (await first.json()) as { data: { attributes: Record<string, unknown> } };
       expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
       // Job is async with worker off; ensure at least the enqueue happened
       expect(upstreamCalls).toBe(0);
     } else {
-      const firstBody = (await first.json()) as { data: { attributes: { explanation: string; model: string; cached: boolean; kind: string; "reasoning-effort": string | null } } };
+      const firstBody = (await first.json()) as {
+        data: {
+          attributes: {
+            explanation: string;
+            model: string;
+            cached: boolean;
+            kind: string;
+            "reasoning-effort": string | null;
+          };
+        };
+      };
       expect(firstBody.data.attributes.kind).toBe("plan");
       expect(firstBody.data.attributes.explanation).toContain("adds one instance");
       expect(firstBody.data.attributes.model).toBe("test-model");
@@ -551,12 +607,16 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       data: { type: "plan-explanations", attributes: { kind: "apply" } },
     });
     expect([200, 202]).toContain(generated.status);
-    if (generated.status === 202) { await new Promise(r => setTimeout(r, 200)); }
+    if (generated.status === 202) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
     if (generated.status === 202) {
       const env = (await generated.json()) as { data: { attributes: Record<string, unknown> } };
       expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     } else {
-      const generatedBody = (await generated.json()) as { data: { attributes: { explanation: string; cached: boolean } } };
+      const generatedBody = (await generated.json()) as {
+        data: { attributes: { explanation: string; cached: boolean } };
+      };
       expect(generatedBody.data.attributes.explanation).toContain("adds one instance");
       expect(generatedBody.data.attributes.cached).toBe(false);
     }
@@ -566,7 +626,9 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       // Worker off in tests; GET returns job envelope until worker runs
       expect([200, 404]).toContain(cached.status);
       if (cached.status === 200) {
-        const cachedBody = (await cached.json()) as { data: { attributes: { explanation?: string; cached?: boolean; status?: string } } };
+        const cachedBody = (await cached.json()) as {
+          data: { attributes: { explanation?: string; cached?: boolean; status?: string } };
+        };
         // May be explanation (if job ran) or job envelope
         if (cachedBody.data.attributes.explanation !== undefined) {
           expect(cachedBody.data.attributes.explanation).toContain("adds one instance");
@@ -588,7 +650,9 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       data: { type: "plan-explanations", attributes: { kind: "apply", refresh: true } },
     });
     expect([200, 202]).toContain(refreshed.status);
-    if (refreshed.status === 202) { await new Promise(r => setTimeout(r, 200)); }
+    if (refreshed.status === 202) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
     if (refreshed.status === 200) {
       const body = (await refreshed.json()) as { data: { attributes: { cached: boolean } } };
       expect(body.data.attributes.cached).toBe(false);
@@ -653,7 +717,10 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     const cached = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
     const cachedBody = (await cached.json()) as { data: { attributes: { explanation: string } } };
     expect(cachedBody.data.attributes.explanation).toContain("No existing resources change.");
-    const [stored] = await db.select({ thinking: runExplanations.thinking }).from(runExplanations).where(eq(runExplanations.runId, applyRunId));
+    const [stored] = await db
+      .select({ thinking: runExplanations.thinking })
+      .from(runExplanations)
+      .where(eq(runExplanations.runId, applyRunId));
     expect(stored?.thinking).toBeNull();
   });
 
@@ -663,16 +730,19 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     upstreamMode = "json";
     upstreamCalls = 0;
     const now = Date.now();
-    await db.insert(runExplanations).values({
-      id: `re-${cacheRunId}-plan-seed2`,
-      runId: cacheRunId,
-      kind: "plan",
-      cacheKey: `test-seed-${now}`,
-      content: "The plan adds one instance and leaves existing resources untouched.",
-      thinking: null,
-      model: "test-model",
-      createdAt: now,
-    }).onConflictDoNothing();
+    await db
+      .insert(runExplanations)
+      .values({
+        id: `re-${cacheRunId}-plan-seed2`,
+        runId: cacheRunId,
+        kind: "plan",
+        cacheKey: `test-seed-${now}`,
+        content: "The plan adds one instance and leaves existing resources untouched.",
+        thinking: null,
+        model: "test-model",
+        createdAt: now,
+      })
+      .onConflictDoNothing();
     // Seeded row exists, so stream POST must serve cache without hitting upstream
     const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
       data: { type: "plan-explanations", attributes: { kind: "plan", stream: true } },
@@ -699,7 +769,9 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       data: { type: "plan-explanations", attributes: { kind: "apply", refresh: true } },
     });
     expect([200, 202]).toContain(response.status);
-    if (response.status === 202) { await new Promise(r => setTimeout(r, 200)); }
+    if (response.status === 202) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
     if (response.status === 202) {
       const env = (await response.json()) as { data: { attributes: Record<string, unknown> } };
       expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
@@ -723,10 +795,22 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     upstreamMode = "json";
     upstreamCalls = 0;
     upstreamBodies = [];
-    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "low" });
-    const response = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
-      data: { type: "plan-explanations", attributes: { kind: "plan", refresh: true } },
-    }, { Authorization: `Bearer ${adminToken}` });
+    await setSettings("plan-explainer", {
+      enabled: true,
+      provider: "openrouter",
+      "endpoint-url": endpointUrl,
+      "api-key": null,
+      model: "test-model",
+      "reasoning-effort": "low",
+    });
+    const response = await request(
+      `/api/v2/runs/${cacheRunId}/explain`,
+      "POST",
+      {
+        data: { type: "plan-explanations", attributes: { kind: "plan", refresh: true } },
+      },
+      { Authorization: `Bearer ${adminToken}` },
+    );
     expect([200, 202]).toContain(response.status);
     if (response.status === 200) {
       expect(upstreamCalls).toBe(1);
@@ -740,21 +824,39 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     // Ensure a real cache row exists (durable worker is off in tests, so the
     // refresh above only enqueued a job).
     const seededAt = Date.now();
-    await db.insert(runExplanations).values({
-      id: `re-${cacheRunId}-plan-seed3-${seededAt}`,
-      runId: cacheRunId,
-      kind: "plan",
-      cacheKey: "legacy-content-hash",
-      content: "The plan adds one instance and leaves existing resources untouched.",
-      thinking: null,
-      model: "test-model",
-      createdAt: seededAt,
-    }).onConflictDoNothing();
-    await db.update(runExplanations).set({ cacheKey: "legacy-content-hash" }).where(eq(runExplanations.runId, cacheRunId));
-    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "different-model", "reasoning-effort": "max" });
-    const cached = await request(`/api/v2/runs/${cacheRunId}/explain`, "POST", {
-      data: { type: "plan-explanations", attributes: { kind: "plan" } },
-    }, { Authorization: `Bearer ${adminToken}` });
+    await db
+      .insert(runExplanations)
+      .values({
+        id: `re-${cacheRunId}-plan-seed3-${seededAt}`,
+        runId: cacheRunId,
+        kind: "plan",
+        cacheKey: "legacy-content-hash",
+        content: "The plan adds one instance and leaves existing resources untouched.",
+        thinking: null,
+        model: "test-model",
+        createdAt: seededAt,
+      })
+      .onConflictDoNothing();
+    await db
+      .update(runExplanations)
+      .set({ cacheKey: "legacy-content-hash" })
+      .where(eq(runExplanations.runId, cacheRunId));
+    await setSettings("plan-explainer", {
+      enabled: true,
+      provider: "openrouter",
+      "endpoint-url": endpointUrl,
+      "api-key": null,
+      model: "different-model",
+      "reasoning-effort": "max",
+    });
+    const cached = await request(
+      `/api/v2/runs/${cacheRunId}/explain`,
+      "POST",
+      {
+        data: { type: "plan-explanations", attributes: { kind: "plan" } },
+      },
+      { Authorization: `Bearer ${adminToken}` },
+    );
     // With worker off, a queued job may still shadow the cache
     expect([200, 202]).toContain(cached.status);
     if (cached.status === 200) {
@@ -766,7 +868,14 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       expect(toComparableString(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     }
     expect(upstreamCalls >= 0).toBe(true);
-    await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });
+    await setSettings("plan-explainer", {
+      enabled: true,
+      provider: "openrouter",
+      "endpoint-url": endpointUrl,
+      "api-key": null,
+      model: "test-model",
+      "reasoning-effort": "xhigh",
+    });
   });
 });
 
@@ -780,30 +889,52 @@ describe("admin operations settings surface", () => {
     await setSettings("approval-webhook", { enabled: false, url: null, secret: null });
     await setSettings("maintenance-windows", { enabled: false, windows: [] });
     await setSettings("plan-explainer", { enabled: false, "endpoint-url": null, "api-key": null, model: null });
-    const read = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const read = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(read.status).toBe(200);
-    const body = (await read.json()) as { data: { attributes: { "approval-webhook": { enabled: boolean }; "maintenance-windows": { enabled: boolean }; "plan-explainer": { enabled: boolean } } } };
+    const body = (await read.json()) as {
+      data: {
+        attributes: {
+          "approval-webhook": { enabled: boolean };
+          "maintenance-windows": { enabled: boolean };
+          "plan-explainer": { enabled: boolean };
+        };
+      };
+    };
     expect(body.data.attributes["approval-webhook"].enabled).toBe(false);
     expect(body.data.attributes["maintenance-windows"].enabled).toBe(false);
     expect(body.data.attributes["plan-explainer"].enabled).toBe(false);
 
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: {
-          type: "operations-settings",
-          attributes: {
-            "approval-webhook": { enabled: true, secret: "new-secret", url: "https://service-now.example.com/tf" },
-            "maintenance-windows": { enabled: true, windows: [{ days: [1, 2, 3], "start-time": "22:00", "end-time": "02:00", timezone: "UTC" }] },
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "operations-settings",
+            attributes: {
+              "approval-webhook": { enabled: true, secret: "new-secret", url: "https://service-now.example.com/tf" },
+              "maintenance-windows": {
+                enabled: true,
+                windows: [{ days: [1, 2, 3], "start-time": "22:00", "end-time": "02:00", timezone: "UTC" }],
+              },
+            },
           },
-        },
+        }),
       }),
-    }));
+    );
     expect(patch.status).toBe(200);
-    const patched = (await patch.json()) as { data: { attributes: { "approval-webhook": { enabled: boolean; "secret-set"?: boolean; secret?: string }; "maintenance-windows": { enabled: boolean; windows: unknown[] } } } };
+    const patched = (await patch.json()) as {
+      data: {
+        attributes: {
+          "approval-webhook": { enabled: boolean; "secret-set"?: boolean; secret?: string };
+          "maintenance-windows": { enabled: boolean; windows: unknown[] };
+        };
+      };
+    };
     expect(patched.data.attributes["approval-webhook"].enabled).toBe(true);
     expect(patched.data.attributes["approval-webhook"]["secret-set"]).toBe(true);
     expect(patched.data.attributes["approval-webhook"].secret).toBeUndefined();
@@ -819,18 +950,26 @@ describe("admin operations settings surface", () => {
   it("reads legacy plaintext settings and upgrades them on the next write", async () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
     try {
-      await setSettings("approval-webhook", { enabled: true, url: "https://legacy.example.com/approval", secret: "legacy-approval-secret" });
+      await setSettings("approval-webhook", {
+        enabled: true,
+        url: "https://legacy.example.com/approval",
+        secret: "legacy-approval-secret",
+      });
       expect((await getSettings("approval-webhook"))["secret"]).toBe("legacy-approval-secret");
-      const rawBeforeWrite = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
+      const rawBeforeWrite = await db.query.adminSettings.findFirst({
+        where: eq(adminSettings.id, "approval-webhook"),
+      });
       expect(rawBeforeWrite?.values["secret"]).toBe("legacy-approval-secret");
 
-      const response = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-        body: JSON.stringify({
-          data: { type: "operations-settings", attributes: { "approval-webhook": { enabled: true } } },
+      const response = await app.handle(
+        new Request("http://terrence.test/api/v2/admin/operations-settings", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+          body: JSON.stringify({
+            data: { type: "operations-settings", attributes: { "approval-webhook": { enabled: true } } },
+          }),
         }),
-      }));
+      );
       expect(response.status).toBe(200);
       const rawAfterWrite = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
       const storedSecret = rawAfterWrite?.values["secret"];
@@ -839,7 +978,11 @@ describe("admin operations settings surface", () => {
       expect(await decryptSecret(storedSecret as string)).toBe("legacy-approval-secret");
     } finally {
       if (original === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "approval-webhook"));
-      else await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt }).where(eq(adminSettings.id, "approval-webhook"));
+      else
+        await db
+          .update(adminSettings)
+          .set({ values: original.values, updatedAt: original.updatedAt })
+          .where(eq(adminSettings.id, "approval-webhook"));
       invalidateSettingsCache();
     }
   });
@@ -847,11 +990,15 @@ describe("admin operations settings surface", () => {
   it("redacts stored secrets from the read surface", async () => {
     await setSettings("approval-webhook", { enabled: true, secret: "hunter2", url: null });
     await setSettings("plan-explainer", { enabled: true, "endpoint-url": null, "api-key": "sk-test", model: "m" });
-    const read = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const read = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(read.status).toBe(200);
-    const body = (await read.json()) as { data: { attributes: { "approval-webhook": Record<string, unknown>; "plan-explainer": Record<string, unknown> } } };
+    const body = (await read.json()) as {
+      data: { attributes: { "approval-webhook": Record<string, unknown>; "plan-explainer": Record<string, unknown> } };
+    };
     expect(body.data.attributes["approval-webhook"]["secret"]).toBeUndefined();
     expect(body.data.attributes["approval-webhook"]["secret-set"]).toBe(true);
     expect(body.data.attributes["plan-explainer"]["api-key"]).toBeUndefined();
@@ -859,13 +1006,18 @@ describe("admin operations settings surface", () => {
   });
 
   it("stores and returns only the optional base URL", async () => {
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { "base-url": "https://api.example.com/v1/chat/completions" } } },
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "operations-settings",
+            attributes: { "plan-explainer": { "base-url": "https://api.example.com/v1/chat/completions" } },
+          },
+        }),
       }),
-    }));
+    );
     expect(patch.status).toBe(200);
     const body = (await patch.json()) as { data: { attributes: { "plan-explainer": Record<string, unknown> } } };
     expect(body.data.attributes["plan-explainer"]["base-url"]).toBe("https://api.example.com/v1");
@@ -878,127 +1030,176 @@ describe("admin operations settings surface", () => {
       ["approval-webhook", "url", "ftp://example.com/tf"],
       ["plan-explainer", "endpoint-url", "file:///etc/passwd"],
     ] as const) {
-      const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-        body: JSON.stringify({
-          data: { type: "operations-settings", attributes: { [group]: { [key]: value } } },
+      const patch = await app.handle(
+        new Request("http://terrence.test/api/v2/admin/operations-settings", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+          body: JSON.stringify({
+            data: { type: "operations-settings", attributes: { [group]: { [key]: value } } },
+          }),
         }),
-      }));
+      );
       expect(patch.status).toBe(422);
     }
     // http(s) URLs (including loopback, e.g. a self-hosted Ollama) remain valid.
-    const ok = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { "endpoint-url": "http://127.0.0.1:11434/v1" } } },
+    const ok = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "operations-settings",
+            attributes: { "plan-explainer": { "endpoint-url": "http://127.0.0.1:11434/v1" } },
+          },
+        }),
       }),
-    }));
+    );
     expect(ok.status).toBe(200);
   });
 
   it("rejects malformed maintenance windows with 422", async () => {
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "maintenance-windows": { enabled: true, windows: [{ days: [9], "start-time": "25:00", "end-time": "02:00" }] } } },
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "operations-settings",
+            attributes: {
+              "maintenance-windows": {
+                enabled: true,
+                windows: [{ days: [9], "start-time": "25:00", "end-time": "02:00" }],
+              },
+            },
+          },
+        }),
       }),
-    }));
+    );
     expect(patch.status).toBe(422);
   });
 
   it("accepts a plan-explainer provider field (additive)", async () => {
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: "openrouter", enabled: true, "reasoning-effort": "xhigh" } } },
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "operations-settings",
+            attributes: { "plan-explainer": { provider: "openrouter", enabled: true, "reasoning-effort": "xhigh" } },
+          },
+        }),
       }),
-    }));
+    );
     expect(patch.status).toBe(200);
     const body = (await patch.json()) as { data: { attributes: { "plan-explainer": Record<string, unknown> } } };
     expect(body.data.attributes["plan-explainer"]["provider"]).toBe("openrouter");
     expect(body.data.attributes["plan-explainer"]["reasoning-effort"]).toBe("xhigh");
 
     // Clearing it back to null also validates.
-    const clear = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: null, enabled: false, "reasoning-effort": null } } },
+    const clear = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "operations-settings",
+            attributes: { "plan-explainer": { provider: null, enabled: false, "reasoning-effort": null } },
+          },
+        }),
       }),
-    }));
+    );
     expect(clear.status).toBe(200);
   });
 
   it("rejects a non-string plan-explainer provider with 422", async () => {
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { provider: 42 } } },
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "operations-settings", attributes: { "plan-explainer": { provider: 42 } } },
+        }),
       }),
-    }));
+    );
     expect(patch.status).toBe(422);
   });
 
   it("rejects an unsupported plan-explainer reasoning effort", async () => {
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({
-        data: { type: "operations-settings", attributes: { "plan-explainer": { "reasoning-effort": "extreme" } } },
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "operations-settings", attributes: { "plan-explainer": { "reasoning-effort": "extreme" } } },
+        }),
       }),
-    }));
+    );
     expect(patch.status).toBe(422);
   });
 
   it("validates and hot-reloads Site Admin logging settings", async () => {
     expect((await request("/api/v2/admin/logging-settings")).status).toBe(404);
-    const invalid = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { "syslog-targets": ["ftp://bad.example:514"] } } }),
-    }));
+    const invalid = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/logging-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { "syslog-targets": ["ftp://bad.example:514"] } } }),
+      }),
+    );
     expect(invalid.status).toBe(422);
-    const invalidHeader = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { "syslog-app": "bad app" } } }),
-    }));
+    const invalidHeader = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/logging-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { "syslog-app": "bad app" } } }),
+      }),
+    );
     expect(invalidHeader.status).toBe(422);
-    const invalidFormat = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: { "syslog-format": "xml" } } }),
-    }));
+    const invalidFormat = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/logging-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { "syslog-format": "xml" } } }),
+      }),
+    );
     expect(invalidFormat.status).toBe(422);
 
-    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { attributes: {
-        "log-level": "debug",
-        "syslog-level": "warn",
-        enabled: false,
-        "syslog-targets": ["udp://collector-a.example:514", "tcp://collector-b.example:601"],
-        "syslog-hostname": " ops-host ",
-        "syslog-app": " terrence-test ",
-        "syslog-format": " JSON ",
-      } } }),
-    }));
+    const patch = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/logging-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              "log-level": "debug",
+              "syslog-level": "warn",
+              enabled: false,
+              "syslog-targets": ["udp://collector-a.example:514", "tcp://collector-b.example:601"],
+              "syslog-hostname": " ops-host ",
+              "syslog-app": " terrence-test ",
+              "syslog-format": " JSON ",
+            },
+          },
+        }),
+      }),
+    );
     expect(patch.status).toBe(200);
-    const body = await patch.json() as { data: { attributes: Record<string, unknown> } };
+    const body = (await patch.json()) as { data: { attributes: Record<string, unknown> } };
     expect(body.data.attributes["log-level"]).toBe("debug");
     expect(body.data.attributes["enabled"]).toBe(false);
     expect(body.data.attributes["syslog-hostname"]).toBe("ops-host");
     expect(body.data.attributes["syslog-app"]).toBe("terrence-test");
     expect(body.data.attributes["syslog-format"]).toBe("json");
-    expect(body.data.attributes["syslog-targets"]).toEqual(["udp://collector-a.example:514", "tcp://collector-b.example:601"]);
+    expect(body.data.attributes["syslog-targets"]).toEqual([
+      "udp://collector-a.example:514",
+      "tcp://collector-b.example:601",
+    ]);
     const persisted = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "logging") });
-    expect(persisted?.values["syslog-targets"]).toEqual(["udp://collector-a.example:514", "tcp://collector-b.example:601"]);
+    expect(persisted?.values["syslog-targets"]).toEqual([
+      "udp://collector-a.example:514",
+      "tcp://collector-b.example:601",
+    ]);
   });
 
   it("serves the provider catalog and per-provider models to admins only", async () => {
@@ -1008,11 +1209,15 @@ describe("admin operations settings surface", () => {
     const forbiddenModels = await request("/api/v2/admin/operations-settings/explainer/models?provider=openrouter");
     expect(forbiddenModels.status).toBe(404);
 
-    const providers = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/providers", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const providers = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/providers", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(providers.status).toBe(200);
-    const providersBody = (await providers.json()) as { data: { id: string; attributes: { name: string; "model-count": number } }[] };
+    const providersBody = (await providers.json()) as {
+      data: { id: string; attributes: { name: string; "model-count": number } }[];
+    };
     expect(providersBody.data.length).toBeGreaterThan(0);
     const ids = providersBody.data.map((p) => p.id);
     expect(ids).toContain("openrouter");
@@ -1025,30 +1230,41 @@ describe("admin operations settings surface", () => {
 
     // The synthetic custom provider resolves with zero catalog models
     // (the admin types the model id), never a 404.
-    const customModels = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=custom", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const customModels = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=custom", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(customModels.status).toBe(200);
     const customBody = (await customModels.json()) as { data: unknown[]; meta: { "model-count": number } };
     expect(customBody.data).toEqual([]);
     expect(customBody.meta["model-count"]).toBe(0);
 
-    const models = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=openrouter", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const models = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=openrouter", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(models.status).toBe(200);
-    const modelsBody = (await models.json()) as { data: { id: string; attributes: { name: string } }[]; meta: { "model-count": number } };
+    const modelsBody = (await models.json()) as {
+      data: { id: string; attributes: { name: string } }[];
+      meta: { "model-count": number };
+    };
     expect(modelsBody.meta["model-count"]).toBeGreaterThan(0);
     expect(modelsBody.data.every((m) => typeof m.id === "string" && m.id !== "")).toBe(true);
 
     // Unknown provider -> 404; missing param -> 422.
-    const unknown = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=does-not-exist", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const unknown = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models?provider=does-not-exist", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(unknown.status).toBe(404);
-    const missing = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models", {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    }));
+    const missing = await app.handle(
+      new Request("http://terrence.test/api/v2/admin/operations-settings/explainer/models", {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+    );
     expect(missing.status).toBe(422);
   });
 });

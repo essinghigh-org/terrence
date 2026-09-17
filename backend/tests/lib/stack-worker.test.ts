@@ -6,13 +6,32 @@ import { tmpdir } from "node:os";
 import { dirname, basename, join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
-import { agents, agentPoolTokens, agentPools, durableJobs, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../../src/db/schema";
+import {
+  agents,
+  agentPoolTokens,
+  agentPools,
+  durableJobs,
+  organizations,
+  stackAgentJobs,
+  stackRecords,
+  stackStateLocks,
+  stacks,
+} from "../../src/db/schema";
 import { claimStackAgentJob, completeStackAgentJob, heartbeatStackAgentJob } from "../../src/lib/stack-agent-jobs";
-import { deferredChangesFromCapturedOutput, removeStackState, runStackDeploymentJob, saveStackState } from "../../src/lib/stack-worker";
+import {
+  deferredChangesFromCapturedOutput,
+  removeStackState,
+  runStackDeploymentJob,
+  saveStackState,
+} from "../../src/lib/stack-worker";
 import { captureProcessOutput, PROCESS_OUTPUT_PREVIEW_CHARS } from "../../src/lib/process-output";
 import type { DurableJob } from "../../src/lib/durable-jobs";
 
-const context = { signal: new AbortController().signal, heartbeat: async (): Promise<boolean> => true, canceled: async (): Promise<boolean> => false };
+const context = {
+  signal: new AbortController().signal,
+  heartbeat: async (): Promise<boolean> => true,
+  canceled: async (): Promise<boolean> => false,
+};
 
 async function archive(): Promise<{ directory: string; path: string }> {
   const directory = await mkdtemp(join(tmpdir(), "terrence-stack-test-"));
@@ -27,7 +46,23 @@ async function archive(): Promise<{ directory: string; path: string }> {
 }
 
 function job(runId: string, id = crypto.randomUUID()): DurableJob {
-  return { id, kind: "stack-deployment", dedupeKey: null, status: "running", payload: { runId }, payloadSchemaVersion: 1, attempts: 1, runAfter: Date.now(), lockedBy: "test", lockToken: "test", leaseExpiresAt: Date.now() + 30_000, heartbeatAt: Date.now(), lastError: null, createdAt: Date.now(), updatedAt: Date.now() };
+  return {
+    id,
+    kind: "stack-deployment",
+    dedupeKey: null,
+    status: "running",
+    payload: { runId },
+    payloadSchemaVersion: 1,
+    attempts: 1,
+    runAfter: Date.now(),
+    lockedBy: "test",
+    lockToken: "test",
+    leaseExpiresAt: Date.now() + 30_000,
+    heartbeatAt: Date.now(),
+    lastError: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
 }
 
 describe("Stack deployment worker", () => {
@@ -45,29 +80,44 @@ describe("Stack deployment worker", () => {
     archivePath = archiveValue.path;
     process.env["SIMULATED_RUNS"] = "true";
     await db.insert(organizations).values({ id: orgId, name: orgId });
-    await db.insert(stacks).values({ id: stackId, orgId, projectId: null, executionMode: "remote", name: "stack-worker", createdAt: Date.now(), updatedAt: Date.now() });
+    await db.insert(stacks).values({
+      id: stackId,
+      orgId,
+      projectId: null,
+      executionMode: "remote",
+      name: "stack-worker",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
   });
 
   test("detects deferred markers beyond the output preview boundary", async () => {
     const directory = await mkdtemp(join(tmpdir(), "terrence-stack-deferred-test-"));
     try {
-      const child = Bun.spawn([
-        process.execPath,
-        "-e",
-        `process.stdout.write("x".repeat(${PROCESS_OUTPUT_PREVIEW_CHARS + 128})); process.stdout.write("\\ndeferred\\n")`,
-      ], { stdout: "pipe", stderr: "pipe" });
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `process.stdout.write("x".repeat(${PROCESS_OUTPUT_PREVIEW_CHARS + 128})); process.stdout.write("\\ndeferred\\n")`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
       const captured = await captureProcessOutput(child.stdout, child.stderr, directory, "deferred-marker");
       expect(await child.exited).toBe(0);
       expect(captured.stdout.truncated).toBe(true);
       expect(await deferredChangesFromCapturedOutput("plan", captured)).toBe(true);
       expect(await deferredChangesFromCapturedOutput("apply", captured)).toBe(false);
 
-      const nonMarkerChild = Bun.spawn([
-        process.execPath,
-        "-e",
-        "process.stdout.write(\"deferredly\")",
-      ], { stdout: "pipe", stderr: "pipe" });
-      const nonMarker = await captureProcessOutput(nonMarkerChild.stdout, nonMarkerChild.stderr, directory, "deferred-negative");
+      const nonMarkerChild = Bun.spawn([process.execPath, "-e", 'process.stdout.write("deferredly")'], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const nonMarker = await captureProcessOutput(
+        nonMarkerChild.stdout,
+        nonMarkerChild.stderr,
+        directory,
+        "deferred-negative",
+      );
       expect(await nonMarkerChild.exited).toBe(0);
       expect(await deferredChangesFromCapturedOutput("plan", nonMarker)).toBe(false);
     } finally {
@@ -92,16 +142,64 @@ describe("Stack deployment worker", () => {
     const groupId = `stack-group-${crypto.randomUUID()}`;
     const runId = `stack-run-${crypto.randomUUID()}`;
     await db.insert(stackRecords).values([
-      { id: configurationId, stackId, parentId: null, recordType: "stack-configurations", name: null, status: "completed", payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }, { name: "b", directory: "b", source: null, dependsOn: ["a"] }] }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: groupId, stackId, parentId: configurationId, recordType: "stack-deployment-groups", name: "default", status: "pending", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: "default", status: "planning", payload: { configurationId, componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: `stack-step-${crypto.randomUUID()}`, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "queued", payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
+      {
+        id: configurationId,
+        stackId,
+        parentId: null,
+        recordType: "stack-configurations",
+        name: null,
+        status: "completed",
+        payload: {
+          archivePath,
+          components: [
+            { name: "a", directory: "a", source: null, dependsOn: [] },
+            { name: "b", directory: "b", source: null, dependsOn: ["a"] },
+          ],
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: groupId,
+        stackId,
+        parentId: configurationId,
+        recordType: "stack-deployment-groups",
+        name: "default",
+        status: "pending",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: runId,
+        stackId,
+        parentId: groupId,
+        recordType: "stack-deployment-runs",
+        name: "default",
+        status: "planning",
+        payload: { configurationId, componentIndex: 0, cycle: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: `stack-step-${crypto.randomUUID()}`,
+        stackId,
+        parentId: runId,
+        recordType: "stack-deployment-steps",
+        name: "a",
+        status: "queued",
+        payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     ]);
     await runStackDeploymentJob(job(runId), context);
     await runStackDeploymentJob(job(runId), context);
     await runStackDeploymentJob(job(runId), context);
     await runStackDeploymentJob(job(runId), context);
-    const steps = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, runId), eq(stackRecords.recordType, "stack-deployment-steps")) });
+    const steps = await db.query.stackRecords.findMany({
+      where: and(eq(stackRecords.parentId, runId), eq(stackRecords.recordType, "stack-deployment-steps")),
+    });
     const completedNames = steps.filter((step) => step.status === "completed").map((step) => step.name);
     const run = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, runId) });
     expect(completedNames).toEqual(["a", "b"]);
@@ -115,10 +213,50 @@ describe("Stack deployment worker", () => {
     const runId = `stack-run-${crypto.randomUUID()}`;
     const stepId = `stack-step-${crypto.randomUUID()}`;
     await db.insert(stackRecords).values([
-      { id: configurationId, stackId, parentId: null, recordType: "stack-configurations", name: null, status: "completed", payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: groupId, stackId, parentId: configurationId, recordType: "stack-deployment-groups", name: "locked", status: "pending", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: "locked", status: "planning", payload: { configurationId, componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: stepId, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "queued", payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
+      {
+        id: configurationId,
+        stackId,
+        parentId: null,
+        recordType: "stack-configurations",
+        name: null,
+        status: "completed",
+        payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: groupId,
+        stackId,
+        parentId: configurationId,
+        recordType: "stack-deployment-groups",
+        name: "locked",
+        status: "pending",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: runId,
+        stackId,
+        parentId: groupId,
+        recordType: "stack-deployment-runs",
+        name: "locked",
+        status: "planning",
+        payload: { configurationId, componentIndex: 0, cycle: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: stepId,
+        stackId,
+        parentId: runId,
+        recordType: "stack-deployment-steps",
+        name: "a",
+        status: "queued",
+        payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     ]);
     process.env["SIMULATED_STACK_PLAN_CHANGES"] = "false";
     process.env["SIMULATED_STACK_DEFERRED"] = "true";
@@ -131,7 +269,17 @@ describe("Stack deployment worker", () => {
     await runStackDeploymentJob(job(runId), context);
     const run = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, runId) });
     expect(run?.status).toBe("succeeded");
-    expect((await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.parentId, runId)) })).length).toBe(1);
+    expect(
+      (
+        await db.query.stackRecords.findMany({
+          where: and(
+            eq(stackRecords.stackId, stackId),
+            eq(stackRecords.recordType, "stack-states"),
+            eq(stackRecords.parentId, runId),
+          ),
+        })
+      ).length,
+    ).toBe(1);
     expect(await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.runId, runId) })).toBeUndefined();
   });
 
@@ -142,23 +290,83 @@ describe("Stack deployment worker", () => {
     const groupId = `stack-group-${crypto.randomUUID()}`;
     const runId = `stack-run-${crypto.randomUUID()}`;
     const stepId = `stack-step-${crypto.randomUUID()}`;
-    await db.insert(agentPools).values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
-    await db.insert(agents).values({ id: agentId, agentPoolId: poolId, name: agentId, iacBinaries: ["terraform"], createdAt: Date.now() });
+    await db
+      .insert(agentPools)
+      .values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
+    await db
+      .insert(agents)
+      .values({ id: agentId, agentPoolId: poolId, name: agentId, iacBinaries: ["terraform"], createdAt: Date.now() });
     await db.update(stacks).set({ executionMode: "agent", agentPoolId: poolId }).where(eq(stacks.id, stackId));
     await db.insert(stackRecords).values([
-      { id: configurationId, stackId, parentId: null, recordType: "stack-configurations", name: null, status: "completed", payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: groupId, stackId, parentId: configurationId, recordType: "stack-deployment-groups", name: "agent", status: "pending", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: "agent", status: "planning", payload: { configurationId, componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: stepId, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "queued", payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
+      {
+        id: configurationId,
+        stackId,
+        parentId: null,
+        recordType: "stack-configurations",
+        name: null,
+        status: "completed",
+        payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: groupId,
+        stackId,
+        parentId: configurationId,
+        recordType: "stack-deployment-groups",
+        name: "agent",
+        status: "pending",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: runId,
+        stackId,
+        parentId: groupId,
+        recordType: "stack-deployment-runs",
+        name: "agent",
+        status: "planning",
+        payload: { configurationId, componentIndex: 0, cycle: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: stepId,
+        stackId,
+        parentId: runId,
+        recordType: "stack-deployment-steps",
+        name: "a",
+        status: "queued",
+        payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     ]);
     await runStackDeploymentJob(job(runId), context);
     const claimed = await claimStackAgentJob((await db.query.agents.findFirst({ where: eq(agents.id, agentId) }))!);
     expect(claimed?.job.phase).toBe("plan");
     expect(claimed?.job.fencingToken).toBeGreaterThan(0);
-    expect(await completeStackAgentJob(agentId, claimed!.job.id, { status: "completed", errorMessage: null, result: { hasChanges: false } }, claimed!.job.fencingToken - 1)).toBeUndefined();
-    expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe("claimed");
-    await completeStackAgentJob(agentId, claimed!.job.id, { status: "completed", errorMessage: null, result: { hasChanges: false } }, claimed!.job.fencingToken);
-    expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe("completed");
+    expect(
+      await completeStackAgentJob(
+        agentId,
+        claimed!.job.id,
+        { status: "completed", errorMessage: null, result: { hasChanges: false } },
+        claimed!.job.fencingToken - 1,
+      ),
+    ).toBeUndefined();
+    expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe(
+      "claimed",
+    );
+    await completeStackAgentJob(
+      agentId,
+      claimed!.job.id,
+      { status: "completed", errorMessage: null, result: { hasChanges: false } },
+      claimed!.job.fencingToken,
+    );
+    expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe(
+      "completed",
+    );
     await db.update(stacks).set({ executionMode: "remote", agentPoolId: null }).where(eq(stacks.id, stackId));
   });
 
@@ -171,17 +379,65 @@ describe("Stack deployment worker", () => {
     const runId = `stack-run-${crypto.randomUUID()}`;
     const stepId = `stack-step-${crypto.randomUUID()}`;
     const recordIds = [configurationId, groupId, runId, stepId];
-    await db.insert(agentPools).values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
+    await db
+      .insert(agentPools)
+      .values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
     await db.insert(agents).values([
       { id: agentId, agentPoolId: poolId, name: agentId, iacBinaries: ["terraform"], createdAt: Date.now() },
-      { id: replacementAgentId, agentPoolId: poolId, name: replacementAgentId, iacBinaries: ["terraform"], createdAt: Date.now() },
+      {
+        id: replacementAgentId,
+        agentPoolId: poolId,
+        name: replacementAgentId,
+        iacBinaries: ["terraform"],
+        createdAt: Date.now(),
+      },
     ]);
     await db.update(stacks).set({ executionMode: "agent", agentPoolId: poolId }).where(eq(stacks.id, stackId));
     await db.insert(stackRecords).values([
-      { id: configurationId, stackId, parentId: null, recordType: "stack-configurations", name: null, status: "completed", payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: groupId, stackId, parentId: configurationId, recordType: "stack-deployment-groups", name: "heartbeat", status: "pending", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: "heartbeat", status: "planning", payload: { configurationId, componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: stepId, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "queued", payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
+      {
+        id: configurationId,
+        stackId,
+        parentId: null,
+        recordType: "stack-configurations",
+        name: null,
+        status: "completed",
+        payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: groupId,
+        stackId,
+        parentId: configurationId,
+        recordType: "stack-deployment-groups",
+        name: "heartbeat",
+        status: "pending",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: runId,
+        stackId,
+        parentId: groupId,
+        recordType: "stack-deployment-runs",
+        name: "heartbeat",
+        status: "planning",
+        payload: { configurationId, componentIndex: 0, cycle: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: stepId,
+        stackId,
+        parentId: runId,
+        recordType: "stack-deployment-steps",
+        name: "a",
+        status: "queued",
+        payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     ]);
     await runStackDeploymentJob(job(runId), context);
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
@@ -196,17 +452,19 @@ describe("Stack deployment worker", () => {
       token: createHash("sha256").update(heartbeatToken).digest("hex"),
       createdAt: Date.now(),
     });
-    const staleClaimedAt = Date.now() - (16 * 60_000);
+    const staleClaimedAt = Date.now() - 16 * 60_000;
     await db.update(stackAgentJobs).set({ claimedAt: staleClaimedAt }).where(eq(stackAgentJobs.id, claimed.job.id));
-    const statusResponse = await app.handle(new Request("http://localhost/api/agent/status", {
-      method: "PUT",
-      headers: {
-        authorization: `Bearer ${heartbeatToken}`,
-        "tfc-agent-id": agentId,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ status: "busy" }),
-    }));
+    const statusResponse = await app.handle(
+      new Request("http://localhost/api/agent/status", {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${heartbeatToken}`,
+          "tfc-agent-id": agentId,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "busy" }),
+      }),
+    );
     expect(statusResponse.status).toBe(200);
     const statusRenewed = await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed.job.id) });
     expect(statusRenewed?.claimedAt).toBeGreaterThan(staleClaimedAt);
@@ -218,7 +476,10 @@ describe("Stack deployment worker", () => {
     expect(renewed?.claimedAt).toBeGreaterThanOrEqual(directHeartbeatAt);
     expect(await claimStackAgentJob(replacement)).toBeUndefined();
 
-    await db.update(stackAgentJobs).set({ claimedAt: Date.now() - (16 * 60_000) }).where(eq(stackAgentJobs.id, claimed.job.id));
+    await db
+      .update(stackAgentJobs)
+      .set({ claimedAt: Date.now() - 16 * 60_000 })
+      .where(eq(stackAgentJobs.id, claimed.job.id));
     const recovered = await claimStackAgentJob(replacement);
     expect(recovered?.job.id).toBe(claimed.job.id);
     expect(recovered?.job.agentId).toBe(replacementAgentId);
@@ -237,19 +498,49 @@ describe("Stack deployment worker", () => {
     const secondRunId = `stack-run-${crypto.randomUUID()}`;
     let workingPath = "";
     let snapshotDirectory = "";
-    const state = (serial: number): string => JSON.stringify({ version: 4, terraform_version: "1.9.0", serial, lineage: "stack-history-lineage", outputs: {}, resources: [] });
+    const state = (serial: number): string =>
+      JSON.stringify({
+        version: 4,
+        terraform_version: "1.9.0",
+        serial,
+        lineage: "stack-history-lineage",
+        outputs: {},
+        resources: [],
+      });
     const snapshotPathOf = (record: { payload: Record<string, unknown> }): string => {
       const value = record.payload["descriptionPath"];
       if (typeof value !== "string") throw new Error("Stack state record has no description path");
       return value;
     };
     await db.insert(stackRecords).values([
-      { id: firstRunId, stackId, parentId: null, recordType: "stack-deployment-runs", name: deployment, status: "succeeded", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: secondRunId, stackId, parentId: null, recordType: "stack-deployment-runs", name: deployment, status: "succeeded", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
+      {
+        id: firstRunId,
+        stackId,
+        parentId: null,
+        recordType: "stack-deployment-runs",
+        name: deployment,
+        status: "succeeded",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: secondRunId,
+        stackId,
+        parentId: null,
+        recordType: "stack-deployment-runs",
+        name: deployment,
+        status: "succeeded",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     ]);
     try {
       workingPath = await saveStackState(stackId, deployment, firstRunId, state(1));
-      const firstRecord = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.parentId, firstRunId), eq(stackRecords.recordType, "stack-states")) });
+      const firstRecord = await db.query.stackRecords.findFirst({
+        where: and(eq(stackRecords.parentId, firstRunId), eq(stackRecords.recordType, "stack-states")),
+      });
       if (firstRecord === undefined) throw new Error("First Stack state record was not created");
       const firstSnapshotPath = snapshotPathOf(firstRecord);
       snapshotDirectory = dirname(firstSnapshotPath);
@@ -257,7 +548,13 @@ describe("Stack deployment worker", () => {
       expect(JSON.parse(await Bun.file(firstSnapshotPath).text()).serial).toBe(1);
 
       const secondWorkingPath = await saveStackState(stackId, deployment, secondRunId, state(2));
-      const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)) });
+      const records = await db.query.stackRecords.findMany({
+        where: and(
+          eq(stackRecords.stackId, stackId),
+          eq(stackRecords.recordType, "stack-states"),
+          eq(stackRecords.name, deployment),
+        ),
+      });
       const secondRecord = records.find((record) => record.parentId === secondRunId);
       if (secondRecord === undefined) throw new Error("Second Stack state record was not created");
       const secondSnapshotPath = snapshotPathOf(secondRecord);
@@ -272,14 +569,28 @@ describe("Stack deployment worker", () => {
       expect(secondRecord.payload["is-current"]).toBe(true);
 
       await removeStackState(stackId, deployment, secondRunId);
-      const afterRemoval = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)) });
+      const afterRemoval = await db.query.stackRecords.findMany({
+        where: and(
+          eq(stackRecords.stackId, stackId),
+          eq(stackRecords.recordType, "stack-states"),
+          eq(stackRecords.name, deployment),
+        ),
+      });
       expect(afterRemoval.find((record) => record.parentId === firstRunId)?.status).toBe("superseded");
       expect(afterRemoval.find((record) => record.parentId === secondRunId)?.status).toBe("destroyed");
       expect(JSON.parse(await Bun.file(firstSnapshotPath).text()).serial).toBe(1);
       expect(JSON.parse(await Bun.file(secondSnapshotPath).text()).serial).toBe(2);
       expect(await Bun.file(secondWorkingPath).exists()).toBe(false);
     } finally {
-      await db.delete(stackRecords).where(and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)));
+      await db
+        .delete(stackRecords)
+        .where(
+          and(
+            eq(stackRecords.stackId, stackId),
+            eq(stackRecords.recordType, "stack-states"),
+            eq(stackRecords.name, deployment),
+          ),
+        );
       await db.delete(stackRecords).where(inArray(stackRecords.id, [firstRunId, secondRunId]));
       if (snapshotDirectory !== "") await rm(snapshotDirectory, { recursive: true, force: true });
       if (workingPath !== "") await rm(workingPath, { force: true });
@@ -291,10 +602,33 @@ describe("Stack deployment worker", () => {
     const oldRunId = `stack-run-${crypto.randomUUID()}`;
     const newRunId = `stack-run-${crypto.randomUUID()}`;
     const lockId = `stack-lock-${crypto.randomUUID()}`;
-    await db.insert(stackRecords).values({ id: oldRunId, stackId, parentId: null, recordType: "stack-deployment-runs", name: deployment, status: "applying", payload: {}, createdAt: Date.now(), updatedAt: Date.now() });
-    await db.insert(stackStateLocks).values({ id: lockId, stackId, deployment, runId: oldRunId, fencingToken: 1, acquiredAt: Date.now(), leaseExpiresAt: Date.now() + 60_000, releasedAt: null, updatedAt: Date.now() });
+    await db.insert(stackRecords).values({
+      id: oldRunId,
+      stackId,
+      parentId: null,
+      recordType: "stack-deployment-runs",
+      name: deployment,
+      status: "applying",
+      payload: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    await db.insert(stackStateLocks).values({
+      id: lockId,
+      stackId,
+      deployment,
+      runId: oldRunId,
+      fencingToken: 1,
+      acquiredAt: Date.now(),
+      leaseExpiresAt: Date.now() + 60_000,
+      releasedAt: null,
+      updatedAt: Date.now(),
+    });
     try {
-      await db.update(stackStateLocks).set({ runId: newRunId, fencingToken: 2, updatedAt: Date.now() }).where(eq(stackStateLocks.id, lockId));
+      await db
+        .update(stackStateLocks)
+        .set({ runId: newRunId, fencingToken: 2, updatedAt: Date.now() })
+        .where(eq(stackStateLocks.id, lockId));
       let rejection: unknown;
       try {
         await saveStackState(stackId, deployment, oldRunId, JSON.stringify({ serial: 1 }), 1);
@@ -302,7 +636,15 @@ describe("Stack deployment worker", () => {
         rejection = error;
       }
       expect(String(rejection)).toContain("ownership");
-      expect(await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)) })).toHaveLength(0);
+      expect(
+        await db.query.stackRecords.findMany({
+          where: and(
+            eq(stackRecords.stackId, stackId),
+            eq(stackRecords.recordType, "stack-states"),
+            eq(stackRecords.name, deployment),
+          ),
+        }),
+      ).toHaveLength(0);
     } finally {
       await db.delete(stackStateLocks).where(eq(stackStateLocks.id, lockId));
       await db.delete(stackRecords).where(eq(stackRecords.id, oldRunId));
@@ -318,20 +660,90 @@ describe("Stack deployment worker", () => {
     const stepId = `stack-step-${crypto.randomUUID()}`;
     const component = { name: "a", directory: "a", source: null, dependsOn: [] };
     let snapshotPath = "";
-    const originalStack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackId), columns: { executionMode: true, agentPoolId: true } });
+    const originalStack = await db.query.stacks.findFirst({
+      where: eq(stacks.id, stackId),
+      columns: { executionMode: true, agentPoolId: true },
+    });
     if (originalStack === undefined) throw new Error("Stack test fixture was not created");
-    await db.insert(agentPools).values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
+    await db
+      .insert(agentPools)
+      .values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
     await db.update(stacks).set({ executionMode: "agent", agentPoolId: poolId }).where(eq(stacks.id, stackId));
     await db.insert(stackRecords).values([
-      { id: configurationId, stackId, parentId: null, recordType: "stack-configurations", name: null, status: "completed", payload: { components: [component] }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: groupId, stackId, parentId: configurationId, recordType: "stack-deployment-groups", name: deployment, status: "succeeded", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: deployment, status: "applying", payload: { configurationId, components: [component], componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: stepId, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "completed", payload: { phase: "apply", "operation-type": "apply", state: JSON.stringify({ version: 4, serial: 7, lineage: "recovered-lineage", outputs: {}, resources: [] }) }, createdAt: Date.now(), updatedAt: Date.now() },
-      { id: `sst-historical-${crypto.randomUUID()}`, stackId, parentId: null, recordType: "stack-states", name: deployment, status: "superseded", payload: { generation: 1, "is-current": false, descriptionPath: join(tmpdir(), "historical-stack-state.tfstate"), components: [] }, createdAt: Date.now(), updatedAt: Date.now() },
+      {
+        id: configurationId,
+        stackId,
+        parentId: null,
+        recordType: "stack-configurations",
+        name: null,
+        status: "completed",
+        payload: { components: [component] },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: groupId,
+        stackId,
+        parentId: configurationId,
+        recordType: "stack-deployment-groups",
+        name: deployment,
+        status: "succeeded",
+        payload: {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: runId,
+        stackId,
+        parentId: groupId,
+        recordType: "stack-deployment-runs",
+        name: deployment,
+        status: "applying",
+        payload: { configurationId, components: [component], componentIndex: 0, cycle: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: stepId,
+        stackId,
+        parentId: runId,
+        recordType: "stack-deployment-steps",
+        name: "a",
+        status: "completed",
+        payload: {
+          phase: "apply",
+          "operation-type": "apply",
+          state: JSON.stringify({ version: 4, serial: 7, lineage: "recovered-lineage", outputs: {}, resources: [] }),
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: `sst-historical-${crypto.randomUUID()}`,
+        stackId,
+        parentId: null,
+        recordType: "stack-states",
+        name: deployment,
+        status: "superseded",
+        payload: {
+          generation: 1,
+          "is-current": false,
+          descriptionPath: join(tmpdir(), "historical-stack-state.tfstate"),
+          components: [],
+        },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     ]);
     try {
       await runStackDeploymentJob(job(runId), context);
-      const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)) });
+      const records = await db.query.stackRecords.findMany({
+        where: and(
+          eq(stackRecords.stackId, stackId),
+          eq(stackRecords.recordType, "stack-states"),
+          eq(stackRecords.name, deployment),
+        ),
+      });
       const recovered = records.find((record) => record.status === "current");
       if (recovered === undefined) throw new Error("Recovered Stack state was not published");
       const path = recovered.payload["descriptionPath"];
@@ -344,13 +756,28 @@ describe("Stack deployment worker", () => {
     } finally {
       await db.delete(stackAgentJobs).where(eq(stackAgentJobs.deploymentRunId, runId));
       await db.delete(durableJobs).where(eq(durableJobs.dedupeKey, `stack-run:${runId}`));
-      await db.delete(stackStateLocks).where(and(eq(stackStateLocks.stackId, stackId), eq(stackStateLocks.deployment, deployment)));
-      const generatedRecords = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.parentId, runId)) });
+      await db
+        .delete(stackStateLocks)
+        .where(and(eq(stackStateLocks.stackId, stackId), eq(stackStateLocks.deployment, deployment)));
+      const generatedRecords = await db.query.stackRecords.findMany({
+        where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.parentId, runId)),
+      });
       const recordIds = [configurationId, groupId, runId, stepId, ...generatedRecords.map((record) => record.id)];
-      await db.delete(stackRecords).where(and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)));
+      await db
+        .delete(stackRecords)
+        .where(
+          and(
+            eq(stackRecords.stackId, stackId),
+            eq(stackRecords.recordType, "stack-states"),
+            eq(stackRecords.name, deployment),
+          ),
+        );
       if (recordIds.length > 0) await db.delete(stackRecords).where(inArray(stackRecords.id, recordIds));
       await db.delete(agentPools).where(eq(agentPools.id, poolId));
-      await db.update(stacks).set({ executionMode: originalStack.executionMode, agentPoolId: originalStack.agentPoolId }).where(eq(stacks.id, stackId));
+      await db
+        .update(stacks)
+        .set({ executionMode: originalStack.executionMode, agentPoolId: originalStack.agentPoolId })
+        .where(eq(stacks.id, stackId));
       if (snapshotPath !== "") {
         const directory = dirname(snapshotPath);
         await rm(directory, { recursive: true, force: true });

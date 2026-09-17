@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { canRecoverAfterCrash, crashSafe, needsCrashRecovery, postCrashTransitionAllowed, shouldRetryAfterCrash } from "../../src/worker/chaos";
+import {
+  canRecoverAfterCrash,
+  crashSafe,
+  needsCrashRecovery,
+  postCrashTransitionAllowed,
+  shouldRetryAfterCrash,
+} from "../../src/worker/chaos";
 import { checkpointPhase, phaseOrder } from "../../src/worker/phases";
 
 describe("worker chaos contract (14)", () => {

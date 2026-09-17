@@ -5,11 +5,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, runs, teams, teamWorkspaces, workspaces } from "../../src/db/schema";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
-import {
-  cleanupSeed,
-  persistSeed,
-  seedOrg,
-} from "./compat_contract_helpers";
+import { cleanupSeed, persistSeed, seedOrg } from "./compat_contract_helpers";
 
 /**
  * /api/v2/plans/:plan_id/json-output must follow the the reference format contract:
@@ -47,17 +43,20 @@ describe("plan JSON output availability semantics", () => {
   });
 
   const getJsonOutput = async (token: string, accept = "*/*"): Promise<Response> =>
-    app.handle(new Request(`http://localhost/api/v2/plans/plan-${runId}/json-output`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: accept },
-    }));
+    app.handle(
+      new Request(`http://localhost/api/v2/plans/plan-${runId}/json-output`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: accept },
+      }),
+    );
 
   const getRedactedJsonOutput = async (token: string, accept = "*/*"): Promise<Response> =>
-    app.handle(new Request(`http://localhost/api/v2/plans/plan-${runId}/json-output-redacted`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: accept },
-    }));
+    app.handle(
+      new Request(`http://localhost/api/v2/plans/plan-${runId}/json-output-redacted`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: accept },
+      }),
+    );
 
-  const setRunStatus = (status: string): Promise<unknown> =>
-    db.update(runs).set({ status }).where(eq(runs.id, runId));
+  const setRunStatus = (status: string): Promise<unknown> => db.update(runs).set({ status }).where(eq(runs.id, runId));
 
   it("returns 204 while the plan has not completed", async () => {
     await setRunStatus("pending");
@@ -80,7 +79,13 @@ describe("plan JSON output availability semantics", () => {
       format_version: "1.2",
       terraform_version: "1.9.8",
       values: { secret: "sensitive-value", secret_sensitive: true },
-      resource_changes: [{ address: "terraform_data.example", type: "terraform_data", change: { actions: ["create"], before: null, after: {} } }],
+      resource_changes: [
+        {
+          address: "terraform_data.example",
+          type: "terraform_data",
+          change: { actions: ["create"], before: null, after: {} },
+        },
+      ],
     });
     const response = await getJsonOutput(seed.token, "application/json");
     expect(response.status).toBe(200);
@@ -94,7 +99,7 @@ describe("plan JSON output availability semantics", () => {
     const response = await getRedactedJsonOutput(seed.token, "application/json");
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/^application\/json(?:;|$)/);
-    const body = await response.json() as { values?: { secret?: unknown } };
+    const body = (await response.json()) as { values?: { secret?: unknown } };
     expect(body.values).toBeUndefined();
   });
 
@@ -102,7 +107,7 @@ describe("plan JSON output availability semantics", () => {
     await setRunStatus("pending");
     const response = await getRedactedJsonOutput(seed.token, "application/json");
     expect(response.status).toBe(200);
-    const body = await response.json() as { values?: { secret?: unknown } };
+    const body = (await response.json()) as { values?: { secret?: unknown } };
     expect(body.values).toBeUndefined();
   });
 
@@ -131,10 +136,12 @@ describe("plan JSON output availability semantics", () => {
     const adminToken = `planjson-admin-token-${teamSuffix}`;
 
     const teamGet = (token: string, redacted: boolean): Promise<Response> =>
-      app.handle(new Request(
-        `http://localhost/api/v2/plans/plan-${runId}/${redacted ? "json-output-redacted" : "json-output"}`,
-        { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
-      ));
+      app.handle(
+        new Request(
+          `http://localhost/api/v2/plans/plan-${runId}/${redacted ? "json-output-redacted" : "json-output"}`,
+          { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+        ),
+      );
 
     beforeAll(async () => {
       await db.insert(teams).values([
@@ -145,16 +152,30 @@ describe("plan JSON output availability semantics", () => {
       await db.insert(teamWorkspaces).values([
         { id: `tw-planjson-read-${teamSuffix}`, teamId: readTeamId, workspaceId, access: "read" },
         {
-          id: `tw-planjson-nostate-${teamSuffix}`, teamId: noStateTeamId, workspaceId,
+          id: `tw-planjson-nostate-${teamSuffix}`,
+          teamId: noStateTeamId,
+          workspaceId,
           access: "custom",
           permissions: { runs: "read", variables: "none", "state-versions": "none" },
         },
         { id: `tw-planjson-admin-${teamSuffix}`, teamId: adminTeamId, workspaceId, access: "admin" },
       ]);
       await db.insert(apiTokens).values([
-        { id: `tok-planjson-read-${teamSuffix}`, token: createHash("sha256").update(readToken).digest("hex"), teamId: readTeamId },
-        { id: `tok-planjson-nostate-${teamSuffix}`, token: createHash("sha256").update(noStateToken).digest("hex"), teamId: noStateTeamId },
-        { id: `tok-planjson-admin-${teamSuffix}`, token: createHash("sha256").update(adminToken).digest("hex"), teamId: adminTeamId },
+        {
+          id: `tok-planjson-read-${teamSuffix}`,
+          token: createHash("sha256").update(readToken).digest("hex"),
+          teamId: readTeamId,
+        },
+        {
+          id: `tok-planjson-nostate-${teamSuffix}`,
+          token: createHash("sha256").update(noStateToken).digest("hex"),
+          teamId: noStateTeamId,
+        },
+        {
+          id: `tok-planjson-admin-${teamSuffix}`,
+          token: createHash("sha256").update(adminToken).digest("hex"),
+          teamId: adminTeamId,
+        },
       ]);
       await setRunStatus("planned");
       await writePlanJsonArtifact(runId, {
@@ -169,11 +190,26 @@ describe("plan JSON output availability semantics", () => {
       // review): sibling suites share seed.orgId, so filtering by org or
       // workspace would delete their fixtures.
       const suiteTeamIds = [readTeamId, noStateTeamId, adminTeamId];
-      await db.delete(apiTokens).where(eq(apiTokens.teamId, readTeamId)).catch((): void => undefined);
-      await db.delete(apiTokens).where(eq(apiTokens.teamId, noStateTeamId)).catch((): void => undefined);
-      await db.delete(apiTokens).where(eq(apiTokens.teamId, adminTeamId)).catch((): void => undefined);
-      await db.delete(teamWorkspaces).where(inArray(teamWorkspaces.teamId, suiteTeamIds)).catch((): void => undefined);
-      await db.delete(teams).where(inArray(teams.id, suiteTeamIds)).catch((): void => undefined);
+      await db
+        .delete(apiTokens)
+        .where(eq(apiTokens.teamId, readTeamId))
+        .catch((): void => undefined);
+      await db
+        .delete(apiTokens)
+        .where(eq(apiTokens.teamId, noStateTeamId))
+        .catch((): void => undefined);
+      await db
+        .delete(apiTokens)
+        .where(eq(apiTokens.teamId, adminTeamId))
+        .catch((): void => undefined);
+      await db
+        .delete(teamWorkspaces)
+        .where(inArray(teamWorkspaces.teamId, suiteTeamIds))
+        .catch((): void => undefined);
+      await db
+        .delete(teams)
+        .where(inArray(teams.id, suiteTeamIds))
+        .catch((): void => undefined);
     });
 
     it("serves raw plan JSON to read teams (read includes state-read)", async () => {
@@ -191,7 +227,7 @@ describe("plan JSON output availability semantics", () => {
     it("keeps the redacted endpoint available to teams without state access", async () => {
       const response = await teamGet(noStateToken, true);
       expect(response.status).toBe(200);
-      const body = await response.json() as { values?: { secret?: unknown } };
+      const body = (await response.json()) as { values?: { secret?: unknown } };
       expect(body.values).toBeUndefined();
     });
   });

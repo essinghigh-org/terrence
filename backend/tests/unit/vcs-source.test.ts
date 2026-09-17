@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  configuredVcsSourceIdentity,
-  vcsSourceMatchesConnection,
-  vcsSourceIdentity,
-} from "../../src/lib/vcs-source";
+import { configuredVcsSourceIdentity, vcsSourceMatchesConnection, vcsSourceIdentity } from "../../src/lib/vcs-source";
 
 describe("VCS source identity", () => {
   test("canonicalizes provider API aliases without losing enterprise hosts", () => {
@@ -26,13 +22,15 @@ describe("VCS source identity", () => {
   });
 
   test("uses the configured source URL before the API URL", () => {
-    expect(configuredVcsSourceIdentity(
-      "github",
-      "github_enterprise",
-      "https://github.example/api/v3",
-      "https://github.example",
-      12345,
-    )).toEqual({ provider: "github", host: "github.example", installationId: 12345 });
+    expect(
+      configuredVcsSourceIdentity(
+        "github",
+        "github_enterprise",
+        "https://github.example/api/v3",
+        "https://github.example",
+        12345,
+      ),
+    ).toEqual({ provider: "github", host: "github.example", installationId: 12345 });
     expect(configuredVcsSourceIdentity("github", "github", null, null)).toEqual({
       provider: "github",
       host: "github.com",
@@ -49,14 +47,9 @@ describe("VCS source identity", () => {
     expect(vcsSourceIdentity("github", "https://github.com/acme/project?ref=main")).toBeUndefined();
     expect(vcsSourceIdentity("github", "https://github.com/acme/project#main")).toBeUndefined();
     expect(vcsSourceIdentity("github", "http://github.example/acme/project", 12345, true)).toBeUndefined();
-    expect(configuredVcsSourceIdentity(
-      "github",
-      "github_enterprise",
-      "http://github.example/api/v3",
-      null,
-      12345,
-      true,
-    )).toBeUndefined();
+    expect(
+      configuredVcsSourceIdentity("github", "github_enterprise", "http://github.example/api/v3", null, 12345, true),
+    ).toBeUndefined();
   });
 
   test("compares provider hosts and requires App installation identities", () => {
@@ -64,7 +57,12 @@ describe("VCS source identity", () => {
     const sameInstallation = vcsSourceIdentity("github", "https://api.github.com/repos/acme/project", 12345);
     const otherInstallation = vcsSourceIdentity("github", "https://github.com/acme/project", 67890);
     const gitlab = vcsSourceIdentity("gitlab", "https://github.com/acme/project");
-    if (github === undefined || sameInstallation === undefined || otherInstallation === undefined || gitlab === undefined) {
+    if (
+      github === undefined ||
+      sameInstallation === undefined ||
+      otherInstallation === undefined ||
+      gitlab === undefined
+    ) {
       throw new Error("test source identities should be valid");
     }
     expect(vcsSourceMatchesConnection(github, sameInstallation)).toBe(true);

@@ -31,10 +31,12 @@ function isSavedView(view: unknown): view is SavedView {
   // SAFETY: only the checked fields are read; the object may carry arbitrary
   // extra fields written by older app versions or other tabs.
   const candidate = view as { name?: unknown; search?: unknown; statusFilter?: unknown; projectFilter?: unknown };
-  return isString(candidate.name)
-    && isString(candidate.search)
-    && isString(candidate.statusFilter)
-    && isString(candidate.projectFilter);
+  return (
+    isString(candidate.name) &&
+    isString(candidate.search) &&
+    isString(candidate.statusFilter) &&
+    isString(candidate.projectFilter)
+  );
 }
 
 function parseViews(raw: string | null): SavedView[] {
@@ -58,10 +60,7 @@ export function getSavedViews(orgIdentifier: string): SavedView[] {
       // 2. Un-namespaced key with orgIdentifier (legacy orgName key)
       const resolved = resolveOrgId(orgIdentifier);
       const orgId = resolved !== "" ? resolved : orgIdentifier;
-      const candidates = [
-        `${SAVED_VIEWS_PREFIX}${orgId}`,
-        `${SAVED_VIEWS_PREFIX}${orgIdentifier}`,
-      ];
+      const candidates = [`${SAVED_VIEWS_PREFIX}${orgId}`, `${SAVED_VIEWS_PREFIX}${orgIdentifier}`];
       for (const legacyKey of candidates) {
         if (legacyKey !== key) {
           const legacyRaw = window.localStorage.getItem(legacyKey);

@@ -84,11 +84,12 @@ function parseIdentifier(sql: string, start: number): { name: string; end: numbe
   const rest = sql.slice(start);
   const match = IDENTIFIER.exec(rest);
   if (match === null) return null;
-  const name = match[1] !== undefined
-    ? match[1].replaceAll('""', '"')
-    : match[2] !== undefined
-      ? match[2].replaceAll("``", "`")
-      : match[3] ?? "";
+  const name =
+    match[1] !== undefined
+      ? match[1].replaceAll('""', '"')
+      : match[2] !== undefined
+        ? match[2].replaceAll("``", "`")
+        : (match[3] ?? "");
   const raw = match[0];
   return { name, end: start + raw.length };
 }
@@ -160,8 +161,19 @@ function splitTopLevel(body: string): string[] {
 }
 
 const CONSTRAINT_WORDS = new Set([
-  "PRIMARY", "NOT", "UNIQUE", "DEFAULT", "REFERENCES", "COLLATE", "CHECK",
-  "CONSTRAINT", "AUTOINCREMENT", "GENERATED", "ON", "DEFERRABLE", "MATCH",
+  "PRIMARY",
+  "NOT",
+  "UNIQUE",
+  "DEFAULT",
+  "REFERENCES",
+  "COLLATE",
+  "CHECK",
+  "CONSTRAINT",
+  "AUTOINCREMENT",
+  "GENERATED",
+  "ON",
+  "DEFERRABLE",
+  "MATCH",
 ]);
 
 function isSerialType(cleaned: string): boolean {
@@ -201,15 +213,19 @@ function isDateTimeDeclaredType(cleaned: string): boolean {
 }
 
 function affinityFallback(cleaned: string): string | null {
-  if (cleaned.includes('INT')) return "INTEGER";
+  if (cleaned.includes("INT")) return "INTEGER";
   if (/CHAR|CLOB|TEXT/.test(cleaned)) return "TEXT";
   if (/REAL|FLOA|DOUB/.test(cleaned)) return "REAL";
-  if (cleaned.includes('BLOB')) return "BLOB";
+  if (cleaned.includes("BLOB")) return "BLOB";
   return null;
 }
 
 function normalizeType(raw: string): string {
-  const cleaned = raw.toUpperCase().replace(/\s+/g, " ").trim().replace(/\(\d+(?:,\s*\d+)?\)/, "");
+  const cleaned = raw
+    .toUpperCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\(\d+(?:,\s*\d+)?\)/, "");
   if (isSerialType(cleaned)) return "SERIAL";
   if (isIntegerDeclaredType(cleaned)) return "INTEGER";
   if (isTextDeclaredType(cleaned)) return "TEXT";
@@ -283,13 +299,18 @@ function mapReferenceActionValue(value: string): string | null {
   return "RESTRICT";
 }
 
-function parseReferenceActions(sql: string, start: number): { onUpdate: string | null; onDelete: string | null; end: number } {
+function parseReferenceActions(
+  sql: string,
+  start: number,
+): { onUpdate: string | null; onDelete: string | null; end: number } {
   let pos = start;
   let onUpdate: string | null = null;
   let onDelete: string | null = null;
   for (;;) {
     while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
-    const action = /^ON\s+(UPDATE|DELETE)\s+(NO\s+ACTION|CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT)/i.exec(sql.slice(pos));
+    const action = /^ON\s+(UPDATE|DELETE)\s+(NO\s+ACTION|CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT)/i.exec(
+      sql.slice(pos),
+    );
     if (action === null) break;
     const kind = action[1]?.toLowerCase() ?? "";
     const value = action[2]?.toLowerCase().replace(/\s+/g, " ") ?? "";
@@ -328,7 +349,10 @@ function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; 
     pos = close + 1;
   }
   const actions = parseReferenceActions(sql, pos);
-  return { fk: { columns: [], table: table.name, refColumns, onUpdate: actions.onUpdate, onDelete: actions.onDelete }, end: actions.end };
+  return {
+    fk: { columns: [], table: table.name, refColumns, onUpdate: actions.onUpdate, onDelete: actions.onDelete },
+    end: actions.end,
+  };
 }
 
 function scanDefaultExprEnd(sql: string, start: number): number {
@@ -343,8 +367,14 @@ function scanDefaultExprEnd(sql: string, start: number): number {
       }
       continue;
     }
-    if (ch === "'") { quote = ch; continue; }
-    if (ch === "(") { depth += 1; continue; }
+    if (ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth += 1;
+      continue;
+    }
     if (ch === ")") {
       depth -= 1;
       if (depth < 0) return i;
@@ -414,7 +444,11 @@ function tryParseGenerated(rest: string, result: { checksSkipped: number }): boo
 }
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
-function tryParseDefault(sql: string, pos: number, result: { defaultExpr: string | null; defaultDropped: boolean }): number | null {
+function tryParseDefault(
+  sql: string,
+  pos: number,
+  result: { defaultExpr: string | null; defaultDropped: boolean },
+): number | null {
   if (/^DEFAULT\b/i.exec(sql.slice(pos)) === null) return null;
   const defLen = /^DEFAULT\b/i.exec(sql.slice(pos))?.[0].length ?? 0;
   const exprStart = pos + defLen;
@@ -427,7 +461,12 @@ function tryParseDefault(sql: string, pos: number, result: { defaultExpr: string
 }
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
-function tryParseReferences(sql: string, pos: number, result: { references: ForeignKeyDef | null }, columnName?: string): number | null {
+function tryParseReferences(
+  sql: string,
+  pos: number,
+  result: { references: ForeignKeyDef | null },
+  columnName?: string,
+): number | null {
   const references = parseReferenceClause(sql, pos);
   if (references === null) return null;
   result.references = columnName === undefined ? references.fk : { ...references.fk, columns: [columnName] };
@@ -465,7 +504,21 @@ function tryParseOnConflictStep(pos: number, rest: string): number | null {
 }
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
-function parseConstraintTailStep(sql: string, pos: number, result: { notNull: boolean; primaryKey: boolean; unique: boolean; defaultExpr: string | null; defaultDropped: boolean; references: ForeignKeyDef | null; checksSkipped: number; collate: string | null }, columnName?: string): { nextPos: number; shouldBreak: boolean } | null {
+function parseConstraintTailStep(
+  sql: string,
+  pos: number,
+  result: {
+    notNull: boolean;
+    primaryKey: boolean;
+    unique: boolean;
+    defaultExpr: string | null;
+    defaultDropped: boolean;
+    references: ForeignKeyDef | null;
+    checksSkipped: number;
+    collate: string | null;
+  },
+  columnName?: string,
+): { nextPos: number; shouldBreak: boolean } | null {
   const rest = sql.slice(pos);
   const primary = tryParsePrimaryKeyStep(pos, rest, result);
   if (primary !== null) return { nextPos: primary, shouldBreak: false };
@@ -491,7 +544,11 @@ function parseConstraintTailStep(sql: string, pos: number, result: { notNull: bo
   return null;
 }
 
-function parseConstraintTail(sql: string, start: number, columnName?: string): {
+function parseConstraintTail(
+  sql: string,
+  start: number,
+  columnName?: string,
+): {
   notNull: boolean;
   primaryKey: boolean;
   unique: boolean;
@@ -521,9 +578,12 @@ function parseConstraintTail(sql: string, start: number, columnName?: string): {
     pos = step.nextPos;
   }
   return result;
-} 
+}
 
-function parseTableLevelConstraint(segment: string): { kind: "pk" | "unique" | "fk" | "check" | "skip"; data: unknown } {
+function parseTableLevelConstraint(segment: string): {
+  kind: "pk" | "unique" | "fk" | "check" | "skip";
+  data: unknown;
+} {
   // sqlite_master DDL uses backtick identifiers; every column list here must
   // be unquoted through parseIdentifier before it reaches the generators.
   const parseColumnList = (body: string): string[] | null => {
@@ -586,7 +646,8 @@ function parseColumnSegment(segment: string): ColumnDef | null {
   // INT") but never constraint keywords — a greedy multi-word match would
   // swallow "PRIMARY KEY" / "NOT NULL" into the type and lose the
   // constraints (the sqlite affinity fallback then silently erases them).
-  const CONSTRAINT_LOOKAHEAD = "(?:PRIMARY|NOT|UNIQUE|DEFAULT|REFERENCES|COLLATE|CHECK|CONSTRAINT|AUTOINCREMENT|GENERATED|ON|DEFERRABLE|MATCH)\\b";
+  const CONSTRAINT_LOOKAHEAD =
+    "(?:PRIMARY|NOT|UNIQUE|DEFAULT|REFERENCES|COLLATE|CHECK|CONSTRAINT|AUTOINCREMENT|GENERATED|ON|DEFERRABLE|MATCH)\\b";
   const typeMatch = new RegExp(
     `^[A-Za-z]+(?:\\s+(?!${CONSTRAINT_LOOKAHEAD})[A-Za-z]+){0,2}(?:\\(\\d+(?:,\\s*\\d+)?\\))?`,
   ).exec(segment.slice(pos));
@@ -713,15 +774,22 @@ function buildColumnLine(column: ColumnDef, pg: PostgresColumnType, table: Table
 function buildTableConstraints(table: TableDef): string[] {
   const lines: string[] = [];
   if (table.compositePk !== null && table.compositePk.length > 0) {
-    lines.push(`CONSTRAINT ${quoteIdentifier(`pk_${table.name}`)} PRIMARY KEY (${table.compositePk.map(quoteIdentifier).join(", ")})`);
+    lines.push(
+      `CONSTRAINT ${quoteIdentifier(`pk_${table.name}`)} PRIMARY KEY (${table.compositePk.map(quoteIdentifier).join(", ")})`,
+    );
   }
   table.tableUniques.forEach((cols, index): void => {
-    lines.push(`CONSTRAINT ${quoteIdentifier(`uq_${table.name}_${index}`)} UNIQUE (${cols.map(quoteIdentifier).join(", ")})`);
+    lines.push(
+      `CONSTRAINT ${quoteIdentifier(`uq_${table.name}_${index}`)} UNIQUE (${cols.map(quoteIdentifier).join(", ")})`,
+    );
   });
   return lines;
 }
 
-export function generateCreateTableSql(table: TableDef, modes: Readonly<ReadonlyMap<string, DrizzleColumnMode>>): string {
+export function generateCreateTableSql(
+  table: TableDef,
+  modes: Readonly<ReadonlyMap<string, DrizzleColumnMode>>,
+): string {
   const columnLines: string[] = [];
   for (const column of table.columns) {
     const pg = postgresColumnType(column, modes.get(column.name));
@@ -736,7 +804,7 @@ export function generateCreateTableSql(table: TableDef, modes: Readonly<Readonly
 /** Generate idempotent ALTER statements that add a table's foreign keys NOT VALID. */
 export function generateForeignKeySql(table: TableDef): string[] {
   const all: ForeignKeyDef[] = [
-    ...table.columns.flatMap((column): ForeignKeyDef[] => column.references === null ? [] : [column.references]),
+    ...table.columns.flatMap((column): ForeignKeyDef[] => (column.references === null ? [] : [column.references])),
     ...table.tableForeignKeys,
   ];
   const statements: string[] = [];
@@ -745,9 +813,7 @@ export function generateForeignKeySql(table: TableDef): string[] {
     const onUpdate = fk.onUpdate === null ? "" : ` ON UPDATE ${fk.onUpdate}`;
     const onDelete = fk.onDelete === null ? "" : ` ON DELETE ${fk.onDelete}`;
     const constraintName = quoteIdentifier(name);
-    const referencedColumns = fk.refColumns.length === 0
-      ? ""
-      : ` (${fk.refColumns.map(quoteIdentifier).join(", ")})`;
+    const referencedColumns = fk.refColumns.length === 0 ? "" : ` (${fk.refColumns.map(quoteIdentifier).join(", ")})`;
     statements.push(
       `ALTER TABLE ${quoteIdentifier(table.name)} DROP CONSTRAINT IF EXISTS ${constraintName};`,
       `ALTER TABLE ${quoteIdentifier(table.name)} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${fk.columns.map(quoteIdentifier).join(", ")}) REFERENCES ${quoteIdentifier(fk.table)}${referencedColumns}${onUpdate}${onDelete} NOT VALID;`,
@@ -764,18 +830,30 @@ function parseIndexHeader(normalized: string): { unique: boolean; pos: number } 
   return { unique, pos: match[0].length };
 }
 
-function parseIndexName(normalized: string, pos: number, unique: boolean): { name: string; pos: number } | { error: IndexDef } {
+function parseIndexName(
+  normalized: string,
+  pos: number,
+  unique: boolean,
+): { name: string; pos: number } | { error: IndexDef } {
   const name = parseIdentifier(normalized, pos);
-  if (name === null) return { error: { name: "", table: "", unique, columns: [], where: null, skipped: "unparseable index name" } };
+  if (name === null)
+    return { error: { name: "", table: "", unique, columns: [], where: null, skipped: "unparseable index name" } };
   return { name: name.name, pos: name.end };
 }
 
-function parseIndexTable(normalized: string, pos: number, name: string, unique: boolean): { table: string; pos: number } | { error: IndexDef } {
+function parseIndexTable(
+  normalized: string,
+  pos: number,
+  name: string,
+  unique: boolean,
+): { table: string; pos: number } | { error: IndexDef } {
   const on = /^\s+ON\s+/i.exec(normalized.slice(pos));
-  if (on === null) return { error: { name, table: "", unique, columns: [], where: null, skipped: "missing ON clause" } };
+  if (on === null)
+    return { error: { name, table: "", unique, columns: [], where: null, skipped: "missing ON clause" } };
   const nextPos = pos + on[0].length;
   const table = parseIdentifier(normalized, nextPos);
-  if (table === null) return { error: { name, table: "", unique, columns: [], where: null, skipped: "missing index table" } };
+  if (table === null)
+    return { error: { name, table: "", unique, columns: [], where: null, skipped: "missing index table" } };
   return { table: table.name, pos: table.end };
 }
 
@@ -795,26 +873,43 @@ function parseIndexColumnBare(raw: string): string | null {
   return collate !== undefined && collate.toUpperCase() === "NOCASE" ? `lower("${colName}")` : `"${colName}"`;
 }
 
-function parseIndexColumns(normalized: string, pos: number, name: string, table: string, unique: boolean): { columns: string[]; pos: number } | { error: IndexDef } {
+function parseIndexColumns(
+  normalized: string,
+  pos: number,
+  name: string,
+  table: string,
+  unique: boolean,
+): { columns: string[]; pos: number } | { error: IndexDef } {
   let p = pos;
   while (p < normalized.length && /\s/.test(normalized[p] ?? "")) p += 1;
-  if ((normalized[p] ?? "") !== "(") return { error: { name, table, unique, columns: [], where: null, skipped: "missing column list" } };
+  if ((normalized[p] ?? "") !== "(")
+    return { error: { name, table, unique, columns: [], where: null, skipped: "missing column list" } };
   const close = scanBalanced(normalized, p);
   if (close < 0) return { error: { name, table, unique, columns: [], where: null, skipped: "unbalanced column list" } };
-  const rawColumns = normalized.slice(p + 1, close).split(",").map((c): string => c.trim()).filter((c): boolean => c !== "");
+  const rawColumns = normalized
+    .slice(p + 1, close)
+    .split(",")
+    .map((c): string => c.trim())
+    .filter((c): boolean => c !== "");
   const columns: string[] = [];
   for (const raw of rawColumns) {
     const quoted = parseIndexColumnQuoted(raw);
-    if (quoted !== null) { columns.push(quoted); continue; }
+    if (quoted !== null) {
+      columns.push(quoted);
+      continue;
+    }
     const bare = parseIndexColumnBare(raw);
-    if (bare !== null) { columns.push(bare); continue; }
+    if (bare !== null) {
+      columns.push(bare);
+      continue;
+    }
     columns.push(raw);
   }
   return { columns, pos: close };
 }
 
 export function parseCreateIndexSql(sql: string): IndexDef {
-  const normalized = sql.replace(/`/g, "\"");
+  const normalized = sql.replace(/`/g, '"');
   const header = parseIndexHeader(normalized);
   if (header === null) {
     return { name: "", table: "", unique: false, columns: [], where: null, skipped: "unparseable index statement" };
@@ -827,7 +922,14 @@ export function parseCreateIndexSql(sql: string): IndexDef {
   if ("error" in colRes) return colRes.error;
   const whereMatch = /^\s+WHERE\s+(.+)$/is.exec(normalized.slice(colRes.pos + 1));
   const where = whereMatch !== null ? (whereMatch[1]?.trim() ?? null) : null;
-  return { name: nameRes.name, table: tableRes.table, unique: header.unique, columns: colRes.columns, where, skipped: null };
+  return {
+    name: nameRes.name,
+    table: tableRes.table,
+    unique: header.unique,
+    columns: colRes.columns,
+    where,
+    skipped: null,
+  };
 }
 
 /**
@@ -843,7 +945,7 @@ export function generateCreateIndexSql(index: IndexDef, booleanColumns?: Readonl
   let where = index.where ?? "";
   if (where !== "" && booleanColumns !== undefined) {
     for (const column of booleanColumns) {
-      const quotedCol = `"${column.replace(/"/g, "\"\"")}"`;
+      const quotedCol = `"${column.replace(/"/g, '""')}"`;
       // Matches `"col" = 1`, `"t"."col" = 1`, `1 = "col"`, and != / <> forms.
       // (?!\w) avoids rewriting `= 10` or `= 1x`; the column name is matched
       // verbatim so qualified references rewrite through their suffix.
@@ -862,10 +964,12 @@ export function generateCreateIndexSql(index: IndexDef, booleanColumns?: Readonl
 }
 
 /** Read the full schema (tables, indexes, triggers) from a SQLite connection. */
-export function inspectSourceSchema(client: Readonly<{ query: (sql: string) => { all: () => unknown[] } }>): SourceSchema {
-  const rows = client.query(
-    "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name",
-  ).all() as readonly { type: string; name: string; sql: string }[];
+export function inspectSourceSchema(
+  client: Readonly<{ query: (sql: string) => { all: () => unknown[] } }>,
+): SourceSchema {
+  const rows = client
+    .query("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name")
+    .all() as readonly { type: string; name: string; sql: string }[];
   const tables: TableDef[] = [];
   const indexes: IndexDef[] = [];
   const triggers: { name: string; sql: string }[] = [];
@@ -910,7 +1014,10 @@ export function collectDrizzleModes(
 }
 
 /** Deterministic FK topological order (parents first) for the copy phase. */
-function buildDependencyEdges(tables: readonly TableDef[], names: Readonly<ReadonlySet<string>>): Map<string, Set<string>> {
+function buildDependencyEdges(
+  tables: readonly TableDef[],
+  names: Readonly<ReadonlySet<string>>,
+): Map<string, Set<string>> {
   const edges = new Map<string, Set<string>>();
   for (const table of tables) {
     const targets = new Set<string>();
@@ -937,14 +1044,20 @@ function computeIndegrees(edges: Readonly<ReadonlyMap<string, Readonly<ReadonlyS
   return indegree;
 }
 
-function topologicalSort(names: Readonly<ReadonlySet<string>>, edges: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>, initialIndegree: Readonly<ReadonlyMap<string, number>>): string[] {
+function topologicalSort(
+  names: Readonly<ReadonlySet<string>>,
+  edges: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>,
+  initialIndegree: Readonly<ReadonlyMap<string, number>>,
+): string[] {
   const indegree = new Map(initialIndegree);
   const queue = [...names].filter((name): boolean => (indegree.get(name) ?? 0) === 0).sort();
   const ordered: string[] = [];
   while (queue.length > 0) {
     const name = queue.shift() ?? "";
     ordered.push(name);
-    for (const dependent of [...edges.entries()].filter(([, targets]): boolean => targets.has(name)).map(([dependentName]): string => dependentName)) {
+    for (const dependent of [...edges.entries()]
+      .filter(([, targets]): boolean => targets.has(name))
+      .map(([dependentName]): string => dependentName)) {
       if (dependent === name) continue;
       indegree.set(dependent, (indegree.get(dependent) ?? 0) - 1);
       if ((indegree.get(dependent) ?? 0) === 0) queue.push(dependent);
@@ -954,14 +1067,17 @@ function topologicalSort(names: Readonly<ReadonlySet<string>>, edges: Readonly<R
   return ordered;
 }
 
-export function orderTablesForCopy(tables: readonly TableDef[]): { ordered: readonly string[]; cycle: readonly string[] } {
+export function orderTablesForCopy(tables: readonly TableDef[]): {
+  ordered: readonly string[];
+  cycle: readonly string[];
+} {
   const names = new Set(tables.map((table): string => table.name));
   const edges = buildDependencyEdges(tables, names);
   const indegree = computeIndegrees(edges);
   const ordered = topologicalSort(names, edges, indegree);
   const cycle = [...names].filter((name): boolean => (indegree.get(name) ?? 0) > 0);
   return { ordered, cycle };
-} 
+}
 
 /** Names never copied as regular tables (migration metadata and retired compatibility tables). */
 export const METADATA_TABLES: ReadonlySet<string> = new Set(["__drizzle_migrations", "sqlite_sequence", "query_runs"]);

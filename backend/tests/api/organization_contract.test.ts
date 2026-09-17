@@ -19,14 +19,16 @@ describe("organization API contract", () => {
   const privateName = `${prefix}-private`;
 
   const request = (path: string, auth = token, method = "GET", body?: unknown) =>
-    app.handle(new Request(`http://localhost${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${auth}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
-      },
-      body: body === undefined ? null : JSON.stringify(body),
-    }));
+    app.handle(
+      new Request(`http://localhost${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${auth}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
+        },
+        body: body === undefined ? null : JSON.stringify(body),
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values([
@@ -175,9 +177,13 @@ describe("organization API contract", () => {
     expect(orgScopedBody.meta.pagination["total-count"]).toBe(1);
 
     expect((await request(`/api/v2/organizations/${privateName}`)).status).toBe(404);
-    expect((await request(`/api/v2/organizations/${privateName}`, token, "PATCH", {
-      data: { type: "organizations", attributes: { "default-iac-binary": "terraform" } },
-    })).status).toBe(404);
+    expect(
+      (
+        await request(`/api/v2/organizations/${privateName}`, token, "PATCH", {
+          data: { type: "organizations", attributes: { "default-iac-binary": "terraform" } },
+        })
+      ).status,
+    ).toBe(404);
     expect((await request(`/api/v2/organizations/${createdName}`, orgToken)).status).toBe(404);
   });
 });

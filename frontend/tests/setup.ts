@@ -92,7 +92,7 @@ if (win["PointerEvent"] === undefined) {
     writable: true,
     configurable: true,
   });
-// SAFETY: the test stubs the global with a mock before exercising the component.
+  // SAFETY: the test stubs the global with a mock before exercising the component.
   testGlobal["PointerEvent"] = PointerEventPolyfill;
 }
 
@@ -145,7 +145,9 @@ testGlobal["confirm"] = win.confirm;
 testGlobal["alert"] = win.alert;
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["requestAnimationFrame"] = (callback: FrameRequestCallback): number =>
-  win.setTimeout((): void => { callback(Date.now()); }, 0);
+  win.setTimeout((): void => {
+    callback(Date.now());
+  }, 0);
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["cancelAnimationFrame"] = (handle: number): void => {
   win.clearTimeout(handle);
@@ -199,16 +201,23 @@ const observer = new win.MutationObserver((mutations: ReadonlyMutations): void =
     }
   }
   for (const mutation of mutations) {
-    if (mutation.type === "attributes" && (mutation.attributeName === "aria-hidden" || mutation.attributeName === "data-aria-hidden")) {
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+    if (
+      mutation.type === "attributes" &&
+      (mutation.attributeName === "aria-hidden" || mutation.attributeName === "data-aria-hidden")
+    ) {
+      // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
       const target = mutation.target as HTMLElement;
-      if (target.getAttribute("aria-hidden") === "true" && target.tagName !== "BODY" && target.closest('[role="dialog"]') === null) {
+      if (
+        target.getAttribute("aria-hidden") === "true" &&
+        target.tagName !== "BODY" &&
+        target.closest('[role="dialog"]') === null
+      ) {
         target.removeAttribute("aria-hidden");
         target.removeAttribute("data-aria-hidden");
       }
     }
     if (mutation.type === "attributes" && mutation.attributeName === "data-state") {
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
+      // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
       const target = mutation.target as HTMLElement;
       if (target.getAttribute("data-state") === "closed") {
         target.dispatchEvent(new win.Event("animationend", { bubbles: true }));
@@ -219,7 +228,11 @@ const observer = new win.MutationObserver((mutations: ReadonlyMutations): void =
 });
 
 if (win.document.body !== null && win.document.body !== undefined) {
-  observer.observe(win.document.body, { attributes: true, subtree: true, attributeFilter: ["aria-hidden", "data-aria-hidden", "data-state", "style", "data-scroll-locked"] });
+  observer.observe(win.document.body, {
+    attributes: true,
+    subtree: true,
+    attributeFilter: ["aria-hidden", "data-aria-hidden", "data-state", "style", "data-scroll-locked"],
+  });
 }
 
 afterEach((): void => {

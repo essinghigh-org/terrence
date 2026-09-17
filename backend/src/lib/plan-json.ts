@@ -2,10 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 
-const planJsonDirectory = resolve(
-  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
-  "plan-json",
-);
+const planJsonDirectory = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "plan-json");
 
 /** Canonical directory holding per-run plan JSON artifacts (id.json). */
 export { planJsonDirectory };
@@ -20,7 +17,7 @@ export type PlanResourceCounts = Readonly<{
 
 function asObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Readonly<Record<string, unknown>>
+    ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 }
 
@@ -52,7 +49,14 @@ function sideArtifactPath(runId: string, kind: string): string {
 function redact(value: unknown, mask: unknown): unknown {
   if (mask === true) return null;
   if (Array.isArray(value) && Array.isArray(mask)) return value.map((item, index) => redact(item, mask[index]));
-  if (value !== null && typeof value === "object" && !Array.isArray(value) && mask !== null && typeof mask === "object" && !Array.isArray(mask)) {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    mask !== null &&
+    typeof mask === "object" &&
+    !Array.isArray(mask)
+  ) {
     const object = value as Record<string, unknown>;
     const maskObject = mask as Record<string, unknown>;
     return Object.fromEntries(Object.entries(object).map(([key, item]) => [key, redact(item, maskObject[key])]));
@@ -73,7 +77,9 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
     if (typeof value === "boolean") return value;
     if (Array.isArray(value)) return value.map(sensitivity);
     const object = asObject(value);
-    return object === undefined ? true : Object.fromEntries(Object.entries(object).map(([key, mask]) => [key, sensitivity(mask)]));
+    return object === undefined
+      ? true
+      : Object.fromEntries(Object.entries(object).map(([key, mask]) => [key, sensitivity(mask)]));
   };
   const change = (raw: unknown): PlanJson => {
     const object = asObject(raw) ?? {};
@@ -81,8 +87,24 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
     const afterMask = sensitivity(object["after_sensitive"]);
     return {
       actions: Array.isArray(object["actions"])
-        ? object["actions"].map((action: unknown) => typeof action === "string" && ["no-op", "create", "read", "update", "delete", "forget"].includes(action) ? action : "unsupported") : ["unsupported"],
-      ...(Array.isArray(object["replace_paths"]) ? { replace_paths: object["replace_paths"].filter((path: unknown) => Array.isArray(path) && path.every((part: unknown) => typeof part === "string" || (typeof part === "number" && Number.isSafeInteger(part)))) } : {}),
+        ? object["actions"].map((action: unknown) =>
+            typeof action === "string" && ["no-op", "create", "read", "update", "delete", "forget"].includes(action)
+              ? action
+              : "unsupported",
+          )
+        : ["unsupported"],
+      ...(Array.isArray(object["replace_paths"])
+        ? {
+            replace_paths: object["replace_paths"].filter(
+              (path: unknown) =>
+                Array.isArray(path) &&
+                path.every(
+                  (part: unknown) =>
+                    typeof part === "string" || (typeof part === "number" && Number.isSafeInteger(part)),
+                ),
+            ),
+          }
+        : {}),
       ...(Object.hasOwn(object, "before") ? { before: redact(object["before"], beforeMask) } : {}),
       ...(Object.hasOwn(object, "after") ? { after: redact(object["after"], afterMask) } : {}),
       before_sensitive: beforeMask,
@@ -91,17 +113,32 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
       ...(asObject(object["importing"]) === undefined ? {} : { importing: { unknown: true } }),
     };
   };
-  const result: Record<string, unknown> = { public_plan_version: PUBLIC_PLAN_VERSION, ...strings(planJson, ["format_version", "terraform_version"]) };
+  const result: Record<string, unknown> = {
+    public_plan_version: PUBLIC_PLAN_VERSION,
+    ...strings(planJson, ["format_version", "terraform_version"]),
+  };
   for (const key of ["resource_changes", "resource_drift"]) {
     const resources = planJson[key];
     if (!Array.isArray(resources)) continue;
     result[key] = resources.flatMap((raw) => {
       const resource = asObject(raw);
       if (resource === undefined) return [];
-      return [{
-        ...strings(resource, ["address", "previous_address", "module_address", "mode", "type", "name", "provider_name", "deposed", "action_reason"]),
-        change: change(resource["change"]),
-      }];
+      return [
+        {
+          ...strings(resource, [
+            "address",
+            "previous_address",
+            "module_address",
+            "mode",
+            "type",
+            "name",
+            "provider_name",
+            "deposed",
+            "action_reason",
+          ]),
+          change: change(resource["change"]),
+        },
+      ];
     });
   }
   if (Array.isArray(planJson["action_invocations"])) {
@@ -109,15 +146,20 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
       const action = asObject(raw);
       if (action === undefined) return [];
       const trigger = asObject(action["lifecycle_action_trigger"]);
-      return [{
-        ...strings(action, ["address", "type", "name", "provider_name"]),
-        ...(trigger === undefined ? {} : { lifecycle_action_trigger: strings(trigger, ["triggering_resource_address", "action_trigger_event"]) }),
-        ...(asObject(action["invoke_action_trigger"]) === undefined ? {} : { invoke_action_trigger: {} }),
-      }];
+      return [
+        {
+          ...strings(action, ["address", "type", "name", "provider_name"]),
+          ...(trigger === undefined
+            ? {}
+            : { lifecycle_action_trigger: strings(trigger, ["triggering_resource_address", "action_trigger_event"]) }),
+          ...(asObject(action["invoke_action_trigger"]) === undefined ? {} : { invoke_action_trigger: {} }),
+        },
+      ];
     });
   }
   const outputs = asObject(planJson["output_changes"]);
-  if (outputs !== undefined) result["output_changes"] = Object.fromEntries(Object.entries(outputs).map(([name, raw]) => [name, change(raw)]));
+  if (outputs !== undefined)
+    result["output_changes"] = Object.fromEntries(Object.entries(outputs).map(([name, raw]) => [name, change(raw)]));
   return result;
 }
 
@@ -137,7 +179,11 @@ async function streamFileToPrivatePath(sourcePath: string, destinationPath: stri
   } finally {
     reader.releaseLock();
     if (!ended) {
-      try { await writer.end(); } catch { /* best-effort cleanup */ }
+      try {
+        await writer.end();
+      } catch {
+        /* best-effort cleanup */
+      }
     }
   }
 }
@@ -153,11 +199,14 @@ export async function writePlanJsonArtifact(
     const target = artifactPath(runId);
     temporary = `${target}.${crypto.randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(planJson), { mode: 0o600 });
-    if (canPublish !== undefined && !await canPublish()) throw new Error("stale-agent-lease");
+    if (canPublish !== undefined && !(await canPublish())) throw new Error("stale-agent-lease");
     await rename(temporary, target);
     temporary = null;
   } catch (error: unknown) {
-    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => { /* best-effort cleanup */ });
+    if (temporary !== null)
+      await rm(temporary, { force: true }).catch((): void => {
+        /* best-effort cleanup */
+      });
     if (isDiskFullError(error)) markStorageDegraded("plan JSON artifact writes are failing (disk full)");
     throw error;
   }
@@ -173,7 +222,10 @@ export async function writePlanJsonArtifactFromFile(runId: string, sourcePath: s
     await rename(temporary, target);
     temporary = null;
   } catch (error: unknown) {
-    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => { /* best-effort cleanup */ });
+    if (temporary !== null)
+      await rm(temporary, { force: true }).catch((): void => {
+        /* best-effort cleanup */
+      });
     if (isDiskFullError(error)) markStorageDegraded("plan JSON artifact writes are failing (disk full)");
     throw error;
   }
@@ -189,12 +241,7 @@ async function readPlanJsonFile(path: string): Promise<PlanJson | undefined> {
     }
     return parsed as PlanJson;
   } catch (error: unknown) {
-    if (
-      error !== null
-      && typeof error === "object"
-      && "code" in error
-      && error.code === "ENOENT"
-    ) return undefined;
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
     throw error;
   }
 }
@@ -204,15 +251,22 @@ export async function readPlanJsonSideArtifact(runId: string, kind: string): Pro
 }
 
 export async function deletePlanJsonArtifact(runId: string): Promise<boolean> {
-  const paths = [artifactPath(runId), ...["redacted.json", "sanitized.json", "provider-schemas.json", "description.txt"].map((suffix) => join(planJsonDirectory, `${runId}.${suffix}`))];
-  const deleted = await Promise.all(paths.map(async (path): Promise<boolean> => {
-    try {
-      await rm(path);
-      return true;
-    } catch (error: unknown) {
-      if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
-      throw error;
-    }
-  }));
+  const paths = [
+    artifactPath(runId),
+    ...["redacted.json", "sanitized.json", "provider-schemas.json", "description.txt"].map((suffix) =>
+      join(planJsonDirectory, `${runId}.${suffix}`),
+    ),
+  ];
+  const deleted = await Promise.all(
+    paths.map(async (path): Promise<boolean> => {
+      try {
+        await rm(path);
+        return true;
+      } catch (error: unknown) {
+        if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+        throw error;
+      }
+    }),
+  );
   return deleted.some(Boolean);
 }

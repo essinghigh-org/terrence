@@ -74,18 +74,12 @@ describe("terraform login.v1 OAuth flow", () => {
   }, 30_000);
 
   test("discovery document advertises login.v1", async () => {
-    const res = await app.handle(
-      new Request("http://localhost/.well-known/terraform.json"),
-    );
+    const res = await app.handle(new Request("http://localhost/.well-known/terraform.json"));
     expect(res.status).toBe(200);
     const doc = (await res.json()) as { "login.v1"?: Record<string, unknown> };
     expect(doc["login.v1"]).toBeDefined();
-    expect((doc["login.v1"]!)["authz"]).toBe(
-      "/oauth/authorization",
-    );
-    expect((doc["login.v1"]!)["token"]).toBe(
-      "/oauth/token",
-    );
+    expect(doc["login.v1"]!["authz"]).toBe("/oauth/authorization");
+    expect(doc["login.v1"]!["token"]).toBe("/oauth/token");
   });
 
   test("unauthenticated browser is redirected to the SPA login page", async () => {
@@ -117,7 +111,11 @@ describe("terraform login.v1 OAuth flow", () => {
 
     const completeWithSession = await app.handle(
       new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
-        headers: { Cookie: `${cookieHeader}; ${Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ")}` },
+        headers: {
+          Cookie: `${cookieHeader}; ${Object.entries(jar)
+            .map(([k, v]) => `${k}=${v}`)
+            .join("; ")}`,
+        },
       }),
     );
     expect(completeWithSession.status).toBe(302);
@@ -156,9 +154,7 @@ describe("terraform login.v1 OAuth flow", () => {
         },
       }),
     );
-    const code = new URL(redirect.headers.get("Location")!).searchParams.get(
-      "code",
-    )!;
+    const code = new URL(redirect.headers.get("Location")!).searchParams.get("code")!;
 
     const tokenRes = await app.handle(
       new Request("http://localhost/oauth/token", {
@@ -355,7 +351,8 @@ describe("terraform login.v1 OAuth flow", () => {
         }),
       }),
     );
-    const challengeToken = ((await loginRes.json()) as { data: { attributes: { "mfa-challenge-token": string } } }).data.attributes["mfa-challenge-token"];
+    const challengeToken = ((await loginRes.json()) as { data: { attributes: { "mfa-challenge-token": string } } }).data
+      .attributes["mfa-challenge-token"];
     const mfaRow = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
     const seedRaw2 = mfaRow!.secretEncrypted ?? mfaRow!.secret;
     const seedPlain2 = isEncryptedSecret(seedRaw2) ? await decryptSecret(seedRaw2) : seedRaw2;

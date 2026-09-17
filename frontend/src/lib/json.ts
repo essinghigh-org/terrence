@@ -7,13 +7,7 @@
  */
 
 /** Any value JSON can represent. */
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { readonly [key: string]: JsonValue };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };
 
 /** A JSON object (string-keyed, JSON values). */
 export type JsonObject = Readonly<Record<string, JsonValue>>;

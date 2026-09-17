@@ -51,19 +51,26 @@ describe("remote-state consumer precedence (STATE-005)", () => {
   let noGrantRunToken = "";
 
   const request = (path: string, auth: string) =>
-    app.handle(new Request(`http://terrence.test${path}`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${auth}` },
-    }));
+    app.handle(
+      new Request(`http://terrence.test${path}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${auth}` },
+      }),
+    );
 
   beforeAll(async () => {
     await db.insert(users).values({ id: `user-rscons-${suffix}`, username, passwordHash: "unused" });
-    await db.insert(organizations).values([{ id: orgId, name: orgId }, { id: otherOrgId, name: otherOrgId }]);
+    await db.insert(organizations).values([
+      { id: orgId, name: orgId },
+      { id: otherOrgId, name: otherOrgId },
+    ]);
     await db.insert(organizationMemberships).values([
       { id: `mem-rscons-${suffix}`, userId: `user-rscons-${suffix}`, orgId, role: "owner" },
       { id: `mem-rscons-other-${suffix}`, userId: `user-rscons-${suffix}`, orgId: otherOrgId, role: "owner" },
     ]);
-    await db.insert(apiTokens).values({ id: userTokenId, token: hashAuthenticationToken(userToken), userId: `user-rscons-${suffix}` });
+    await db
+      .insert(apiTokens)
+      .values({ id: userTokenId, token: hashAuthenticationToken(userToken), userId: `user-rscons-${suffix}` });
     await db.insert(projects).values({ id: projectId, name: projectId, orgId });
     await db.insert(workspaces).values([
       { id: producer, name: producer, orgId, projectId, globalRemoteState: false, projectRemoteState: false },
@@ -74,23 +81,38 @@ describe("remote-state consumer precedence (STATE-005)", () => {
       { id: crossOrgConsumer, name: crossOrgConsumer, orgId: otherOrgId, projectId: null },
     ]);
     await db.insert(runs).values([
-      { id: runInConsumer, workspaceId: explicitConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
+      {
+        id: runInConsumer,
+        workspaceId: explicitConsumer,
+        status: "planned",
+        isDestroy: false,
+        createdAt: Date.now(),
+      },
     ]);
     consumerRunToken = await mintRunToken(runInConsumer, explicitConsumer, orgId);
-    await db.insert(remoteStateConsumers).values([
-      { id: `rsc-${suffix}`, workspaceId: producer, consumerWorkspaceId: explicitConsumer },
-    ]);
-    const lock = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${producer}/actions/lock`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${userToken}` },
-    }));
+    await db
+      .insert(remoteStateConsumers)
+      .values([{ id: `rsc-${suffix}`, workspaceId: producer, consumerWorkspaceId: explicitConsumer }]);
+    const lock = await app.handle(
+      new Request(`http://terrence.test/api/v2/workspaces/${producer}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
     if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
     const state = JSON.stringify({ ...JSON.parse(STATE), serial: 1, lineage: "test-lineage", resources: [] });
-    const post = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${producer}/state-versions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state, md5: createHash("md5").update(state).digest("base64") } } }),
-    }));
+    const post = await app.handle(
+      new Request(`http://terrence.test/api/v2/workspaces/${producer}/state-versions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "state-versions",
+            attributes: { serial: 1, state, md5: createHash("md5").update(state).digest("base64") },
+          },
+        }),
+      }),
+    );
     expect(post.status).toBe(201);
   });
 
@@ -163,9 +185,11 @@ describe("remote-state consumer precedence (STATE-005)", () => {
 
   test("a run without a consumer grant cannot read another workspace's state (404)", async () => {
     const runNoGrant = `run-nogrant-${suffix}`;
-    await db.insert(runs).values([
-      { id: runNoGrant, workspaceId: unrelatedConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
-    ]);
+    await db
+      .insert(runs)
+      .values([
+        { id: runNoGrant, workspaceId: unrelatedConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
+      ]);
     noGrantRunToken = await mintRunToken(runNoGrant, unrelatedConsumer, orgId);
     try {
       const res = await request(`/api/v2/workspaces/${producer}/current-state-version`, noGrantRunToken);
@@ -184,9 +208,11 @@ describe("remote-state consumer precedence (STATE-005)", () => {
 
   test("a run without a consumer grant cannot read another workspace's state outputs (404)", async () => {
     const runNoGrant = `run-nogrant-out-${suffix}`;
-    await db.insert(runs).values([
-      { id: runNoGrant, workspaceId: unrelatedConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
-    ]);
+    await db
+      .insert(runs)
+      .values([
+        { id: runNoGrant, workspaceId: unrelatedConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
+      ]);
     const noGrantOutToken = await mintRunToken(runNoGrant, unrelatedConsumer, orgId);
     try {
       const res = await request(`/api/v2/workspaces/${producer}/current-state-version-outputs`, noGrantOutToken);

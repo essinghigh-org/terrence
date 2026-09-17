@@ -17,12 +17,14 @@ type SurfaceEntry = Readonly<{ name: string; status: string }>;
 type LifecycleFixture = Readonly<{ id: string; label: string; resources?: string[]; required_behaviors?: string[] }>;
 type LifecycleContract = Readonly<{ version?: number; fixtures?: LifecycleFixture[] }>;
 
-type ProviderSurface = Readonly<JsonObject & {
-  provider?: string;
-  resources?: SurfaceEntry[];
-  "latest-available"?: string | null;
-  lifecycle_contract?: LifecycleContract;
-}>;
+type ProviderSurface = Readonly<
+  JsonObject & {
+    provider?: string;
+    resources?: SurfaceEntry[];
+    "latest-available"?: string | null;
+    lifecycle_contract?: LifecycleContract;
+  }
+>;
 /* eslint-enable @typescript-eslint/naming-convention */
 
 const STATUS_STYLES = {
@@ -34,11 +36,16 @@ const STATUS_STYLES = {
 
 function statusLabel(status: string): string {
   switch (status) {
-    case "covered": return "Covered";
-    case "planned": return "Planned";
-    case "backend-gap": return "Backend gap";
-    case "admin": return "Admin only";
-    default: return status;
+    case "covered":
+      return "Covered";
+    case "planned":
+      return "Planned";
+    case "backend-gap":
+      return "Backend gap";
+    case "admin":
+      return "Admin only";
+    default:
+      return status;
   }
 }
 
@@ -84,41 +91,55 @@ function DashboardContent({
 }>): React.JSX.Element {
   return (
     <>
-      {freshness !== null && (
-        <p className={`mb-3 text-xs ${freshness.className}`}>{freshness.text}</p>
-      )}
+      {freshness !== null && <p className={`mb-3 text-xs ${freshness.className}`}>{freshness.text}</p>}
       <div className="grid gap-3 sm:grid-cols-4">
         <Card>
-          <CardHeader variant="section"><CardTitle className="text-sm">Resources</CardTitle></CardHeader>
+          <CardHeader variant="section">
+            <CardTitle className="text-sm">Resources</CardTitle>
+          </CardHeader>
           <CardContent className="tabular-nums text-2xl font-bold">
             {isNumber(data["resource_count"]) ? data["resource_count"] : resources.length}
           </CardContent>
         </Card>
         <Card>
-          <CardHeader variant="section"><CardTitle className="text-sm">Data sources</CardTitle></CardHeader>
+          <CardHeader variant="section">
+            <CardTitle className="text-sm">Data sources</CardTitle>
+          </CardHeader>
           <CardContent className="tabular-nums text-2xl font-bold">
             {isNumber(data["data_source_count"]) ? data["data_source_count"] : dataSources.length}
           </CardContent>
         </Card>
         <Card>
-          <CardHeader variant="section"><CardTitle className="text-sm">Schema-covered resources</CardTitle></CardHeader>
+          <CardHeader variant="section">
+            <CardTitle className="text-sm">Schema-covered resources</CardTitle>
+          </CardHeader>
           <CardContent className="tabular-nums text-2xl font-bold text-success">{coveredResources}</CardContent>
         </Card>
         <Card>
-          <CardHeader variant="section"><CardTitle className="text-sm">Schema-covered data sources</CardTitle></CardHeader>
+          <CardHeader variant="section">
+            <CardTitle className="text-sm">Schema-covered data sources</CardTitle>
+          </CardHeader>
           <CardContent className="tabular-nums text-2xl font-bold text-success">{coveredDataSources}</CardContent>
         </Card>
       </div>
 
       <Card>
-        <CardHeader variant="section"><CardTitle className="text-lg">Behavioral lifecycle contract</CardTitle></CardHeader>
+        <CardHeader variant="section">
+          <CardTitle className="text-lg">Behavioral lifecycle contract</CardTitle>
+        </CardHeader>
         <CardContent className="space-y-2 text-sm">
           {lifecycleFixtures.length === 0 ? (
             <p className="text-muted-foreground">No named lifecycle fixtures are reported.</p>
           ) : (
             <>
-              <p>{lifecycleFixtures.length} named fixture{lifecycleFixtures.length === 1 ? "" : "s"} define the measured provider behavior.</p>
-              <p className="text-muted-foreground">A schema-covered resource is fully exercised only when its named fixture passes create, refresh, convergence, and the applicable import, update, pagination, and permission checks.</p>
+              <p>
+                {lifecycleFixtures.length} named fixture{lifecycleFixtures.length === 1 ? "" : "s"} define the measured
+                provider behavior.
+              </p>
+              <p className="text-muted-foreground">
+                A schema-covered resource is fully exercised only when its named fixture passes create, refresh,
+                convergence, and the applicable import, update, pagination, and permission checks.
+              </p>
             </>
           )}
         </CardContent>
@@ -136,11 +157,20 @@ function DashboardContent({
               aria-label="Filter resources"
               placeholder="Search resources…"
               value={search}
-              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { onSearchChange(event.currentTarget.value); }}
+              onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                onSearchChange(event.currentTarget.value);
+              }}
               className="h-9 w-56"
             />
             <div className="w-40">
-              <Select id="provider-surface-status" name="status" aria-label="Status filter" value={statusFilter} onValueChange={onStatusFilterChange} className="h-9">
+              <Select
+                id="provider-surface-status"
+                name="status"
+                aria-label="Status filter"
+                value={statusFilter}
+                onValueChange={onStatusFilterChange}
+                className="h-9"
+              >
                 <option value="">All statuses</option>
                 <option value="covered">Covered</option>
                 <option value="planned">Planned</option>
@@ -181,14 +211,23 @@ function DashboardBody({
   content: React.JSX.Element | null;
 }>): React.JSX.Element {
   if (loading) {
-    return <div role="status" className="flex justify-center py-12"><Spinner aria-label="Loading provider surface" /></div>;
+    return (
+      <div role="status" className="flex justify-center py-12">
+        <Spinner aria-label="Loading provider surface" />
+      </div>
+    );
   }
   if (error !== "") {
     return (
-      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+      <div
+        role="alert"
+        className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
+      >
         <p className="font-medium">Could not load provider surface</p>
         <p className="mt-1">{error}</p>
-        <Button className="mt-3" variant="outline" onClick={onRetry}>Try again</Button>
+        <Button className="mt-3" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
       </div>
     );
   }
@@ -204,9 +243,11 @@ function SurfaceTable({
   search,
 }: Readonly<{ entries: SurfaceEntry[]; statusFilter: string; search: string }>): React.JSX.Element {
   const needle = search.trim().toLowerCase();
-  const visible = entries.filter((entry): boolean =>
-    (statusFilter === "" || entry.status === statusFilter)
-    && (needle === "" || entry.name.toLowerCase().includes(needle)));
+  const visible = entries.filter(
+    (entry): boolean =>
+      (statusFilter === "" || entry.status === statusFilter) &&
+      (needle === "" || entry.name.toLowerCase().includes(needle)),
+  );
   return (
     <Table>
       <TableHeader>
@@ -216,20 +257,31 @@ function SurfaceTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {visible.map((entry): React.JSX.Element => (
-          <TableRow key={entry.name}>
-            <TableCell className="font-mono text-sm">{entry.name}</TableCell>
-            <TableCell>
-              {/* SAFETY: the status union covers exactly the map keys; unmatched values are handled by the surrounding fallback. */}
-              <Badge variant="outline" className={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES])}>
-                {statusLabel(entry.status)}
-              </Badge>
+        {visible.map(
+          (entry): React.JSX.Element => (
+            <TableRow key={entry.name}>
+              <TableCell className="font-mono text-sm">{entry.name}</TableCell>
+              <TableCell>
+                {/* SAFETY: the status union covers exactly the map keys; unmatched values are handled by the surrounding fallback. */}
+                <Badge
+                  variant="outline"
+                  className={
+                    // SAFETY: the rendered attribute matches the union the UI derives from the API contract.
+                    cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES])
+                  }
+                >
+                  {statusLabel(entry.status)}
+                </Badge>
+              </TableCell>
+            </TableRow>
+          ),
+        )}
+        {visible.length === 0 && (
+          <TableRow>
+            <TableCell colSpan={2} className="py-8 text-center text-muted-foreground">
+              No matching entries.
             </TableCell>
           </TableRow>
-        ))}
-        {visible.length === 0 && (
-          <TableRow><TableCell colSpan={2} className="py-8 text-center text-muted-foreground">No matching entries.</TableCell></TableRow>
         )}
       </TableBody>
     </Table>
@@ -248,8 +300,8 @@ export function CompatibilityDashboard(): React.JSX.Element {
     setLoading(true);
     setError("");
     try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi("/api/v2/admin/provider-surface") as { data?: ProviderSurface };
+      // SAFETY: the fixture matches the JSON:API envelope the component consumes.
+      const response = (await fetchApi("/api/v2/admin/provider-surface")) as { data?: ProviderSurface };
       setData(response.data ?? null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not load provider surface");
@@ -264,9 +316,7 @@ export function CompatibilityDashboard(): React.JSX.Element {
 
   const resources = data?.resources ?? [];
   // SAFETY: the compat surface payload carries SurfaceEntry arrays per contract.
-  const dataSources = Array.isArray(data?.["data_sources"])
-    ? data["data_sources"] as SurfaceEntry[]
-    : [];
+  const dataSources = Array.isArray(data?.["data_sources"]) ? (data["data_sources"] as SurfaceEntry[]) : [];
   const lifecycleFixtures = data?.lifecycle_contract?.fixtures ?? [];
   const coveredResources = resources.filter((entry): boolean => entry.status === "covered").length;
   const coveredDataSources = dataSources.filter((entry): boolean => entry.status === "covered").length;
@@ -284,22 +334,30 @@ export function CompatibilityDashboard(): React.JSX.Element {
         loading={loading}
         error={error}
         data={data}
-        onRetry={(): void => { void load(); }}
-        content={data === null ? null : (
-          <DashboardContent
-            data={data}
-            freshness={freshness}
-            resources={resources}
-            dataSources={dataSources}
-            lifecycleFixtures={lifecycleFixtures}
-            coveredResources={coveredResources}
-            coveredDataSources={coveredDataSources}
-            statusFilter={statusFilter}
-            search={search}
-            onSearchChange={(value: string): void => { setSearch(value); }}
-            onStatusFilterChange={(value: string): void => { setStatusFilter(value); }}
-          />
-        )}
+        onRetry={(): void => {
+          void load();
+        }}
+        content={
+          data === null ? null : (
+            <DashboardContent
+              data={data}
+              freshness={freshness}
+              resources={resources}
+              dataSources={dataSources}
+              lifecycleFixtures={lifecycleFixtures}
+              coveredResources={coveredResources}
+              coveredDataSources={coveredDataSources}
+              statusFilter={statusFilter}
+              search={search}
+              onSearchChange={(value: string): void => {
+                setSearch(value);
+              }}
+              onStatusFilterChange={(value: string): void => {
+                setStatusFilter(value);
+              }}
+            />
+          )
+        }
       />
     </PageShell>
   );

@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createOperationContext,
-  OperationCanceledError,
-} from "../../src/lib/operation-context";
+import { createOperationContext, OperationCanceledError } from "../../src/lib/operation-context";
 
 describe("operation cancellation context", () => {
   test("does not invent a deadline when the operation has no budget", async () => {
@@ -29,7 +26,13 @@ describe("operation cancellation context", () => {
   test("uses the caller's deadline and classifies it separately from cancellation", async () => {
     const context = createOperationContext({ deadlineMs: 20 });
     await new Promise<void>((resolve): void => {
-      context.signal.addEventListener("abort", (): void => { resolve(); }, { once: true });
+      context.signal.addEventListener(
+        "abort",
+        (): void => {
+          resolve();
+        },
+        { once: true },
+      );
     });
 
     expect(context.deadlineAt).not.toBeNull();

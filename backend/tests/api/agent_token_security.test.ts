@@ -25,15 +25,17 @@ async function request(
   const headers: Record<string, string> = {};
   if (options.token !== undefined) headers["Authorization"] = `Bearer ${options.token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
-  return app.handle(new Request(`http://localhost${path}`, {
-    method,
-    headers,
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-  }));
+  return app.handle(
+    new Request(`http://localhost${path}`, {
+      method,
+      headers,
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    }),
+  );
 }
 
 async function responseJson(response: Response): Promise<JsonObject> {
-  return await response.json() as JsonObject;
+  return (await response.json()) as JsonObject;
 }
 
 describe("agent pool token expiry and revocation", () => {
@@ -65,7 +67,7 @@ describe("agent pool token expiry and revocation", () => {
     });
     expect(response.status).toBe(201);
     const body = await responseJson(response);
-    poolId = ((body["data"] as JsonObject)["id"] as string);
+    poolId = (body["data"] as JsonObject)["id"] as string;
   });
 
   afterAll(async () => {
@@ -78,9 +80,7 @@ describe("agent pool token expiry and revocation", () => {
   });
 
   const setPolicy = async (maxTtlMs?: number): Promise<void> => {
-    const policies = maxTtlMs === undefined
-      ? []
-      : [{ "token-type": "agent", "max-ttl-ms": maxTtlMs }];
+    const policies = maxTtlMs === undefined ? [] : [{ "token-type": "agent", "max-ttl-ms": maxTtlMs }];
     const response = await request("PATCH", `/api/v2/organizations/${orgName}/token-ttl-policies`, {
       token: userToken,
       body: { data: { attributes: { "token-ttl-policies": policies } } },
@@ -165,7 +165,10 @@ describe("agent pool token expiry and revocation", () => {
     const registered = await responseJson(registration);
     const agentId = registered["id"] as string;
 
-    await db.update(agentPoolTokens).set({ expiresAt: Date.now() - 1 }).where(eq(agentPoolTokens.id, created.id));
+    await db
+      .update(agentPoolTokens)
+      .set({ expiresAt: Date.now() - 1 })
+      .where(eq(agentPoolTokens.id, created.id));
 
     expect((await registerAgent(created.token, `expired-agent-${suffix}`)).status).toBe(401);
     const poll = await request("POST", `/api/v2/agents/${agentId}/jobs/poll`, { token: created.token });

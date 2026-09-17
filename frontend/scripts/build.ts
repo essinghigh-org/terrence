@@ -37,4 +37,6 @@ if (existsSync(publicDir)) {
   cpSync(publicDir, outDir, { recursive: true });
 }
 
-console.log(`Frontend build completed successfully (${result.outputs.length} outputs, ${isDev ? "development" : "production"} mode).`);
+console.log(
+  `Frontend build completed successfully (${result.outputs.length} outputs, ${isDev ? "development" : "production"} mode).`,
+);

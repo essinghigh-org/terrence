@@ -82,9 +82,11 @@ function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    return Object.fromEntries(Object.keys(record).sort().flatMap((key): [string, unknown][] =>
-      record[key] === undefined ? [] : [[key, canonicalize(record[key])]],
-    ));
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort()
+        .flatMap((key): [string, unknown][] => (record[key] === undefined ? [] : [[key, canonicalize(record[key])]])),
+    );
   }
   return value;
 }
@@ -103,11 +105,13 @@ function ingressString(ingress: Readonly<Record<string, unknown>> | null, key: s
 }
 
 /** Build an immutable public manifest and encrypted execution envelope. */
-export async function buildRunProvenanceCapsule(input: CapsuleInput): Promise<Readonly<{
-  publicManifest: PublicRunProvenance;
-  manifestSha256: string;
-  executionMaterial: string;
-}>> {
+export async function buildRunProvenanceCapsule(input: CapsuleInput): Promise<
+  Readonly<{
+    publicManifest: PublicRunProvenance;
+    manifestSha256: string;
+    executionMaterial: string;
+  }>
+> {
   const ingress = input.configurationIngress;
   const variables = input.effectiveVariables
     .map((variable): PublicRunProvenance["variables"][number] => ({
@@ -117,14 +121,18 @@ export async function buildRunProvenanceCapsule(input: CapsuleInput): Promise<Re
       variableSetId: variable.variableSetId ?? null,
       sensitive: variable.sensitive === true,
     }))
-    .concat(input.runVariables.map((variable): PublicRunProvenance["variables"][number] => ({
-      key: variable.key,
-      category: variable.category ?? "terraform",
-      source: "run",
-      variableSetId: null,
-      sensitive: variable.sensitive === true,
-    })))
-    .sort((left, right): number => `${left.category}:${left.key}:${left.source}`.localeCompare(`${right.category}:${right.key}:${right.source}`));
+    .concat(
+      input.runVariables.map((variable): PublicRunProvenance["variables"][number] => ({
+        key: variable.key,
+        category: variable.category ?? "terraform",
+        source: "run",
+        variableSetId: null,
+        sensitive: variable.sensitive === true,
+      })),
+    )
+    .sort((left, right): number =>
+      `${left.category}:${left.key}:${left.source}`.localeCompare(`${right.category}:${right.key}:${right.source}`),
+    );
   const publicManifest: PublicRunProvenance = {
     schemaVersion: RUN_PROVENANCE_SCHEMA_VERSION,
     runId: input.runId,
@@ -151,10 +159,12 @@ export async function buildRunProvenanceCapsule(input: CapsuleInput): Promise<Re
     },
   };
   const canonical = canonicalJson(publicManifest);
-  const executionMaterial = await encryptSecret(canonicalJson({
-    schemaVersion: RUN_PROVENANCE_SCHEMA_VERSION,
-    variables: input.runVariables,
-    effectiveVariables: input.effectiveExecutionVariables,
-  }));
+  const executionMaterial = await encryptSecret(
+    canonicalJson({
+      schemaVersion: RUN_PROVENANCE_SCHEMA_VERSION,
+      variables: input.runVariables,
+      effectiveVariables: input.effectiveExecutionVariables,
+    }),
+  );
   return { publicManifest, manifestSha256: sha256Hex(canonical), executionMaterial };
 }

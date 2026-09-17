@@ -25,10 +25,20 @@ export const stateTools: readonly McpTool[] = [
     requires: ["state:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "state-read",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const sv = await db.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, wsId), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+        where: and(
+          eq(stateVersions.workspaceId, wsId),
+          eq(stateVersions.status, "finalized"),
+          eq(stateVersions.intermediate, false),
+        ),
         orderBy: [desc(stateVersions.serial)],
       });
       if (sv === undefined) return toolBadRequest(`No state versions found for workspace "${wsId}"`);
@@ -73,7 +83,13 @@ export const stateTools: readonly McpTool[] = [
     requires: ["state:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const wsId = String(args["workspace_id"]);
-      const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
+      const ws = await findAuthorizedWorkspace(
+        wsId,
+        session.userId ?? undefined,
+        session.orgId,
+        session.teamId,
+        "state-read",
+      );
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const ar = await db.query.assessmentResults.findMany({
         where: eq(assessmentResults.workspaceId, wsId),
@@ -91,7 +107,8 @@ export const stateTools: readonly McpTool[] = [
           completedAt: true,
         },
       });
-      if (ar.length === 0) return { status: "no_assessment", message: "No drift assessment has been run for this workspace" };
+      if (ar.length === 0)
+        return { status: "no_assessment", message: "No drift assessment has been run for this workspace" };
       return ar[0];
     },
   },

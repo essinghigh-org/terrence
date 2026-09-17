@@ -31,7 +31,9 @@ async function expectPairingError(operation: Promise<unknown>): Promise<void> {
     messages.push(current.message);
     current = (current as Error & { cause?: unknown }).cause;
   }
-  expect(messages.some((message: string) => message.includes("sso_provider and sso_subject must be set together"))).toBeTrue();
+  expect(
+    messages.some((message: string) => message.includes("sso_provider and sso_subject must be set together")),
+  ).toBeTrue();
 }
 
 afterAll(async () => {
@@ -40,20 +42,26 @@ afterAll(async () => {
 
 test("enforces all-or-nothing SSO identity pairing", async () => {
   await expectPairingError(
-    db.insert(users).values(userValues(`sso-half-provider-${suffix}`, { provider: "saml", subject: null })).execute(),
+    db
+      .insert(users)
+      .values(userValues(`sso-half-provider-${suffix}`, { provider: "saml", subject: null }))
+      .execute(),
   );
   await expectPairingError(
-    db.insert(users).values(userValues(`sso-half-subject-${suffix}`, { provider: null, subject: "subject" })).execute(),
+    db
+      .insert(users)
+      .values(userValues(`sso-half-subject-${suffix}`, { provider: null, subject: "subject" }))
+      .execute(),
   );
 
   const localId = `sso-local-${suffix}`;
   const ssoId = `sso-valid-${suffix}`;
-  await db.insert(users).values([
-    userValues(localId, { provider: null, subject: null }),
-    userValues(ssoId, { provider: "oidc", subject: "subject" }),
-  ]);
+  await db
+    .insert(users)
+    .values([
+      userValues(localId, { provider: null, subject: null }),
+      userValues(ssoId, { provider: "oidc", subject: "subject" }),
+    ]);
 
-  await expectPairingError(
-    db.update(users).set({ ssoSubject: null }).where(eq(users.id, ssoId)).execute(),
-  );
+  await expectPairingError(db.update(users).set({ ssoSubject: null }).where(eq(users.id, ssoId)).execute());
 });

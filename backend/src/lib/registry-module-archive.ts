@@ -17,10 +17,12 @@ function safeRelativePath(value: string): boolean {
   if (value === "" || value.includes("\\") || value.includes("\0")) return false;
   if (value === "." || value === "./") return true;
   const normalized = value.replace(/^\.\//, "").replace(/\/$/, "");
-  return normalized !== ""
-    && !normalized.startsWith("/")
-    && !/^[A-Za-z]:/.test(normalized)
-    && !normalized.split("/").includes("..");
+  return (
+    normalized !== "" &&
+    !normalized.startsWith("/") &&
+    !/^[A-Za-z]:/.test(normalized) &&
+    !normalized.split("/").includes("..")
+  );
 }
 
 async function tarOutput(args: readonly string[]): Promise<string> {
@@ -37,7 +39,11 @@ export async function validateModuleArchive(path: string): Promise<void> {
   });
 }
 
-export async function extractValidatedModuleArchive(path: string, destination: string, signal?: Readonly<AbortSignal>): Promise<void> {
+export async function extractValidatedModuleArchive(
+  path: string,
+  destination: string,
+  signal?: Readonly<AbortSignal>,
+): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await extractSafeTarArchive(path, destination, {
     maxCompressedBytes: MAX_MODULE_ARCHIVE_BYTES,
@@ -48,7 +54,9 @@ export async function extractValidatedModuleArchive(path: string, destination: s
 
 async function containsTerraform(directory: string): Promise<boolean> {
   const entries = await readdir(directory, { withFileTypes: true });
-  return entries.some((entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")));
+  return entries.some(
+    (entry): boolean => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")),
+  );
 }
 
 async function repositoryRoot(directory: string): Promise<string> {
@@ -65,7 +73,8 @@ export async function moduleRootPath(directory: string, sourceDirectory = ""): P
   const source = sourceDirectory.trim().replace(/^\.\//, "").replace(/\/$/, "");
   if (source !== "" && !safeRelativePath(source)) throw new Error("Source directory must be a safe relative path");
   const selected = resolve(root, source);
-  if (selected !== root && !selected.startsWith(`${root}${sep}`)) throw new Error("Source directory escapes the repository");
+  if (selected !== root && !selected.startsWith(`${root}${sep}`))
+    throw new Error("Source directory escapes the repository");
   let selectedStat;
   try {
     selectedStat = await stat(selected);
@@ -97,10 +106,7 @@ export async function ingestModuleArchive<T>(
     await rename(temporaryArchive, destinationPath);
     return metadata;
   } finally {
-    await Promise.allSettled([
-      rm(staging, { recursive: true, force: true }),
-      rm(temporaryArchive, { force: true }),
-    ]);
+    await Promise.allSettled([rm(staging, { recursive: true, force: true }), rm(temporaryArchive, { force: true })]);
   }
 }
 

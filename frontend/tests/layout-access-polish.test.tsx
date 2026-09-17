@@ -30,8 +30,8 @@ afterEach((): void => {
 });
 
 test("shows identity, organization switching, and site administration when authorized", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
@@ -45,7 +45,7 @@ test("shows identity, organization switching, and site administration when autho
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -77,7 +77,7 @@ test("redirects non-administrators before loading site data", async () => {
   const fetchMock = mock(async (): Promise<Response> => {
     throw new Error("Admin data must not be requested");
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin"]}>
@@ -97,8 +97,8 @@ test("redirects non-administrators before loading site data", async () => {
 });
 
 test("uses one contextual sidebar across organization settings", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
@@ -125,12 +125,10 @@ test("uses one contextual sidebar across organization settings", async () => {
         },
       });
     }
-    if (
-      url === "/api/v2/organizations/acme/teams"
-      || url === "/api/v2/organizations/acme/organization-memberships"
-    ) return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/teams" || url === "/api/v2/organizations/acme/organization-memberships")
+      return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -147,10 +145,8 @@ test("uses one contextual sidebar across organization settings", async () => {
   });
   expect(view.getByRole("link", { name: "Teams" }).getAttribute("aria-current")).toBe("page");
   expect(view.getAllByRole("link", { name: "Variable sets" })).toHaveLength(1);
-  expect(view.getByRole("link", { name: "VCS providers" }).getAttribute("href"))
-    .toBe("/app/acme/settings/vcs");
-  expect(view.getByRole("link", { name: "Agent pools" }).getAttribute("href"))
-    .toBe("/app/acme/settings/agents");
+  expect(view.getByRole("link", { name: "VCS providers" }).getAttribute("href")).toBe("/app/acme/settings/vcs");
+  expect(view.getByRole("link", { name: "Agent pools" }).getAttribute("href")).toBe("/app/acme/settings/agents");
 });
 
 test("keeps General visible and gates managed organization navigation independently", async () => {
@@ -179,7 +175,7 @@ test("keeps General visible and gates managed organization navigation independen
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -193,9 +189,13 @@ test("keeps General visible and gates managed organization navigation independen
   );
 
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-        === "/api/v2/organizations/acme")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]): boolean =>
+          (isString(input) ? input : input instanceof URL ? input.toString() : input.url) ===
+          "/api/v2/organizations/acme",
+      ),
+    ).toBe(true);
   });
   expect(view.queryByRole("link", { name: "Projects" })).toBeNull();
   expect(view.queryByRole("link", { name: "No-code modules" })).toBeNull();
@@ -213,10 +213,7 @@ test("keeps General visible and gates managed organization navigation independen
 test("fails closed while organization permissions change or fail to load", async () => {
   const acmePermissions = deferred<Response>();
   let acmeSignal: AbortSignal | null = null;
-  const fetchMock = mock(async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
@@ -238,7 +235,7 @@ test("fails closed while organization permissions change or fail to load", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -246,7 +243,11 @@ test("fails closed while organization permissions change or fail to load", async
       <Routes>
         <Route
           path="/app/:orgName"
-          element={<Layout><p>Organization content</p></Layout>}
+          element={
+            <Layout>
+              <p>Organization content</p>
+            </Layout>
+          }
         />
       </Routes>
     </MemoryRouter>,
@@ -259,24 +260,30 @@ test("fails closed while organization permissions change or fail to load", async
 
   fireEvent.click(view.getByRole("link", { name: "Open platform" }));
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some(([input]): boolean =>
-      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-        === "/api/v2/organizations/platform")).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]): boolean =>
+          (isString(input) ? input : input instanceof URL ? input.toString() : input.url) ===
+          "/api/v2/organizations/platform",
+      ),
+    ).toBe(true);
     expect(acmeSignal?.aborted).toBe(true);
   });
 
   await act(async (): Promise<void> => {
-    acmePermissions.resolve(json({
-      data: {
-        attributes: {
-          permissions: {
-            "can-manage-agent-pools": true,
-            "can-manage-vcs-settings": true,
-            "can-manage-workspaces": true,
+    acmePermissions.resolve(
+      json({
+        data: {
+          attributes: {
+            permissions: {
+              "can-manage-agent-pools": true,
+              "can-manage-vcs-settings": true,
+              "can-manage-workspaces": true,
+            },
           },
         },
-      },
-    }));
+      }),
+    );
     await new Promise<void>((resolve): void => {
       window.setTimeout(resolve, 0);
     });
@@ -285,15 +292,15 @@ test("fails closed while organization permissions change or fail to load", async
 });
 
 test("uses contextual account navigation", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -309,17 +316,14 @@ test("uses contextual account navigation", async () => {
     expect(view.getByText("Account content")).toBeTruthy();
   });
   expect(view.getByRole("link", { name: "Profile" }).getAttribute("aria-current")).toBe("page");
-  expect(view.getByRole("link", { name: "Sessions" }).getAttribute("href"))
-    .toBe("/app/account#sessions");
-  expect(view.getByRole("link", { name: "Password" }).getAttribute("href"))
-    .toBe("/app/account#password");
-  expect(view.getByRole("link", { name: "API tokens" }).getAttribute("href"))
-    .toBe("/app/account#api-tokens");
+  expect(view.getByRole("link", { name: "Sessions" }).getAttribute("href")).toBe("/app/account#sessions");
+  expect(view.getByRole("link", { name: "Password" }).getAttribute("href")).toBe("/app/account#password");
+  expect(view.getByRole("link", { name: "API tokens" }).getAttribute("href")).toBe("/app/account#api-tokens");
 });
 
 test("only shows password navigation while a password change is required", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
@@ -334,7 +338,7 @@ test("only shows password navigation while a password change is required", async
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -355,8 +359,8 @@ test("only shows password navigation while a password change is required", async
 });
 
 test("scrolls contextual account links after account data loads", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
@@ -369,7 +373,7 @@ test("scrolls contextual account links after account data loads", async () => {
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -383,7 +387,7 @@ test("scrolls contextual account links after account data loads", async () => {
 
   await view.findByRole("button", { name: "Save Profile" });
   const tokenHeading = (await view.findAllByText("API Tokens")).find((el) => el.closest("#api-tokens") !== null)!;
-// SAFETY: closest() resolves to the row element that contains the queried text.
+  // SAFETY: closest() resolves to the row element that contains the queried text.
   const tokenCard = tokenHeading.closest("#api-tokens")!;
   const scrollIntoView = mock((): void => undefined);
   tokenCard.scrollIntoView = scrollIntoView;
@@ -397,8 +401,8 @@ test("scrolls contextual account links after account data loads", async () => {
 
 test("keeps failed account details read-only until retry succeeds", async () => {
   let detailsRequests = 0;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       detailsRequests += 1;
@@ -414,7 +418,7 @@ test("keeps failed account details read-only until retry succeeds", async () => 
     }
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -429,8 +433,8 @@ test("keeps failed account details read-only until retry succeeds", async () => 
   expect(detailsRequests).toBe(2);
 });
 test("a required password change bounces non-account routes to the password section (issue #626)", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
@@ -445,7 +449,7 @@ test("a required password change bounces non-account routes to the password sect
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app"]}>
