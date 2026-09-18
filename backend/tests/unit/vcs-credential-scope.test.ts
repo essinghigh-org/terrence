@@ -25,9 +25,11 @@ describe("VCS credential origin scoping", (): void => {
     );
   });
 
-  it("fails closed when no trustworthy HTTP(S) origin is available", (): void => {
+  it("fails closed when no trustworthy HTTPS origin is available", (): void => {
     expect(vcsCredentialOrigin("ado_server", null, null)).toBeNull();
     expect(gitExtraHeaderConfigKey("ado_server", "file:///tmp/vcs", null)).toBeNull();
     expect(gitExtraHeaderConfigKey("github_enterprise", "not a url", null)).toBeNull();
+    expect(vcsCredentialOrigin("github_enterprise", "http://github.example.test/api/v3", null)).toBeNull();
+    expect(gitExtraHeaderConfigKey("gitlab_enterprise_edition", null, "http://gitlab.example.test/")).toBeNull();
   });
 });

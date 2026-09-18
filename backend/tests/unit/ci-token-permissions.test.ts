@@ -14,14 +14,13 @@ function jobBlock(name: string, nextName: string): string {
 describe("CI token least privilege", (): void => {
   it("does not grant issue-write permission to provider tests that execute PR code", (): void => {
     const block = jobBlock("provider-compatibility", "provider-canary-review");
-    expect(block).toContain("contents: read");
-    expect(block).not.toContain("issues: write");
+    expect(block).toContain("\n    permissions:\n      contents: read\n    steps:\n");
   });
 
   it("isolates scheduled issue creation in a no-checkout job", (): void => {
     const block = jobBlock("provider-canary-review", "cli-compatibility-report");
     expect(block).toContain("github.event_name == 'schedule'");
-    expect(block).toContain("issues: write");
+    expect(block).toContain("\n    permissions:\n      issues: write\n    steps:\n");
     expect(block).not.toContain("actions/checkout@");
     expect(block).not.toContain("bun install");
   });

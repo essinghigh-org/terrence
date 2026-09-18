@@ -26,7 +26,7 @@ export function vcsCredentialOrigin(
   if (candidate === null) return null;
   try {
     const parsed = new URL(candidate);
-    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.hostname === "") return null;
+    if (parsed.protocol !== "https:" || parsed.hostname === "") return null;
     return parsed.origin;
   } catch {
     return null;
