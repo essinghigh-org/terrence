@@ -18,7 +18,7 @@ import {
 import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
 import { rotateOrgRunLogTokens } from "../lib/run-token";
 import { currentTokenScopes } from "../lib/request-scope";
-import { eq, and, asc, desc, count, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { eq, and, asc, desc, count, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { isUniqueConstraintError, tokenExpiry } from "../lib/validation";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
@@ -55,12 +55,44 @@ type ParamCtx = Readonly<{
   set: SetObj;
 }>;
 
-function organizationTokenWhere(orgId: string, tokenType: string) {
+/**
+ * The singular TFE-compatible organization credential slots.
+ *
+ * Compatibility tokens intentionally have no description. Modern Terrence
+ * organization tokens always carry one, which keeps the two credential models
+ * disjoint without changing the persisted schema or invalidating existing
+ * tokens.
+ */
+function organizationCompatibilityTokenWhere(orgId: string, tokenType: string) {
   return and(
     eq(apiTokens.orgId, orgId),
     eq(apiTokens.tokenType, tokenType),
     isNull(apiTokens.userId),
     isNull(apiTokens.teamId),
+    isNull(apiTokens.description),
+  );
+}
+
+/** Modern, independently managed organization-scoped API tokens. */
+function modernOrganizationTokensWhere(orgId: string) {
+  return and(
+    eq(apiTokens.orgId, orgId),
+    eq(apiTokens.tokenType, ""),
+    isNull(apiTokens.userId),
+    isNull(apiTokens.teamId),
+    isNotNull(apiTokens.description),
+    eq(apiTokens.legacy, false),
+  );
+}
+
+function isModernOrganizationToken(token: Readonly<typeof apiTokens.$inferSelect>): boolean {
+  return (
+    token.orgId !== null &&
+    token.userId === null &&
+    token.teamId === null &&
+    token.tokenType === "" &&
+    token.description !== null &&
+    token.legacy === false
   );
 }
 
@@ -198,6 +230,15 @@ async function findVisibleApiToken(
       return token;
     }
   }
+  if (
+    token !== undefined &&
+    isModernOrganizationToken(token) &&
+    token.orgId !== null &&
+    userId !== undefined &&
+    (await checkOrgPermission(userId, token.orgId, "owner"))
+  ) {
+    return token;
+  }
   return undefined;
 }
 
@@ -263,6 +304,25 @@ async function revokeTeamApiToken(
   )
     return false;
   await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+  return true;
+}
+
+async function revokeOrganizationApiToken(tokenId: string, userId: string | undefined): Promise<boolean> {
+  const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
+  if (
+    token === undefined ||
+    !isModernOrganizationToken(token) ||
+    token.orgId === null ||
+    userId === undefined ||
+    !(await checkOrgPermission(userId, token.orgId, "owner"))
+  ) {
+    return false;
+  }
+  await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+  await auditLog("revoke", "authentication-token", tokenId, userId, token.orgId, {
+    orgId: token.orgId,
+    source: "organization",
+  });
   return true;
 }
 
@@ -371,10 +431,12 @@ async function rotateOrgToken(
   return withDbLock(
     `organization-token:${orgId}:${tokenType}`,
     async (): Promise<Readonly<typeof apiTokens.$inferSelect> | undefined> => {
-      const prior = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(orgId, tokenType) });
+      const prior = await db.query.apiTokens.findFirst({
+        where: organizationCompatibilityTokenWhere(orgId, tokenType),
+      });
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
-        await t.delete(apiTokens).where(organizationTokenWhere(orgId, tokenType));
+        await t.delete(apiTokens).where(organizationCompatibilityTokenWhere(orgId, tokenType));
         await t.insert(apiTokens).values(createdToken);
       });
       return prior;
@@ -1191,6 +1253,33 @@ export const userRoutes = new Elysia({ name: "users" })
     const visible = allUsers.filter((u): boolean => (u as unknown as { deletedAt?: unknown }).deletedAt == null);
     return { data: visible.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u)) };
   })
+  .get(
+    "/api/v2/organizations/:org_name/authentication-tokens",
+    async ({ params, request, user, set }: ParamCtx): Promise<unknown> => {
+      const orgName = params["org_name"] ?? "";
+      const org = await cachedOrgByName(orgName);
+      if (org === undefined || user?.id === undefined || !(await checkOrgPermission(user.id, org.id, "owner"))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const { number, size } = pageRequest(request);
+      const where = modernOrganizationTokensWhere(org.id);
+      const [tokens, countRows] = await Promise.all([
+        db.query.apiTokens.findMany({
+          where,
+          orderBy: [desc(apiTokens.createdAt), desc(apiTokens.id)],
+          limit: size,
+          offset: (number - 1) * size,
+        }),
+        db.select({ total: count() }).from(apiTokens).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return {
+        data: tokens.map((token): Record<string, unknown> => tokenResource(token)),
+        ...pagination(request, number, size, totalCount),
+      };
+    },
+  )
   .get("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params["user_id"] ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
@@ -1813,6 +1902,10 @@ export const userRoutes = new Elysia({ name: "users" })
         (set as { status: number }).status = 204;
         return {};
       }
+      if (await revokeOrganizationApiToken(tokenId, user?.id)) {
+        (set as { status: number }).status = 204;
+        return {};
+      }
       if (await revokeAgentPoolToken(tokenId, user?.id, tokenOrgId, tokenTeamId)) {
         (set as { status: number }).status = 204;
         return {};
@@ -1849,17 +1942,9 @@ export const userRoutes = new Elysia({ name: "users" })
         expiresAt,
         teamId: null,
       };
-      if (mintOrgId !== undefined) {
-        await withDbLock(`organization-token:${mintOrgId}:`, async (): Promise<void> => {
-          await db.transaction(async (tx: unknown): Promise<void> => {
-            const t = tx as typeof db;
-            await t.delete(apiTokens).where(organizationTokenWhere(mintOrgId, ""));
-            await t.insert(apiTokens).values(createdToken);
-          });
-        });
-      } else {
-        await db.insert(apiTokens).values(createdToken);
-      }
+      // Modern organization tokens are an independent collection. They must
+      // never rotate the singular TFE-compatible organization credential.
+      await db.insert(apiTokens).values(createdToken);
       await auditLog("create", "authentication-token", createdToken.id, creator.id, mintOrgId ?? null, {
         description: input.description,
         scopes: createdToken.scopes,
@@ -1903,7 +1988,7 @@ export const userRoutes = new Elysia({ name: "users" })
       }
       const tokenType = validated === "organization" ? "" : validated;
       const token = await db.query.apiTokens.findFirst({
-        where: organizationTokenWhere(org.id, tokenType),
+        where: organizationCompatibilityTokenWhere(org.id, tokenType),
       });
       if (token === undefined) {
         (set as { status: number }).status = 404;
@@ -2006,8 +2091,10 @@ export const userRoutes = new Elysia({ name: "users" })
       const existing = await withDbLock(
         `organization-token:${org.id}:${tokenType}`,
         async (): Promise<Readonly<typeof apiTokens.$inferSelect> | undefined> => {
-          const prior = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
-          await db.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
+          const prior = await db.query.apiTokens.findFirst({
+            where: organizationCompatibilityTokenWhere(org.id, tokenType),
+          });
+          await db.delete(apiTokens).where(organizationCompatibilityTokenWhere(org.id, tokenType));
           return prior;
         },
       );

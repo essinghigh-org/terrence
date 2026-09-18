@@ -22,7 +22,9 @@ type MockOrg = Readonly<{ id: string; externalId: string }>;
 type MockChild = Readonly<{ id: string; name: string }>;
 
 /** JSON:API create-token body captured by the fetch mock. */
-type PostedBody = { data: { type: string; attributes: JsonObject } } | null;
+type PostedBody = {
+  data: { type: string; attributes: JsonObject; relationships?: JsonObject };
+} | null;
 
 /** Token resource passed to onCreated. */
 type CreatedToken = { id: string; type: string; attributes: JsonObject };
@@ -188,6 +190,39 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
     },
   });
   expect(created!).toEqual({ id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } });
+});
+
+test("fixed organization creates an organization-owned token without an organization selector", async () => {
+  const { postedBody, fetchMock } = mockApi({
+    orgs: [{ id: "acme-org", externalId: "org-111" }],
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const view = render(
+    <TokenScopeDialog
+      open
+      fixedOrganization={{ id: "org-111", name: "acme-org" }}
+      onOpenChange={(): void => {
+        /* noop */
+      }}
+      onCreated={(): void => {
+        /* noop */
+      }}
+    />,
+  );
+
+  const dialog = await view.findByRole("dialog");
+  expect(within(dialog).getByText("Create organization API token")).toBeTruthy();
+  expect(within(dialog).getByText(/owned by acme-org/i)).toBeTruthy();
+  expect(within(dialog).queryByRole("combobox", { name: "Organization" })).toBeNull();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
+  await waitFor((): void => {
+    expect(postedBody()).not.toBeNull();
+  });
+  expect(postedBody()!.data.relationships).toEqual({
+    organization: { data: { id: "org-111", type: "organizations" } },
+  });
 });
 
 test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {

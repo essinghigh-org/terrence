@@ -93,6 +93,7 @@ export type LayoutOutletContext = Readonly<{
 }>;
 
 type OrganizationPermissions = Readonly<{
+  "can-update"?: boolean;
   "can-manage-agent-pools"?: boolean;
   "can-manage-projects"?: boolean;
   "can-manage-vcs-settings"?: boolean;
@@ -294,6 +295,7 @@ function resolvePageTitle(
 }
 
 type OrgCapabilities = {
+  canUpdateOrganization: boolean;
   canManageWorkspaces: boolean;
   canManageVcsSettings: boolean;
   canManageAgentPools: boolean;
@@ -306,6 +308,7 @@ function resolveOrgCapabilities(
   organizationPermissions: OrganizationPermissions | null,
 ): OrgCapabilities {
   return {
+    canUpdateOrganization: hasCurrentOrganizationPermissions && organizationPermissions?.["can-update"] === true,
     canManageWorkspaces:
       hasCurrentOrganizationPermissions && organizationPermissions?.["can-manage-workspaces"] === true,
     canManageVcsSettings:
@@ -404,7 +407,8 @@ function isGeneralSettingsActive(pathname: string, settingsPath: string, tab: st
     tab !== "cidr" &&
     tab !== "tags" &&
     tab !== "users" &&
-    tab !== "ssh-keys"
+    tab !== "ssh-keys" &&
+    tab !== "api-tokens"
   );
 }
 
@@ -419,22 +423,24 @@ function isPolicySetsActive(pathname: string, settingsPath: string): boolean {
 function visibleOrgSettingsLinks<T extends Readonly<{ label: string }>>(
   links: readonly T[],
   perms: Readonly<{
+    canUpdateOrganization: boolean;
     canManageWorkspaces: boolean;
     canManageVcsSettings: boolean;
     canManageAgentPools: boolean;
     canManagePolicies: boolean;
   }>,
 ): T[] {
-  return links.filter(
-    (link): boolean =>
-      (link.label !== "Variable sets" || perms.canManageWorkspaces) &&
-      (link.label !== "VCS providers" || perms.canManageVcsSettings) &&
-      (link.label !== "Agent pools" || perms.canManageAgentPools) &&
-      (link.label !== "Policy sets" || perms.canManagePolicies) &&
-      (link.label !== "Tag policy sets" || perms.canManagePolicies) &&
-      (link.label !== "OIDC" || perms.canManagePolicies) &&
-      (link.label !== "Stacks" || perms.canManageWorkspaces),
-  );
+  const permittedByLabel = new Map<string, boolean>([
+    ["API tokens", perms.canUpdateOrganization],
+    ["Variable sets", perms.canManageWorkspaces],
+    ["VCS providers", perms.canManageVcsSettings],
+    ["Agent pools", perms.canManageAgentPools],
+    ["Policy sets", perms.canManagePolicies],
+    ["Tag policy sets", perms.canManagePolicies],
+    ["OIDC", perms.canManagePolicies],
+    ["Stacks", perms.canManageWorkspaces],
+  ]);
+  return links.filter((link): boolean => permittedByLabel.get(link.label) !== false);
 }
 
 function AccountNav({
@@ -1180,6 +1186,7 @@ function OrganizationSettingsNav({
   pathname,
   organizationSettingsPath,
   organizationSettingsTab,
+  canUpdateOrganization,
   canManageWorkspaces,
   canManageVcsSettings,
   canManageAgentPools,
@@ -1192,6 +1199,7 @@ function OrganizationSettingsNav({
   pathname: string;
   organizationSettingsPath: string;
   organizationSettingsTab: string | null;
+  canUpdateOrganization: boolean;
   canManageWorkspaces: boolean;
   canManageVcsSettings: boolean;
   canManageAgentPools: boolean;
@@ -1242,6 +1250,12 @@ function OrganizationSettingsNav({
         to: `${organizationSettingsPath}?tab=ssh-keys`,
       },
       {
+        active: pathname === organizationSettingsPath && organizationSettingsTab === "api-tokens",
+        icon: KeyRound,
+        label: "API tokens",
+        to: `${organizationSettingsPath}?tab=api-tokens`,
+      },
+      {
         active: pathname === `${orgPath}/variable-sets`,
         icon: Variable,
         label: "Variable sets",
@@ -1285,6 +1299,7 @@ function OrganizationSettingsNav({
       },
     ] as const,
     {
+      canUpdateOrganization,
       canManageWorkspaces,
       canManageVcsSettings,
       canManageAgentPools,
@@ -1300,7 +1315,7 @@ function OrganizationSettingsNav({
       { label: "People", members: ["Users", "Teams", "Roles"] },
       { label: "Infrastructure", members: ["Variable sets", "VCS providers", "Agent pools", "Stacks"] },
       { label: "Policies", members: ["Policy sets", "Tag policy sets"] },
-      { label: "Security", members: ["IP allowlists", "SSH keys", "OIDC"] },
+      { label: "Security", members: ["IP allowlists", "SSH keys", "API tokens", "OIDC"] },
     ] as const
   )
     .map((group): { label: string; links: typeof links } => ({
@@ -1593,8 +1608,14 @@ export function Layout({ children }: Readonly<{ readonly children?: ReactNode }>
   usePageTitle(computedTitle);
 
   const hasCurrentOrganizationPermissions = organizationPermissionPath === orgPath;
-  const { canManageWorkspaces, canManageVcsSettings, canManageAgentPools, canManagePolicies, canReadProjects } =
-    resolveOrgCapabilities(hasCurrentOrganizationPermissions, organizationPermissions);
+  const {
+    canUpdateOrganization,
+    canManageWorkspaces,
+    canManageVcsSettings,
+    canManageAgentPools,
+    canManagePolicies,
+    canReadProjects,
+  } = resolveOrgCapabilities(hasCurrentOrganizationPermissions, organizationPermissions);
   const hasCurrentWorkspacePermissions = workspacePermissionPath === workspacePath;
   const [capabilities, setCapabilities] = useState<Capabilities>(DEFAULT_CAPABILITIES);
 
@@ -1770,6 +1791,7 @@ export function Layout({ children }: Readonly<{ readonly children?: ReactNode }>
           pathname={location.pathname}
           organizationSettingsPath={organizationSettingsPath}
           organizationSettingsTab={organizationSettingsTab}
+          canUpdateOrganization={canUpdateOrganization}
           canManageWorkspaces={canManageWorkspaces}
           canManageVcsSettings={canManageVcsSettings}
           canManageAgentPools={canManageAgentPools}
