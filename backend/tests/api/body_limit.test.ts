@@ -78,6 +78,54 @@ describe("request body size guard", () => {
     expect(response.status).toBe(413);
   });
 
+  test("rejects a chunked non-JSON body over the limit with 413", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(API_BODY_LIMIT_BYTES + 1024));
+        controller.close();
+      },
+    });
+    const response = await app.handle(
+      new Request("http://localhost/api/agent/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: stream,
+      }),
+    );
+    expect(response.status).toBe(413);
+  });
+
+  test("does not let an arbitrary /upload suffix opt into the large-body limit", async () => {
+    const response = await app.handle(
+      new Request("http://localhost/audit-body-limit/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(API_BODY_LIMIT_BYTES + 1024),
+        },
+        body: oversizedBody(),
+      }),
+    );
+    expect(response.status).toBe(413);
+  });
+
+  test("preserves normal urlencoded form parsing while applying the chunked guard", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("client_id=terraform-cli&grant_type=invalid"));
+        controller.close();
+      },
+    });
+    const response = await app.handle(
+      new Request("http://localhost/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      }),
+    );
+    expect(response.status).not.toBe(413);
+  });
+
   test("allows normal-sized JSON API bodies through the guard", async () => {
     const response = await app.handle(
       new Request("http://localhost/api/v2/users/login", {

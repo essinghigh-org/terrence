@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { staticCacheControl, staticMimeFor, buildContentSecurityPolicy } from "../../src/lib/security-headers";
+import {
+  staticCacheControl,
+  staticMimeFor,
+  buildContentSecurityPolicy,
+  shouldSendHsts,
+} from "../../src/lib/security-headers";
 
 describe("buildContentSecurityPolicy", (): void => {
   it("keeps img-src same-origin (avatars are proxied server-side)", (): void => {
@@ -9,6 +14,29 @@ describe("buildContentSecurityPolicy", (): void => {
     expect(directives).toContain("base-uri 'none'");
     expect(directives).toContain("img-src 'self' data:");
     expect(csp).not.toContain("https://");
+  });
+});
+
+describe("shouldSendHsts", (): void => {
+  it("honors an HTTPS PUBLIC_URL behind a plaintext reverse-proxy hop", (): void => {
+    const previous = process.env["PUBLIC_URL"];
+    process.env["PUBLIC_URL"] = "https://terraform.example.test";
+    try {
+      expect(shouldSendHsts(new Request("http://127.0.0.1:3000/api/v2/ping"))).toBeTrue();
+    } finally {
+      if (previous === undefined) delete process.env["PUBLIC_URL"];
+      else process.env["PUBLIC_URL"] = previous;
+    }
+  });
+
+  it("still recognizes a direct HTTPS request without PUBLIC_URL", (): void => {
+    const previous = process.env["PUBLIC_URL"];
+    delete process.env["PUBLIC_URL"];
+    try {
+      expect(shouldSendHsts(new Request("https://terraform.example.test/api/v2/ping"))).toBeTrue();
+    } finally {
+      if (previous !== undefined) process.env["PUBLIC_URL"] = previous;
+    }
   });
 });
 

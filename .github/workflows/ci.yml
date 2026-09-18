@@ -315,7 +315,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -382,20 +381,28 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  provider-canary-review:
+    name: Open provider canary review item
+    needs: provider-compatibility
+    if: always() && github.event_name == 'schedule' && needs.provider-compatibility.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      # Deliberately no checkout: this write-capable job must not execute repository code.
       - name: Open a review item for a failed canary
-        if: failure() && matrix.tier == 'canary'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          title="[CLI canary] ${TERRENCE_E2E_CLI} compatibility failure"
-          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          title="[CLI canary] provider compatibility failure"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
           if [ -z "$existing" ]; then
             cat > /tmp/canary-issue.md <<EOF
-          The scheduled ${TERRENCE_E2E_CLI} canary failed. Review the [CI run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) and its redacted CLI diagnostic artifacts.
+          The scheduled provider/CLI canary matrix failed. Review the [CI run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) and its redacted CLI diagnostic artifacts to identify the failing engine.
 
           The supported floor and current pins have not changed. Promote a new version only after the complete compatibility matrix passes.
           EOF
-            gh issue create --title "$title" --body-file /tmp/canary-issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/canary-issue.md
           fi
 
   cli-compatibility-report:

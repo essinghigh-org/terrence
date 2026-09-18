@@ -27,6 +27,7 @@ import { ensureBinary } from "../binaryManager";
 import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { runBoundedProcess } from "./bounded-process";
+import { gitExtraHeaderConfigKey } from "./vcs-credential-scope";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
 import {
   captureProcessOutput,
@@ -49,7 +50,12 @@ export function isStackStoragePath(path: string): boolean {
   return target === root || target.startsWith(`${root}/`);
 }
 
-type SourceCredentials = Readonly<{ provider: string; apiUrl: string | null; token: string | null }>;
+type SourceCredentials = Readonly<{
+  provider: string;
+  apiUrl: string | null;
+  httpUrl: string | null;
+  token: string | null;
+}>;
 
 function timeoutSeconds(value: unknown, fallback: number): number {
   if (typeof value === "number")
@@ -89,6 +95,7 @@ async function credentialsFor(stack: Stack): Promise<SourceCredentials> {
     return {
       provider: stack.vcsServiceProvider ?? client.serviceProvider,
       apiUrl: client.apiUrl,
+      httpUrl: client.httpUrl,
       token: await decryptSecret(token.token),
     };
   }
@@ -102,11 +109,16 @@ async function credentialsFor(stack: Stack): Promise<SourceCredentials> {
     if (installation === undefined) throw new Error("The Stack GitHub App installation is unavailable");
     const token = await getGitHubAppAccessToken(installation.installationId);
     if (token === null) throw new Error("The Stack GitHub App could not authenticate");
-    const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
-    if (apiUrl === undefined) throw new Error("The Stack GitHub App API URL is invalid");
-    return { provider: stack.vcsServiceProvider ?? "github", apiUrl, token };
+    const configuration = await getGitHubAppRuntimeConfiguration();
+    if (configuration === null) throw new Error("The Stack GitHub App configuration is invalid");
+    return {
+      provider: stack.vcsServiceProvider ?? "github",
+      apiUrl: configuration.apiUrl,
+      httpUrl: configuration.httpUrl,
+      token,
+    };
   }
-  return { provider: stack.vcsServiceProvider ?? "github", apiUrl: null, token: null };
+  return { provider: stack.vcsServiceProvider ?? "github", apiUrl: null, httpUrl: null, token: null };
 }
 
 function providerFamily(provider: string): "github" | "gitlab" | "ado" {
@@ -226,6 +238,7 @@ async function fetchGitArchive(stack: Stack, destination: string, signal: Readon
     stack.vcsRepositoryHttpUrl ??
     `https://${family === "ado" ? "dev.azure.com" : family === "gitlab" ? "gitlab.com" : "github.com"}/${stack.vcsIdentifier ?? ""}.git`;
   const url = checkedUrl(repository);
+  if (new URL(url).protocol !== "https:") throw new Error("The Stack VCS repository URL must use HTTPS");
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-git-"));
   const cloneDirectory = join(staging, "repo");
   const branch = stack.vcsBranch;
@@ -244,8 +257,10 @@ async function fetchGitArchive(stack: Stack, destination: string, signal: Readon
       family === "ado"
         ? `Basic ${Buffer.from(`:${credentials.token}`).toString("base64")}`
         : `Bearer ${credentials.token}`;
+    const configKey = gitExtraHeaderConfigKey(credentials.provider, credentials.apiUrl, credentials.httpUrl);
+    if (configKey === null) throw new Error("The Stack VCS credential origin is unavailable");
     env["GIT_CONFIG_COUNT"] = "1";
-    env["GIT_CONFIG_KEY_0"] = "http.extraHeader";
+    env["GIT_CONFIG_KEY_0"] = configKey;
     env["GIT_CONFIG_VALUE_0"] = `Authorization: ${auth}`;
   }
   try {

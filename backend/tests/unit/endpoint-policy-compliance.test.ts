@@ -60,6 +60,15 @@ describe("endpoint-policy (465-469)", () => {
 
   it("upload paths are recognized", () => {
     expect(isUploadPath("/api/v2/configuration-versions/cv-1/upload")).toBe(true);
+    expect(isUploadPath("/api/v2/state-versions/sv-1/json-upload")).toBe(true);
+    expect(isUploadPath("/api/v2/workspaces/ws-1/state-versions/upload")).toBe(true);
+    expect(isUploadPath("/api/v2/policies/pol-1/upload")).toBe(true);
+    expect(isUploadPath("/api/v2/policy-set-versions/psv-1/upload")).toBe(true);
+    expect(isUploadPath("/api/v2/registry-module-versions/rmv-1/upload")).toBe(true);
+    expect(isUploadPath("/api/v2/module-test-configuration-versions/cv-1/upload")).toBe(true);
+    expect(isUploadPath("/api/v2/stack-configurations/sc-1/upload")).toBe(true);
+    expect(isUploadPath("/api/agent/jobs/job-1/filesystem")).toBe(true);
+    expect(isUploadPath("/unknown/upload")).toBe(false);
     expect(isUploadPath("/api/v2/state-versions")).toBe(false);
   });
 
