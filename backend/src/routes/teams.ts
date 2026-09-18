@@ -520,17 +520,20 @@ async function resolveCallerTeamVisibility(
   callerIsSiteAdmin: boolean,
   tokenOrgId: string | null,
   tokenTeamId: string | null,
-): Promise<{ callerTeamIds: Set<string> | null; callerCanSeeSecret: boolean }> {
-  const callerIsOwner =
-    callerUserId !== null &&
-    (await db.query.organizationMemberships.findFirst({
-      where: and(
-        eq(organizationMemberships.orgId, orgId),
-        eq(organizationMemberships.userId, callerUserId),
-        eq(organizationMemberships.role, "owner"),
-        eq(organizationMemberships.status, "active"),
-      ),
-    })) !== undefined;
+): Promise<{
+  callerTeamIds: Set<string> | null;
+  callerCanSeeSecret: boolean;
+  callerHasActiveOrgMembership: boolean;
+}> {
+  const callerMembership =
+    callerUserId === null
+      ? undefined
+      : await db.query.organizationMemberships.findFirst({
+          where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, callerUserId)),
+          columns: { role: true, status: true },
+        });
+  const callerHasActiveOrgMembership = callerMembership?.status === "active";
+  const callerIsOwner = callerHasActiveOrgMembership && callerMembership?.role === "owner";
   // A team token identifies one team; it is not an organization-wide secret
   // roster token. Keep its visibility limited to public teams plus itself.
   let callerTeamIds: Set<string> | null = tokenTeamId === null ? null : new Set([tokenTeamId]);
@@ -556,7 +559,7 @@ async function resolveCallerTeamVisibility(
       );
     }
   }
-  return { callerTeamIds, callerCanSeeSecret };
+  return { callerTeamIds, callerCanSeeSecret, callerHasActiveOrgMembership };
 }
 
 function buildVisibleTeamWhere(orgId: string, callerCanSeeSecret: boolean, callerTeamIds: Set<string> | null) {
@@ -986,7 +989,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       ]);
       const { number, size } = pageRequest(request);
       const callerUserId = user?.id ?? null;
-      const { callerTeamIds, callerCanSeeSecret } = await resolveCallerTeamVisibility(
+      const { callerTeamIds, callerCanSeeSecret, callerHasActiveOrgMembership } = await resolveCallerTeamVisibility(
         org.id,
         callerUserId,
         user?.isSiteAdmin === true,
@@ -1007,7 +1010,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const scimEnabled =
         (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true;
       const { membersByTeam, mappingByTeam, groupById } = await loadTeamListAssociations(teamIds, scimEnabled);
-      const memberTokenManagementAllowed = currentTokenScopes() === null;
+      const memberTokenManagementAllowed = currentTokenScopes() === null && callerHasActiveOrgMembership;
       const data = teamList.map(async (t: TeamItem): Promise<Record<string, unknown>> => {
         const userRefs = canReadMembers ? (membersByTeam.get(t.id) ?? []) : [];
         const mapping = mappingByTeam.get(t.id);

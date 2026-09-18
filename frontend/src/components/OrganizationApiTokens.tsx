@@ -24,6 +24,13 @@ function tokenDate(token: ApiToken, key: string, fallback: string): string {
   return isString(value) && value !== "" ? formatDateTime(value) : fallback;
 }
 
+function tokenScopeSummary(token: ApiToken, orgName: string): string {
+  if (token.attributes["scopes"] !== null) {
+    return summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"]);
+  }
+  return `Organization-wide access within ${orgName} · expires: ${tokenDate(token, "expired-at", "Never")}`;
+}
+
 // eslint-disable-next-line complexity -- coordinates loading, one-time secret disclosure, creation, refresh, and revocation states
 export function OrganizationApiTokens({
   orgId,
@@ -242,7 +249,7 @@ export function OrganizationApiTokens({
                         <div>
                           <span>{tokenDescription(token)}</span>
                           <p className="mt-1 max-w-xl break-words text-xs font-normal text-muted-foreground">
-                            {summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"])}
+                            {tokenScopeSummary(token, orgName)}
                           </p>
                         </div>
                       </TableCell>

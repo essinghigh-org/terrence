@@ -23,6 +23,11 @@ import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
 type Team = Readonly<{ id: string; attributes: Readonly<JsonObject> }>;
+type TokenTeamSelection = Readonly<{ orgName: string; team: Team }>;
+
+function tokenTeamForOrganization(selection: TokenTeamSelection | null, orgName: string): Team | null {
+  return selection !== null && selection.orgName === orgName ? selection.team : null;
+}
 type Role = Readonly<{
   id: string;
   attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }>;
@@ -1467,7 +1472,14 @@ function OrganizationApiTokensTab({
   if (activeTab !== "api-tokens") return null;
   const externalId = org.attributes["external-id"];
   const orgId = isString(externalId) ? externalId : "";
-  return <OrganizationApiTokens orgId={orgId} orgName={orgName} canManage={canUpdateOrganization && orgId !== ""} />;
+  return (
+    <OrganizationApiTokens
+      key={orgName}
+      orgId={orgId}
+      orgName={orgName}
+      canManage={canUpdateOrganization && orgId !== ""}
+    />
+  );
 }
 
 function TeamApiTokenManager({
@@ -1523,7 +1535,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const [membershipsError, setMembershipsError] = useState("");
   const [newTeamName, setNewTeamName] = useState("");
   const [editingTeamId, setEditingTeamId] = useState("");
-  const [tokenTeam, setTokenTeam] = useState<Team | null>(null);
+  const [tokenTeam, setTokenTeam] = useState<TokenTeamSelection | null>(null);
   const [teamPermissions, setTeamPermissions] = useState<Record<OrganizationPermission, boolean>>(
     (): Record<OrganizationPermission, boolean> =>
       // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
@@ -1557,6 +1569,7 @@ export function OrganizationSettings(): React.JSX.Element {
     orgCapabilityFlags(org, orgNameParam);
 
   useEffect((): void => {
+    setTokenTeam(null);
     setTeams([]);
     setTeamsError("");
     setMemberships([]);
@@ -2278,7 +2291,9 @@ export function OrganizationSettings(): React.JSX.Element {
             onRemoveMember={(teamId: string, member: { id: string; username: string }): void => {
               void removeTeamMember(teamId, member);
             }}
-            onManageTokens={setTokenTeam}
+            onManageTokens={(team: Team): void => {
+              setTokenTeam({ orgName: orgNameParam, team });
+            }}
             onInvite={inviteMember}
             onRetryTeams={(): void => {
               void loadTeams();
@@ -2292,7 +2307,7 @@ export function OrganizationSettings(): React.JSX.Element {
       </div>
 
       <TeamApiTokenManager
-        team={tokenTeam}
+        team={tokenTeamForOrganization(tokenTeam, orgNameParam)}
         onClose={(): void => {
           setTokenTeam(null);
         }}

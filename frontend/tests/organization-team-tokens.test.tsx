@@ -58,6 +58,8 @@ test("organization token settings use the modern plural collection and keep comp
   const view = render(<OrganizationApiTokens orgId="org-111" orgName="acme" canManage />);
 
   expect(await view.findByText("CI organization token")).toBeTruthy();
+  expect(view.getByText(/Organization-wide access within acme/i)).toBeTruthy();
+  expect(view.queryByText(/Legacy token.*all organizations/i)).toBeNull();
   expect(view.getByText(/TFE-compatible singular organization credentials remain API-only/i)).toBeTruthy();
 
   fireEvent.click(view.getByRole("button", { name: "New token" }));
