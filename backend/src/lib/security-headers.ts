@@ -97,10 +97,28 @@ export function applySecurityHeaders(
 /** HSTS value when Terrence knows it is being served over HTTPS (includeSubDomains, 1 year). */
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
 
-/** Whether a response should carry HSTS. Caller passes the request so we can check the scheme / X-Forwarded-Proto. */
+function publicUrlUsesHttps(): boolean {
+  const configured = process.env["PUBLIC_URL"]?.trim();
+  if (configured === undefined || configured === "") return false;
+  try {
+    return new URL(configured).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a response should carry HSTS.
+ *
+ * PUBLIC_URL is the deployment's authoritative external origin. In the common
+ * TLS-terminating reverse-proxy deployment, the request that reaches Terrence is
+ * plain HTTP even though the browser-facing origin is HTTPS. Relying only on
+ * the internal request scheme silently drops HSTS in exactly that topology.
+ */
 export function shouldSendHsts(
   request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>,
 ): boolean {
+  if (publicUrlUsesHttps()) return true;
   // Lazy require: a static import cycles back through settings/run-logs and
   // crashes module init with a TDZ error (verified 2026-09-11).
   try {

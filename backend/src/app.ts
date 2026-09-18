@@ -2,6 +2,7 @@ import { SettingsValidationError } from "./lib/settings-contract";
 import { databaseConstraint } from "./lib/database-errors";
 import { executionSetting, integerSetting } from "./lib/runtime-config";
 import { Elysia } from "elysia";
+import { parseQuery } from "elysia/parse-query";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
@@ -27,7 +28,7 @@ import {
 } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
 import { recordRequestLatency, requestFinished, requestStarted } from "./lib/process-metrics";
-import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
+import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readBytesWithLimit, readTextWithLimit } from "./lib/body-limit";
 import {
   acceptsJsonApi,
   isJsonApiContentType,
@@ -187,6 +188,79 @@ type ParseContext = Readonly<{
   request: CustomRequest;
   contentType: string;
 }>;
+
+type ParsedRequestBody = Record<string, unknown> | string | ArrayBuffer | null | undefined;
+
+function requestHasBody(request: CustomRequest): boolean {
+  const requestBody = (request as CustomRequest & { readonly body?: unknown }).body;
+  if (requestBody !== undefined) return requestBody !== null;
+  return Number(request.headers.get("content-length")) > 0 || request.headers.get("transfer-encoding") !== null;
+}
+
+function isRawBoundedTextPath(pathname: string): boolean {
+  return (
+    pathname === "/api/webhooks/github" ||
+    pathname === "/api/webhooks/bitbucket" ||
+    pathname === "/api/v2/webhooks/run-approval" ||
+    /^\/api\/agent\/jobs\/[^/]+\/log$/.test(pathname)
+  );
+}
+
+async function parseBoundedJson(request: CustomRequest): Promise<Record<string, unknown> | null> {
+  const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+async function parseJsonApiBody(request: CustomRequest): Promise<Record<string, unknown> | string | null> {
+  const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+  if (!isJsonApiContentType(request.headers.get("content-type"))) return text;
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function requestMediaType(request: CustomRequest, contentType: string): string {
+  const resolved = contentType === "" ? request.headers.get("content-type") : contentType;
+  return (resolved ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+async function parseBoundedGenericBody(
+  request: CustomRequest,
+  contentType: string,
+): Promise<string | ArrayBuffer | Record<string, unknown>> {
+  const mediaType = requestMediaType(request, contentType);
+  if (mediaType === "application/x-www-form-urlencoded") {
+    return parseQuery(await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES));
+  }
+  if (mediaType.startsWith("text/")) {
+    return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+  }
+  const bytes = await readBytesWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+async function parseBoundedRequestBody({ request, contentType }: ParseContext): Promise<ParsedRequestBody> {
+  const pathname = new URL(request.url).pathname;
+  const hasBody = requestHasBody(request);
+  // State upload checksums bind the exact bytes, including whitespace.
+  if (/^\/api\/v2\/state-versions\/[^/]+\/upload$/.test(pathname)) {
+    return readTextWithLimit(request as unknown as Request, 100 * 1024 * 1024);
+  }
+  if (hasBody && isJsonApiRequestPath(pathname)) return parseJsonApiBody(request);
+  // HMAC webhooks and agent logs need their exact wire representation.
+  if (isRawBoundedTextPath(pathname)) {
+    return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+  }
+  if (isJsonContentType(contentType) && !isUploadPath(pathname)) return parseBoundedJson(request);
+  if (hasBody && !isUploadPath(pathname)) return parseBoundedGenericBody(request, contentType);
+  return undefined;
+}
 
 type MediaTypeContext = Readonly<{
   request: CustomRequest;
@@ -1236,61 +1310,7 @@ export const app = new Elysia()
     const etagResponse = applyDocumentEtag(request, headers, pathname, doc.isJsonDocument, response);
     if (etagResponse !== null) return etagResponse;
   })
-  .onParse(
-    async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
-      const pathname = new URL(request.url).pathname;
-      const requestBody = (request as CustomRequest & { readonly body?: unknown }).body;
-      const hasBody =
-        requestBody !== undefined
-          ? requestBody !== null
-          : Number(request.headers.get("content-length")) > 0 || request.headers.get("transfer-encoding") !== null;
-      // State upload checksums bind the exact bytes, including whitespace.
-      if (/^\/api\/v2\/state-versions\/[^/]+\/upload$/.test(pathname)) {
-        return readTextWithLimit(request as unknown as Request, 100 * 1024 * 1024);
-      }
-      if (hasBody && isJsonApiRequestPath(pathname)) {
-        // Read through the same bounded path used for JSON. Invalid media types
-        // remain text until the authenticated onBeforeHandle guard returns 415;
-        // this preserves auth/permission precedence without losing the 4 MiB
-        // chunked-body limit.
-        const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
-        if (!isJsonApiContentType(request.headers.get("content-type"))) return text;
-        try {
-          return JSON.parse(text) as Record<string, unknown>;
-        } catch {
-          return null;
-        }
-      }
-      // HMAC-verified webhooks must verify against the exact bytes on the wire;
-      // a JSON round-trip would re-serialize noncanonically and break signatures.
-      if (
-        pathname === "/api/webhooks/github" ||
-        pathname === "/api/webhooks/bitbucket" ||
-        pathname === "/api/v2/webhooks/run-approval" ||
-        // Agent log chunks are raw stream text (never JSON); a JSON-flavored
-        // content-type would make Elysia consume the stream and drop the body.
-        /^\/api\/agent\/jobs\/[^/]+\/log$/.test(pathname)
-      ) {
-        return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
-      }
-      // Any valid JSON media type (vnd.api+json, application/json,
-      // application/scim+json, ...) is capped and parsed here so chunked
-      // bodies without Content-Length cannot buffer up to the 100 MiB server
-      // limit. Archive-upload paths are exempt: state and configuration
-      // uploads legitimately carry JSON content types up to the 100 MiB
-      // server cap, and their routes enforce their own limits. Arbitrary
-      // strings that merely contain "json" are not treated as JSON and fall
-      // through to Elysia's default parser.
-      if (isJsonContentType(contentType) && !isUploadPath(pathname)) {
-        const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
-        try {
-          return JSON.parse(text) as Record<string, unknown>;
-        } catch {
-          return null;
-        }
-      }
-    },
-  )
+  .onParse(parseBoundedRequestBody)
   // Keep these routes below authentication, password-change, scope, and rate
   // limit hooks. The version endpoint performs outbound work and must not be
   // an unauthenticated, unbounded escape hatch from the application policy.
