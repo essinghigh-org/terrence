@@ -7,7 +7,7 @@
       "id": "override-brace-expansion",
       "kind": "dependency-override",
       "package": "brace-expansion",
-      "constraint": "5.0.9",
+      "constraint": "5.0.12",
       "owner": "platform-maintainers",
       "reason": "Keep the transitive brace-expansion resolution on the reviewed patched release while upstream ranges converge.",
       "disposition": "Accepted override; re-check consumers before renewal.",
