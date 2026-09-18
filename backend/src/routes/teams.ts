@@ -51,6 +51,7 @@ type ParamCtx = Readonly<{
 
 type TeamItem = Readonly<{
   readonly id: string;
+  readonly orgId: string;
   readonly name: string;
   readonly description: string | null;
   readonly visibility: string;
@@ -229,14 +230,64 @@ type TeamScim = {
   groupName: string | null;
 };
 
-type TeamPermissions = Readonly<{ canUpdate: boolean; canDestroy: boolean }>;
+type TeamPermissions = Readonly<{ canUpdate: boolean; canDestroy: boolean; canManageTokens: boolean }>;
+
+async function canManageTeamTokens(
+  team: TeamItem,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+): Promise<boolean> {
+  if (await checkOrganizationPermission(team.orgId, userId, tokenOrgId, tokenTeamId, "manage-teams")) return true;
+  // Scoped credentials must not gain token-minting authority merely because
+  // their backing user belongs to a team. The explicit teams:write grant path
+  // above remains available for read/revoke operations, while POST handlers
+  // separately reject scoped credentials from minting unscoped team tokens.
+  if (currentTokenScopes() !== null || userId === undefined || team.allowMemberTokenManagement !== true) return false;
+  const [orgMembership, teamMembership] = await Promise.all([
+    db.query.organizationMemberships.findFirst({
+      where: and(
+        eq(organizationMemberships.orgId, team.orgId),
+        eq(organizationMemberships.userId, userId),
+        eq(organizationMemberships.status, "active"),
+      ),
+      columns: { id: true },
+    }),
+    db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.userId, userId)),
+      columns: { id: true },
+    }),
+  ]);
+  return orgMembership !== undefined && teamMembership !== undefined;
+}
+
+async function resolveTeamDetailAccess(
+  team: TeamItem,
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<{ canReadMembers: boolean; permissions: TeamPermissions }> {
+  const [canReadMembers, canManageTeams, canManageTokens] = await Promise.all([
+    checkOrgPermission(userId, team.orgId, "member", tokenOrgId, tokenTeamId, "members:read"),
+    checkOrganizationPermission(team.orgId, userId, tokenOrgId, tokenTeamId, "manage-teams"),
+    canManageTeamTokens(team, userId, tokenOrgId, tokenTeamId),
+  ]);
+  return {
+    canReadMembers,
+    permissions: {
+      canUpdate: canManageTeams,
+      canDestroy: canManageTeams,
+      canManageTokens,
+    },
+  };
+}
 
 async function teamResource(
   team: TeamItem,
   userCount: number,
   linkage?: TeamLinkage,
   scim?: TeamScim,
-  permissions: TeamPermissions = { canUpdate: false, canDestroy: false },
+  permissions: TeamPermissions = { canUpdate: false, canDestroy: false, canManageTokens: false },
 ): Promise<Record<string, unknown>> {
   return {
     id: team.id,
@@ -250,7 +301,11 @@ async function teamResource(
       "allow-member-token-management": team.allowMemberTokenManagement === true,
       "policy-override-delegation-expires-at": team.policyOverrideDelegationExpiresAt ?? null,
       "users-count": userCount,
-      permissions: { "can-update": permissions.canUpdate, "can-destroy": permissions.canDestroy },
+      permissions: {
+        "can-update": permissions.canUpdate,
+        "can-destroy": permissions.canDestroy,
+        "can-manage-tokens": permissions.canManageTokens,
+      },
       ...(scim?.enabled === true
         ? {
             "scim-linked": scim.mapping !== undefined,
@@ -465,17 +520,20 @@ async function resolveCallerTeamVisibility(
   callerIsSiteAdmin: boolean,
   tokenOrgId: string | null,
   tokenTeamId: string | null,
-): Promise<{ callerTeamIds: Set<string> | null; callerCanSeeSecret: boolean }> {
-  const callerIsOwner =
-    callerUserId !== null &&
-    (await db.query.organizationMemberships.findFirst({
-      where: and(
-        eq(organizationMemberships.orgId, orgId),
-        eq(organizationMemberships.userId, callerUserId),
-        eq(organizationMemberships.role, "owner"),
-        eq(organizationMemberships.status, "active"),
-      ),
-    })) !== undefined;
+): Promise<{
+  callerTeamIds: Set<string> | null;
+  callerCanSeeSecret: boolean;
+  callerHasActiveOrgMembership: boolean;
+}> {
+  const callerMembership =
+    callerUserId === null
+      ? undefined
+      : await db.query.organizationMemberships.findFirst({
+          where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, callerUserId)),
+          columns: { role: true, status: true },
+        });
+  const callerHasActiveOrgMembership = callerMembership?.status === "active";
+  const callerIsOwner = callerHasActiveOrgMembership && callerMembership?.role === "owner";
   // A team token identifies one team; it is not an organization-wide secret
   // roster token. Keep its visibility limited to public teams plus itself.
   let callerTeamIds: Set<string> | null = tokenTeamId === null ? null : new Set([tokenTeamId]);
@@ -501,7 +559,7 @@ async function resolveCallerTeamVisibility(
       );
     }
   }
-  return { callerTeamIds, callerCanSeeSecret };
+  return { callerTeamIds, callerCanSeeSecret, callerHasActiveOrgMembership };
 }
 
 function buildVisibleTeamWhere(orgId: string, callerCanSeeSecret: boolean, callerTeamIds: Set<string> | null) {
@@ -931,7 +989,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       ]);
       const { number, size } = pageRequest(request);
       const callerUserId = user?.id ?? null;
-      const { callerTeamIds, callerCanSeeSecret } = await resolveCallerTeamVisibility(
+      const { callerTeamIds, callerCanSeeSecret, callerHasActiveOrgMembership } = await resolveCallerTeamVisibility(
         org.id,
         callerUserId,
         user?.isSiteAdmin === true,
@@ -952,6 +1010,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const scimEnabled =
         (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true;
       const { membersByTeam, mappingByTeam, groupById } = await loadTeamListAssociations(teamIds, scimEnabled);
+      const memberTokenManagementAllowed = currentTokenScopes() === null && callerHasActiveOrgMembership;
       const data = teamList.map(async (t: TeamItem): Promise<Record<string, unknown>> => {
         const userRefs = canReadMembers ? (membersByTeam.get(t.id) ?? []) : [];
         const mapping = mappingByTeam.get(t.id);
@@ -965,6 +1024,12 @@ export const teamRoutes = new Elysia({ name: "teams" })
         return teamResource(t, userRefs.length, { users: userRefs }, scim, {
           canUpdate: canManageTeams,
           canDestroy: canManageTeams,
+          canManageTokens:
+            canManageTeams ||
+            (memberTokenManagementAllowed &&
+              callerUserId !== null &&
+              t.allowMemberTokenManagement === true &&
+              callerTeamIds?.has(t.id) === true),
         });
       });
       return teamListResponse(request, number, size, countRows, data);
@@ -1033,7 +1098,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
         });
       });
       (set as { status: number }).status = 201;
-      return { data: await teamResource(newTeam, 0, { users: [] }, undefined, { canUpdate: true, canDestroy: true }) };
+      return {
+        data: await teamResource(newTeam, 0, { users: [] }, undefined, {
+          canUpdate: true,
+          canDestroy: true,
+          canManageTokens: true,
+        }),
+      };
     },
   )
   .get(
@@ -1051,11 +1122,12 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const userCount =
         (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ??
         0;
-      const [canReadMembers, canManageTeams] = await Promise.all([
-        checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "members:read"),
-        checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"),
-      ]);
-      const permissions: TeamPermissions = { canUpdate: canManageTeams, canDestroy: canManageTeams };
+      const { canReadMembers, permissions } = await resolveTeamDetailAccess(
+        team,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+      );
       const rosterCount = canReadMembers ? userCount : 0;
       const members = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, team.id) });
       const scim = await teamScim(
@@ -1136,7 +1208,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
           userCount,
           { users: memberRefs.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) },
           scim,
-          { canUpdate: true, canDestroy: true },
+          { canUpdate: true, canDestroy: true, canManageTokens: true },
         ),
       };
     },
@@ -1341,10 +1413,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       }
       const teamId = params["team_id"] ?? "";
       const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-      if (
-        team === undefined ||
-        !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))
-      ) {
+      if (team === undefined || !(await canManageTeamTokens(team, user?.id, tokenOrgId, tokenTeamId ?? null))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -1390,10 +1459,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
       const teamId = params["team_id"] ?? "";
       const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-      if (
-        team === undefined ||
-        !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))
-      ) {
+      if (team === undefined || !(await canManageTeamTokens(team, user?.id, tokenOrgId, tokenTeamId ?? null))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -1424,10 +1490,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
       const teamId = params["team_id"] ?? "";
       const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-      if (
-        team === undefined ||
-        !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))
-      ) {
+      if (team === undefined || !(await canManageTeamTokens(team, user?.id, tokenOrgId, tokenTeamId ?? null))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -1458,10 +1521,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       }
       const teamId = params["team_id"] ?? "";
       const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-      if (
-        team === undefined ||
-        !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))
-      ) {
+      if (team === undefined || !(await canManageTeamTokens(team, user?.id, tokenOrgId, tokenTeamId ?? null))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -1523,10 +1583,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
       const teamId = params["team_id"] ?? "";
       const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-      if (
-        team === undefined ||
-        !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))
-      ) {
+      if (team === undefined || !(await canManageTeamTokens(team, user?.id, tokenOrgId, tokenTeamId ?? null))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -1564,10 +1621,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const teamId = params["team_id"] ?? "";
       const tokenId = params["token_id"] ?? "";
       const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
-      if (
-        team === undefined ||
-        !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))
-      ) {
+      if (team === undefined || !(await canManageTeamTokens(team, user?.id, tokenOrgId, tokenTeamId ?? null))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }

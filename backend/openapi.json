@@ -52929,6 +52929,46 @@
           }
         }
       }
+    },
+    "/api/v2/organizations/{org_name}/authentication-tokens": {
+      "get": {
+        "operationId": "get-api-v2-organizations-org-name-authentication-tokens",
+        "tags": [
+          "organizations"
+        ],
+        "parameters": [
+          {
+            "name": "org_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/organizations/{org_name}/authentication-tokens",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
     }
   },
   "components": {

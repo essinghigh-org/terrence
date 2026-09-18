@@ -129,6 +129,54 @@ describe("teams and team access API contract", () => {
     } finally {
       await db.update(apiTokens).set({ scopes: null }).where(eq(apiTokens.userId, userId));
     }
+
+    const memberTeamDetail = await request(`/api/v2/teams/${teamId}`, "GET", undefined, memberToken);
+    expect(memberTeamDetail.status).toBe(200);
+    expect((await memberTeamDetail.json()).data.attributes.permissions["can-manage-tokens"]).toBe(true);
+
+    const memberCreatedToken = await request(
+      `/api/v2/teams/${teamId}/authentication-tokens`,
+      "POST",
+      { data: { attributes: { description: "Member-managed token" } } },
+      memberToken,
+    );
+    expect(memberCreatedToken.status).toBe(201);
+    const memberCreatedTokenId = (await memberCreatedToken.json()).data.id as string;
+    expect(
+      (
+        (await (await request(`/api/v2/teams/${teamId}/authentication-tokens`, "GET", undefined, memberToken)).json())
+          .data as { id: string }[]
+      ).some((entry) => entry.id === memberCreatedTokenId),
+    ).toBeTrue();
+    expect(
+      (
+        await request(
+          `/api/v2/teams/${teamId}/authentication-tokens/${memberCreatedTokenId}`,
+          "DELETE",
+          undefined,
+          memberToken,
+        )
+      ).status,
+    ).toBe(204);
+
+    expect(
+      (
+        await request(`/api/v2/teams/${teamId}`, "PATCH", {
+          data: { attributes: { "allow-member-token-management": false } },
+        })
+      ).status,
+    ).toBe(200);
+    expect((await request(`/api/v2/teams/${teamId}/authentication-tokens`, "GET", undefined, memberToken)).status).toBe(
+      404,
+    );
+    expect(
+      (
+        await request(`/api/v2/teams/${teamId}`, "PATCH", {
+          data: { attributes: { "allow-member-token-management": true } },
+        })
+      ).status,
+    ).toBe(200);
+
     expect(
       (
         await request(`/api/v2/teams/${teamId}`, "PATCH", {

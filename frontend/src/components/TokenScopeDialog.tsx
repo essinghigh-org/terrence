@@ -465,10 +465,12 @@ export function TokenScopeDialog({
   open,
   onOpenChange,
   onCreated,
+  fixedOrganization,
 }: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (token: { id: string; type: string; attributes: JsonObject }) => void;
+  fixedOrganization?: Readonly<{ id: string; name: string }>;
 }>): React.JSX.Element {
   const [description, setDescription] = useState("");
   const [fineGrained, setFineGrained] = useState(false);
@@ -490,6 +492,11 @@ export function TokenScopeDialog({
   useEffect((): void => {
     if (!open) return;
     setError("");
+    if (fixedOrganization !== undefined) {
+      setOrgs([fixedOrganization]);
+      setOrgId(fixedOrganization.id);
+      return;
+    }
     void fetchApi<{ data?: { id: string; attributes?: JsonObject }[] }>("/organizations?page[size]=100")
       .then((response): void => {
         const data = response.data ?? [];
@@ -511,7 +518,7 @@ export function TokenScopeDialog({
       .catch((): void => {
         setError("Could not load organizations");
       });
-  }, [open]);
+  }, [open, fixedOrganization?.id, fixedOrganization?.name]);
 
   // Load projects + workspaces for the selected org.
   useEffect((): (() => void) | undefined => {
@@ -687,7 +694,7 @@ export function TokenScopeDialog({
   const reset = (): void => {
     setDescription("");
     setFineGrained(false);
-    setOrgId("");
+    setOrgId(fixedOrganization?.id ?? "");
     setSelectedProjects(new Set());
     setSelectedWorkspaces(new Set());
     setProjectSearch("");
@@ -721,7 +728,19 @@ export function TokenScopeDialog({
       };
       const created = (await fetchApi("/tokens", {
         method: "POST",
-        body: JSON.stringify({ data: { attributes } }),
+        body: JSON.stringify({
+          data: {
+            type: "tokens",
+            attributes,
+            ...(fixedOrganization === undefined
+              ? {}
+              : {
+                  relationships: {
+                    organization: { data: { id: fixedOrganization.id, type: "organizations" } },
+                  },
+                }),
+          },
+        }),
       })) as { data: { id: string; type: string; attributes: JsonObject } };
       onCreated(created.data);
       onOpenChange(false);
@@ -769,7 +788,11 @@ export function TokenScopeDialog({
   const totalGrantedCount = useMemo((): number => Object.values(granted).filter(Boolean).length, [granted]);
 
   const currentScopeSummary = useMemo((): string => {
-    if (!fineGrained) return summarizeTokenScopes(null);
+    if (!fineGrained) {
+      return fixedOrganization === undefined
+        ? summarizeTokenScopes(null)
+        : `Organization token · full access within ${fixedOrganization.name}`;
+    }
     return summarizeTokenScopes({
       orgs: orgId === "" ? [] : [orgId],
       projects: selectedProjects.size > 0 ? [...selectedProjects] : null,
@@ -777,7 +800,7 @@ export function TokenScopeDialog({
       tags: serializeTags(tagTree),
       permissions: Object.fromEntries(Object.entries(granted).filter(([, value]): boolean => value)),
     });
-  }, [fineGrained, granted, orgId, selectedProjects, selectedWorkspaces, tagTree]);
+  }, [fineGrained, fixedOrganization, granted, orgId, selectedProjects, selectedWorkspaces, tagTree]);
 
   const rootPath: readonly number[] = [];
   const renderRuleRow = (node: TagRuleNode, path: readonly number[]): React.JSX.Element => {
@@ -949,11 +972,12 @@ export function TokenScopeDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Shield className="size-5 text-primary" />
-            Create API token
+            {fixedOrganization === undefined ? "Create API token" : "Create organization API token"}
           </DialogTitle>
           <DialogDescription>
-            Fine-grained tokens restrict access to specific organizations, projects, workspaces, and tag rules, with
-            customizable per-action permission grants.
+            {fixedOrganization === undefined
+              ? "Fine-grained tokens restrict access to specific organizations, projects, workspaces, and tag rules, with customizable per-action permission grants."
+              : `Create a service credential owned by ${fixedOrganization.name}. Fine-grained mode can further restrict it to specific projects, workspaces, tag rules, and actions.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -987,16 +1011,16 @@ export function TokenScopeDialog({
             <div>
               <span className="font-semibold text-foreground text-sm">Fine-grained</span>
               <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                Restrict this token to specific resources, tag rules, and action permissions. Legacy tokens have
-                unrestricted access to all resources.
+                Restrict this token to specific resources, tag rules, and action permissions.
               </span>
             </div>
           </label>
 
           {!fineGrained && (
             <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning-text">
-              This legacy token has full access to every organization and resource available to your account. Choose a
-              fine-grained token for a narrower task.
+              {fixedOrganization === undefined
+                ? "This token has full access to every organization and resource available to your account. Choose a fine-grained token for a narrower task."
+                : `This organization token has broad access within ${fixedOrganization.name}. Choose fine-grained mode for a narrower automation task.`}
             </div>
           )}
 
@@ -1056,24 +1080,33 @@ export function TokenScopeDialog({
                   <Building2 className="size-3.5 text-muted-foreground" />
                   Organization
                 </label>
-                <Select
-                  id="token-org"
-                  name="token-organization"
-                  value={orgId}
-                  onChange={(e): void => {
-                    setOrgId(e.target.value);
-                    setSelectedProjects(new Set());
-                    setSelectedWorkspaces(new Set());
-                  }}
-                >
-                  {orgs.map(
-                    (org): React.JSX.Element => (
-                      <option key={org.id} value={org.id}>
-                        {org.name}
-                      </option>
-                    ),
-                  )}
-                </Select>
+                {fixedOrganization === undefined ? (
+                  <Select
+                    id="token-org"
+                    name="token-organization"
+                    value={orgId}
+                    onChange={(e): void => {
+                      setOrgId(e.target.value);
+                      setSelectedProjects(new Set());
+                      setSelectedWorkspaces(new Set());
+                    }}
+                  >
+                    {orgs.map(
+                      (org): React.JSX.Element => (
+                        <option key={org.id} value={org.id}>
+                          {org.name}
+                        </option>
+                      ),
+                    )}
+                  </Select>
+                ) : (
+                  <div
+                    id="token-org"
+                    className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground"
+                  >
+                    {fixedOrganization.name}
+                  </div>
+                )}
               </div>
 
               {/* Projects & Workspaces Grid */}

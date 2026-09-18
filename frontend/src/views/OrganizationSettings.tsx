@@ -15,12 +15,19 @@ import { HelpTooltip } from "../components/ui/help-tooltip";
 import { OrganizationCidrRanges } from "../components/OrganizationCidrRanges";
 import { OrganizationTags } from "../components/OrganizationTags";
 import { OrganizationSshKeys } from "../components/OrganizationSshKeys";
+import { OrganizationApiTokens } from "../components/OrganizationApiTokens";
+import { TeamApiTokensDialog } from "../components/TeamApiTokensDialog";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { PageHeader, PageShell, SettingsSection } from "../components/PageHeader";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
 type Team = Readonly<{ id: string; attributes: Readonly<JsonObject> }>;
+type TokenTeamSelection = Readonly<{ orgName: string; team: Team }>;
+
+function tokenTeamForOrganization(selection: TokenTeamSelection | null, orgName: string): Team | null {
+  return selection !== null && selection.orgName === orgName ? selection.team : null;
+}
 type Role = Readonly<{
   id: string;
   attributes: Readonly<{ name?: string; description?: string | null; permissions?: Record<string, boolean> }>;
@@ -898,6 +905,7 @@ function TeamRow({
   onAddMemberChange,
   onAddMember,
   onRemoveMember,
+  onManageTokens,
 }: Readonly<{
   team: Team;
   editing: boolean;
@@ -919,9 +927,13 @@ function TeamRow({
   onAddMemberChange: (teamId: string, value: string) => void;
   onAddMember: (teamId: string) => void;
   onRemoveMember: (teamId: string, member: { id: string; username: string }) => void;
+  onManageTokens: (team: Team) => void;
 }>): React.JSX.Element {
   // SAFETY: the fixture field is a string per the API contract.
   const teamName = team.attributes["name"] as string;
+  const rawPermissions = team.attributes["permissions"];
+  const canManageTokens =
+    isRecord(rawPermissions) && !Array.isArray(rawPermissions) && rawPermissions["can-manage-tokens"] === true;
   return (
     <div key={team.id}>
       <div className="flex items-center justify-between gap-3 p-4 hover:bg-muted transition-colors">
@@ -949,6 +961,18 @@ function TeamRow({
               (team.attributes["visibility"] as string | undefined) ?? "organization"
             }
           </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label={`Manage API tokens for ${teamName}`}
+            disabled={!canManageTokens}
+            onClick={(): void => {
+              onManageTokens(team);
+            }}
+          >
+            API tokens
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -1109,6 +1133,7 @@ function TeamsTab({
   onRetryTeams,
   onRetryMembers,
   onRemoveRequest,
+  onManageTokens,
 }: Readonly<{
   teams: readonly Team[];
   teamsError: string;
@@ -1146,6 +1171,7 @@ function TeamsTab({
   onRetryTeams: () => void;
   onRetryMembers: () => void;
   onRemoveRequest: (membership: Membership) => void;
+  onManageTokens: (team: Team) => void;
 }>): React.JSX.Element {
   return (
     <Card className="border-border shadow-sm rounded-md">
@@ -1215,6 +1241,7 @@ function TeamsTab({
                 onAddMemberChange={onAddMemberChange}
                 onAddMember={onAddMember}
                 onRemoveMember={onRemoveMember}
+                onManageTokens={onManageTokens}
               />
             ),
           )}
@@ -1394,7 +1421,7 @@ function OrgConfirmDialogs({
   );
 }
 
-type SettingsTab = "general" | "teams" | "roles" | "cidr" | "tags" | "users" | "ssh-keys";
+type SettingsTab = "general" | "teams" | "roles" | "cidr" | "tags" | "users" | "ssh-keys" | "api-tokens";
 
 function parseSettingsTab(requestedTab: string | null): SettingsTab {
   return requestedTab === "teams" ||
@@ -1402,7 +1429,8 @@ function parseSettingsTab(requestedTab: string | null): SettingsTab {
     requestedTab === "cidr" ||
     requestedTab === "tags" ||
     requestedTab === "users" ||
-    requestedTab === "ssh-keys"
+    requestedTab === "ssh-keys" ||
+    requestedTab === "api-tokens"
     ? requestedTab
     : "general";
 }
@@ -1428,6 +1456,50 @@ function orgCapabilityFlags(org: Organization | null, orgNameParam: string): Org
 
 function OrgLoadErrorMessage({ loadError }: Readonly<{ loadError: string }>): string {
   return loadError !== "" ? loadError : "The organization could not be loaded.";
+}
+
+function OrganizationApiTokensTab({
+  activeTab,
+  org,
+  orgName,
+  canUpdateOrganization,
+}: Readonly<{
+  activeTab: SettingsTab;
+  org: Organization;
+  orgName: string;
+  canUpdateOrganization: boolean;
+}>): React.JSX.Element | null {
+  if (activeTab !== "api-tokens") return null;
+  const externalId = org.attributes["external-id"];
+  const orgId = isString(externalId) ? externalId : "";
+  return (
+    <OrganizationApiTokens
+      key={orgName}
+      orgId={orgId}
+      orgName={orgName}
+      canManage={canUpdateOrganization && orgId !== ""}
+    />
+  );
+}
+
+function TeamApiTokenManager({
+  team,
+  onClose,
+}: Readonly<{
+  team: Team | null;
+  onClose: () => void;
+}>): React.JSX.Element | null {
+  if (team === null) return null;
+  return (
+    <TeamApiTokensDialog
+      teamId={team.id}
+      teamName={isString(team.attributes["name"]) ? team.attributes["name"] : team.id}
+      open
+      onOpenChange={(open): void => {
+        if (!open) onClose();
+      }}
+    />
+  );
 }
 
 export function OrganizationSettings(): React.JSX.Element {
@@ -1463,6 +1535,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const [membershipsError, setMembershipsError] = useState("");
   const [newTeamName, setNewTeamName] = useState("");
   const [editingTeamId, setEditingTeamId] = useState("");
+  const [tokenTeam, setTokenTeam] = useState<TokenTeamSelection | null>(null);
   const [teamPermissions, setTeamPermissions] = useState<Record<OrganizationPermission, boolean>>(
     (): Record<OrganizationPermission, boolean> =>
       // SAFETY: Object.fromEntries preserves the key union; the cast restores the typed record.
@@ -1496,6 +1569,7 @@ export function OrganizationSettings(): React.JSX.Element {
     orgCapabilityFlags(org, orgNameParam);
 
   useEffect((): void => {
+    setTokenTeam(null);
     setTeams([]);
     setTeamsError("");
     setMemberships([]);
@@ -2144,6 +2218,13 @@ export function OrganizationSettings(): React.JSX.Element {
 
         {activeTab === "ssh-keys" && <OrganizationSshKeys orgName={orgNameParam} />}
 
+        <OrganizationApiTokensTab
+          activeTab={activeTab}
+          org={org}
+          orgName={orgNameParam}
+          canUpdateOrganization={canUpdateOrganization}
+        />
+
         {activeTab === "users" && (
           <UsersTab
             orgNameParam={orgNameParam}
@@ -2210,6 +2291,9 @@ export function OrganizationSettings(): React.JSX.Element {
             onRemoveMember={(teamId: string, member: { id: string; username: string }): void => {
               void removeTeamMember(teamId, member);
             }}
+            onManageTokens={(team: Team): void => {
+              setTokenTeam({ orgName: orgNameParam, team });
+            }}
             onInvite={inviteMember}
             onRetryTeams={(): void => {
               void loadTeams();
@@ -2221,6 +2305,13 @@ export function OrganizationSettings(): React.JSX.Element {
           />
         )}
       </div>
+
+      <TeamApiTokenManager
+        team={tokenTeamForOrganization(tokenTeam, orgNameParam)}
+        onClose={(): void => {
+          setTokenTeam(null);
+        }}
+      />
 
       <OrgConfirmDialogs
         orgNameParam={orgNameParam}

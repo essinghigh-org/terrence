@@ -195,7 +195,7 @@ describe("account, token, and variable schema contracts", () => {
     expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, createdData.id) })).toBeUndefined();
   });
 
-  it("keeps exactly one true organization token across both creation endpoints", async () => {
+  it("keeps the TFE organization credential separate from modern organization tokens", async () => {
     const first = await request(`/api/v2/organizations/${orgName}/authentication-token`, "POST", {
       data: { type: "authentication-token", attributes: {} },
     });
@@ -211,6 +211,7 @@ describe("account, token, and variable schema contracts", () => {
       data: { type: "authentication-token", attributes: {} },
     });
     expect(replacement.status).toBe(201);
+    const replacementData = (await replacement.json()).data;
     expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, firstData.id) })).toBeUndefined();
 
     const generic = await request("/api/v2/tokens", "POST", {
@@ -223,8 +224,18 @@ describe("account, token, and variable schema contracts", () => {
     expect(generic.status).toBe(201);
     const genericData = (await generic.json()).data;
     const orgTokens = await db.query.apiTokens.findMany({ where: eq(apiTokens.orgId, orgId) });
-    expect(orgTokens).toHaveLength(1);
-    expect(orgTokens[0]).toMatchObject({ id: genericData.id, userId: null, orgId });
+    expect(orgTokens).toHaveLength(2);
+    expect(orgTokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: replacementData.id, userId: null, orgId, description: null }),
+        expect.objectContaining({
+          id: genericData.id,
+          userId: null,
+          orgId,
+          description: "organization automation",
+        }),
+      ]),
+    );
 
     const identity = await request("/api/v2/account/details", "GET", undefined, genericData.attributes.token);
     expect(identity.status).toBe(200);
@@ -243,7 +254,9 @@ describe("account, token, and variable schema contracts", () => {
         )
       ).status,
     ).toBe(204);
-    expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.orgId, orgId) })).toBeUndefined();
+    expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, replacementData.id) })).toBeUndefined();
+    expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, genericData.id) })).toBeDefined();
+    expect((await request(`/api/v2/authentication-tokens/${genericData.id}`, "DELETE")).status).toBe(204);
   });
 
   it("persists HCL mode when workspace variables are created, read, and updated", async () => {
