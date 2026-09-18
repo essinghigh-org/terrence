@@ -238,8 +238,7 @@ async function fetchGitArchive(stack: Stack, destination: string, signal: Readon
     stack.vcsRepositoryHttpUrl ??
     `https://${family === "ado" ? "dev.azure.com" : family === "gitlab" ? "gitlab.com" : "github.com"}/${stack.vcsIdentifier ?? ""}.git`;
   const url = checkedUrl(repository);
-  if (new URL(url).protocol !== "https:")
-    throw new Error("The Stack VCS repository URL must use HTTPS");
+  if (new URL(url).protocol !== "https:") throw new Error("The Stack VCS repository URL must use HTTPS");
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-git-"));
   const cloneDirectory = join(staging, "repo");
   const branch = stack.vcsBranch;
