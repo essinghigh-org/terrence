@@ -976,7 +976,10 @@ export const controlPlaneNodes = sqliteTable(
     hostname: text("hostname").notNull(),
     address: text("address"),
     version: text("version"),
-    status: text("status").notNull().default("active"), // active | draining | maintenance
+    instanceId: text("instance_id"),
+    role: text("role").notNull().default("standalone"), // standalone | leader | follower | ineligible
+    coordinatorEpoch: integer("coordinator_epoch"),
+    status: text("status").notNull().default("active"), // active | draining | maintenance | error
     readinessChecks: text("readiness_checks", { mode: "json" })
       .$type<{ check: string; status: string }[]>()
       .notNull()
@@ -991,6 +994,39 @@ export const controlPlaneNodes = sqliteTable(
   (table) => [
     uniqueIndex("control_plane_nodes_hostname_idx").on(table.hostname),
     index("control_plane_nodes_heartbeat_idx").on(table.status, table.lastHeartbeatAt),
+  ],
+);
+
+/** Long-lived fenced leases for singleton control-plane responsibilities. */
+export const controlPlaneLeases = sqliteTable(
+  "control_plane_leases",
+  {
+    name: text("name").primaryKey(),
+    ownerNodeId: text("owner_node_id").notNull(),
+    ownerInstanceId: text("owner_instance_id").notNull(),
+    fencingEpoch: integer("fencing_epoch").notNull().default(1),
+    expiresAt: integer("expires_at").notNull(),
+    heartbeatAt: integer("heartbeat_at").notNull(),
+  },
+  (table) => [index("control_plane_leases_expires_idx").on(table.expiresAt)],
+);
+
+/** Durable fan-out records backing PostgreSQL LISTEN/NOTIFY in HA mode. */
+export const controlEvents = sqliteTable(
+  "control_events",
+  {
+    id: text("id").primaryKey(),
+    originNodeId: text("origin_node_id").notNull(),
+    originInstanceId: text("origin_instance_id").notNull(),
+    topic: text("topic").notNull(),
+    payload: text("payload", { mode: "json" }).$type<Readonly<Record<string, unknown>>>().notNull(),
+    createdAt: integer("created_at")
+      .notNull()
+      .$defaultFn(() => Date.now()),
+  },
+  (table) => [
+    index("control_events_created_idx").on(table.createdAt, table.id),
+    index("control_events_topic_created_idx").on(table.topic, table.createdAt),
   ],
 );
 

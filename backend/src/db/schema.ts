@@ -156,6 +156,16 @@ export const configurationVersions: typeof sqliteSchema.configurationVersions =
     ? sqliteSchema.configurationVersions
     : (pgTables[dbNameOf(sqliteSchema.configurationVersions)] as unknown as typeof sqliteSchema.configurationVersions);
 
+export const controlEvents: typeof sqliteSchema.controlEvents =
+  pgTables === null
+    ? sqliteSchema.controlEvents
+    : (pgTables[dbNameOf(sqliteSchema.controlEvents)] as unknown as typeof sqliteSchema.controlEvents);
+
+export const controlPlaneLeases: typeof sqliteSchema.controlPlaneLeases =
+  pgTables === null
+    ? sqliteSchema.controlPlaneLeases
+    : (pgTables[dbNameOf(sqliteSchema.controlPlaneLeases)] as unknown as typeof sqliteSchema.controlPlaneLeases);
+
 export const controlPlaneNodes: typeof sqliteSchema.controlPlaneNodes =
   pgTables === null
     ? sqliteSchema.controlPlaneNodes

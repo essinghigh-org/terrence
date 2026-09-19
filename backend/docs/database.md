@@ -27,9 +27,9 @@ SQLite runs in WAL mode with foreign keys enforced. The single process shares on
 
 ## PostgreSQL
 
-Set `DATABASE_URL` to a PostgreSQL connection string. Terrence applies its schema migrations at startup.
+Set `DATABASE_URL` to a PostgreSQL connection string. Terrence applies its schema migrations at startup. Concurrent PostgreSQL replicas serialize migration work with a session advisory lock, so only one process migrates or verifies a fresh/upgraded schema at a time.
 
-PostgreSQL is recommended when the dataset outgrows SQLite or when you need the database tooling ecosystem.
+PostgreSQL is recommended when the dataset outgrows SQLite or when you need the database tooling ecosystem, and it is required for [high-availability control-plane deployments](high-availability). SQLite remains single-process only.
 
 ## Migrations
 

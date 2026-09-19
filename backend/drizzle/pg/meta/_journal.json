@@ -428,6 +428,13 @@
       "when": 1788710968017,
       "tag": "0060_chilly_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1789836972764,
+      "tag": "0061_naive_the_leader",
+      "breakpoints": true
     }
   ]
 }

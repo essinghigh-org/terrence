@@ -86,7 +86,9 @@ import { insertAgentApplyJobTx, recoverStaleAgentJobs, type AgentJob } from "./l
 import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-token";
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
-import { publish } from "./lib/event-bus";
+import { pruneControlEvents, publish } from "./lib/event-bus";
+import { isControlPlaneCoordinatorLeader } from "./lib/control-plane-coordinator";
+import { haEnabled } from "./lib/ha-config";
 import {
   probeLandlockAbi,
   RunSandbox,
@@ -104,8 +106,6 @@ import {
   parsePersistedStatusMetadata,
 } from "./lib/validation";
 import { log, safeJsonStringify } from "./lib/log";
-export type { ExecutionPhase } from "./worker/phases";
-export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
 import { extractSafeTarArchive } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
@@ -5449,7 +5449,7 @@ async function processAutoDestroyWorkspacePage(
 
 export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<string[]> {
   if (isMaintenanceActive()) return [];
-  if (workerQueueDraining()) return [];
+  if (coordinatorWorkerDraining()) return [];
 
   const created: string[] = [];
   let workspaceCursor: AutoDestroyDescendingCursor | null = null;
@@ -5469,7 +5469,7 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
 
 async function fetchAssessmentCandidates(): Promise<(typeof workspaces.$inferSelect)[]> {
   if (isMaintenanceActive()) return [];
-  if (workerQueueDraining()) return [];
+  if (coordinatorWorkerDraining()) return [];
   // ponytail: a per-workspace scan is sufficient for a homelab scheduler; use one ranked SQL query if scale demands it.
   const [allWorkspaces, allOrganizations] = await Promise.all([
     db.query.workspaces.findMany({ orderBy: [asc(workspaces.createdAt), asc(workspaces.id)] }),
@@ -6062,7 +6062,7 @@ async function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise
 export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
     if (isMaintenanceActive()) return [];
-    if (workerQueueDraining()) return [];
+    if (coordinatorWorkerDraining()) return [];
     const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
     const running = await db.query.assessmentResults.findMany({
       where: eq(assessmentResults.status, "running"),
@@ -6092,7 +6092,9 @@ export async function pollAssessmentQueue(): Promise<string[]> {
   });
 }
 
-let isWorkerLoopRunning = false;
+let coordinatorWorkerRunning = false;
+let coordinatorWorkerGeneration = 0;
+let durableWorkerQueueStarted = false;
 let workerQueueCursor: { createdAt: number; id: string } = { createdAt: 0, id: "" };
 
 type QueuePageContext = Readonly<{
@@ -6243,6 +6245,7 @@ async function claimAgentPoolRun(
   claimedRunIds: string[],
   claimedWorkspaceIds: Set<string>,
 ): Promise<void> {
+  if (coordinatorWorkerDraining()) return;
   const pool = workspace.agentPoolId === null ? undefined : ctx.poolsById.get(workspace.agentPoolId);
   if (
     pool?.orgId !== workspace.orgId ||
@@ -6279,6 +6282,7 @@ async function claimAgentPoolRun(
     return;
   }
 
+  if (coordinatorWorkerDraining()) return;
   const queued = await db.transaction(async (transaction): Promise<boolean> => {
     const tx = transaction as unknown as typeof db;
     const inputState = await tx.query.stateVersions.findFirst({
@@ -6422,12 +6426,23 @@ async function claimLocalRun(
   claimedRunIds: string[],
   claimedWorkspaceIds: Set<string>,
 ): Promise<void> {
+  if (coordinatorWorkerDraining()) return;
   let localReservationHeld = workspace.executionMode !== "agent" && reserveLocalRunExecution(run.id);
   if (!localReservationHeld && workspace.executionMode !== "agent") return;
 
   // Claim local and remote runs atomically by moving them into the first execution stage.
   try {
     const claimed = await db.update(runs).set({ status: "fetching" }).where(claimWhere).returning({ id: runs.id });
+    if (coordinatorWorkerDraining()) {
+      if (claimed.length > 0) {
+        await db
+          .update(runs)
+          .set({ status: "pending" })
+          .where(and(eq(runs.id, run.id), eq(runs.status, "fetching")));
+      }
+      if (localReservationHeld) releaseLocalRunReservation(run.id);
+      return;
+    }
 
     if (claimed.length > 0) {
       claimedRunIds.push(run.id);
@@ -6456,6 +6471,7 @@ async function dispatchQueuedRun(
   claimedRunIds: string[],
   claimedWorkspaceIds: Set<string>,
 ): Promise<void> {
+  if (coordinatorWorkerDraining()) return;
   if (claimedWorkspaceIds.has(run.workspaceId)) return;
   if (workspace === undefined) return;
   if (workspace.locked === true) {
@@ -6487,7 +6503,7 @@ async function dispatchQueuedRun(
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
     if (isMaintenanceActive()) return [];
-    if (workerQueueDraining()) return [];
+    if (coordinatorWorkerDraining()) return [];
     if (isStorageDegraded()) return [];
     await recoverStaleAgentJobs();
     // ponytail: scan the pending queue in-process; replace with a grouped SQL claim if queue volume matters.
@@ -6660,6 +6676,7 @@ async function checkScheduledApplyGate(runId: string): Promise<boolean> {
 }
 
 async function dispatchAgentScheduledRun(run: DueScheduledRun, workspace: ScheduledWorkspaceRow): Promise<boolean> {
+  if (coordinatorWorkerDraining()) return false;
   const pool =
     workspace.agentPoolId === null
       ? undefined
@@ -6685,6 +6702,7 @@ async function dispatchAgentScheduledRun(run: DueScheduledRun, workspace: Schedu
   // apply_queued without a job. Concurrent polls see zero rows. Any
   // failure throws and rolls back the whole transaction; the outer
   // catch keeps the run confirmed for the next poll.
+  if (coordinatorWorkerDraining()) return false;
   const job = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
     const tx = transaction as unknown as typeof db;
     return insertAgentApplyJobTx(tx, run.id, pool.id, run.statusTimestamps);
@@ -6694,10 +6712,15 @@ async function dispatchAgentScheduledRun(run: DueScheduledRun, workspace: Schedu
 }
 
 async function dispatchLocalScheduledRun(run: DueScheduledRun): Promise<boolean> {
+  if (coordinatorWorkerDraining()) return false;
   // Atomic claim: only the poll that flips confirmed -> apply_queued
   // may dispatch; concurrent polls see zero rows and skip.
   const localReservation = reserveLocalRunExecution(run.id);
   if (!localReservation) return false;
+  if (coordinatorWorkerDraining()) {
+    releaseLocalRunReservation(run.id);
+    return false;
+  }
   const claimed = await db
     .update(runs)
     .set({
@@ -6709,6 +6732,14 @@ async function dispatchLocalScheduledRun(run: DueScheduledRun): Promise<boolean>
     })
     .where(and(eq(runs.id, run.id), eq(runs.status, "confirmed")))
     .returning({ id: runs.id });
+  if (claimed.length > 0 && coordinatorWorkerDraining()) {
+    await db
+      .update(runs)
+      .set({ status: "confirmed" })
+      .where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued")));
+    releaseLocalRunReservation(run.id);
+    return false;
+  }
   if (claimed.length === 0) {
     releaseLocalRunReservation(run.id);
     return false;
@@ -6740,6 +6771,7 @@ async function processDueScheduledRun(
   run: DueScheduledRun,
   workspacesById: ReadonlyMap<string, ScheduledWorkspaceRow>,
 ): Promise<boolean> {
+  if (coordinatorWorkerDraining()) return false;
   if (run.planOnly === true) return false;
   try {
     const workspace = workspacesById.get(run.workspaceId);
@@ -6756,6 +6788,7 @@ async function processDueScheduledRun(
       return false;
     }
     if (await checkScheduledApplyGate(run.id)) return false;
+    if (coordinatorWorkerDraining()) return false;
     if (workspace.executionMode === "agent") {
       return await dispatchAgentScheduledRun(run, workspace);
     }
@@ -6768,7 +6801,7 @@ async function processDueScheduledRun(
 
 export async function applyDueScheduledRuns(): Promise<string[]> {
   if (isMaintenanceActive()) return [];
-  if (workerQueueDraining()) return [];
+  if (coordinatorWorkerDraining()) return [];
   if (isStorageDegraded()) return [];
   const now = Date.now();
   const dueRuns = await fetchDueScheduledRuns(now);
@@ -6839,16 +6872,30 @@ const ASSESSMENT_POLL_INTERVAL_MS = integerSetting("TERRENCE_ASSESSMENT_POLL_MS"
 // naturally, then the shutdown path checkpoints the DB once idle (or after a
 // bounded grace). Startup reconciliation (reconcileInterruptedLocalRuns) is
 // the safety net for executions that could NOT finish (SIGKILL, power loss).
-/** Stop the background scheduler from claiming new work (graceful shutdown).
- * Terminal for the process: poll cycles stop re-arming and startWorkerQueue
- * cannot be restarted (isWorkerLoopRunning stays set), which is the intended
- * contract for the shutdown path in index.ts. */
+/** Stop the coordinator scheduler without putting the process into terminal
+ * shutdown. HA lease loss uses this path so a follower can later reacquire
+ * leadership and start a fresh scheduler generation. */
+export function stopCoordinatorWorkerQueue(): void {
+  if (!coordinatorWorkerRunning) return;
+  coordinatorWorkerRunning = false;
+  coordinatorWorkerGeneration += 1;
+}
+
+/** Stop all local execution ownership for process shutdown. */
 export function stopWorkerQueue(): void {
+  stopCoordinatorWorkerQueue();
   localExecutionLifecycle.stop();
 }
 
 export function workerQueueDraining(): boolean {
   return localExecutionLifecycle.isDraining();
+}
+
+function coordinatorWorkerDraining(): boolean {
+  return (
+    localExecutionLifecycle.isDraining() ||
+    (haEnabled() && (!coordinatorWorkerRunning || !isControlPlaneCoordinatorLeader()))
+  );
 }
 
 /**
@@ -7422,13 +7469,10 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   return { requeued, errored, assessmentsErrored, rearmed };
 }
 
-export function startWorkerQueue(): void {
-  // Off switch for benchmarks/tests that must run in a process with no
-  // background DB activity (the polling loop otherwise injects queries
-  // and CPU into measurements).
-  if (envFlag("TERRENCE_DISABLE_WORKER")) return;
-  if (isWorkerLoopRunning) return;
-  isWorkerLoopRunning = true;
+/** Start HA-safe, individually leased durable jobs on this replica. */
+export function startDurableWorkerQueue(): void {
+  if (envFlag("TERRENCE_DISABLE_WORKER") || durableWorkerQueueStarted) return;
+  durableWorkerQueueStarted = true;
   // A previous release or an operator action can leave a committed outbox
   // row without its companion durable job. Repair those boundedly before the
   // normal lease poll starts; a current transaction always writes both rows.
@@ -7445,16 +7489,31 @@ export function startWorkerQueue(): void {
     "vcs-webhook": handleVcsWebhookJob,
     "outbox-delivery": handleOutboxDeliveryJob,
   });
+}
+
+/** Start one generation of scheduler/discovery work owned by the coordinator. */
+export function startCoordinatorWorkerQueue(): void {
+  // Off switch for benchmarks/tests that must run in a process with no
+  // background DB activity (the polling loop otherwise injects queries).
+  if (envFlag("TERRENCE_DISABLE_WORKER")) return;
+  if (coordinatorWorkerRunning || localExecutionLifecycle.isDraining()) return;
+  coordinatorWorkerRunning = true;
+  coordinatorWorkerGeneration += 1;
+  const generation = coordinatorWorkerGeneration;
+
+  const generationActive = (): boolean =>
+    coordinatorWorkerRunning && coordinatorWorkerGeneration === generation && !localExecutionLifecycle.isDraining();
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {
-    if (workerQueueDraining()) return;
+    if (!generationActive()) return;
     const timer = setTimeout((): void => {
-      void cycle();
+      if (generationActive()) void cycle();
     }, jitteredPollDelay(interval));
     timer.unref?.();
   };
 
   const fastCycle = async (): Promise<void> => {
+    if (!generationActive()) return;
     const pollCycleStarted = Date.now();
     workerPollStarted();
     try {
@@ -7491,6 +7550,7 @@ export function startWorkerQueue(): void {
 
   const slowCycle = (name: string, poller: () => Promise<unknown>, interval: number): void => {
     const cycle = async (): Promise<void> => {
+      if (!generationActive()) return;
       const started = Date.now();
       try {
         await poller();
@@ -7535,4 +7595,11 @@ export function startWorkerQueue(): void {
     async (): Promise<unknown> => purgeExpiredForwardedRequests(),
     60 * 60 * 1000,
   );
+  slowCycle("pruneControlEvents", async (): Promise<unknown> => pruneControlEvents(), 60 * 60 * 1000);
+}
+
+/** Single-node compatibility: both worker classes remain local to one process. */
+export function startWorkerQueue(): void {
+  startDurableWorkerQueue();
+  startCoordinatorWorkerQueue();
 }

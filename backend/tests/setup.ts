@@ -11,12 +11,10 @@ process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] ??= "true";
 // The run sandbox is fail-closed by default; CI/dev hosts usually lack
 // the Landlock ABI the sandbox needs, so tests explicitly opt out.
 process.env["TERRENCE_RUN_SANDBOX"] ??= "false";
-// app.ts boots the worker queue at import time via a dynamic import; in Bun
-// the first poll can fire before the top-level-await ./db module finishes
-// evaluating (TDZ ReferenceError, cascading 500s across API test files).
-// Tests drive the queue explicitly (pollWorkerQueue/executeRun) or spawn
-// dedicated processes, so the background loop must stay off here. Spawns
-// that need it opt back in with TERRENCE_DISABLE_WORKER=0.
+// Tests drive queue functions explicitly or spawn the main backend entrypoint,
+// so background workers stay disabled in the shared test process. Dedicated
+// spawned backends that exercise scheduling opt back in with
+// TERRENCE_DISABLE_WORKER=0.
 process.env["TERRENCE_DISABLE_WORKER"] ??= "1";
 process.env["TEST_TERRENCE_SETUP_RAN"] = "yes";
 

@@ -6,6 +6,10 @@ import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
 import {
   reconcileInterruptedLocalRuns,
+  startCoordinatorWorkerQueue,
+  startDurableWorkerQueue,
+  startWorkerQueue,
+  stopCoordinatorWorkerQueue,
   stopWorkerQueue,
   terminateActiveRunExecutions,
   waitForWorkerDrain,
@@ -13,9 +17,21 @@ import {
 import { sweepUploadTemps } from "./src/lib/upload-sweep";
 import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
-import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
+import {
+  claimControlPlaneNodeIdentity,
+  markControlPlaneNodeDraining,
+  startControlPlaneHeartbeat,
+  stopControlPlaneHeartbeat,
+} from "./src/routes/health";
 import { validateRunSandboxConfig } from "./src/lib/sandbox";
 import { importLegacyGitHubAppConfiguration } from "./src/lib/github-app-config";
+import { assertHaConfiguration, haEnabled } from "./src/lib/ha-config";
+import {
+  isControlPlaneCoordinatorLeader,
+  startControlPlaneCoordinator,
+  stopControlPlaneCoordinator,
+} from "./src/lib/control-plane-coordinator";
+import { startDistributedEventBus, stopDistributedEventBus } from "./src/lib/event-bus";
 
 // SEC-10: a misspelled TERRENCE_RUN_NET_POLICY must fail boot, not surface
 // at the first run execution.
@@ -43,10 +59,49 @@ if (
   throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must point to non-empty files.");
 }
 
-// The background worker queue is started by src/app.ts (deferred out of
-// module evaluation so the TLA module graph fully resolves first). Do NOT
-// add a second startWorkerQueue() call here — the worker must have exactly
-// one startup location.
+async function reconcileInterruptedWork(prefix: string): Promise<void> {
+  try {
+    const reconciled = await reconcileInterruptedLocalRuns();
+    if (
+      reconciled.requeued > 0 ||
+      reconciled.errored > 0 ||
+      reconciled.assessmentsErrored > 0 ||
+      reconciled.rearmed > 0
+    ) {
+      console.log(
+        `[terrence] ${prefix} reconciliation: ${reconciled.requeued} run(s) requeued, ` +
+          `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored, ` +
+          `${reconciled.rearmed} apply(s) re-armed for dispatch`,
+      );
+    }
+  } catch (error: unknown) {
+    console.error(`[terrence] ${prefix} reconciliation failed; interrupted work may remain blocked`, error);
+  }
+}
+
+async function sweepSharedUploadTemps(prefix: string): Promise<void> {
+  try {
+    const swept = await sweepUploadTemps(storageDir);
+    const sweptTotal =
+      swept.stateUploads +
+      swept.cvTemps +
+      swept.unclaimedArchives +
+      swept.invalidExports +
+      swept.orphanedModuleArchives;
+    if (sweptTotal > 0) {
+      console.log(
+        `[terrence] ${prefix} upload sweep: removed ${sweptTotal} leftover file(s) ` +
+          `(state-uploads: ${swept.stateUploads}, cv-temps: ${swept.cvTemps}, ` +
+          `unclaimed-archives: ${swept.unclaimedArchives}, invalid-exports: ${swept.invalidExports}, ` +
+          `orphaned-module-archives: ${swept.orphanedModuleArchives})`,
+      );
+    }
+  } catch (error: unknown) {
+    console.error(`[terrence] ${prefix} upload sweep failed; leftover temp files remain for the next pass`, error);
+  }
+}
+
+assertHaConfiguration();
 assertStorageWritable();
 // PostgreSQL schema migrations are async (the sqlite migrator runs
 // synchronously at module load inside src/db). Fresh postgres databases
@@ -75,54 +130,39 @@ try {
 await resetAdminPassword();
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
+await claimControlPlaneNodeIdentity();
 // Route initialization starts background work, so load it only after schema and bootstrap.
 const { app, systemApiApp } = await import("./src/app");
+await startDistributedEventBus();
+
+if (haEnabled()) {
+  startDurableWorkerQueue();
+  await startControlPlaneCoordinator({
+    onLeadershipAcquired: async (fencingEpoch): Promise<void> => {
+      console.log(`[terrence] Coordinator activation started (epoch ${fencingEpoch})`);
+      await reconcileInterruptedWork("Coordinator");
+      if (!isControlPlaneCoordinatorLeader()) return;
+      await sweepSharedUploadTemps("Coordinator");
+      if (!isControlPlaneCoordinatorLeader()) return;
+      startCoordinatorWorkerQueue();
+      console.log(`[terrence] Coordinator scheduler active (epoch ${fencingEpoch})`);
+    },
+    onLeadershipLost: (): void => {
+      stopCoordinatorWorkerQueue();
+      // A node that cannot prove current lease ownership must not leave a
+      // Terraform/OpenTofu subprocess running. The replacement coordinator
+      // reconciles the now-interrupted DB state after acquiring a later epoch.
+      terminateActiveRunExecutions();
+    },
+  });
+} else {
+  // Single-node compatibility preserves the conservative recovery semantics,
+  // but worker claiming begins only after reconciliation and shared-file sweep.
+  await reconcileInterruptedWork("Startup");
+  await sweepSharedUploadTemps("Startup");
+  startWorkerQueue();
+}
 startControlPlaneHeartbeat();
-
-// Startup reconciliation: local runs interrupted by a previous crash or
-// restart (SIGKILL, power loss) keep transient statuses that block their
-// workspace queues forever. Pre-execution states are requeued; anything that
-// may have had side effects (planning, applying) is errored and never
-// replayed. Agent-mode runs are left to recoverStaleAgentJobs.
-try {
-  const reconciled = await reconcileInterruptedLocalRuns();
-  if (
-    reconciled.requeued > 0 ||
-    reconciled.errored > 0 ||
-    reconciled.assessmentsErrored > 0 ||
-    reconciled.rearmed > 0
-  ) {
-    console.log(
-      `[terrence] Startup reconciliation: ${reconciled.requeued} run(s) requeued, ` +
-        `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored, ` +
-        `${reconciled.rearmed} apply(s) re-armed for dispatch`,
-    );
-  }
-} catch (error: unknown) {
-  // A DB hiccup at boot must not take the whole instance down; the next
-  // restart reconciles again (the pass is idempotent).
-  console.error("[terrence] Startup reconciliation failed; runs from before the restart may still be blocked", error);
-}
-
-// Startup sweep for crash-stranded upload temps and orphaned archives
-// (issue #619): request paths clean up after themselves, so anything left
-// behind is garbage from a crash before cleanup ran. Best-effort and
-// idempotent like the reconciliation above.
-try {
-  const swept = await sweepUploadTemps(storageDir);
-  const sweptTotal =
-    swept.stateUploads + swept.cvTemps + swept.unclaimedArchives + swept.invalidExports + swept.orphanedModuleArchives;
-  if (sweptTotal > 0) {
-    console.log(
-      `[terrence] Startup upload sweep: removed ${sweptTotal} leftover file(s) ` +
-        `(state-uploads: ${swept.stateUploads}, cv-temps: ${swept.cvTemps}, ` +
-        `unclaimed-archives: ${swept.unclaimedArchives}, invalid-exports: ${swept.invalidExports}, ` +
-        `orphaned-module-archives: ${swept.orphanedModuleArchives})`,
-    );
-  }
-} catch (error: unknown) {
-  console.error("[terrence] Startup upload sweep failed; leftover temp files remain for the next restart", error);
-}
 
 app.listen({
   port,
@@ -146,13 +186,10 @@ console.log(
   `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)}${systemTls === undefined ? " (HTTP loopback)" : " (TLS)"}`,
 );
 
-if (isPostgres) {
-  // PostgreSQL makes a multi-replica deployment look plausible (shared DB),
-  // but the event bus, the worker queue, and the run sandbox are all
-  // in-process. Warn loudly so nobody mistakes Postgres for HA.
+if (isPostgres && !haEnabled()) {
   console.warn(
-    "[terrence] Multiple control-plane replicas are not currently supported. " +
-      "Run exactly one Terrence control-plane instance; remote agent pools may be scaled independently.",
+    "[terrence] PostgreSQL is configured but HA mode is disabled. " +
+      "Run one control-plane replica, or configure the shared HA prerequisites and set TERRENCE_HA_ENABLED=true.",
   );
 }
 
@@ -178,6 +215,10 @@ import { checkpointWal } from "./src/db";
 async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   console.log(`[terrence] ${signal} received; draining worker, stopping server, checkpointing WAL before shutdown`);
   stopWorkerQueue();
+  // Freeze the last node heartbeat before marking it draining; otherwise the
+  // 10s heartbeat loop can overwrite the durable draining marker while the
+  // process waits for local execution to finish.
+  stopControlPlaneHeartbeat();
   // Flush/close the remote syslog transport so in-flight frames drain
   // before process exit (no-op when TERRENCE_SYSLOG_TARGET is unset).
   shutdownLogging();
@@ -224,6 +265,11 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
       console.warn("[terrence] Worker drain deadline exceeded; terminating in-flight executions before exit");
       terminateActiveRunExecutions();
     }
+    // Keep renewing the coordinator lease until locally owned executions have
+    // drained or been killed, then release it so another replica can take over
+    // without overlapping an old apply.
+    await stopControlPlaneCoordinator();
+    await stopDistributedEventBus();
     checkpointWal();
   } catch (error: unknown) {
     checkpointFailed = true;

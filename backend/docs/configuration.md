@@ -62,7 +62,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TERRENCE_DISABLE_WORKER` | off | When `1`, run without the worker. Pending runs stay queued. |
+| `TERRENCE_DISABLE_WORKER` | off | When `1`, this process runs without scheduler or durable-job workers. In HA mode it remains API-ready but coordinator-ineligible; other worker-enabled replicas may still process work. |
 | `TERRENCE_WORKER_POLL_MS` | `1500` | Run queue poll interval. Values must be at least 100 ms. |
 | `TERRENCE_AUTO_DESTROY_POLL_MS` | `30000` | Auto-destroy scan interval. Minimum 5000 ms. |
 | `TERRENCE_ASSESSMENT_POLL_MS` | `60000` | Assessment discovery interval. Minimum 5000 ms. |
@@ -177,10 +177,13 @@ configuration always wins over environment values.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TERRENCE_NODE_ID` | `terrence-node-1` | Node identity reported in readiness responses. |
+| `TERRENCE_HA_ENABLED` | off | Enable PostgreSQL-backed active-active API replicas with an elected scheduler coordinator. HA startup requires PostgreSQL, shared `STORAGE_DIR`, common `PUBLIC_URL`, explicit shared encryption/token/signed-URL secrets, and a unique explicit `TERRENCE_NODE_ID` per replica. |
+| `TERRENCE_NODE_ID` | `terrence-node-1` | Node identity reported in readiness responses. Must be explicitly configured and unique per live replica in HA mode. |
 | `TERRENCE_NODE_ADDRESS` | none | Node address reported in readiness responses. |
 | `TERRENCE_NODE_STATUS` | active | Override the readiness status. `draining` or `maintenance` marks the node as draining. |
-| `TERRENCE_TOKEN_HASH_SECRET` | generated | Stable secret for token hashing. Installs persist a 256-bit secret in storage; preserve it when restoring or moving the single control-plane instance. Multiple active replicas are unsupported. Must be at least 32 bytes. |
+| `TERRENCE_TOKEN_HASH_SECRET` | generated | Stable secret for token hashing. Single-node installs may persist a generated 256-bit secret in storage. HA mode requires an explicit shared value of at least 32 bytes. |
+
+See [High availability](high-availability) for topology, shared-storage requirements, coordinator failover, readiness behavior, and local-execution limitations.
 
 ## Outbound access and proxies
 

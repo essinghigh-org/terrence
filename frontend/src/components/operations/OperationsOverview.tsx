@@ -87,15 +87,30 @@ function NodeSummary(): React.JSX.Element {
   const load = useInsightResource("/admin/operations-center", resourceDocument);
   const attrs = load.data?.attributes;
   const backup = record(attrs?.["backup"]);
+  const coordinator = record(attrs?.["coordinator"]);
   return (
     <InsightSection
       title="Control plane and recovery"
-      description="Terrence supports one active control-plane process. Node records do not imply high availability."
+      description="Control-plane membership, coordinator ownership and recovery evidence."
     >
       <InsightError error={load.error} retry={load.reload} />
       {load.loading && <InsightLoading />}
       {attrs !== undefined && (
         <>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Metric label="HA mode" value={enabledLabel(attrs["ha-enabled"])} />
+            <Metric label="Coordinator" value={text(coordinator["owner-node-id"], "None")} />
+            <Metric
+              label="Coordinator epoch"
+              value={numberValue(coordinator["epoch"])?.toLocaleString() ?? "Unknown"}
+            />
+            <Metric
+              label="Lease"
+              value={
+                coordinator["active"] === true ? "Active" : coordinator["active"] === false ? "Expired" : "Unknown"
+              }
+            />
+          </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span>Restore rehearsal:</span>
             <InsightStatus value={backup["status"]} />
@@ -107,13 +122,15 @@ function NodeSummary(): React.JSX.Element {
             </Link>
           </div>
           <InsightTable
-            headings={["Node", "Version", "Recorded status", "Heartbeat"]}
+            headings={["Node", "Role", "Epoch", "Version", "Recorded status", "Heartbeat"]}
             empty="No node heartbeats recorded. Readiness is unknown."
             rows={records(attrs["nodes"]).map(
               (node): InsightTableRow => ({
                 id: text(node["id"]),
                 cells: [
                   text(node["id"]),
+                  text(node["role"], "standalone"),
+                  numberValue(node["coordinator-epoch"])?.toLocaleString() ?? "—",
                   text(node["version"]),
                   <InsightStatus key="status" value={node["stale"] === true ? "stale" : node["status"]} />,
                   <InsightDate key="date" value={node["last-heartbeat-at"]} />,
@@ -122,7 +139,14 @@ function NodeSummary(): React.JSX.Element {
             )}
           />
           <p className="text-xs text-muted-foreground">
-            Snapshot: <InsightDate value={attrs["checked-at"]} /> · Local node: {text(attrs["local-node-id"])}
+            Snapshot: <InsightDate value={attrs["checked-at"]} /> · Local node: {text(attrs["local-node-id"])} ·
+            Topology: {text(attrs["supported-topology"])}
+            {coordinator["expires-at"] !== undefined && (
+              <>
+                {" "}
+                · Lease expires: <InsightDate value={coordinator["expires-at"]} />
+              </>
+            )}
           </p>
           <Button size="sm" variant="outline" onClick={load.reload}>
             Refresh recovery and nodes

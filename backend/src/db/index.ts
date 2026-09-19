@@ -817,6 +817,34 @@ export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
   return poolMetrics(driver, max);
 }
 
+export async function listenPostgresChannel(
+  channel: string,
+  onNotify: (payload: string) => void,
+  onListen?: () => void,
+): Promise<{ unlisten: () => Promise<void> }> {
+  if (!isPostgres) throw new Error("PostgreSQL LISTEN requires the postgres backend");
+  return requirePgClient().listen(channel, onNotify, onListen);
+}
+
+export async function notifyPostgresChannel(channel: string, payload?: string): Promise<void> {
+  if (!isPostgres) throw new Error("PostgreSQL NOTIFY requires the postgres backend");
+  await requirePgClient().notify(channel, payload);
+}
+
+/**
+ * Cluster coordination must use one clock. PostgreSQL is authoritative in HA
+ * mode; SQLite remains process-local and can use the application clock.
+ */
+export async function databaseCurrentTimeMs(): Promise<number> {
+  if (!isPostgres) return Date.now();
+  const rows = await requirePgClient().unsafe<{ nowMs: number | bigint | string }[]>(
+    'SELECT CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT) AS "nowMs"',
+  );
+  const value = rows[0]?.nowMs;
+  if (value === undefined) throw new Error("PostgreSQL did not return its current time");
+  return Number(value);
+}
+
 /** @public Cleanly close the database connection/pool (application shutdown, tests). */
 export async function closeDatabase(): Promise<void> {
   if (sqliteClient !== null) {
@@ -861,11 +889,52 @@ export function databaseSchemaVersion(): string | null {
  * is invoked explicitly from the boot path (backend/index.ts) and the test
  * harness (tests/setup.ts). Memoized: safe to call from both.
  */
+const PG_MIGRATION_ADVISORY_LOCK_ID = 0x54455252454e4345n; // "TERRENCE"
+
+async function withPgMigrationAdvisoryLock(operation: () => Promise<void>): Promise<void> {
+  const reserved = await requirePgClient().reserve();
+  let locked = false;
+  let previousLockTimeout: string | undefined;
+  let previousStatementTimeout: string | undefined;
+  try {
+    const settingRows = await reserved.unsafe<{ lockTimeout: string; statementTimeout: string }[]>(
+      "SELECT current_setting('lock_timeout') AS \"lockTimeout\", " +
+        "current_setting('statement_timeout') AS \"statementTimeout\"",
+    );
+    previousLockTimeout = settingRows[0]?.lockTimeout;
+    previousStatementTimeout = settingRows[0]?.statementTimeout;
+    // Migration startup may legitimately wait longer than normal query/lock
+    // deadlines while another replica upgrades the same fresh database.
+    await reserved.unsafe("SELECT set_config('lock_timeout', '0', false)");
+    await reserved.unsafe("SELECT set_config('statement_timeout', '0', false)");
+    await reserved.unsafe("SELECT pg_advisory_lock($1::bigint)", [PG_MIGRATION_ADVISORY_LOCK_ID]);
+    locked = true;
+    await operation();
+  } finally {
+    if (locked) {
+      await reserved
+        .unsafe("SELECT pg_advisory_unlock($1::bigint)", [PG_MIGRATION_ADVISORY_LOCK_ID])
+        .catch((): void => undefined);
+    }
+    if (previousLockTimeout !== undefined) {
+      await reserved
+        .unsafe("SELECT set_config('lock_timeout', $1, false)", [previousLockTimeout])
+        .catch((): void => undefined);
+    }
+    if (previousStatementTimeout !== undefined) {
+      await reserved
+        .unsafe("SELECT set_config('statement_timeout', $1, false)", [previousStatementTimeout])
+        .catch((): void => undefined);
+    }
+    reserved.release();
+  }
+}
+
 let pgMigrationsPromise: Promise<void> | null = null;
 export async function applyPgMigrations(): Promise<void> {
   if (!isPostgres) return Promise.resolve();
   if (pgMigrationsPromise !== null) return pgMigrationsPromise;
-  pgMigrationsPromise = (async (): Promise<void> => {
+  pgMigrationsPromise = withPgMigrationAdvisoryLock(async (): Promise<void> => {
     const instance = pgDb;
     if (instance === null) throw new Error("postgres backend not initialized");
     const pg = requirePgClient();
@@ -1180,6 +1249,6 @@ export async function applyPgMigrations(): Promise<void> {
     await pg.unsafe(`DROP TRIGGER IF EXISTS oauth_clients_delete_guard ON oauth_clients`);
     await pg.unsafe(`DROP TRIGGER IF EXISTS github_app_installations_delete_guard ON github_app_installations`);
     await pg.unsafe(`DROP FUNCTION IF EXISTS vcs_integration_delete_guard()`);
-  })();
+  });
   return pgMigrationsPromise;
 }

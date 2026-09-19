@@ -1487,11 +1487,9 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
     }),
   );
 
-// Start the background worker queue. Deferred out of module evaluation:
-// ./db/index.ts is a top-level-await module, and the dynamic import weave
-// can fire this before `db` finishes initializing (TDZ ReferenceError that
-// 500s every request in worker-thread test runs). A 0ms timer guarantees
-// the module graph has fully evaluated before the first poll.
+// Start process-level ancillary services after module evaluation. Worker
+// ownership lives in backend/index.ts so migrations, reconciliation, and HA
+// coordinator election complete before any scheduler can claim work.
 setTimeout((): void => {
   let loggingRefreshFailureReported = false;
   const refreshLoggingSettings = (): void => {
@@ -1515,14 +1513,6 @@ setTimeout((): void => {
     const loggingRefreshTimer = setInterval(refreshLoggingSettings, 1_000);
     (loggingRefreshTimer as unknown as { unref?: () => void }).unref?.();
   }
-  import("./worker")
-    .then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
-      startWorkerQueue();
-      log.info("Worker queue started");
-    })
-    .catch((error: unknown): void => {
-      log.error("Failed to start worker queue", { error: String(error) });
-    });
   // Memory/request observability sampler. Follows the worker switch: tests
   // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
   // production runs both. The ring buffer is what turns the /metrics rss

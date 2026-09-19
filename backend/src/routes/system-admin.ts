@@ -6,15 +6,17 @@ import { join, resolve } from "node:path";
 import { count, desc, gte } from "drizzle-orm";
 import { Elysia } from "elysia";
 import { authPlugin } from "../auth";
-import { db } from "../db";
+import { databaseCurrentTimeMs, db } from "../db";
 import { controlPlaneNodes, workspaces } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { fetchResolvedExternalUrl, privateHostReason, resolveExternalUrl } from "../lib/url-safety";
 import { landlockAccessFlagsForAbi, probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { envFlag } from "../lib/env";
-import { readinessNodeId } from "./health";
+import { NODE_HEARTBEAT_TIMEOUT_MS, readinessNodeId } from "./health";
 import { integerSetting } from "../lib/runtime-config";
 import { auditLog } from "../lib/utils";
+import { controlPlaneCoordinatorState } from "../lib/control-plane-coordinator";
+import { controlPlaneInstanceId, haEnabled } from "../lib/ha-config";
 
 type Status = "OK" | "WARNING" | "ERROR";
 type BundleStatus = "generating" | "finished" | "errored" | "deleted";
@@ -430,18 +432,22 @@ async function runDiagnostics(
 }
 
 async function activeControlPlaneNodes(): Promise<readonly (typeof controlPlaneNodes.$inferSelect)[]> {
+  const now = await databaseCurrentTimeMs();
   const nodes = await db.query.controlPlaneNodes.findMany({
-    where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - 45_000),
+    where: gte(controlPlaneNodes.lastHeartbeatAt, now - NODE_HEARTBEAT_TIMEOUT_MS),
     orderBy: [desc(controlPlaneNodes.registeredAt)],
   });
   if (nodes.some((node): boolean => node.id === readinessNodeId())) return nodes;
-  const now = Date.now();
+  const coordinator = controlPlaneCoordinatorState();
   return [
     {
       id: readinessNodeId(),
       hostname: readinessNodeId(),
       address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
       version: process.env["BUILD_VERSION"] ?? "dev",
+      instanceId: haEnabled() ? controlPlaneInstanceId : null,
+      role: haEnabled() ? (coordinator.role === "disabled" ? "follower" : coordinator.role) : "standalone",
+      coordinatorEpoch: haEnabled() ? coordinator.fencingEpoch : null,
       status: "active",
       readinessChecks: [],
       registeredAt: now,

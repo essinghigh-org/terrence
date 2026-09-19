@@ -526,6 +526,39 @@ export const configurationVersions = pgTable(
 );
 pgSchema["configurationVersions"] = configurationVersions;
 
+export const controlEvents = pgTable(
+  "control_events",
+  {
+    id: text("id").notNull().primaryKey(),
+    originNodeId: text("origin_node_id").notNull(),
+    originInstanceId: text("origin_instance_id").notNull(),
+    topic: text("topic").notNull(),
+    payload: jsonb("payload").notNull(),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema["controlEvents"]["createdAt"].defaultFn!()),
+  },
+  (table) => [
+    index("control_events_created_idx").on(table["createdAt"], table["id"]),
+    index("control_events_topic_created_idx").on(table["topic"], table["createdAt"]),
+  ],
+);
+pgSchema["controlEvents"] = controlEvents;
+
+export const controlPlaneLeases = pgTable(
+  "control_plane_leases",
+  {
+    name: text("name").notNull().primaryKey(),
+    ownerNodeId: text("owner_node_id").notNull(),
+    ownerInstanceId: text("owner_instance_id").notNull(),
+    fencingEpoch: bigint("fencing_epoch", { mode: "number" }).notNull().default(1),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    heartbeatAt: bigint("heartbeat_at", { mode: "number" }).notNull(),
+  },
+  (table) => [index("control_plane_leases_expires_idx").on(table["expiresAt"])],
+);
+pgSchema["controlPlaneLeases"] = controlPlaneLeases;
+
 export const controlPlaneNodes = pgTable(
   "control_plane_nodes",
   {
@@ -533,6 +566,9 @@ export const controlPlaneNodes = pgTable(
     hostname: text("hostname").notNull(),
     address: text("address"),
     version: text("version"),
+    instanceId: text("instance_id"),
+    role: text("role").notNull().default("standalone"),
+    coordinatorEpoch: bigint("coordinator_epoch", { mode: "number" }),
     status: text("status").notNull().default("active"),
     readinessChecks: jsonb("readiness_checks").notNull().default([]),
     registeredAt: bigint("registered_at", { mode: "number" })
