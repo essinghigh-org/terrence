@@ -86,6 +86,9 @@ const PolicySetDetail = lazyView(() => import("./views/PolicySetDetail"), "Polic
 const OidcConfigurations = lazyView(() => import("./views/OidcConfigurations"), "OidcConfigurations");
 const StackSettings = lazyView(() => import("./views/StackSettings"), "StackSettings");
 const PolicySetsTags = lazyView(() => import("./views/PolicySetsTags"), "PolicySetsTags");
+const WorkspaceInsights = lazyView(() => import("./views/WorkspaceInsights"), "WorkspaceInsights");
+const RunInsights = lazyView(() => import("./views/RunInsights"), "RunInsights");
+const AdminOperationsCenter = lazyView(() => import("./views/AdminOperationsCenter"), "AdminOperationsCenter");
 const AdminDashboard = lazyView(() => import("./views/AdminDashboard"), "AdminDashboard");
 const CompatibilityDashboard = lazyView(() => import("./views/CompatibilityDashboard"), "CompatibilityDashboard");
 const AdminSmtpSettings = lazyView(() => import("./views/AdminSmtpSettings"), "AdminSmtpSettings");
@@ -252,7 +255,7 @@ function AppRoutes(): JSX.Element {
         <Route path="admin/approval-webhook" element={<AdminApprovalWebhook />} />
         <Route path="admin/plan-explainer" element={<AdminPlanExplainer />} />
         <Route path="admin/smtp" element={<AdminSmtpSettings />} />
-        <Route path="admin/operations" element={<Navigate to="/app/admin/logging" replace />} />
+        <Route path="admin/operations" element={<AdminOperationsCenter />} />
         <Route path="admin/database" element={<AdminDatabaseMigration />} />
         <Route path="account" element={<AccountSettings />} />
         <Route path="docs" element={<Docs />} />
@@ -301,6 +304,8 @@ function AppRoutes(): JSX.Element {
 
         <Route path=":orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="overview" />} />
         <Route path=":orgName/workspaces/:workspaceName/runs" element={<WorkspaceDetail section="runs" />} />
+        <Route path=":orgName/workspaces/:workspaceName/insights" element={<WorkspaceInsights />} />
+        <Route path=":orgName/workspaces/:workspaceName/runs/:runId/insights" element={<RunInsights />} />
         <Route path=":orgName/workspaces/:workspaceName/states" element={<WorkspaceDetail section="states" />} />
         <Route path=":orgName/workspaces/:workspaceName/variables" element={<WorkspaceDetail section="variables" />} />
         <Route path=":orgName/workspaces/:workspaceName/settings" element={<WorkspaceDetail section="settings" />} />

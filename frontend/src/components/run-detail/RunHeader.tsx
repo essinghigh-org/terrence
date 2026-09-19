@@ -140,6 +140,7 @@ function VcsReference({ attributes }: Readonly<{ attributes: RunAttributes }>): 
 }
 
 function RunHeaderActions({
+  runId,
   workspacePath,
   canRerun,
   rerunBlockedReason,
@@ -150,6 +151,7 @@ function RunHeaderActions({
   onCopyPermalink,
   onOpenRerunDialog,
 }: Readonly<{
+  runId: string;
   workspacePath: string;
   canRerun: boolean;
   rerunBlockedReason: string | null;
@@ -166,6 +168,12 @@ function RunHeaderActions({
         <Link2 className="size-3.5" aria-hidden="true" />
         {copiedPermalink ? "Copied" : "Copy link"}
       </Button>
+      <Link
+        to={`${workspacePath}/runs/${encodeURIComponent(runId)}/insights`}
+        className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+      >
+        Insights & compare
+      </Link>
       {/* Starting a fresh run used to come from the workspace header that
           wrapped this page. Re-run is permission-gated, so keep an
           unconditional route to the new-run form. */}
@@ -309,6 +317,7 @@ export function RunHeader(props: RunHeaderProps): React.JSX.Element {
           </div>
         </div>
         <RunHeaderActions
+          runId={runId}
           workspacePath={props.workspacePath}
           canRerun={props.canRerun}
           rerunBlockedReason={props.rerunBlockedReason}

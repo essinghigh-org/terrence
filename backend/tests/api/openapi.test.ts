@@ -153,6 +153,47 @@ describe("openapi contract", () => {
     expect(deleteBundle?.responses?.["409"]).toBeDefined();
   });
 
+  it("documents support bundles as gzip archives and rehearsal settings with a typed body", () => {
+    for (const path of [
+      "/api/v1/support/bundle-requests/{id}/download",
+      "/api/v1/support-bundle-requests/{id}/download",
+      "/api/v2/admin/support-bundles/{id}/download",
+    ]) {
+      const operation = paths[path]?.["get"] as
+        | { responses?: Record<string, { content?: Record<string, unknown> }> }
+        | undefined;
+      expect(operation?.responses?.["200"]?.content?.["application/gzip"]).toEqual({
+        schema: { type: "string", format: "binary" },
+      });
+      expect(operation?.responses?.["200"]?.content?.["application/vnd.api+json"]).toBeUndefined();
+    }
+
+    const settings = paths["/api/v2/admin/operations-center/settings"]?.["patch"] as
+      | { requestBody?: { required?: boolean; content?: Record<string, { schema?: Record<string, unknown> }> } }
+      | undefined;
+    expect(settings?.requestBody?.required).toBe(true);
+    expect(settings?.requestBody?.content?.["application/vnd.api+json"]?.schema).toMatchObject({
+      type: "object",
+      required: ["data"],
+      properties: {
+        data: {
+          type: "object",
+          required: ["attributes"],
+          properties: {
+            attributes: {
+              type: "object",
+              additionalProperties: false,
+              required: ["rehearsal-max-age-days"],
+              properties: {
+                "rehearsal-max-age-days": { type: "integer", minimum: 1, maximum: 3650 },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("documents provider artwork as an image response", () => {
     const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.["get"] as
       | {

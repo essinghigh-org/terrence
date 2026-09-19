@@ -48,7 +48,7 @@ See [Variables](variables) for the details.
 
 Runs appear on the workspace page. Each run produces a plan, and optionally an apply, policy results, cost estimates, and assessment results.
 
-The workspace shows the current state version and the run history. Run logs stream in real time. The State History and Configuration Versions sections expose the timestamps and status of state and configuration changes, while run details expose the event timeline. Authorized organization and site administrators can review audit events through the audit log.
+The workspace shows the current state version and the run history. Run logs stream in real time. The State History and Configuration Versions sections expose the timestamps and status of state and configuration changes, while run details expose the event timeline. **Workspace → Insights** adds retained state comparison, resource history, drift review, effective-access/input-impact views, and review-only import/upgrade/dependency tools; see [Workspace and run insights](insights). Authorized organization and site administrators can review audit events through the audit log.
 
 ## Locking
 

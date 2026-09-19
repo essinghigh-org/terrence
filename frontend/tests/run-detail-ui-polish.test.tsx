@@ -146,6 +146,9 @@ test("collapsible plan warnings appear at top of plan with diagnostic details", 
   expect(view.getAllByText(/Use new_param instead of old_param/).length).toBeGreaterThan(0);
   expect(view.getByText("Input state serial")).toBeTruthy();
   expect(view.getByText("#1346")).toBeTruthy();
+  expect(view.getByRole("link", { name: "Insights & compare" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/runs/run-warn/insights",
+  );
 });
 
 test("when apply is running, apply disabled reasons are NOT shown", async () => {

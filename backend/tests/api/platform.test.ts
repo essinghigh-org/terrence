@@ -4,6 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
+  configurationVersions,
   durableJobs,
   organizationMemberships,
   organizations,
@@ -139,4 +140,50 @@ test("promotion advance cannot queue unverified release content", async () => {
   artifacts.push(body.data.id);
   expect((await request(`/organizations/${orgId}/promotions/${body.data.id}/advance`, "POST")).status).toBe(501);
   expect(await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) })).toBeUndefined();
+});
+
+test("drift remediation creates a normal review run and refuses resolved incidents", async () => {
+  await db.insert(configurationVersions).values({
+    id: `platform-cv-${suffix}`,
+    workspaceId,
+    status: "uploaded",
+    autoQueueRuns: false,
+    createdAt: Date.now(),
+  });
+  const incident = await createPlatformArtifact({
+    kind: "drift-incident",
+    organizationId: orgId,
+    workspaceId,
+    status: "open",
+    payload: { fingerprint: `drift-${suffix}`, source: "assessment" },
+  });
+  artifacts.push(incident.id);
+
+  const response = await request(`/drift-incidents/${incident.id}/remediation`, "POST");
+  expect(response.status).toBe(201);
+  const body = (await response.json()) as {
+    data: { id: string; attributes: { status: string; "auto-apply": boolean; "review-required": boolean } };
+  };
+  expect(body.data.attributes).toMatchObject({ status: "pending", "auto-apply": false, "review-required": true });
+
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, body.data.id) });
+  expect(run).toBeDefined();
+  expect(run?.workspaceId).toBe(workspaceId);
+  expect(run?.autoApply).toBe(false);
+  expect(run?.operation).toBe("plan_and_apply");
+  expect(run?.message).toContain(incident.id);
+  expect((await getPlatformArtifact(incident.id, "drift-incident", orgId))?.payload["remediation-run-id"]).toBe(
+    body.data.id,
+  );
+
+  const resolved = await request(`/drift-incidents/${incident.id}`, "PATCH", {
+    status: "resolved",
+    "resolution-classification": "accepted-risk",
+    "acknowledged-exception": true,
+    notes: "Reviewed in test",
+  });
+  expect(resolved.status).toBe(200);
+  const blocked = await request(`/drift-incidents/${incident.id}/remediation`, "POST");
+  expect(blocked.status).toBe(409);
+  expect(await blocked.text()).toContain("Reopen the incident");
 });

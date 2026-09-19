@@ -84,6 +84,7 @@ const settingDefaults: Record<string, Settings> = {
   },
   "approval-webhook": { enabled: false, url: null, secret: null },
   "maintenance-windows": { enabled: false, windows: [] },
+  "operations-center": { "rehearsal-max-age-days": 30 },
   logging: {
     enabled: null,
     "log-level": null,
