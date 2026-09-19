@@ -1,8 +1,8 @@
 import { Elysia } from "elysia";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, lte, sql } from "drizzle-orm";
 import { authPlugin } from "../../auth";
 import { databaseCurrentTimeMs, db } from "../../db";
-import { controlPlaneLeases, controlPlaneNodes } from "../../db/schema";
+import { controlPlaneLeases, controlPlaneNodes, runs } from "../../db/schema";
 import { readBackupStatus } from "../../lib/backup-verification";
 import { CONTROL_PLANE_LEASE_NAME } from "../../lib/control-plane-coordinator";
 import { haEnabled } from "../../lib/ha-config";
@@ -34,6 +34,12 @@ function settingsAttributes(body: unknown): Record<string, unknown> {
   return attrs !== null && typeof attrs === "object" && !Array.isArray(attrs) ? (attrs as Record<string, unknown>) : {};
 }
 
+function aggregateCount(value: number | bigint | string | undefined): number {
+  if (value === undefined) return 0;
+  const count = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0;
+}
+
 export const operationsCenterRoutes = new Elysia({ name: "admin-operations-center" })
   .use(authPlugin)
   .onBeforeHandle(({ user, set }: ParamCtx): unknown => {
@@ -42,12 +48,32 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
     return { errors: [{ status: "404", title: "Not Found" }] };
   })
   .get("/api/v2/admin/operations-center", async (): Promise<unknown> => {
-    const [backup, settings, nodes, coordinatorLease, now] = await Promise.all([
+    const now = await databaseCurrentTimeMs();
+    const [backup, settings, nodes, coordinatorLease, activeExecutionRows, expiredExecutionRows] = await Promise.all([
       readBackupStatus(),
       getSettings("operations-center"),
       db.query.controlPlaneNodes.findMany({ orderBy: [desc(controlPlaneNodes.lastHeartbeatAt)], limit: 100 }),
       db.query.controlPlaneLeases.findFirst({ where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME) }),
-      databaseCurrentTimeMs(),
+      db
+        .select({ count: sql<number | bigint | string>`count(*)` })
+        .from(runs)
+        .where(
+          and(
+            isNotNull(runs.executionOwnerInstanceId),
+            isNotNull(runs.executionLeaseExpiresAt),
+            gt(runs.executionLeaseExpiresAt, now),
+          ),
+        ),
+      db
+        .select({ count: sql<number | bigint | string>`count(*)` })
+        .from(runs)
+        .where(
+          and(
+            isNotNull(runs.executionOwnerInstanceId),
+            isNotNull(runs.executionLeaseExpiresAt),
+            lte(runs.executionLeaseExpiresAt, now),
+          ),
+        ),
     ]);
     const maxAgeDays = Number(settings["rehearsal-max-age-days"] ?? 30);
     return settingResource("operations-center", {
@@ -65,6 +91,10 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
               "heartbeat-at": new Date(coordinatorLease.heartbeatAt).toISOString(),
               "expires-at": new Date(coordinatorLease.expiresAt).toISOString(),
             },
+      "execution-leases": {
+        active: aggregateCount(activeExecutionRows[0]?.count),
+        expired: aggregateCount(expiredExecutionRows[0]?.count),
+      },
       "rehearsal-max-age-days": maxAgeDays,
       backup: {
         "last-verified-restore-at": backup.lastVerifiedRestoreAt,

@@ -188,10 +188,13 @@ async function streamFileToPrivatePath(sourcePath: string, destinationPath: stri
   }
 }
 
+export type ArtifactPublicationFence = (publish: () => Promise<void>) => Promise<void>;
+
 export async function writePlanJsonArtifact(
   runId: string,
   planJson: PlanJson,
   canPublish?: () => Promise<boolean>,
+  publicationFence?: ArtifactPublicationFence,
 ): Promise<void> {
   let temporary: string | null = null;
   try {
@@ -200,8 +203,13 @@ export async function writePlanJsonArtifact(
     temporary = `${target}.${crypto.randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(planJson), { mode: 0o600 });
     if (canPublish !== undefined && !(await canPublish())) throw new Error("stale-agent-lease");
-    await rename(temporary, target);
-    temporary = null;
+    const publish = async (): Promise<void> => {
+      if (temporary === null) throw new Error("Plan JSON temporary artifact disappeared before publication");
+      await rename(temporary, target);
+      temporary = null;
+    };
+    if (publicationFence === undefined) await publish();
+    else await publicationFence(publish);
   } catch (error: unknown) {
     if (temporary !== null)
       await rm(temporary, { force: true }).catch((): void => {
@@ -212,15 +220,24 @@ export async function writePlanJsonArtifact(
   }
 }
 
-export async function writePlanJsonArtifactFromFile(runId: string, sourcePath: string): Promise<void> {
+export async function writePlanJsonArtifactFromFile(
+  runId: string,
+  sourcePath: string,
+  publicationFence?: ArtifactPublicationFence,
+): Promise<void> {
   let temporary: string | null = null;
   try {
     await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
     const target = artifactPath(runId);
     temporary = `${target}.${crypto.randomUUID()}.tmp`;
     await streamFileToPrivatePath(sourcePath, temporary);
-    await rename(temporary, target);
-    temporary = null;
+    const publish = async (): Promise<void> => {
+      if (temporary === null) throw new Error("Plan JSON temporary artifact disappeared before publication");
+      await rename(temporary, target);
+      temporary = null;
+    };
+    if (publicationFence === undefined) await publish();
+    else await publicationFence(publish);
   } catch (error: unknown) {
     if (temporary !== null)
       await rm(temporary, { force: true }).catch((): void => {

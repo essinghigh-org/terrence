@@ -1,0 +1,1 @@
+CREATE INDEX "runs_execution_lease_expiry_idx" ON "runs" USING btree ("execution_lease_expires_at");

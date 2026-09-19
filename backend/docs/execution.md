@@ -135,20 +135,33 @@ See [Tokens](tokens).
 
 ## Concurrency
 
-- At most `TERRENCE_RUN_CONCURRENCY` local runs execute at once (default 5). Lower it on small hosts: parallel plans each hold provider processes and state in memory and can OOM. The admin runs tab shows the live limit with executing and queued counts (system-info worker block).
+- At most `TERRENCE_RUN_CONCURRENCY` local runs execute at once per worker process (default 5). Lower it on small hosts: parallel plans each hold provider processes and state in memory and can OOM. The admin runs tab shows the live local limit with executing and queued counts (system-info worker block).
 - The queue poll claims at most 5 runs per cycle.
-- One executing run per workspace, regardless of the limit.
+- One executing local run per workspace, regardless of the process-local limit. In HA mode this is enforced across replicas by the PostgreSQL workspace execution lease, not only by in-process bookkeeping.
 - Health assessments run under `HEALTH_ASSESSMENT_CONCURRENCY` (default 2).
+
+### HA execution ownership
+
+With [HA mode](high-availability) enabled, a server-side plan or apply must own both its run execution lease and the matching workspace execution lease before it executes. The run's fencing token increases on every new ownership generation. Leases last 30 seconds and renew every 5 seconds using PostgreSQL time.
+
+Lease ownership fences run status changes, workspace apply-lock changes, state publication and shared run artifacts. State commits validate and lock the execution ownership rows inside the same transaction as state serial allocation. Shared artifacts prepare temporary bytes first and hold those same ownership rows while performing the final atomic rename.
+
+If lease renewal fails or the local watchdog expires, the execution context becomes permanently invalid, its current process group/cgroup is terminated, and later child-process spawns or authoritative publications from that context fail. A different replica can take over only after PostgreSQL considers the previous lease expired.
+
+Terrence does not implement a separate execution quorum: PostgreSQL is the ownership authority. Loss of PostgreSQL write authority therefore causes local execution to fail closed rather than continue without a lease.
 
 ## Restart safety
 
-A process restart during a run is handled at startup:
+A process restart or HA executor loss during a run is handled conservatively:
 
-- Pre-execution runs return to the queue.
+- A still-live database execution lease remains authoritative and is not reconciled by another coordinator.
+- Expired pre-execution work returns to the queue.
 - Interrupted plans and applies move to `errored`.
+- Confirmed applies that died before dispatch are re-armed after their lease expires.
+- Expired owner metadata on resting/final runs is cleared without resetting the fencing token.
 - Interrupted applies are never re-executed automatically.
 
-See [Runs](runs).
+See [Runs](runs) and [High availability](high-availability).
 
 ## API surface
 

@@ -13,7 +13,7 @@ This page covers the day-to-day operations of a Terrence instance: draining, sto
 
 Site administrators can open **Site administration → Operations center** for a browser-facing view of the operational evidence Terrence already records.
 
-The overview shows worker capacity and queue depth, storage headroom, sandbox availability, control-plane heartbeats, restore-rehearsal freshness, and the maintenance-window preview. In [HA mode](high-availability), it also shows the elected coordinator, fencing epoch, lease state, and each replica's leader/follower role. Without `TERRENCE_HA_ENABLED=true`, a deployment still supports only one active control-plane process.
+The overview shows worker capacity and queue depth, storage headroom, sandbox availability, control-plane heartbeats, restore-rehearsal freshness, and the maintenance-window preview. In [HA mode](high-availability), it also shows the elected coordinator, fencing epoch, coordinator lease state, each replica's leader/follower role, and aggregate active/expired local execution lease counts. An expired execution lease may appear briefly while the coordinator recovery loop reconciles or garbage-collects it.
 
 The remaining tabs provide:
 
@@ -195,9 +195,11 @@ The container health check uses these endpoints.
 
 The `/metrics` endpoint exposes process, database, and worker gauges. See [Metrics](metrics).
 
-## Single control plane
+## Control-plane topology
 
-Terrence is a single-process application. Run exactly one control-plane instance. Remote agent pools can scale independently. Multiple control-plane replicas are not supported; PostgreSQL does not make replicas safe.
+Without `TERRENCE_HA_ENABLED=true`, run exactly one Terrence control-plane process. PostgreSQL alone does not make multiple Terrence replicas safe.
+
+With HA enabled, multiple active API/control-plane replicas are supported against PostgreSQL and a shared `STORAGE_DIR`. PostgreSQL is the authoritative ownership/quorum boundary; Terrence adds coordinator, run and workspace leases plus fencing around that database authority. See [High availability](high-availability).
 
 ## Help a user regain access
 

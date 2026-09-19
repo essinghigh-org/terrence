@@ -50,6 +50,14 @@ HA startup fails closed unless PostgreSQL, an explicit `STORAGE_DIR`, `PUBLIC_UR
 
 SQLite remains a single-process backend.
 
+## PostgreSQL is the quorum boundary
+
+Terrence does not implement a second Raft/Paxos-style quorum between control-plane replicas. PostgreSQL is the single authoritative coordination boundary for HA ownership. Deploy PostgreSQL with whatever database-level HA model fits the environment (for example a managed multi-AZ service or a separately operated PostgreSQL cluster) and present Terrence with one writable endpoint whose transactions provide the database's normal consistency guarantees.
+
+Terrence does not inspect or vote on individual PostgreSQL members. If the PostgreSQL deployment cannot establish write authority, Terrence cannot renew or acquire coordinator/run execution leases. A local executor that cannot continue proving ownership fails closed and self-fences instead of continuing optimistically.
+
+This keeps one source of truth for ownership: a PostgreSQL transaction either commits the lease/fencing transition or it does not.
+
 ## Shared storage
 
 `STORAGE_DIR` must refer to the same shared POSIX filesystem from every replica. Terrence can verify that the path is configured and writable, but it cannot prove that separate paths are backed by the same storage.
@@ -82,7 +90,7 @@ Only the coordinator runs:
 
 All worker-enabled replicas may process individually leased durable jobs.
 
-If a replica loses coordinator ownership, it immediately stops its scheduler generation and terminates locally running Terraform/OpenTofu processes. It cannot resume scheduler work until it later acquires a new coordinator epoch.
+If a replica loses coordinator ownership, it immediately stops its scheduler generation. Locally running Terraform/OpenTofu executions are not revoked merely by the coordinator handoff: each run is independently authoritative while its own run/workspace execution lease remains valid. If the database connectivity or ownership needed by that run is lost, the run's own watchdog self-fences it.
 
 ## PostgreSQL migrations
 
@@ -115,22 +123,38 @@ Node heartbeats expose:
 - version and readiness checks
 - heartbeat freshness
 
-The Operations Center shows the current coordinator, lease expiry, fencing epoch, HA topology, and every node's role.
+The Operations Center shows the current coordinator, lease expiry, fencing epoch, HA topology, every node's role, and aggregate active/expired local execution lease counts.
 
 `TERRENCE_DISABLE_WORKER=1` makes an HA replica coordinator-ineligible and disables durable workers on that replica, but does not by itself make the API unready.
 
-## Local execution failover
+## Local execution fencing and failover
 
-This HA mode provides automatic **control-plane** failover. Local Terraform/OpenTofu execution is deliberately conservative:
+Local Terraform/OpenTofu execution has a second ownership layer in addition to the control-plane coordinator:
 
-- the elected coordinator owns local scheduler execution;
-- lease loss terminates its local subprocesses;
-- after coordinator takeover, interrupted local runs are reconciled;
-- an interrupted apply is not automatically replayed.
+- each local plan/apply acquires a PostgreSQL-backed run execution lease for 30 seconds and renews it every 5 seconds;
+- every new ownership generation increments the run's monotonically increasing fencing token;
+- the same transaction also acquires the workspace execution lease, so only one local run can own mutation/execution rights for a workspace at a time;
+- automatic plan-to-apply execution reuses the same in-process lease generation instead of handing ownership off mid-run;
+- a later manual or scheduled apply acquires a new generation after the plan lease is released.
 
-This avoids duplicate applies during a node failure or network partition.
+A local executor that loses the lease immediately invalidates its entire async execution context, force-terminates the affected process group/cgroup, and is prevented from starting another Terraform/OpenTofu/provider process. Database writes made by the execution path include the current owner, fencing token, and database-clock expiry in their compare-and-set predicate.
 
-Local execution does not yet have per-run database lease/fencing columns or a cross-replica workspace execution lease. That stronger execution-ownership model is the remaining step before Terrence can claim transparent local-executor failover. Agent execution and durable jobs already have their own heartbeat/fencing mechanisms and therefore benefit more directly from control-plane HA.
+Authoritative state publication is stronger than a check followed by a write: Terrence conditionally locks the run and workspace ownership rows inside the same transaction that allocates and inserts the state serial. A higher-token takeover therefore waits until the current authoritative commit finishes; once takeover commits, the old generation cannot publish state.
+
+Shared execution artifacts use the same boundary. Plan JSON, saved plans, and cost-estimate bytes are prepared in private temporary files; the final atomic rename is performed while the current run/workspace ownership rows are locked. A stale executor cannot replace artifacts belonging to a newer generation.
+
+After a process failure:
+
+- a newly elected coordinator respects any still-live run execution lease, even if the previous coordinator is gone;
+- expired execution leases are checked by the coordinator every 10 seconds;
+- pre-execution work can be safely requeued;
+- interrupted planning/apply execution is reconciled conservatively;
+- an interrupted apply is **never automatically replayed** because infrastructure may already have changed;
+- expired owner metadata on final/resting runs is garbage-collected without decreasing the run's fencing token.
+
+This gives Terrence database-enforced local execution ownership and fencing. It does not make an arbitrary Terraform apply transactionally movable between hosts: external cloud mutations performed before a crash cannot be rolled back by PostgreSQL. Recovery therefore remains intentionally conservative.
+
+Agent execution and durable jobs keep their existing independent lease/fencing mechanisms.
 
 ## Failure behavior
 
@@ -139,17 +163,41 @@ Expected failure sequence:
 ```text
 leader stops renewing
         │
-        ├─ local scheduler stops / subprocesses terminate when lease loss is observed
+        ├─ local scheduler generation stops when coordinator loss is observed
         │
-        └─ lease expires (<= ~15s from last successful renewal)
+        └─ coordinator lease expires (<= ~15s from last successful renewal)
                     │
                     ▼
            follower atomically takes over
                     │
                     ├─ fencing epoch increments
-                    ├─ interrupted local work is reconciled
+                    ├─ still-live run execution leases remain authoritative
+                    ├─ expired local execution leases are recovered separately
                     ├─ shared-file sweep runs
                     └─ scheduler starts
+```
+
+Coordinator ownership and run execution ownership are independent. Electing a new coordinator does not authorize it to overwrite a still-live run lease owned by the previous node.
+
+For an individual local run, the failure sequence is:
+
+```text
+last successful run-lease confirmation
+                 │
+                 ├─ renewal succeeds → lease extends
+                 │
+                 └─ renewal fails/hangs or process dies
+                              │
+                local watchdog self-fences by lease expiry
+                              │
+                              ▼
+                 PostgreSQL run lease expires (<= 30s)
+                              │
+                              ▼
+             another generation may atomically claim
+                              │
+                              ├─ fencing token increments
+                              └─ expired-run recovery runs within ~10s
 ```
 
 A killed leader is not automatically removed from the node inventory; its heartbeat becomes stale. Reusing that node ID is permitted only after the previous heartbeat is stale or the old process marked itself draining.
@@ -171,3 +219,12 @@ PostgreSQL CI starts three real Terrence processes against one fresh database an
 - `SIGKILL` of the coordinator causes automatic takeover by a different replica;
 - the replacement coordinator has a higher fencing epoch;
 - surviving replicas remain HTTP healthy.
+
+Execution-lease tests additionally verify:
+
+- exactly one run can own a workspace at a time;
+- every ownership takeover increments the run fencing token;
+- stale owners cannot renew, release, or publish state;
+- PostgreSQL row locks keep a higher-token takeover blocked until an in-flight authoritative state/artifact fence transaction commits;
+- expired interrupted leases recover while still-live leases remain authoritative;
+- expired ownership metadata on resting/final runs is cleared without resetting the fencing token.

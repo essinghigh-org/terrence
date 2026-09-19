@@ -1,5 +1,6 @@
 import { db } from "../db";
 import type { stateVersions } from "../db/schema";
+import { assertRunExecutionFenceTx, type RunExecutionLease } from "./execution-lease";
 import {
   CLIENT_ENCRYPTED_STATE_ERROR,
   decodeStatePayload,
@@ -26,13 +27,22 @@ export async function insertStateVersionWithSerialTx(
   return serial;
 }
 
-/** Insert the next workspace state serial with a short retry for concurrent writers. */
-export async function insertStateVersionWithSerialRetry(values: Readonly<StateInsert>): Promise<number> {
+/** Insert the next workspace state serial with a short retry for concurrent writers.
+ *
+ * Local HA execution passes its lease so the ownership check and state commit
+ * occur in the same database transaction. A stale executor can therefore
+ * never publish a state version after a newer fencing token has taken over.
+ */
+export async function insertStateVersionWithSerialRetry(
+  values: Readonly<StateInsert>,
+  executionLease?: RunExecutionLease,
+): Promise<number> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await db.transaction(
-        async (transaction): Promise<number> => insertStateVersionWithSerialTx(transaction, values),
-      );
+      return await db.transaction(async (transaction): Promise<number> => {
+        if (executionLease !== undefined) await assertRunExecutionFenceTx(transaction, executionLease);
+        return insertStateVersionWithSerialTx(transaction, values);
+      });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error) || attempt === 2) throw error;
     }

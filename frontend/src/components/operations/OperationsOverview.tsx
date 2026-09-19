@@ -32,6 +32,12 @@ function sandboxLabel(sandbox: InsightRecord): string {
   return sandbox["available"] === true ? "available" : sandbox["available"] === false ? "unavailable" : "unknown";
 }
 
+function leaseStateLabel(value: unknown): string {
+  if (value === true) return "Active";
+  if (value === false) return "Expired";
+  return "Unknown";
+}
+
 function RuntimeSummary(): React.JSX.Element {
   const load = useInsightResource("/admin/system-info", objectDocument);
   const worker = record(load.data?.["worker"]);
@@ -88,6 +94,7 @@ function NodeSummary(): React.JSX.Element {
   const attrs = load.data?.attributes;
   const backup = record(attrs?.["backup"]);
   const coordinator = record(attrs?.["coordinator"]);
+  const executionLeases = record(attrs?.["execution-leases"]);
   return (
     <InsightSection
       title="Control plane and recovery"
@@ -97,18 +104,21 @@ function NodeSummary(): React.JSX.Element {
       {load.loading && <InsightLoading />}
       {attrs !== undefined && (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
             <Metric label="HA mode" value={enabledLabel(attrs["ha-enabled"])} />
             <Metric label="Coordinator" value={text(coordinator["owner-node-id"], "None")} />
             <Metric
               label="Coordinator epoch"
               value={numberValue(coordinator["epoch"])?.toLocaleString() ?? "Unknown"}
             />
+            <Metric label="Lease" value={leaseStateLabel(coordinator["active"])} />
             <Metric
-              label="Lease"
-              value={
-                coordinator["active"] === true ? "Active" : coordinator["active"] === false ? "Expired" : "Unknown"
-              }
+              label="Active executions"
+              value={numberValue(executionLeases["active"])?.toLocaleString() ?? "Unknown"}
+            />
+            <Metric
+              label="Expired execution leases"
+              value={numberValue(executionLeases["expired"])?.toLocaleString() ?? "Unknown"}
             />
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">

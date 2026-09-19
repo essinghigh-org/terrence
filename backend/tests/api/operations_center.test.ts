@@ -102,6 +102,10 @@ test("rehearsal threshold persists, validates the envelope, and records an audit
   expect(attrs["supported-topology"]).toBe("single-active-control-plane");
   expect(["unknown", "current", "overdue"]).toContain(attrs.backup.status);
   expect(Array.isArray(attrs.nodes)).toBe(true);
+  expect(attrs["execution-leases"]).toMatchObject({
+    active: expect.any(Number),
+    expired: expect.any(Number),
+  });
   expect(
     await db.query.auditLogs.findFirst({
       where: and(

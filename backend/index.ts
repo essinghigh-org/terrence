@@ -147,8 +147,9 @@ if (haEnabled()) {
       startCoordinatorWorkerQueue();
       console.log(`[terrence] Coordinator scheduler active (epoch ${fencingEpoch})`);
     },
-    // A node that cannot prove current lease ownership must not leave either
-    // its scheduler generation or Terraform/OpenTofu subprocesses running.
+    // Coordinator ownership fences scheduler/discovery work only. Active
+    // Terraform/OpenTofu runs hold independent run/workspace execution leases
+    // and self-fence if those leases can no longer be renewed.
     onLeadershipLost: handleControlPlaneLeadershipLost,
   });
 } else {
