@@ -63,6 +63,7 @@ test("operations center exposes runtime, recovery and maintenance evidence only 
               "heartbeat-at": "2026-09-19T11:59:58.000Z",
               "expires-at": "2026-09-19T12:00:13.000Z",
             },
+            "execution-leases": { active: 2, expired: 1 },
             "rehearsal-max-age-days": 30,
             backup: {
               status: "current",
@@ -134,6 +135,8 @@ test("operations center exposes runtime, recovery and maintenance evidence only 
   expect(metric("Coordinator").getByText("ha-node-a")).toBeTruthy();
   expect(metric("Coordinator epoch").getByText("7")).toBeTruthy();
   expect(metric("Lease").getByText("Active")).toBeTruthy();
+  expect(metric("Active executions").getByText("2")).toBeTruthy();
+  expect(metric("Expired execution leases").getByText("1")).toBeTruthy();
 
   const topology = view.getByText(/Topology:\s*active-active-api-elected-coordinator/);
   expect(topology).toBeTruthy();

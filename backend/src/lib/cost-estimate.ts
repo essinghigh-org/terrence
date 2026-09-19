@@ -411,12 +411,26 @@ export function parseInfracostOutput(output: unknown, timestamps: CostEstimateTi
   };
 }
 
-export async function writeCostEstimateArtifact(runId: string, estimate: CostEstimateAttributes): Promise<void> {
+export async function writeCostEstimateArtifact(
+  runId: string,
+  estimate: CostEstimateAttributes,
+  publicationFence?: (publish: () => Promise<void>) => Promise<void>,
+): Promise<void> {
   await mkdir(costEstimateDirectory(), { recursive: true, mode: 0o700 });
   const target = artifactPath(runId);
-  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(estimate), { mode: 0o600 });
-  await rename(temporary, target);
+  let temporary: string | null = `${target}.${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(estimate), { mode: 0o600 });
+    const publish = async (): Promise<void> => {
+      if (temporary === null) throw new Error("Cost estimate temporary artifact disappeared before publication");
+      await rename(temporary, target);
+      temporary = null;
+    };
+    if (publicationFence === undefined) await publish();
+    else await publicationFence(publish);
+  } finally {
+    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => undefined);
+  }
 }
 
 export async function readCostEstimateArtifact(runId: string): Promise<CostEstimateAttributes | undefined> {

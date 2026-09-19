@@ -5,7 +5,7 @@ import { terraformVariableLine } from "./lib/tfvars";
 import { compareCodePoints, compareVariableSets } from "./lib/variable-set-precedence";
 import { newResourceId } from "./lib/resource-id";
 import { envFlag } from "./lib/env";
-import { db } from "./db";
+import { databaseCurrentTimeMs, db } from "./db";
 import {
   runs,
   configurationVersions,
@@ -37,7 +37,7 @@ import {
   adminGeneralSettings,
   projects,
 } from "./db/schema";
-import { eq, desc, asc, and, gt, lt, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
+import { eq, desc, asc, and, gt, lt, lte, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
@@ -88,6 +88,17 @@ import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { pruneControlEvents, publish } from "./lib/event-bus";
 import { isControlPlaneCoordinatorLeader } from "./lib/control-plane-coordinator";
+import {
+  assertLocalRunExecutionLease,
+  clearExpiredRunExecutionLease,
+  currentRunExecutionLease,
+  localRunExecutionEvidenceAllowed,
+  runExecutionFenceCondition,
+  RunExecutionLeaseUnavailableError,
+  withCurrentRunExecutionFence,
+  withRunExecutionLease,
+  workspaceExecutionFenceCondition,
+} from "./lib/execution-lease";
 import { haEnabled } from "./lib/ha-config";
 import {
   probeLandlockAbi,
@@ -138,6 +149,11 @@ const localExecutionLifecycle = new LocalExecutionLifecycle({
   concurrencyLimit: (): number => integerSetting("TERRENCE_RUN_CONCURRENCY"),
 });
 const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
+
+function executionArtifactPublicationFence(runId: string): (publish: () => Promise<void>) => Promise<void> {
+  return async (publish): Promise<void> => withCurrentRunExecutionFence(runId, publish);
+}
+
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
     "Run sandbox is required (the default) but Landlock is unavailable. " +
@@ -367,10 +383,20 @@ async function persistSavedPlan(
     configurationVersionId,
   };
   await writeFile(temporaryPlan, await encryptSecret(bytes.toString("base64")), { mode: 0o600 });
-  await rename(temporaryPlan, savedPlanFile(runId));
   const temporaryMetadata = join(directory, `.metadata-${crypto.randomUUID()}`);
   await writeFile(temporaryMetadata, JSON.stringify(metadata), { mode: 0o600 });
-  await rename(temporaryMetadata, savedPlanMetadataFile(runId));
+  try {
+    await withCurrentRunExecutionFence(runId, async (): Promise<void> => {
+      await rename(temporaryPlan, savedPlanFile(runId));
+      await rename(temporaryMetadata, savedPlanMetadataFile(runId));
+    });
+  } catch (error: unknown) {
+    await Promise.all([
+      rm(temporaryPlan, { force: true }).catch((): void => undefined),
+      rm(temporaryMetadata, { force: true }).catch((): void => undefined),
+    ]);
+    throw error;
+  }
   return metadata;
 }
 
@@ -449,7 +475,7 @@ async function recordPlanInput(
   const updated = await db
     .update(runs)
     .set({ statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 })
-    .where(and(eq(runs.id, runId), eq(runs.status, current.status)))
+    .where(runExecutionFenceCondition(runId, and(eq(runs.id, runId), eq(runs.status, current.status))))
     .returning({ id: runs.id });
   if (updated.length === 0) throw new Error(`Run ${runId} changed while recording its plan input.`);
 }
@@ -595,7 +621,9 @@ function spawnRunProcess(
     extraRo?: readonly string[];
   },
   sandbox?: RunSandbox | null,
+  requireExecutionLease = true,
 ): TrackedRunProcess {
+  if (requireExecutionLease) assertLocalRunExecutionLease(runId);
   const cgroup = activeRunCgroups.get(runId) ?? null;
   if (sandbox !== undefined && sandbox !== null) {
     const proc = sandbox.spawnGeneric(args, {
@@ -761,6 +789,7 @@ type RunDiagnosticLevel = "info" | "warn" | "error";
 type RunDiagnosticFields = Readonly<Record<string, unknown>>;
 
 async function writeLog(runId: string, phase: RunLogPhase, outputText: string): Promise<void> {
+  if (!localRunExecutionEvidenceAllowed(runId)) return;
   try {
     await db.insert(logs).values({
       id: crypto.randomUUID(),
@@ -861,7 +890,7 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
       const updated = await tx
         .update(runs)
         .set({ status, statusTimestamps: timestamps, statusMetadataSchemaVersion: 1, ...(extra ?? {}) })
-        .where(and(eq(runs.id, runId), eq(runs.status, currentStatus)))
+        .where(runExecutionFenceCondition(runId, and(eq(runs.id, runId), eq(runs.status, currentStatus))))
         .returning({ id: runs.id });
       if (updated.length === 0) {
         // A concurrent cancel/force-cancel won the race after the read above.
@@ -1064,6 +1093,7 @@ async function readPlanJson(
   planBinaryPath: string | undefined,
   timeoutMs: number,
   outputDirectory: string,
+  requireExecutionLease = true,
 ): Promise<PlanJsonCapture | undefined> {
   const tfplanPath = join(executionDir, "tfplan");
   if (!(await exists(tfplanPath))) return undefined;
@@ -1089,6 +1119,7 @@ async function readPlanJson(
           stderr: "pipe",
         },
         runSandbox,
+        requireExecutionLease,
       );
       outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "terraform-show-json");
       const [exitCode, output] = await waitForTrackedProcess(runId, "plan", child, outputPromise, timeoutMs);
@@ -1119,6 +1150,18 @@ async function readPlanJson(
     }
   }
   return undefined;
+}
+
+/** Test-only seam for verifying HA lease requirements on plan JSON subprocesses. */
+export async function readPlanJsonForTests(
+  runId: string,
+  executionDir: string,
+  planBinaryPath: string | undefined,
+  timeoutMs: number,
+  outputDirectory: string,
+  requireExecutionLease = true,
+): Promise<PlanJsonCapture | undefined> {
+  return readPlanJson(runId, executionDir, planBinaryPath, timeoutMs, outputDirectory, requireExecutionLease);
 }
 
 function processEnv(key: string): string {
@@ -1189,7 +1232,7 @@ async function writeDisabledCostEstimate(runId: string, timestamps: CostEstimate
     ...timestamps,
     "finished-at": new Date().toISOString(),
   });
-  await writeCostEstimateArtifact(runId, estimate);
+  await writeCostEstimateArtifact(runId, estimate, executionArtifactPublicationFence(runId));
 }
 
 async function resolveCostEstimateBinary(
@@ -1215,6 +1258,7 @@ async function resolveCostEstimateBinary(
         },
         "Cost estimation is not installed in this image (no Infracost binary override and managed install failed).",
       ),
+      executionArtifactPublicationFence(runId),
     );
     await writeLog(
       runId,
@@ -1272,7 +1316,7 @@ async function runInfracostBreakdown(
       "finished-at": new Date().toISOString(),
     },
   );
-  await writeCostEstimateArtifact(runId, estimate);
+  await writeCostEstimateArtifact(runId, estimate, executionArtifactPublicationFence(runId));
   await writeLog(
     runId,
     "plan",
@@ -1297,6 +1341,7 @@ async function reportCostEstimateFailure(
         },
         message,
       ),
+      executionArtifactPublicationFence(runId),
     );
   } catch (artifactError: unknown) {
     const artifactMessage = artifactError instanceof Error ? artifactError.message : String(artifactError);
@@ -1342,7 +1387,11 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
   const gcpCredentialsPath = join(secretsDir, "gcp-credentials.json");
 
   try {
-    await writeCostEstimateArtifact(runId, emptyCostEstimate("pending", scope.timestamps));
+    await writeCostEstimateArtifact(
+      runId,
+      emptyCostEstimate("pending", scope.timestamps),
+      executionArtifactPublicationFence(runId),
+    );
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) throw new Error("Persisted Terraform plan JSON is unavailable.");
     await writeFile(inputPath, JSON.stringify(planJson), { mode: 0o600 });
@@ -2296,57 +2345,110 @@ async function waitForVcsConfigurationDownload(
   return current;
 }
 
+async function deferRunForExecutionLeaseContention(runId: string, phase: "plan" | "apply"): Promise<void> {
+  if (phase === "plan") {
+    await db
+      .update(runs)
+      .set({ status: "pending" })
+      .where(
+        and(
+          eq(runs.id, runId),
+          eq(runs.status, "fetching"),
+          isNull(runs.executionOwnerInstanceId),
+          isNull(runs.executionOwnerNodeId),
+        ),
+      );
+    return;
+  }
+  await db
+    .update(runs)
+    .set({ status: "confirmed", scheduledAt: Date.now() + 1000 })
+    .where(
+      and(
+        eq(runs.id, runId),
+        inArray(runs.status, ["confirmed", "apply_queued"]),
+        isNull(runs.executionOwnerInstanceId),
+        isNull(runs.executionOwnerNodeId),
+      ),
+    );
+}
+
 /** Tracked wrapper: shutdown drain waits for in-flight run executions. */
 export async function executeRun(runId: string): Promise<void> {
-  prepareRunCgroup(runId);
-  return trackLocalRunExecution(runId, async () =>
-    trackLocalExecution(
-      executeRunImpl(runId)
-        .catch(async (error: unknown): Promise<void> => {
-          if (!(await runWasCanceled(runId))) {
-            try {
-              const current = await db.query.runs.findFirst({
-                where: eq(runs.id, runId),
-                columns: { statusTimestamps: true, statusMetadataSchemaVersion: true },
-              });
-              const timestamps =
-                parsePersistedStatusMetadata(current?.statusTimestamps, current?.statusMetadataSchemaVersion, runId) ??
-                {};
-              await db
-                .update(runs)
-                .set({
-                  status: "errored",
-                  statusTimestamps: { ...timestamps, "errored-at": new Date().toISOString() },
-                  statusMetadataSchemaVersion: 1,
-                })
-                .where(
-                  and(
-                    eq(runs.id, runId),
-                    notInArray(runs.status, [
-                      "canceled",
-                      "force_canceled",
-                      "applied",
-                      "errored",
-                      "discarded",
-                      "planned",
-                      "planned_and_saved",
-                      "planned_and_finished",
-                      "policy_soft_failed",
-                    ]),
-                  ),
-                );
-            } catch (statusError: unknown) {
-              log.error("Failed to fence a run after an execution error", { runId, error: statusError });
-            }
-          }
-          throw error;
-        })
-        .finally((): void => {
-          // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
-          cleanupRunCgroup(runId);
-        }),
-    ),
-  );
+  return trackLocalRunExecution(runId, async () => {
+    try {
+      await withRunExecutionLease(
+        runId,
+        "plan",
+        {
+          onLeaseLost: (): void => {
+            cancelRunExecution(runId, true);
+          },
+        },
+        async (): Promise<void> => {
+          prepareRunCgroup(runId);
+          return trackLocalExecution(
+            executeRunImpl(runId)
+              .catch(async (error: unknown): Promise<void> => {
+                if (!(await runWasCanceled(runId))) {
+                  try {
+                    const current = await db.query.runs.findFirst({
+                      where: eq(runs.id, runId),
+                      columns: { statusTimestamps: true, statusMetadataSchemaVersion: true },
+                    });
+                    const timestamps =
+                      parsePersistedStatusMetadata(
+                        current?.statusTimestamps,
+                        current?.statusMetadataSchemaVersion,
+                        runId,
+                      ) ?? {};
+                    await db
+                      .update(runs)
+                      .set({
+                        status: "errored",
+                        statusTimestamps: { ...timestamps, "errored-at": new Date().toISOString() },
+                        statusMetadataSchemaVersion: 1,
+                      })
+                      .where(
+                        runExecutionFenceCondition(
+                          runId,
+                          and(
+                            eq(runs.id, runId),
+                            notInArray(runs.status, [
+                              "canceled",
+                              "force_canceled",
+                              "applied",
+                              "errored",
+                              "discarded",
+                              "planned",
+                              "planned_and_saved",
+                              "planned_and_finished",
+                              "policy_soft_failed",
+                            ]),
+                          ),
+                        ),
+                      );
+                  } catch (statusError: unknown) {
+                    log.error("Failed to fence a run after an execution error", { runId, error: statusError });
+                  }
+                }
+                throw error;
+              })
+              .finally((): void => {
+                // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
+                cleanupRunCgroup(runId);
+              }),
+          );
+        },
+      );
+    } catch (error: unknown) {
+      if (error instanceof RunExecutionLeaseUnavailableError) {
+        await deferRunForExecutionLeaseContention(runId, "plan");
+        return;
+      }
+      throw error;
+    }
+  });
 }
 
 async function loadPlanExecutionScope(runId: string): Promise<{
@@ -2651,41 +2753,66 @@ async function executeRunImpl(runId: string): Promise<void> {
 
 /** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
 export async function executeApply(runId: string): Promise<void> {
-  const ownsCgroup = getRunCgroup(runId) === null;
-  if (ownsCgroup) prepareRunCgroup(runId);
-  return trackLocalRunExecution(runId, async () =>
-    trackLocalExecution(
-      executeApplyImpl(runId)
-        .catch(async (error: unknown): Promise<void> => {
-          if (!(await runWasCanceled(runId))) {
-            try {
-              const current = await db.query.runs.findFirst({
-                where: eq(runs.id, runId),
-                columns: { statusTimestamps: true },
-              });
-              await db
-                .update(runs)
-                .set({
-                  status: "errored",
-                  statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-                })
-                .where(
-                  and(
-                    eq(runs.id, runId),
-                    notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
-                  ),
-                );
-            } catch (statusError: unknown) {
-              log.error("Failed to fence a run after an apply error", { runId, error: statusError });
-            }
-          }
-          throw error;
-        })
-        .finally((): void => {
-          if (ownsCgroup) cleanupRunCgroup(runId);
-        }),
-    ),
-  );
+  return trackLocalRunExecution(runId, async () => {
+    try {
+      await withRunExecutionLease(
+        runId,
+        "apply",
+        {
+          onLeaseLost: (): void => {
+            cancelRunExecution(runId, true);
+          },
+        },
+        async (): Promise<void> => {
+          const ownsCgroup = getRunCgroup(runId) === null;
+          if (ownsCgroup) prepareRunCgroup(runId);
+          return trackLocalExecution(
+            executeApplyImpl(runId)
+              .catch(async (error: unknown): Promise<void> => {
+                if (!(await runWasCanceled(runId))) {
+                  try {
+                    const current = await db.query.runs.findFirst({
+                      where: eq(runs.id, runId),
+                      columns: { statusTimestamps: true },
+                    });
+                    await db
+                      .update(runs)
+                      .set({
+                        status: "errored",
+                        statusTimestamps: {
+                          ...(current?.statusTimestamps ?? {}),
+                          "errored-at": new Date().toISOString(),
+                        },
+                      })
+                      .where(
+                        runExecutionFenceCondition(
+                          runId,
+                          and(
+                            eq(runs.id, runId),
+                            notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
+                          ),
+                        ),
+                      );
+                  } catch (statusError: unknown) {
+                    log.error("Failed to fence a run after an apply error", { runId, error: statusError });
+                  }
+                }
+                throw error;
+              })
+              .finally((): void => {
+                if (ownsCgroup) cleanupRunCgroup(runId);
+              }),
+          );
+        },
+      );
+    } catch (error: unknown) {
+      if (error instanceof RunExecutionLeaseUnavailableError) {
+        await deferRunForExecutionLeaseContention(runId, "apply");
+        return;
+      }
+      throw error;
+    }
+  });
 }
 
 /** Claim the workspace lock for the apply itself, so a manual lock acquired
@@ -2701,7 +2828,12 @@ async function acquireRunWorkspaceLock(workspaceId: string, runId: string): Prom
       lockOwnerType: "run",
       lockOwnerId: runId,
     })
-    .where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked))))
+    .where(
+      workspaceExecutionFenceCondition(
+        runId,
+        and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked))),
+      ),
+    )
     .returning({ id: workspaces.id });
   return locked.length > 0;
 }
@@ -2716,11 +2848,14 @@ async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Prom
       lockOwnerId: null,
     })
     .where(
-      and(
-        eq(workspaces.id, workspaceId),
-        eq(workspaces.locked, true),
-        eq(workspaces.lockOwnerType, "run"),
-        eq(workspaces.lockOwnerId, runId),
+      workspaceExecutionFenceCondition(
+        runId,
+        and(
+          eq(workspaces.id, workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "run"),
+          eq(workspaces.lockOwnerId, runId),
+        ),
       ),
     );
 }
@@ -2821,7 +2956,12 @@ async function deferApplyForWorkspaceLock(
       status: "confirmed",
       scheduledAt: run.scheduledAt ?? Date.now() + 1000,
     })
-    .where(and(eq(runs.id, runId), eq(runs.status, run.status), notInArray(runs.status, FINAL_RUN_STATUSES)));
+    .where(
+      runExecutionFenceCondition(
+        runId,
+        and(eq(runs.id, runId), eq(runs.status, run.status), notInArray(runs.status, FINAL_RUN_STATUSES)),
+      ),
+    );
 }
 
 async function runPreApplyPhase(
@@ -3101,7 +3241,7 @@ async function enforcePlanExecutorPolicy(
       status: "errored",
       statusTimestamps: { ...(statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
     })
-    .where(and(eq(runs.id, runId), eq(runs.status, runStatus)))
+    .where(runExecutionFenceCondition(runId, and(eq(runs.id, runId), eq(runs.status, runStatus))))
     .returning({ id: runs.id });
   if (policyRejected.length === 0) return false;
   await writeLog(runId, "plan", `[terrence ERROR] ${policyError}`);
@@ -3343,7 +3483,10 @@ async function runPlanInitAndPlan(
   planTimeoutMs: number,
 ): Promise<{ proceed: boolean; planHasChanges: boolean }> {
   const binary = resolved.binaryPath;
-  await db.update(runs).set({ terraformVersion: resolved.version }).where(eq(runs.id, runId));
+  await db
+    .update(runs)
+    .set({ terraformVersion: resolved.version })
+    .where(runExecutionFenceCondition(runId, eq(runs.id, runId)));
   await writeLog(runId, "plan", `[terrence] Using ${resolved.tool} v${resolved.version} at ${binary}`);
   if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
 
@@ -3436,12 +3579,13 @@ async function finalizePlanOutput(
     ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
     : planCapture?.planJson;
   if (planJson !== undefined) {
-    if (planCapture === undefined) await writePlanJsonArtifact(runId, planJson);
-    else {
+    if (planCapture === undefined) {
+      await writePlanJsonArtifact(runId, planJson, undefined, executionArtifactPublicationFence(runId));
+    } else {
       // readPlanJson only returns after the child and both output streams are
       // complete; the raw file is in the private run workdir. Copy those
       // exact bytes instead of reserializing the large parsed plan in memory.
-      await writePlanJsonArtifactFromFile(runId, planCapture.rawPath);
+      await writePlanJsonArtifactFromFile(runId, planCapture.rawPath, executionArtifactPublicationFence(runId));
     }
     // The structured plan is persisted: tell SSE clients to fetch it once
     // instead of polling /json-output while the run is still planning.
@@ -3790,20 +3934,23 @@ async function saveApplyStateVersion(
   // version's `vcs-commit-sha` matches TFE's definition ("commit used by the run
   // that produced that state, if applicable" — null for CLI pushes).
   const { vcsCommitSha, vcsCommitUrl } = await applyStateVcsMetadata(configurationVersionId);
-  const nextSerial = await insertStateVersionWithSerialRetry({
-    id: crypto.randomUUID(),
-    workspaceId,
-    statePayload: await encryptStatePayload(statePayload),
-    jsonState: await encryptStatePayload(jsonState),
-    jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
-    runId,
-    createdBy,
-    vcsCommitSha,
-    vcsCommitUrl,
-    terraformVersion,
-    status: "finalized",
-    createdAt: Date.now(),
-  });
+  const nextSerial = await insertStateVersionWithSerialRetry(
+    {
+      id: crypto.randomUUID(),
+      workspaceId,
+      statePayload: await encryptStatePayload(statePayload),
+      jsonState: await encryptStatePayload(jsonState),
+      jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
+      runId,
+      createdBy,
+      vcsCommitSha,
+      vcsCommitUrl,
+      terraformVersion,
+      status: "finalized",
+      createdAt: Date.now(),
+    },
+    currentRunExecutionLease(runId),
+  );
   scheduleExplorerInventory(workspaceId);
 
   await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
@@ -5209,7 +5356,7 @@ async function captureProcess(
   timeoutMs: number,
   outputDirectory: string,
 ): Promise<CapturedProcess> {
-  const child = spawnRunProcess(runId, args, { cwd, env, stdout: "pipe", stderr: "pipe" }, runSandbox);
+  const child = spawnRunProcess(runId, args, { cwd, env, stdout: "pipe", stderr: "pipe" }, runSandbox, false);
   const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "assessment");
   const [exitCode, capturedOutput] = await waitForTrackedProcess(runId, "assessment", child, outputPromise, timeoutMs);
   return { exitCode, output: processOutputPreview(capturedOutput), capturedOutput };
@@ -5821,6 +5968,7 @@ async function runAssessmentPlanCapture(
     resolved.binaryPath,
     assessmentTimeoutMs,
     workDir,
+    false,
   );
   if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
   return generatedPlan.planJson;
@@ -6865,6 +7013,10 @@ const AUTO_DESTROY_POLL_INTERVAL_MS = integerSetting("TERRENCE_AUTO_DESTROY_POLL
  * for nothing. Default 60s (scratch review).
  */
 const ASSESSMENT_POLL_INTERVAL_MS = integerSetting("TERRENCE_ASSESSMENT_POLL_MS");
+// Once a run execution lease expires, the coordinator rechecks it frequently
+// enough that recovery adds at most a small delay beyond the lease TTL without
+// burdening the hot 1.5s queue poll.
+const RUN_EXECUTION_RECOVERY_POLL_MS = 10_000;
 
 // --- Graceful-drain state (shutdown) ---
 // SIGTERM sets the draining flag: the pollers stop claiming new work while
@@ -6881,10 +7033,15 @@ export function stopCoordinatorWorkerQueue(): void {
   coordinatorWorkerGeneration += 1;
 }
 
-/** Fence all coordinator-owned local work immediately after lease loss. */
+/** Stop coordinator-owned scheduler work immediately after lease loss.
+ *
+ * Active Terraform/OpenTofu executions are independently fenced by their
+ * run/workspace execution leases. A coordinator handoff alone must not revoke
+ * a still-valid run lease; database connectivity loss will self-fence each run
+ * through its own renewal watchdog.
+ */
 export function handleControlPlaneLeadershipLost(): void {
   stopCoordinatorWorkerQueue();
-  terminateActiveRunExecutions();
 }
 
 /** Test-only visibility for coordinator scheduler ownership. */
@@ -7156,6 +7313,20 @@ const ERROR_AFTER_RESTART = new Set([
   "applying",
 ]);
 
+function reclaimableRunExecutionCondition(databaseNow: number): SQL {
+  const condition = or(
+    and(isNull(runs.executionOwnerNodeId), isNull(runs.executionOwnerInstanceId)),
+    and(
+      isNotNull(runs.executionOwnerNodeId),
+      isNotNull(runs.executionOwnerInstanceId),
+      isNotNull(runs.executionLeaseExpiresAt),
+      lte(runs.executionLeaseExpiresAt, databaseNow),
+    ),
+  );
+  if (condition === undefined) throw new Error("Reclaimable execution condition unexpectedly resolved empty");
+  return condition;
+}
+
 async function pruneInterruptedApplyRecovery(): Promise<void> {
   const retentionMs = integerSetting("TERRENCE_RECOVERY_RETENTION_MS");
   const cutoff = Date.now() - retentionMs;
@@ -7262,7 +7433,7 @@ async function requeueInterruptedRun(run: InterruptedRunCandidate, pendingAt: st
       status: "pending",
       statusTimestamps: { ...(run.statusTimestamps ?? {}), "pending-at": pendingAt },
     })
-    .where(and(eq(runs.id, run.id), eq(runs.status, run.status)))
+    .where(runExecutionFenceCondition(run.id, and(eq(runs.id, run.id), eq(runs.status, run.status))))
     .returning({ id: runs.id });
   if (updated.length === 0) return false;
   await writeLog(
@@ -7353,13 +7524,24 @@ async function reconcileInterruptedRun(
   // (or workspace-deleted, which can never execute again) runs are
   // reconciled here.
   if (agentWorkspaceIds.has(run.workspaceId)) return "skipped";
+  const phase = run.status === "apply_queued" || run.status === "applying" ? "apply" : "plan";
   try {
-    if (REQUEUE_AFTER_RESTART.has(run.status)) {
-      return (await requeueInterruptedRun(run, pendingAt)) ? "requeued" : "skipped";
-    }
-    await errorInterruptedRun(run);
-    return "errored";
+    return await withRunExecutionLease(
+      run.id,
+      phase,
+      { onLeaseLost: (): void => undefined },
+      async (): Promise<"requeued" | "errored" | "skipped"> => {
+        if (REQUEUE_AFTER_RESTART.has(run.status)) {
+          return (await requeueInterruptedRun(run, pendingAt)) ? "requeued" : "skipped";
+        }
+        await errorInterruptedRun(run);
+        return "errored";
+      },
+    );
   } catch (error: unknown) {
+    // A still-live lease is authoritative even if another coordinator has
+    // already been elected. Recovery waits until PostgreSQL says it expired.
+    if (error instanceof RunExecutionLeaseUnavailableError) return "skipped";
     // One bad transition or CAS race must not abort the whole startup
     // reconciliation; log and continue to the next interrupted run.
     await reportReconciliationFailure(run.id, error);
@@ -7371,13 +7553,21 @@ async function rearmOrphanedApply(
   runId: string,
   workspaceId: string,
   orphanAgentWorkspaceIds: ReadonlySet<string>,
+  databaseNow: number,
 ): Promise<boolean> {
   if (orphanAgentWorkspaceIds.has(workspaceId)) return false;
   try {
     const rearmedRows = await db
       .update(runs)
       .set({ scheduledAt: Date.now() })
-      .where(and(eq(runs.id, runId), eq(runs.status, "confirmed"), isNull(runs.scheduledAt)))
+      .where(
+        and(
+          eq(runs.id, runId),
+          eq(runs.status, "confirmed"),
+          isNull(runs.scheduledAt),
+          reclaimableRunExecutionCondition(databaseNow),
+        ),
+      )
       .returning({ id: runs.id });
     if (rearmedRows.length === 0) return false;
     await writeLog(
@@ -7404,8 +7594,14 @@ async function rearmOrphanedApplies(): Promise<number> {
   // against double dispatch, and agent-mode runs stay with
   // recoverStaleAgentJobs.
   let rearmed = 0;
+  const databaseNow = await databaseCurrentTimeMs();
   const orphanedApplies = await db.query.runs.findMany({
-    where: and(eq(runs.status, "confirmed"), isNull(runs.scheduledAt), eq(runs.planOnly, false)),
+    where: and(
+      eq(runs.status, "confirmed"),
+      isNull(runs.scheduledAt),
+      eq(runs.planOnly, false),
+      reclaimableRunExecutionCondition(databaseNow),
+    ),
     columns: { id: true, workspaceId: true },
   });
   if (orphanedApplies.length === 0) return rearmed;
@@ -7418,7 +7614,7 @@ async function rearmOrphanedApplies(): Promise<number> {
     orphanWorkspaces.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
   );
   for (const run of orphanedApplies) {
-    if (await rearmOrphanedApply(run.id, run.workspaceId, orphanAgentWorkspaceIds)) rearmed += 1;
+    if (await rearmOrphanedApply(run.id, run.workspaceId, orphanAgentWorkspaceIds, databaseNow)) rearmed += 1;
   }
   return rearmed;
 }
@@ -7484,6 +7680,75 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   const assessmentsErrored = await errorInterruptedAssessments();
 
   return { requeued, errored, assessmentsErrored, rearmed };
+}
+
+/** Recover only executions whose explicit database lease has expired.
+ *
+ * Unlike startup reconciliation, this recurring HA pass never treats an
+ * unowned transient status as an orphan: that could be the normal small window
+ * between scheduler claim and executeRun()/executeApply() acquiring its lease.
+ */
+export async function reconcileExpiredLocalRunExecutions(): Promise<{
+  requeued: number;
+  errored: number;
+  rearmed: number;
+}> {
+  const databaseNow = await databaseCurrentTimeMs();
+  const interruptedStatuses = [...REQUEUE_AFTER_RESTART, ...ERROR_AFTER_RESTART];
+  const candidates = await db.query.runs.findMany({
+    where: and(
+      isNotNull(runs.executionOwnerNodeId),
+      isNotNull(runs.executionOwnerInstanceId),
+      isNotNull(runs.executionLeaseExpiresAt),
+      lte(runs.executionLeaseExpiresAt, databaseNow),
+    ),
+    columns: {
+      id: true,
+      workspaceId: true,
+      status: true,
+      statusTimestamps: true,
+      scheduledAt: true,
+      planOnly: true,
+    },
+  });
+  if (candidates.length === 0) return { requeued: 0, errored: 0, rearmed: 0 };
+
+  const workspaceIds = [...new Set(candidates.map((run): string => run.workspaceId))];
+  const agentWorkspaceIds = new Set(
+    (
+      await db.query.workspaces.findMany({
+        where: inArray(workspaces.id, workspaceIds),
+        columns: { id: true, executionMode: true },
+      })
+    )
+      .filter((workspace): boolean => workspace.executionMode === "agent")
+      .map((workspace): string => workspace.id),
+  );
+
+  const pendingAt = new Date().toISOString();
+  let requeued = 0;
+  let errored = 0;
+  let rearmed = 0;
+  for (const run of candidates) {
+    if (agentWorkspaceIds.has(run.workspaceId)) continue;
+
+    if (interruptedStatuses.includes(run.status)) {
+      const outcome = await reconcileInterruptedRun(run, agentWorkspaceIds, pendingAt);
+      if (outcome === "requeued") requeued += 1;
+      else if (outcome === "errored") errored += 1;
+      continue;
+    }
+
+    if (run.status === "confirmed" && run.scheduledAt === null && run.planOnly === false) {
+      if (await rearmOrphanedApply(run.id, run.workspaceId, agentWorkspaceIds, databaseNow)) rearmed += 1;
+    }
+
+    // Resting/final rows can retain expired ownership if a process dies after
+    // its authoritative commit but before the normal finally-release. Clear
+    // that exact old generation so diagnostics do not accumulate stale owners.
+    await clearExpiredRunExecutionLease(run.id, databaseNow);
+  }
+  return { requeued, errored, rearmed };
 }
 
 /** Start HA-safe, individually leased durable jobs on this replica. */
@@ -7603,6 +7868,11 @@ export function startCoordinatorWorkerQueue(): void {
       }
     },
     ASSESSMENT_POLL_INTERVAL_MS,
+  );
+  slowCycle(
+    "reconcileExpiredLocalRunExecutions",
+    async (): Promise<unknown> => reconcileExpiredLocalRunExecutions(),
+    RUN_EXECUTION_RECOVERY_POLL_MS,
   );
   // Forwarded agent requests (which may carry credentials) are purged after
   // their retention window so the table cannot grow unbounded and stale

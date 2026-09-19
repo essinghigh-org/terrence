@@ -114,7 +114,7 @@ describe("control-plane coordinator leases", () => {
     });
   });
 
-  test("fences scheduler ownership and active executions when a live coordinator loses its lease", async () => {
+  test("stops scheduler ownership without revoking an independently leased execution", async () => {
     process.env["TERRENCE_HA_ENABLED"] = "true";
     process.env["TERRENCE_DISABLE_WORKER"] = "false";
     process.env["TERRENCE_NODE_ID"] = "node-a";
@@ -162,6 +162,8 @@ describe("control-plane coordinator leases", () => {
       fencingEpoch: 2,
     });
     expect(coordinatorWorkerRunningForTests()).toBe(false);
-    expect(killCalls).toBe(1);
+    // Phase 2 run/workspace execution leases are independent of the scheduler
+    // coordinator. The run self-fences only if its own lease is lost.
+    expect(killCalls).toBe(0);
   });
 });

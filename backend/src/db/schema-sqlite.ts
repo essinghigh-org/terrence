@@ -510,6 +510,15 @@ export const workspaces = sqliteTable(
     // show lock age. Set on lock, cleared on unlock/force-unlock. Older
     // databases converge via the idempotent boot repair in db/index.ts.
     lockedAt: integer("locked_at"),
+    // HA execution ownership is distinct from the user/apply workspace lock.
+    // The current local executor must hold this lease before it may mutate
+    // authoritative run/state data for this workspace.
+    executionRunId: text("execution_run_id"),
+    executionOwnerNodeId: text("execution_owner_node_id"),
+    executionOwnerInstanceId: text("execution_owner_instance_id"),
+    executionFencingToken: integer("execution_fencing_token"),
+    executionLeaseExpiresAt: integer("execution_lease_expires_at"),
+    executionLeaseHeartbeatAt: integer("execution_lease_heartbeat_at"),
     // Executor policy (36/37/39): per-workspace isolation level. When
     // `trustedExecution` is false, local Landlock execution is refused and the
     // run must be dispatched to an isolated executor (agent/container/k8s).
@@ -766,6 +775,14 @@ export const runs = sqliteTable(
     allowConfigGeneration: integer("allow_config_generation", { mode: "boolean" }).notNull().default(false),
     generatedConfiguration: integer("generated_configuration", { mode: "boolean" }).notNull().default(false),
     executionMode: text("execution_mode").notNull().default("remote"),
+    // PostgreSQL-authoritative local execution ownership. The fencing token is
+    // monotonic per run and is never reset when ownership is released.
+    executionOwnerNodeId: text("execution_owner_node_id"),
+    executionOwnerInstanceId: text("execution_owner_instance_id"),
+    executionFencingToken: integer("execution_fencing_token").notNull().default(0),
+    executionLeaseExpiresAt: integer("execution_lease_expires_at"),
+    executionLeaseHeartbeatAt: integer("execution_lease_heartbeat_at"),
+    executionPhase: text("execution_phase"),
     // Filled when an agent claims a run. These values describe the exact
     // compatibility contract used by the current run generation.
     agentVersion: text("agent_version"),
@@ -795,6 +812,7 @@ export const runs = sqliteTable(
     index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
     index("runs_status_created_idx").on(table.status, table.createdAt),
     index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
+    index("runs_execution_lease_expiry_idx").on(table.executionLeaseExpiresAt),
     index("runs_configuration_version_idx").on(table.configurationVersionId),
   ],
 );
