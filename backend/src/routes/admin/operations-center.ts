@@ -59,6 +59,7 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
         .from(runs)
         .where(
           and(
+            isNotNull(runs.executionOwnerNodeId),
             isNotNull(runs.executionOwnerInstanceId),
             isNotNull(runs.executionLeaseExpiresAt),
             gt(runs.executionLeaseExpiresAt, now),
@@ -69,6 +70,7 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
         .from(runs)
         .where(
           and(
+            isNotNull(runs.executionOwnerNodeId),
             isNotNull(runs.executionOwnerInstanceId),
             isNotNull(runs.executionLeaseExpiresAt),
             lte(runs.executionLeaseExpiresAt, now),

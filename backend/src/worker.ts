@@ -1093,6 +1093,7 @@ async function readPlanJson(
   planBinaryPath: string | undefined,
   timeoutMs: number,
   outputDirectory: string,
+  requireExecutionLease = true,
 ): Promise<PlanJsonCapture | undefined> {
   const tfplanPath = join(executionDir, "tfplan");
   if (!(await exists(tfplanPath))) return undefined;
@@ -1118,6 +1119,7 @@ async function readPlanJson(
           stderr: "pipe",
         },
         runSandbox,
+        requireExecutionLease,
       );
       outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "terraform-show-json");
       const [exitCode, output] = await waitForTrackedProcess(runId, "plan", child, outputPromise, timeoutMs);
@@ -1148,6 +1150,18 @@ async function readPlanJson(
     }
   }
   return undefined;
+}
+
+/** Test-only seam for verifying HA lease requirements on plan JSON subprocesses. */
+export async function readPlanJsonForTests(
+  runId: string,
+  executionDir: string,
+  planBinaryPath: string | undefined,
+  timeoutMs: number,
+  outputDirectory: string,
+  requireExecutionLease = true,
+): Promise<PlanJsonCapture | undefined> {
+  return readPlanJson(runId, executionDir, planBinaryPath, timeoutMs, outputDirectory, requireExecutionLease);
 }
 
 function processEnv(key: string): string {
@@ -5954,6 +5968,7 @@ async function runAssessmentPlanCapture(
     resolved.binaryPath,
     assessmentTimeoutMs,
     workDir,
+    false,
   );
   if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
   return generatedPlan.planJson;
