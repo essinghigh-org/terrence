@@ -61,6 +61,43 @@ test("delayed evidence from a previous workspace is discarded after navigation",
   expect(view.queryByText("old-evidence")).toBeNull();
 });
 
+function ScopedWriter({ scope }: Readonly<{ scope: string }>) {
+  const action = useInsightAction(scope);
+  return (
+    <>
+      <button
+        onClick={() => {
+          void action.execute("/evidence", { scope });
+        }}
+      >
+        Scoped write
+      </button>
+      <span>{action.result?.id}</span>
+    </>
+  );
+}
+
+test("an action response from the previous committed scope is discarded after navigation", async () => {
+  let resolveOld!: (response: Response) => void;
+  globalThis.fetch = mock(
+    async () =>
+      new Promise<Response>((resolve) => {
+        resolveOld = resolve;
+      }),
+  ) as unknown as typeof fetch;
+  const view = render(<ScopedWriter scope="workspace-old" />);
+  fireEvent.click(view.getByText("Scoped write"));
+  await waitFor(() => {
+    expect(resolveOld).toBeDefined();
+  });
+  view.rerender(<ScopedWriter scope="workspace-new" />);
+  await act(async () => {
+    resolveOld(json(resource("old-write")));
+    await Promise.resolve();
+  });
+  expect(view.queryByText("old-write")).toBeNull();
+});
+
 function Writer() {
   const action = useInsightAction("one-workspace");
   return (

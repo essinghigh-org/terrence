@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { app } from "../../src/app";
@@ -45,6 +45,16 @@ afterAll(async () => {
   await db.delete(adminSettings).where(eq(adminSettings.id, "operations-center"));
   if (originalSettings !== undefined) await db.insert(adminSettings).values(originalSettings);
   invalidateSettingsCache();
+  await db
+    .delete(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.userId, adminId),
+        eq(auditLogs.action, "update"),
+        eq(auditLogs.resourceType, "operations-center-settings"),
+        eq(auditLogs.resourceId, "operations-center"),
+      ),
+    );
   await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, memberId]));
   await db.delete(users).where(inArray(users.id, [adminId, memberId]));
 });
@@ -78,6 +88,7 @@ test("operations center and browser support routes require a site administrator"
       })
     ).status,
   ).toBe(404);
+  expect((await request("/admin/operations-center/settings", memberToken, "PATCH", {})).status).toBe(404);
 });
 
 test("rehearsal threshold persists, validates the envelope, and records an audit event", async () => {
@@ -92,7 +103,14 @@ test("rehearsal threshold persists, validates the envelope, and records an audit
   expect(["unknown", "current", "overdue"]).toContain(attrs.backup.status);
   expect(Array.isArray(attrs.nodes)).toBe(true);
   expect(
-    await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceType, "operations-center-settings") }),
+    await db.query.auditLogs.findFirst({
+      where: and(
+        eq(auditLogs.userId, adminId),
+        eq(auditLogs.action, "update"),
+        eq(auditLogs.resourceType, "operations-center-settings"),
+        eq(auditLogs.resourceId, "operations-center"),
+      ),
+    }),
   ).toBeDefined();
   for (const value of [null, [], "14", 0, 3651, 1.5]) {
     const invalid = await request("/admin/operations-center/settings", adminToken, "PATCH", {

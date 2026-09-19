@@ -229,6 +229,77 @@ test("workspace insights compares retained state evidence without implying live 
   });
 });
 
+test("drift review saves a changed assignee without requiring an unrelated note", async () => {
+  let patchBody: Record<string, unknown> | undefined;
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          type: "workspaces",
+          attributes: {
+            name: "production",
+            "execution-mode": "remote",
+            locked: false,
+            permissions: { "can-manage-run-tasks": true, "can-queue-run": true },
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/assessment-results") return json({ data: [] });
+    if (url === "/api/v2/workspaces/ws-1/drift-incidents") {
+      return json({
+        data: [
+          {
+            id: "incident-1",
+            type: "drift-incidents",
+            attributes: {
+              status: "open",
+              assignee: "alice",
+              "latest-assessment-id": "assessment-1",
+              "observed-at": "2026-09-19T12:00:00Z",
+              "updated-at": "2026-09-19T12:00:00Z",
+            },
+          },
+        ],
+      });
+    }
+    if (url === "/api/v2/drift-incidents/incident-1" && init?.method === "PATCH") {
+      patchBody = JSON.parse(requestBodyText(init.body)) as Record<string, unknown>;
+      return json({
+        data: { id: "incident-1", type: "drift-incidents", attributes: { status: "open", assignee: "bob" } },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production/insights?tab=drift"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName/insights" element={<WorkspaceInsights />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Incident incident-1")).toBeTruthy();
+  });
+  const save = view.getByRole("button", { name: "Save note and assignee" });
+  expect(save.hasAttribute("disabled")).toBe(true);
+  fireEvent.input(view.getByLabelText("Assignee"), { target: { value: "bob" } });
+  expect(save.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(save);
+  await waitFor((): void => {
+    expect(patchBody).toBeDefined();
+  });
+  expect((patchBody?.["data"] as Record<string, unknown>)["attributes"] as Record<string, unknown>).toEqual({
+    comment: "",
+    assignee: "bob",
+  });
+});
+
 test("run insights defaults to the latest earlier successful run and posts an explicit plan comparison", async () => {
   let comparisonBody: Record<string, unknown> | undefined;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

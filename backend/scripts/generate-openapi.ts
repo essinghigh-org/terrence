@@ -338,6 +338,13 @@ for (const route of routes) {
     /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(
       openApiPath,
     );
+  const isSupportBundleDownload =
+    m === "get" &&
+    [
+      "/api/v1/support/bundle-requests/{id}/download",
+      "/api/v1/support-bundle-requests/{id}/download",
+      "/api/v2/admin/support-bundles/{id}/download",
+    ].includes(openApiPath);
   const hasSuccessStatus = [...responseStatuses].some((status) => status >= 200 && status < 300);
   if ((hasImplicitSuccessReturn(handlerSource) && !hasSuccessStatus) || isPlanArtifact || !hasSuccessStatus) {
     responseStatuses.add(200);
@@ -401,6 +408,15 @@ for (const route of routes) {
       );
     }
   }
+  if (isSupportBundleDownload) {
+    const bundleResponse = responses["200"] as Record<string, unknown> | undefined;
+    if (bundleResponse !== undefined) {
+      bundleResponse.description = "Support bundle gzip archive";
+      bundleResponse.content = {
+        "application/gzip": { schema: { type: "string", format: "binary" } },
+      };
+    }
+  }
   // Plan artifacts are ordinary JSON documents (terraform show sends
   // Accept: application/json), not JSON:API resources: they answer 200 with
   // application/json and 204 while the plan is still running.
@@ -413,6 +429,35 @@ for (const route of routes) {
     }
     const pendingResponse = responses["204"] as Record<string, unknown> | undefined;
     if (pendingResponse !== undefined) pendingResponse.description = "Plan accepted but not completed yet";
+  }
+  if (m === "patch" && openApiPath === "/api/v2/admin/operations-center/settings") {
+    operation.requestBody = {
+      required: true,
+      content: {
+        "application/vnd.api+json": {
+          schema: {
+            type: "object",
+            required: ["data"],
+            properties: {
+              data: {
+                type: "object",
+                required: ["attributes"],
+                properties: {
+                  attributes: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["rehearsal-max-age-days"],
+                    properties: {
+                      "rehearsal-max-age-days": { type: "integer", minimum: 1, maximum: 3650 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
   }
   if (m === "patch" && openApiPath === "/api/v2/organization-memberships/{id}") {
     operation.requestBody = {

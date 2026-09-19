@@ -70,6 +70,9 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
       ),
     });
   })
+  // Keep body validation inside the authenticated handler. Elysia route-level
+  // body schemas run before onBeforeHandle; malformed non-admin requests would
+  // otherwise reveal this deliberately hidden admin route with 422 instead of 404.
   .patch("/api/v2/admin/operations-center/settings", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     const attrs = settingsAttributes(body);
     const value = attrs["rehearsal-max-age-days"];

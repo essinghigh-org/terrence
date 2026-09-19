@@ -52489,11 +52489,12 @@
         "summary": "GET /api/v1/support/bundle-requests/{id}/download",
         "responses": {
           "200": {
-            "description": "Success",
+            "description": "Support bundle gzip archive",
             "content": {
-              "application/vnd.api+json": {
+              "application/gzip": {
                 "schema": {
-                  "type": "object"
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
@@ -52772,11 +52773,12 @@
         "summary": "GET /api/v1/support-bundle-requests/{id}/download",
         "responses": {
           "200": {
-            "description": "Success",
+            "description": "Support bundle gzip archive",
             "content": {
-              "application/vnd.api+json": {
+              "application/gzip": {
                 "schema": {
-                  "type": "object"
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
@@ -53030,6 +53032,43 @@
           "422": {
             "description": "Unprocessable Entity"
           }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.api+json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "required": [
+                      "attributes"
+                    ],
+                    "properties": {
+                      "attributes": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "rehearsal-max-age-days"
+                        ],
+                        "properties": {
+                          "rehearsal-max-age-days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -53197,11 +53236,12 @@
         "summary": "GET /api/v2/admin/support-bundles/{id}/download",
         "responses": {
           "200": {
-            "description": "Success",
+            "description": "Support bundle gzip archive",
             "content": {
-              "application/vnd.api+json": {
+              "application/gzip": {
                 "schema": {
-                  "type": "object"
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }

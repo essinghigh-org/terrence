@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fetchApi, fetchApiBlob } from "./api";
 
 export type InsightRecord = Readonly<Record<string, unknown>>;
@@ -149,7 +149,9 @@ export type InsightAction = Readonly<{
 /** Writes are explicit, single-flight, and never automatically replayed. */
 export function useInsightAction(scope: string): InsightAction {
   const identity = useRef(scope);
-  identity.current = scope;
+  useLayoutEffect((): void => {
+    identity.current = scope;
+  }, [scope]);
   const mounted = useRef(true);
   const pending = useRef(false);
   const requestIdentity = useRef<Readonly<{ signature: string; key: string }> | null>(null);

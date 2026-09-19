@@ -129,6 +129,19 @@ const INCIDENT_CONFIRMATION = {
   },
 } as const;
 
+function incidentUpdateDisabled(
+  busy: boolean,
+  status: string,
+  comment: string,
+  assignee: string,
+  initialAssignee: string,
+): boolean {
+  if (busy || status === "resolved") return true;
+  if (comment.trim() !== "") return false;
+  const nextAssignee = assignee.trim();
+  return nextAssignee === "" || nextAssignee === initialAssignee;
+}
+
 function DriftIncident({
   incident,
   permissions,
@@ -141,7 +154,8 @@ function DriftIncident({
   onChanged: () => void;
 }>): React.JSX.Element {
   const [comment, setComment] = useState("");
-  const [assignee, setAssignee] = useState(text(incident.attributes["assignee"], ""));
+  const initialAssignee = text(incident.attributes["assignee"], "");
+  const [assignee, setAssignee] = useState(initialAssignee);
   const [confirm, setConfirm] = useState<"remediate" | "resolve" | "snooze" | null>(null);
   const action = useInsightAction(incident.id);
   const status = text(incident.attributes["status"]);
@@ -230,7 +244,7 @@ function DriftIncident({
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
-              disabled={action.busy || comment.trim() === "" || status === "resolved"}
+              disabled={incidentUpdateDisabled(action.busy, status, comment, assignee, initialAssignee)}
               onClick={(): void => {
                 void saveComment();
               }}
