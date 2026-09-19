@@ -1,7 +1,7 @@
 import { executionSetting, integrationSetting, integerSetting } from "../lib/runtime-config";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
-import { db } from "../db";
+import { databaseCurrentTimeMs, db } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runNetPolicy, runSandboxRequired } from "../lib/sandbox";
 import { envFlag } from "../lib/env";
@@ -17,11 +17,13 @@ import {
 } from "../lib/metrics";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { eq, desc, gte } from "drizzle-orm";
+import { and, desc, eq, gte, lt, or } from "drizzle-orm";
 import { controlPlaneNodes } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { maintenanceSnapshot } from "../lib/maintenance";
 import { COMPATIBILITY_VERSION, TFP_API_VERSION } from "../lib/constants";
+import { controlPlaneCoordinatorState } from "../lib/control-plane-coordinator";
+import { controlPlaneInstanceId, controlPlaneNodeId, haEnabled } from "../lib/ha-config";
 
 // Single source of truth for the reported application version:
 // BUILD_VERSION env wins, otherwise the root package.json version,
@@ -613,7 +615,89 @@ async function resolveMetricsCollection(
   return { collection };
 }
 
-export const readinessNodeId = (): string => process.env["TERRENCE_NODE_ID"] ?? "terrence-node-1";
+export const readinessNodeId = (): string => controlPlaneNodeId();
+
+function nodeCoordinatorMetadata(): {
+  role: string;
+  coordinatorEpoch: number | null;
+} {
+  if (!haEnabled()) return { role: "standalone", coordinatorEpoch: null };
+  const coordinator = controlPlaneCoordinatorState();
+  // Identity is claimed before election begins. Persist that short startup
+  // window as follower rather than leaking the coordinator's internal
+  // "disabled" initialization state into the public node model.
+  return {
+    role: coordinator.role === "disabled" ? "follower" : coordinator.role,
+    coordinatorEpoch: coordinator.fencingEpoch,
+  };
+}
+
+export async function claimControlPlaneNodeIdentity(now?: number): Promise<void> {
+  if (!haEnabled()) return;
+  const currentNow = now ?? (await databaseCurrentTimeMs());
+  const nodeId = readinessNodeId();
+  const metadata = nodeCoordinatorMetadata();
+  const replaceable = or(
+    eq(controlPlaneNodes.instanceId, controlPlaneInstanceId),
+    lt(controlPlaneNodes.lastHeartbeatAt, currentNow - NODE_HEARTBEAT_TIMEOUT_MS),
+    eq(controlPlaneNodes.status, "draining"),
+  );
+  const updated = await db
+    .update(controlPlaneNodes)
+    .set({
+      hostname: nodeId,
+      address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+      version: appVersion(),
+      instanceId: controlPlaneInstanceId,
+      role: metadata.role,
+      coordinatorEpoch: metadata.coordinatorEpoch,
+      status: "active",
+      lastHeartbeatAt: currentNow,
+    })
+    .where(and(eq(controlPlaneNodes.id, nodeId), replaceable))
+    .returning({ id: controlPlaneNodes.id });
+  if (updated.length > 0) return;
+
+  const inserted = await db
+    .insert(controlPlaneNodes)
+    .values({
+      id: nodeId,
+      hostname: nodeId,
+      address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+      version: appVersion(),
+      instanceId: controlPlaneInstanceId,
+      role: metadata.role,
+      coordinatorEpoch: metadata.coordinatorEpoch,
+      status: "active",
+      readinessChecks: [],
+      registeredAt: currentNow,
+      lastHeartbeatAt: currentNow,
+    })
+    .onConflictDoNothing()
+    .returning({ id: controlPlaneNodes.id });
+  if (inserted.length > 0) return;
+
+  throw new Error(`TERRENCE_NODE_ID "${nodeId}" is already registered by another live control-plane instance`);
+}
+
+async function probeNodeIdentityReadiness(): Promise<ReadinessStatus> {
+  if (!haEnabled()) return "OK";
+  try {
+    const row = await db.query.controlPlaneNodes.findFirst({
+      where: eq(controlPlaneNodes.id, readinessNodeId()),
+      columns: { instanceId: true },
+    });
+    return row?.instanceId === controlPlaneInstanceId ? "OK" : "ERROR";
+  } catch (error: unknown) {
+    // A failed read cannot prove that another process owns this node ID. The
+    // database readiness check reports the underlying failure separately, and
+    // the heartbeat update remains scoped to this process's instance ID.
+    log.warn("Unable to verify control-plane node identity", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "OK";
+  }
+}
 
 type ReadinessStatus = "OK" | "ERROR";
 type ReadinessOverall = "OK" | "ERROR" | "DRAINING";
@@ -672,13 +756,18 @@ function resolveReadinessStatus(
   disk: ReadinessStatus,
   sandboxAbiStatus: ReadinessStatus,
   netPolicyStatus: ReadinessStatus,
+  nodeIdentityStatus: ReadinessStatus,
   set: SetCtx["set"],
 ): { status: ReadinessOverall; draining: boolean } {
   const maintenance = maintenanceSnapshot();
   const draining =
     maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
   const status =
-    database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR" || netPolicyStatus === "ERROR"
+    database === "ERROR" ||
+    disk === "ERROR" ||
+    sandboxAbiStatus === "ERROR" ||
+    netPolicyStatus === "ERROR" ||
+    nodeIdentityStatus === "ERROR"
       ? "ERROR"
       : draining
         ? "DRAINING"
@@ -691,9 +780,10 @@ async function buildReadinessResult(
   status: ReadinessOverall,
   database: ReadinessStatus,
   disk: ReadinessStatus,
-  worker: ReadinessStatus,
+  worker: string,
   sandboxAbiStatus: ReadinessStatus,
   netPolicyStatus: ReadinessStatus,
+  nodeIdentityStatus: ReadinessStatus,
 ): Promise<ReadinessResult> {
   const result: ReadinessResult = {
     node: readinessNodeId(),
@@ -703,6 +793,7 @@ async function buildReadinessResult(
       { check: "atlas", status: "OK" },
       { check: "database", status: database },
       { check: "disk", status: disk },
+      { check: "node-identity", status: nodeIdentityStatus },
       { check: "redis", status: "OK" },
       { check: "task-worker", status: worker },
       { check: "run-sandbox", status: sandboxAbiStatus },
@@ -710,6 +801,9 @@ async function buildReadinessResult(
       { check: "vault", status: "OK" },
     ],
   };
+  if (haEnabled()) {
+    result.checks.push({ check: "coordinator", status: controlPlaneCoordinatorState().role.toUpperCase() });
+  }
   // Todo 271: include the bundled DB schema target alongside the
   // database liveness check so /api/v1/readiness and /readyz agree.
   // This is the packaged target; the applied state lives in the DB's
@@ -726,6 +820,7 @@ async function buildReadinessResult(
 
 async function persistReadinessNode(
   database: ReadinessStatus,
+  nodeIdentityStatus: ReadinessStatus,
   persistNode: boolean,
   status: ReadinessOverall,
   draining: boolean,
@@ -733,40 +828,46 @@ async function persistReadinessNode(
 ): Promise<void> {
   // Only the heartbeat path persists the node row. Every readiness probe
   // responding on load-balancer or orchestrator intervals would otherwise
-  // write the row on each request for zero freshness gain (the heartbeat
-  // already refreshes it every 10s). Swallow nothing either: a failing
-  // upsert must not silently let the node disappear from /api/v1/nodes.
-  if (database === "OK" && persistNode) {
-    const now = Date.now();
-    await db
-      .insert(controlPlaneNodes)
-      .values({
-        id: readinessNodeId(),
-        hostname: readinessNodeId(),
-        address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
-        version: appVersion(),
-        status: status === "ERROR" ? "error" : draining ? "draining" : "active",
-        readinessChecks: checks,
-        registeredAt: now,
-        lastHeartbeatAt: now,
-      })
-      .onConflictDoUpdate({
-        target: controlPlaneNodes.id,
-        set: {
-          hostname: readinessNodeId(),
-          address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
-          version: appVersion(),
-          status: status === "ERROR" ? "error" : draining ? "draining" : "active",
-          readinessChecks: checks,
-          lastHeartbeatAt: now,
-        },
-      })
-      .catch((error: unknown): void => {
-        log.warn("Unable to record control-plane node heartbeat", {
-          error: error instanceof Error ? error.message : String(error),
+  // write the row on each request for zero freshness gain.
+  if (database !== "OK" || nodeIdentityStatus !== "OK" || !persistNode) return;
+
+  const now = await databaseCurrentTimeMs();
+  const nodeId = readinessNodeId();
+  const metadata = nodeCoordinatorMetadata();
+  const values = {
+    hostname: nodeId,
+    address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+    version: appVersion(),
+    instanceId: controlPlaneInstanceId,
+    role: metadata.role,
+    coordinatorEpoch: metadata.coordinatorEpoch,
+    status: status === "ERROR" ? "error" : draining ? "draining" : "active",
+    readinessChecks: checks,
+    lastHeartbeatAt: now,
+  };
+
+  const write = haEnabled()
+    ? db
+        .update(controlPlaneNodes)
+        .set(values)
+        .where(and(eq(controlPlaneNodes.id, nodeId), eq(controlPlaneNodes.instanceId, controlPlaneInstanceId)))
+    : db
+        .insert(controlPlaneNodes)
+        .values({
+          id: nodeId,
+          ...values,
+          registeredAt: now,
+        })
+        .onConflictDoUpdate({
+          target: controlPlaneNodes.id,
+          set: values,
         });
-      });
-  }
+
+  await write.catch((error: unknown): void => {
+    log.warn("Unable to record control-plane node heartbeat", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 function readinessPlainText(
@@ -794,9 +895,17 @@ async function readinessResponse(
 ): Promise<ReadinessResult | Response> {
   const database = await probeDatabaseReadiness(timeoutSeconds);
   const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = envFlag("TERRENCE_DISABLE_WORKER") ? "ERROR" : "OK";
+  const worker = envFlag("TERRENCE_DISABLE_WORKER") ? (haEnabled() ? "STANDBY" : "ERROR") : "OK";
   const sandbox = probeSandboxReadiness();
-  const resolved = resolveReadinessStatus(database, disk, sandbox.sandboxAbiStatus, sandbox.netPolicyStatus, set);
+  const nodeIdentity = database === "OK" ? await probeNodeIdentityReadiness() : "ERROR";
+  const resolved = resolveReadinessStatus(
+    database,
+    disk,
+    sandbox.sandboxAbiStatus,
+    sandbox.netPolicyStatus,
+    nodeIdentity,
+    set,
+  );
 
   const result = await buildReadinessResult(
     resolved.status,
@@ -805,8 +914,9 @@ async function readinessResponse(
     worker,
     sandbox.sandboxAbiStatus,
     sandbox.netPolicyStatus,
+    nodeIdentity,
   );
-  await persistReadinessNode(database, persistNode, resolved.status, resolved.draining, result.checks);
+  await persistReadinessNode(database, nodeIdentity, persistNode, resolved.status, resolved.draining, result.checks);
   const text = readinessPlainText(request, set, resolved.status);
   if ("response" in text) return text.response;
   return result;
@@ -819,14 +929,23 @@ type ReadinessResult = {
 };
 
 export async function markControlPlaneNodeDraining(): Promise<void> {
+  const predicate = haEnabled()
+    ? and(eq(controlPlaneNodes.id, readinessNodeId()), eq(controlPlaneNodes.instanceId, controlPlaneInstanceId))
+    : eq(controlPlaneNodes.id, readinessNodeId());
+  const now = await databaseCurrentTimeMs();
   await db
     .update(controlPlaneNodes)
     .set({
       status: "draining",
-      lastHeartbeatAt: Date.now(),
+      lastHeartbeatAt: now,
     })
-    .where(eq(controlPlaneNodes.id, readinessNodeId()))
+    .where(predicate)
     .catch((): void => undefined);
+}
+
+export function stopControlPlaneHeartbeat(): void {
+  if (nodeHeartbeatTimer !== undefined) clearInterval(nodeHeartbeatTimer);
+  nodeHeartbeatTimer = undefined;
 }
 
 export function startControlPlaneHeartbeat(): void {
@@ -931,9 +1050,10 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
       }
       const current = await readinessResponse(set, timeout);
       if (current instanceof Response) throw new Error("Unexpected plain-text readiness response");
+      const now = await databaseCurrentTimeMs();
       const nodes = await db.query.controlPlaneNodes
         .findMany({
-          where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
+          where: gte(controlPlaneNodes.lastHeartbeatAt, now - NODE_HEARTBEAT_TIMEOUT_MS),
           orderBy: [desc(controlPlaneNodes.registeredAt)],
         })
         .catch(() => []);
@@ -943,10 +1063,13 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
         hostname: readinessNodeId(),
         address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
         version: appVersion(),
+        instanceId: controlPlaneInstanceId,
+        role: nodeCoordinatorMetadata().role,
+        coordinatorEpoch: nodeCoordinatorMetadata().coordinatorEpoch,
         status: current.status.toLowerCase(),
         readinessChecks: current.checks,
-        registeredAt: Date.now(),
-        lastHeartbeatAt: Date.now(),
+        registeredAt: now,
+        lastHeartbeatAt: now,
       });
       return {
         data: [...byId.values()].map(
@@ -975,9 +1098,10 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
     build: process.env["BUILD_SHA"] ?? "unknown",
   }))
   .get("/api/v1/nodes", async (): Promise<{ data: { id: string; type: "nodes" }[]; links: { self: string } }> => {
+    const now = await databaseCurrentTimeMs();
     const nodes = await db.query.controlPlaneNodes
       .findMany({
-        where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
+        where: gte(controlPlaneNodes.lastHeartbeatAt, now - NODE_HEARTBEAT_TIMEOUT_MS),
         orderBy: [desc(controlPlaneNodes.registeredAt)],
       })
       .catch(() => []);

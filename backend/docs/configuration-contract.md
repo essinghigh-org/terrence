@@ -88,6 +88,7 @@ RATE_LIMIT_ fail startup. Unrelated process variables remain available.
 | TERRENCE_ENABLE_LOCAL_SIGNUP | false | true, false, 1, or 0 | yes |
 | TERRENCE_EXECUTOR_BACKEND | landlock | string | yes |
 | TERRENCE_EXPLAIN_TIMEOUT_MS | 60000 | Integer 1–2147483647 | yes |
+| TERRENCE_HA_ENABLED | false | true, false, 1, or 0 | yes |
 | TERRENCE_NODE_STATUS | active | string | yes |
 | TERRENCE_OUTBOUND_ALLOW_CIDRS | empty | list | yes |
 | TERRENCE_OUTBOUND_ALLOW_HOSTS | empty | list | yes |

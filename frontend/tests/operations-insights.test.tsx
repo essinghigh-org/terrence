@@ -1,10 +1,11 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { AdminOperationsCenter } from "../src/views/AdminOperationsCenter";
 import { WorkspaceInsights } from "../src/views/WorkspaceInsights";
 import { RunInsights } from "../src/views/RunInsights";
 import { isString } from "../src/lib/type-guards";
+import { formatDateTime } from "../src/lib/utils";
 import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
@@ -52,8 +53,16 @@ test("operations center exposes runtime, recovery and maintenance evidence only 
           type: "operations-center",
           attributes: {
             "checked-at": "2026-09-19T12:00:00.000Z",
-            "local-node-id": "terrence-node-1",
-            "supported-topology": "single-active-control-plane",
+            "local-node-id": "ha-node-a",
+            "ha-enabled": true,
+            "supported-topology": "active-active-api-elected-coordinator",
+            coordinator: {
+              "owner-node-id": "ha-node-a",
+              epoch: 7,
+              active: true,
+              "heartbeat-at": "2026-09-19T11:59:58.000Z",
+              "expires-at": "2026-09-19T12:00:13.000Z",
+            },
             "rehearsal-max-age-days": 30,
             backup: {
               status: "current",
@@ -61,11 +70,22 @@ test("operations center exposes runtime, recovery and maintenance evidence only 
             },
             nodes: [
               {
-                id: "terrence-node-1",
+                id: "ha-node-a",
                 version: "1.2.3",
                 status: "active",
+                role: "leader",
+                "coordinator-epoch": 7,
                 stale: false,
                 "last-heartbeat-at": "2026-09-19T12:00:00.000Z",
+              },
+              {
+                id: "ha-node-b",
+                version: "1.2.3",
+                status: "active",
+                role: "follower",
+                "coordinator-epoch": 7,
+                stale: false,
+                "last-heartbeat-at": "2026-09-19T11:59:59.000Z",
               },
             ],
           },
@@ -104,7 +124,24 @@ test("operations center exposes runtime, recovery and maintenance evidence only 
   expect(view.getByText("3")).toBeTruthy();
   expect(view.getByText("1 / 4")).toBeTruthy();
   expect(view.getByText("current")).toBeTruthy();
-  expect(view.getByText(/one active control-plane process/i)).toBeTruthy();
+
+  const metric = (label: string): ReturnType<typeof within> => {
+    const container = view.getByText(label).parentElement;
+    if (container === null) throw new Error(`Metric "${label}" has no container`);
+    return within(container);
+  };
+  expect(metric("HA mode").getByText("Enabled")).toBeTruthy();
+  expect(metric("Coordinator").getByText("ha-node-a")).toBeTruthy();
+  expect(metric("Coordinator epoch").getByText("7")).toBeTruthy();
+  expect(metric("Lease").getByText("Active")).toBeTruthy();
+
+  const topology = view.getByText(/Topology:\s*active-active-api-elected-coordinator/);
+  expect(topology).toBeTruthy();
+  const topologyLine = topology.closest("p");
+  if (topologyLine === null) throw new Error("Topology summary has no paragraph container");
+  expect(within(topologyLine).getByText(formatDateTime("2026-09-19T12:00:13.000Z"))).toBeTruthy();
+  expect(view.getByText("ha-node-b")).toBeTruthy();
+  expect(view.getByText("follower")).toBeTruthy();
 
   cleanup();
   const denied = render(

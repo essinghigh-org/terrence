@@ -13,7 +13,7 @@ This page covers the day-to-day operations of a Terrence instance: draining, sto
 
 Site administrators can open **Site administration → Operations center** for a browser-facing view of the operational evidence Terrence already records.
 
-The overview shows worker capacity and queue depth, storage headroom, sandbox availability, control-plane heartbeats, restore-rehearsal freshness, and the maintenance-window preview. Node heartbeats are visibility only: Terrence still supports exactly one active control-plane process, and seeing multiple node records does not make an overlapping deployment safe.
+The overview shows worker capacity and queue depth, storage headroom, sandbox availability, control-plane heartbeats, restore-rehearsal freshness, and the maintenance-window preview. In [HA mode](high-availability), it also shows the elected coordinator, fencing epoch, lease state, and each replica's leader/follower role. Without `TERRENCE_HA_ENABLED=true`, a deployment still supports only one active control-plane process.
 
 The remaining tabs provide:
 
@@ -82,7 +82,7 @@ Application encryption varies by artifact; filesystem permissions and gzip compr
 | Generated configuration | Execution work directories; generated HCL and private variable files | Plaintext private files | Execution-directory cleanup |
 | AI explanations | Database `run_explanations`; generated text | Plaintext; prompts carry the SEC-01 plan projection (or the apply tail) scrubbed by value against sensitive variables/outputs, responses are scrubbed the same way, and each generation writes an audit row with endpoint host plus redaction counts (never secrets). Cache entries generated before this minimization may contain previously disclosed values | Regeneration/run deletion; assess old backups separately |
 
-The directory must persist across container restarts. Mount it as a volume. At boot Terrence fails fast when the directory is not writable and logs the exact `chown` fix with path and UID.
+The directory must persist across container restarts. Mount it as a volume. In [HA mode](high-availability), every replica must mount the same shared POSIX `STORAGE_DIR`; independent per-node volumes are unsupported. At boot Terrence fails fast when the directory is not writable and logs the exact `chown` fix with path and UID.
 
 ## Backups
 

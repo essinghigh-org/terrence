@@ -1,9 +1,11 @@
 import { Elysia } from "elysia";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { authPlugin } from "../../auth";
-import { db } from "../../db";
-import { controlPlaneNodes } from "../../db/schema";
+import { databaseCurrentTimeMs, db } from "../../db";
+import { controlPlaneLeases, controlPlaneNodes } from "../../db/schema";
 import { readBackupStatus } from "../../lib/backup-verification";
+import { CONTROL_PLANE_LEASE_NAME } from "../../lib/control-plane-coordinator";
+import { haEnabled } from "../../lib/ha-config";
 import { getSettings } from "../../lib/settings";
 import { auditLog } from "../../lib/utils";
 import { NODE_HEARTBEAT_TIMEOUT_MS, readinessNodeId } from "../health";
@@ -40,17 +42,29 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
     return { errors: [{ status: "404", title: "Not Found" }] };
   })
   .get("/api/v2/admin/operations-center", async (): Promise<unknown> => {
-    const [backup, settings, nodes] = await Promise.all([
+    const [backup, settings, nodes, coordinatorLease, now] = await Promise.all([
       readBackupStatus(),
       getSettings("operations-center"),
       db.query.controlPlaneNodes.findMany({ orderBy: [desc(controlPlaneNodes.lastHeartbeatAt)], limit: 100 }),
+      db.query.controlPlaneLeases.findFirst({ where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME) }),
+      databaseCurrentTimeMs(),
     ]);
     const maxAgeDays = Number(settings["rehearsal-max-age-days"] ?? 30);
-    const now = Date.now();
     return settingResource("operations-center", {
       "checked-at": new Date(now).toISOString(),
       "local-node-id": readinessNodeId(),
-      "supported-topology": "single-active-control-plane",
+      "ha-enabled": haEnabled(),
+      "supported-topology": haEnabled() ? "active-active-api-elected-coordinator" : "single-active-control-plane",
+      coordinator:
+        coordinatorLease === undefined
+          ? null
+          : {
+              "owner-node-id": coordinatorLease.ownerNodeId,
+              epoch: coordinatorLease.fencingEpoch,
+              active: coordinatorLease.expiresAt > now,
+              "heartbeat-at": new Date(coordinatorLease.heartbeatAt).toISOString(),
+              "expires-at": new Date(coordinatorLease.expiresAt).toISOString(),
+            },
       "rehearsal-max-age-days": maxAgeDays,
       backup: {
         "last-verified-restore-at": backup.lastVerifiedRestoreAt,
@@ -63,6 +77,8 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
           id: node.id,
           version: node.version,
           status: node.status,
+          role: node.role,
+          "coordinator-epoch": node.coordinatorEpoch,
           "last-heartbeat-at": new Date(node.lastHeartbeatAt).toISOString(),
           stale: now - node.lastHeartbeatAt > NODE_HEARTBEAT_TIMEOUT_MS,
           checks: node.readinessChecks,
