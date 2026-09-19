@@ -1126,7 +1126,8 @@ type DiagnosticCheck = Readonly<{
 
 type RepositoryProbe = Readonly<
   // eslint-disable-next-line @typescript-eslint/naming-convention -- GitHub REST field name
-  { repo: Readonly<{ full_name: string }>; scopeCheck: null } | { repo: undefined; scopeCheck: DiagnosticCheck }>;
+  { repo: Readonly<{ full_name: string }>; scopeCheck: null } | { repo: undefined; scopeCheck: DiagnosticCheck }
+>;
 
 async function probeInstallationRepositories(
   githubApiBase: string,
