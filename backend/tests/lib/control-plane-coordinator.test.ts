@@ -6,7 +6,10 @@ import {
   CONTROL_PLANE_LEASE_NAME,
   claimControlPlaneLease,
   controlPlaneCoordinatorState,
+  controlPlaneCoordinatorSuspended,
   releaseControlPlaneLease,
+  resignControlPlaneLease,
+  resumeControlPlaneCoordinator,
   runControlPlaneCoordinatorTickForTests,
   startControlPlaneCoordinator,
   stopControlPlaneCoordinator,
@@ -165,5 +168,116 @@ describe("control-plane coordinator leases", () => {
     // Phase 2 run/workspace execution leases are independent of the scheduler
     // coordinator. The run self-fences only if its own lease is lost.
     expect(killCalls).toBe(0);
+  });
+});
+
+describe("coordinator resignation (HA-3C)", () => {
+  test("resigning expires the lease so a follower can claim without waiting out the TTL", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    let leadershipLost = 0;
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: (): void => {
+        leadershipLost += 1;
+        handleControlPlaneLeadershipLost();
+      },
+    });
+    expect(controlPlaneCoordinatorState()).toMatchObject({ role: "leader", fencingEpoch: 1 });
+    setCoordinatorWorkerRunningForTests(true);
+
+    expect(await resignControlPlaneLease()).toBe(true);
+
+    // The scheduler generation stops before the lease is surrendered; releasing
+    // first would leave this node generating work against a cluster that
+    // already has a new leader.
+    expect(leadershipLost).toBe(1);
+    expect(coordinatorWorkerRunningForTests()).toBe(false);
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+
+    const lease = await db.query.controlPlaneLeases.findFirst({
+      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    });
+    expect(lease?.expiresAt).toBe(0);
+
+    // A follower contends immediately rather than after CONTROL_PLANE_LEASE_TTL_MS.
+    const successor = await claimControlPlaneLease(identityB, 50_000, 15_000);
+    expect(successor).toMatchObject({ acquired: true, ownerNodeId: "node-b", fencingEpoch: 2 });
+  });
+
+  test("a resigned coordinator does not reclaim the lease on its next tick", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    expect(controlPlaneCoordinatorState().role).toBe("leader");
+    await resignControlPlaneLease();
+
+    // Without suspension the very next renewal tick would take the lease
+    // straight back and silently undo the drain.
+    await runControlPlaneCoordinatorTickForTests();
+    expect(controlPlaneCoordinatorState().role).not.toBe("leader");
+
+    const lease = await db.query.controlPlaneLeases.findFirst({
+      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    });
+    expect(lease?.ownerInstanceId).toBe(controlPlaneInstanceId);
+    expect(lease?.expiresAt).toBe(0);
+  });
+
+  test("a suspended coordinator still observes who leads", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    await resignControlPlaneLease();
+    await claimControlPlaneLease(identityB, 60_000, 15_000);
+
+    await runControlPlaneCoordinatorTickForTests();
+    // Operations surfaces must keep reporting an accurate coordinator during a
+    // drain, so suspension means "do not contend", not "stop looking".
+    expect(controlPlaneCoordinatorState()).toMatchObject({ role: "follower", ownerNodeId: "node-b" });
+  });
+
+  test("resuming returns a resigned node to the election", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    await resignControlPlaneLease();
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+
+    resumeControlPlaneCoordinator();
+    expect(controlPlaneCoordinatorSuspended()).toBe(false);
+    await runControlPlaneCoordinatorTickForTests();
+    expect(controlPlaneCoordinatorState().role).toBe("leader");
+  });
+
+  test("resignation is a no-op when this node does not own the lease", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    await claimControlPlaneLease(identityB, 70_000, 15_000);
+    expect(await resignControlPlaneLease()).toBe(false);
+
+    const lease = await db.query.controlPlaneLeases.findFirst({
+      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    });
+    // A node that never held the lease must not be able to expire someone
+    // else's ownership by resigning.
+    expect(lease).toMatchObject({ ownerNodeId: "node-b", fencingEpoch: 1 });
+    expect(lease?.expiresAt).toBe(85_000);
   });
 });

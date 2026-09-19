@@ -158,6 +158,8 @@ jobs:
           NODE
       - name: Verify controlled supply-chain policy (issue #787)
         run: bun run check:supply-chain
+      - name: Verify rolling-upgrade schema compatibility (HA-3B)
+        run: bun run check:schema-compat
       - name: Generate dependency manifest, SBOM, and change summary
         env:
           BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}

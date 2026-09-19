@@ -60,7 +60,17 @@ const POLL_MS = 500;
 /** Attempts before a durable job dead-letters (todo 186); shared with the webhook delivery mirror. */
 export const DURABLE_MAX_ATTEMPTS = 3;
 let workerRunning = false;
+/**
+ * In-flight durable jobs owned by this process. A node drain (HA-3C) is only
+ * complete once this reaches zero, so the count must cover the whole handler
+ * lifetime rather than just the claim.
+ */
+let activeDurableJobs = 0;
 const NO_EXISTING_DURABLE_JOB = Symbol("no-existing-durable-job");
+
+export function activeDurableJobCount(): number {
+  return activeDurableJobs;
+}
 
 /** A queue admission failure is explicit and carries a retry hint. */
 export class DurableJobBudgetError extends Error {
@@ -486,6 +496,7 @@ async function runJob(
 ): Promise<void> {
   const operation = createOperationContext();
   let heartbeatFailures = 0;
+  activeDurableJobs += 1;
   const heartbeatTimer = setInterval((): void => {
     void heartbeatDurableJob(job)
       .then((ok): void => {
@@ -553,6 +564,7 @@ async function runJob(
   } finally {
     clearInterval(heartbeatTimer);
     operation.dispose();
+    activeDurableJobs -= 1;
   }
 }
 

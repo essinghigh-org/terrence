@@ -5,6 +5,7 @@ import { isPostgres } from "../db/driver";
 import { runs, workspaces } from "../db/schema";
 import { controlPlaneInstanceId, controlPlaneNodeId, haEnabled } from "./ha-config";
 import { log } from "./log";
+import { nodeDrainRequested } from "./node-drain";
 
 export const RUN_EXECUTION_LEASE_TTL_MS = 30_000;
 export const RUN_EXECUTION_LEASE_RENEW_MS = 5_000;
@@ -518,9 +519,16 @@ export async function withRunExecutionLease<T>(
     return work();
   }
 
+  // HA-3C: a draining node finishes what it already owns but must not take on
+  // a new generation. Refusing here is the single chokepoint that covers every
+  // acquisition path (queue claim, scheduled apply dispatch, assessments).
+  // Surfacing ordinary contention lets the run stay claimable elsewhere rather
+  // than erroring, and the re-entrant path above is deliberately upstream of
+  // this check so an in-flight plan can still proceed into its apply.
+  if (nodeDrainRequested()) throw new RunExecutionLeaseUnavailableError(runId);
+
   const claimedLease = await claimRunExecutionLease(runId, phase);
   if (claimedLease === null) throw new RunExecutionLeaseUnavailableError(runId);
-
   let claimConfirmedAt: number;
   try {
     claimConfirmedAt = await databaseCurrentTimeMs();

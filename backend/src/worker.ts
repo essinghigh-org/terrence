@@ -88,6 +88,7 @@ import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { pruneControlEvents, publish } from "./lib/event-bus";
 import { isControlPlaneCoordinatorLeader } from "./lib/control-plane-coordinator";
+import { nodeDrainRequested, registerNodeDrainActivityProbe } from "./lib/node-drain";
 import {
   assertLocalRunExecutionLease,
   clearExpiredRunExecutionLease,
@@ -119,7 +120,7 @@ import {
 import { log, safeJsonStringify } from "./lib/log";
 import { extractSafeTarArchive } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
-import { startDurableJobWorker } from "./lib/durable-jobs";
+import { activeDurableJobCount, startDurableJobWorker } from "./lib/durable-jobs";
 import { handleOutboxDeliveryJob, repairOutboxJobs } from "./lib/outbox";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
@@ -7061,15 +7062,28 @@ export function stopWorkerQueue(): void {
   localExecutionLifecycle.stop();
 }
 
+/**
+ * True when this replica must not claim new work.
+ *
+ * Two independent reasons collapse here: process shutdown (SIGTERM set the
+ * lifecycle drain flag) and an operator-requested node drain (HA-3C). Both
+ * mean "finish what you own, take nothing new", so every claim gate consults
+ * this one predicate.
+ */
 export function workerQueueDraining(): boolean {
-  return localExecutionLifecycle.isDraining();
+  return localExecutionLifecycle.isDraining() || nodeDrainRequested();
 }
 
+// A node drain completes only once this replica owns no local run execution
+// and no durable job. The drain module stays free of worker imports by
+// reading those counts through this probe.
+registerNodeDrainActivityProbe((): { activeRunExecutions: number; activeDurableJobs: number } => ({
+  activeRunExecutions: localExecutionLifecycle.activeRunExecutionCount(),
+  activeDurableJobs: activeDurableJobCount(),
+}));
+
 function coordinatorWorkerDraining(): boolean {
-  return (
-    localExecutionLifecycle.isDraining() ||
-    (haEnabled() && (!coordinatorWorkerRunning || !isControlPlaneCoordinatorLeader()))
-  );
+  return workerQueueDraining() || (haEnabled() && (!coordinatorWorkerRunning || !isControlPlaneCoordinatorLeader()));
 }
 
 /**
@@ -7778,13 +7792,13 @@ export function startCoordinatorWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries).
   if (envFlag("TERRENCE_DISABLE_WORKER")) return;
-  if (coordinatorWorkerRunning || localExecutionLifecycle.isDraining()) return;
+  if (coordinatorWorkerRunning || workerQueueDraining()) return;
   coordinatorWorkerRunning = true;
   coordinatorWorkerGeneration += 1;
   const generation = coordinatorWorkerGeneration;
 
   const generationActive = (): boolean =>
-    coordinatorWorkerRunning && coordinatorWorkerGeneration === generation && !localExecutionLifecycle.isDraining();
+    coordinatorWorkerRunning && coordinatorWorkerGeneration === generation && !workerQueueDraining();
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {
     if (!generationActive()) return;

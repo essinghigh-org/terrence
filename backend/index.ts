@@ -1,6 +1,6 @@
 import "./src/lib/validate-runtime-config";
 import { validatePersistedConfiguration } from "./src/lib/settings";
-import { integerSetting, listenerSetting } from "./src/lib/runtime-config";
+import { integerSetting, integrationSetting, listenerSetting } from "./src/lib/runtime-config";
 import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
@@ -18,6 +18,7 @@ import { sweepUploadTemps } from "./src/lib/upload-sweep";
 import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import {
+  assertClusterCompatibility,
   claimControlPlaneNodeIdentity,
   markControlPlaneNodeDraining,
   startControlPlaneHeartbeat,
@@ -32,6 +33,12 @@ import {
   stopControlPlaneCoordinator,
 } from "./src/lib/control-plane-coordinator";
 import { startDistributedEventBus, stopDistributedEventBus } from "./src/lib/event-bus";
+import {
+  beginLocalNodeDrain,
+  reconcileRecordedDrainRequest,
+  startNodeDrainWatch,
+  stopNodeDrainWatch,
+} from "./src/lib/node-drain";
 
 // SEC-10: a misspelled TERRENCE_RUN_NET_POLICY must fail boot, not surface
 // at the first run execution.
@@ -130,10 +137,28 @@ try {
 await resetAdminPassword();
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
+// HA-3A: refuse to join a cluster whose live peers this release cannot
+// interoperate with. This runs before the node claims its identity so an
+// unsupported binary never advertises itself as a usable replica.
+await assertClusterCompatibility();
 await claimControlPlaneNodeIdentity();
 // Route initialization starts background work, so load it only after schema and bootstrap.
 const { app, systemApiApp } = await import("./src/app");
 await startDistributedEventBus();
+// The drain watch must be listening before any work is claimed, so an
+// in-flight rolling upgrade can cordon this node the moment it comes up.
+startNodeDrainWatch();
+if (haEnabled()) {
+  // A node can be started already cordoned (TERRENCE_NODE_STATUS=draining),
+  // or be replacing a node an operator drained moments ago. Honour both
+  // before the worker queues start rather than claiming work and stopping.
+  if (["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"))) {
+    await beginLocalNodeDrain({ reason: "TERRENCE_NODE_STATUS" });
+  }
+  await reconcileRecordedDrainRequest().catch((error: unknown): void => {
+    console.warn("[terrence] Unable to reconcile a recorded node drain request", error);
+  });
+}
 
 if (haEnabled()) {
   startDurableWorkerQueue();
@@ -212,6 +237,7 @@ import { checkpointWal } from "./src/db";
 async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   console.log(`[terrence] ${signal} received; draining worker, stopping server, checkpointing WAL before shutdown`);
   stopWorkerQueue();
+  stopNodeDrainWatch();
   // Freeze the last node heartbeat before marking it draining; otherwise the
   // 10s heartbeat loop can overwrite the durable draining marker while the
   // process waits for local execution to finish.

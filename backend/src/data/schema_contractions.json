@@ -1,0 +1,37 @@
+{
+  "$comment": [
+    "HA-3B: the expand/migrate/contract register.",
+    "",
+    "A migration that ships in release N must never make an N-1 replica unsafe",
+    "while N-1 remains inside the supported rolling-upgrade window. Adding a",
+    "column, table, or index is safe: an old replica simply ignores it. Removing",
+    "or narrowing one is not, because an old replica is still reading and writing",
+    "the thing being taken away.",
+    "",
+    "check:schema-compat therefore rejects any contracting statement in",
+    "backend/drizzle that is not registered here. Registering an entry is the",
+    "explicit assertion that no supported replica still depends on the surface,",
+    "which is the step the discipline exists to force someone to think about.",
+    "",
+    "The normal shape of a rename is three releases:",
+    "  N     expand   add `bar`; write both; backfill `foo` -> `bar`",
+    "  N+1   migrate  every supported replica reads `bar`; nothing depends on `foo`",
+    "  N+2   contract drop `foo`, registered below",
+    "",
+    "Fields:",
+    "  migration    the migration file stem, e.g. \"0071_bold_husk\"",
+    "  dialect      \"sqlite\" | \"pg\" | \"both\"",
+    "  surface      the column/table/index being contracted",
+    "  expandedIn   the release that introduced the replacement surface",
+    "  approvedFor  the release this contraction may ship in",
+    "  owner        who asserted the window had passed",
+    "  justification why no supported replica still reads the surface"
+  ],
+  "protocolVersion": 1,
+  "enforcedFrom": "0064_fluffy_tag",
+  "rollingUpgradeWindow": {
+    "supportedSkew": "N/N-1",
+    "note": "One HA protocol version. A release that breaks N-1 must bump HA_PROTOCOL_VERSION in backend/src/lib/ha-protocol.ts rather than relying on its release number."
+  },
+  "contractions": []
+}
