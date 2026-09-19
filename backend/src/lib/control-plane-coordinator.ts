@@ -314,6 +314,13 @@ async function coordinatorTick(): Promise<void> {
   }
 }
 
+/** Test-only deterministic renewal tick without leaving two renewal timers armed. */
+export async function runControlPlaneCoordinatorTickForTests(): Promise<void> {
+  if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
+  coordinatorTimer = undefined;
+  await coordinatorTick();
+}
+
 export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbacks): Promise<void> {
   if (!haEnabled()) {
     clearLeadershipWatchdog();

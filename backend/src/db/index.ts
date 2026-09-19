@@ -907,8 +907,21 @@ async function withPgMigrationAdvisoryLock(operation: () => Promise<void>): Prom
     // deadlines while another replica upgrades the same fresh database.
     await reserved.unsafe("SELECT set_config('lock_timeout', '0', false)");
     await reserved.unsafe("SELECT set_config('statement_timeout', '0', false)");
-    await reserved.unsafe("SELECT pg_advisory_lock($1::bigint)", [PG_MIGRATION_ADVISORY_LOCK_ID]);
-    locked = true;
+    const waitStartedAt = Date.now();
+    for (let attempt = 0; ; attempt += 1) {
+      const rows = await reserved.unsafe<{ acquired: boolean }[]>(
+        "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
+        [PG_MIGRATION_ADVISORY_LOCK_ID],
+      );
+      locked = rows[0]?.acquired === true;
+      if (locked) break;
+      if (attempt % 20 === 0) {
+        console.warn(
+          `[terrence] Waiting for the PostgreSQL migration advisory lock held by another session (${String(Date.now() - waitStartedAt)} ms so far)`,
+        );
+      }
+      await Bun.sleep(500);
+    }
     await operation();
   } finally {
     if (locked) {

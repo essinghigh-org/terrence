@@ -5,13 +5,37 @@ import { controlPlaneLeases } from "../../src/db/schema";
 import {
   CONTROL_PLANE_LEASE_NAME,
   claimControlPlaneLease,
+  controlPlaneCoordinatorState,
   releaseControlPlaneLease,
+  runControlPlaneCoordinatorTickForTests,
+  startControlPlaneCoordinator,
+  stopControlPlaneCoordinator,
 } from "../../src/lib/control-plane-coordinator";
+import { controlPlaneInstanceId } from "../../src/lib/ha-config";
+import {
+  clearTrackedRunProcessesForTests,
+  coordinatorWorkerRunningForTests,
+  handleControlPlaneLeadershipLost,
+  setCoordinatorWorkerRunningForTests,
+  trackRunProcessForTests,
+} from "../../src/worker";
 
 const identityA = { nodeId: "node-a", instanceId: "instance-a" };
 const identityB = { nodeId: "node-b", instanceId: "instance-b" };
+const originalHaEnabled = process.env["TERRENCE_HA_ENABLED"];
+const originalDisableWorker = process.env["TERRENCE_DISABLE_WORKER"];
+const originalNodeId = process.env["TERRENCE_NODE_ID"];
 
 afterEach(async (): Promise<void> => {
+  await stopControlPlaneCoordinator();
+  setCoordinatorWorkerRunningForTests(false);
+  clearTrackedRunProcessesForTests();
+  if (originalHaEnabled === undefined) delete process.env["TERRENCE_HA_ENABLED"];
+  else process.env["TERRENCE_HA_ENABLED"] = originalHaEnabled;
+  if (originalDisableWorker === undefined) delete process.env["TERRENCE_DISABLE_WORKER"];
+  else process.env["TERRENCE_DISABLE_WORKER"] = originalDisableWorker;
+  if (originalNodeId === undefined) delete process.env["TERRENCE_NODE_ID"];
+  else process.env["TERRENCE_NODE_ID"] = originalNodeId;
   await db.delete(controlPlaneLeases).where(eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME));
 });
 
@@ -88,5 +112,56 @@ describe("control-plane coordinator leases", () => {
       ownerInstanceId: "instance-b",
       fencingEpoch: 2,
     });
+  });
+
+  test("fences scheduler ownership and active executions when a live coordinator loses its lease", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    let leadershipLost = 0;
+    let killCalls = 0;
+    const runId = "coordinator-lease-loss-" + crypto.randomUUID();
+    trackRunProcessForTests(runId, {
+      pid: null,
+      kill: (): void => {
+        killCalls += 1;
+      },
+      exited: new Promise<number>(() => undefined),
+    });
+
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: (): void => {
+        leadershipLost += 1;
+        handleControlPlaneLeadershipLost();
+      },
+    });
+    expect(controlPlaneCoordinatorState()).toMatchObject({ role: "leader", fencingEpoch: 1 });
+    setCoordinatorWorkerRunningForTests(true);
+    expect(coordinatorWorkerRunningForTests()).toBe(true);
+
+    const now = Date.now();
+    await db
+      .update(controlPlaneLeases)
+      .set({
+        ownerNodeId: "node-b",
+        ownerInstanceId: "forced-" + controlPlaneInstanceId,
+        fencingEpoch: 2,
+        expiresAt: now + 60_000,
+        heartbeatAt: now,
+      })
+      .where(eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME));
+
+    await runControlPlaneCoordinatorTickForTests();
+
+    expect(leadershipLost).toBe(1);
+    expect(controlPlaneCoordinatorState()).toMatchObject({
+      role: "follower",
+      ownerNodeId: "node-b",
+      fencingEpoch: 2,
+    });
+    expect(coordinatorWorkerRunningForTests()).toBe(false);
+    expect(killCalls).toBe(1);
   });
 });

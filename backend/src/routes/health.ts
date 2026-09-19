@@ -682,13 +682,21 @@ export async function claimControlPlaneNodeIdentity(now?: number): Promise<void>
 
 async function probeNodeIdentityReadiness(): Promise<ReadinessStatus> {
   if (!haEnabled()) return "OK";
-  const row = await db.query.controlPlaneNodes
-    .findFirst({
+  try {
+    const row = await db.query.controlPlaneNodes.findFirst({
       where: eq(controlPlaneNodes.id, readinessNodeId()),
       columns: { instanceId: true },
-    })
-    .catch((): undefined => undefined);
-  return row?.instanceId === controlPlaneInstanceId ? "OK" : "ERROR";
+    });
+    return row?.instanceId === controlPlaneInstanceId ? "OK" : "ERROR";
+  } catch (error: unknown) {
+    // A failed read cannot prove that another process owns this node ID. The
+    // database readiness check reports the underlying failure separately, and
+    // the heartbeat update remains scoped to this process's instance ID.
+    log.warn("Unable to verify control-plane node identity", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "OK";
+  }
 }
 
 type ReadinessStatus = "OK" | "ERROR";

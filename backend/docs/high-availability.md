@@ -46,7 +46,7 @@ TERRENCE_NODE_ID=terrence-1
 # TERRENCE_NODE_ID=terrence-3
 ```
 
-HA startup fails closed unless PostgreSQL, an explicit `STORAGE_DIR`, `PUBLIC_URL`, the three shared secrets, and a non-default explicit node ID are configured. A second live process cannot claim the same `TERRENCE_NODE_ID`.
+HA startup fails closed unless PostgreSQL, an explicit `STORAGE_DIR`, `PUBLIC_URL`, the three shared secrets, and an explicit non-blank node ID are configured. A second live process cannot claim the same `TERRENCE_NODE_ID`.
 
 SQLite remains a single-process backend.
 
@@ -152,7 +152,7 @@ leader stops renewing
                     └─ scheduler starts
 ```
 
-A killed leader is not automatically removed from the node inventory; its heartbeat becomes stale. Reusing that node ID is permitted only after the previous heartbeat is stale or the old process marked itself draining/maintenance.
+A killed leader is not automatically removed from the node inventory; its heartbeat becomes stale. Reusing that node ID is permitted only after the previous heartbeat is stale or the old process marked itself draining.
 
 ## Backups
 

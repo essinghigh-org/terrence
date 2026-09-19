@@ -6881,6 +6881,23 @@ export function stopCoordinatorWorkerQueue(): void {
   coordinatorWorkerGeneration += 1;
 }
 
+/** Fence all coordinator-owned local work immediately after lease loss. */
+export function handleControlPlaneLeadershipLost(): void {
+  stopCoordinatorWorkerQueue();
+  terminateActiveRunExecutions();
+}
+
+/** Test-only visibility for coordinator scheduler ownership. */
+export function coordinatorWorkerRunningForTests(): boolean {
+  return coordinatorWorkerRunning;
+}
+
+/** Test-only state priming without arming scheduler timers. */
+export function setCoordinatorWorkerRunningForTests(running: boolean): void {
+  coordinatorWorkerRunning = running;
+  coordinatorWorkerGeneration += 1;
+}
+
 /** Stop all local execution ownership for process shutdown. */
 export function stopWorkerQueue(): void {
   stopCoordinatorWorkerQueue();

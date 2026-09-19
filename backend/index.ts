@@ -5,11 +5,11 @@ import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
 import {
+  handleControlPlaneLeadershipLost,
   reconcileInterruptedLocalRuns,
   startCoordinatorWorkerQueue,
   startDurableWorkerQueue,
   startWorkerQueue,
-  stopCoordinatorWorkerQueue,
   stopWorkerQueue,
   terminateActiveRunExecutions,
   waitForWorkerDrain,
@@ -147,13 +147,9 @@ if (haEnabled()) {
       startCoordinatorWorkerQueue();
       console.log(`[terrence] Coordinator scheduler active (epoch ${fencingEpoch})`);
     },
-    onLeadershipLost: (): void => {
-      stopCoordinatorWorkerQueue();
-      // A node that cannot prove current lease ownership must not leave a
-      // Terraform/OpenTofu subprocess running. The replacement coordinator
-      // reconciles the now-interrupted DB state after acquiring a later epoch.
-      terminateActiveRunExecutions();
-    },
+    // A node that cannot prove current lease ownership must not leave either
+    // its scheduler generation or Terraform/OpenTofu subprocesses running.
+    onLeadershipLost: handleControlPlaneLeadershipLost,
   });
 } else {
   // Single-node compatibility preserves the conservative recovery semantics,
