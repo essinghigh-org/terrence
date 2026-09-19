@@ -8,7 +8,7 @@
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
   "devDependencies": {
-    "@biomejs/biome": "2.5.13",
+    "@biomejs/biome": "2.5.14",
     "eslint": "^10.10.0",
     "knip": "^6.36.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
