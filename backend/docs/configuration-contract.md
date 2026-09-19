@@ -252,6 +252,7 @@ Unknown fields within these groups are rejected.
 | oidc.pkce-method | enum (S256, none) or null | visible |
 | oidc.scopes | string or null | redacted |
 | oidc.signing-alg | enum (HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384, ES512, PS256, PS384, PS512) or null | visible |
+| operations-center.rehearsal-max-age-days | integer 1–3650 | visible |
 | plan-explainer.api-key | string or null | redacted |
 | plan-explainer.base-url | url or null | redacted |
 | plan-explainer.enabled | boolean | visible |

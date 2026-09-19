@@ -51,6 +51,7 @@ test("uses a persisted, route-aware workspace settings sidebar", async () => {
         <Route path="/app/:orgName/workspaces/:workspaceName" element={<Layout />}>
           <Route index element={<div>Overview content</div>} />
           <Route path="runs" element={<div>Runs content</div>} />
+          <Route path="insights" element={<div>Insights content</div>} />
           <Route path="settings/general" element={<div>General settings content</div>} />
         </Route>
       </Routes>
@@ -88,6 +89,9 @@ test("uses a persisted, route-aware workspace settings sidebar", async () => {
     expect(view.getByText("Overview content")).toBeTruthy();
   });
   expect(view.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
+  expect(view.getByRole("link", { name: "Insights" }).getAttribute("href")).toBe(
+    "/app/acme/workspaces/production/insights",
+  );
 });
 
 test("ignores an aborted workspace response after the route changes", async () => {

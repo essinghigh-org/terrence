@@ -39,6 +39,8 @@ import {
   type StateVersionComparisonInput,
 } from "../lib/platform-comparison";
 import { readPlanJsonArtifact } from "../lib/plan-json";
+import { createRun } from "./runs";
+import { idempotencyContext, idempotencyPrincipal } from "../lib/idempotency";
 import { newResourceId } from "../lib/resource-id";
 import { parseTerraformStatePayload } from "../lib/validation";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, notFound } from "../lib/utils";
@@ -771,19 +773,38 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
     const workspace = await workspaceByPermission(workspaceId, context, "run-tasks");
     if (workspace === undefined) return notFound(context.set);
-    const configuration = await latestConfigurationVersion(workspace.id);
-    const runId = newResourceId("run");
-    await db.insert(runs).values({
-      id: runId,
-      workspaceId: workspace.id,
-      configurationVersionId: configuration?.id ?? null,
-      status: "pending",
+    if (row.status === "resolved")
+      return errorDocument(context.set, 409, "Reopen the incident before requesting remediation", "Incident Resolved");
+    const attributes = {
       operation: "plan_and_apply",
-      autoApply: false,
+      "auto-apply": false,
       message: `Drift remediation review for incident ${row.id}`,
-      createdBy: context.user?.id ?? null,
-      createdAt: Date.now(),
-    });
+    };
+    const idempotency = idempotencyContext(
+      context.request,
+      `drift-remediation:${row.id}`,
+      idempotencyPrincipal({ userId: context.user?.id, orgId: context.orgId, teamId: context.teamId }),
+      attributes,
+      context.set,
+    );
+    if (idempotency === "invalid") return errorDocument(context.set, 400, "Invalid Idempotency-Key", "Bad Request");
+    // Use the same authorization, configuration, lock, toolchain, provenance,
+    // and idempotency pipeline as ordinary runs. A review is never an apply.
+    const created = await createRun(
+      workspace.id,
+      attributes,
+      undefined,
+      context.user,
+      context.orgId,
+      context.teamId,
+      context.set,
+      idempotency,
+    );
+    if (!("data" in created)) return created;
+    const createdData = created["data"];
+    if (createdData === null || typeof createdData !== "object") return created;
+    const runId = (createdData as Record<string, unknown>)["id"];
+    if (typeof runId !== "string") return created;
     const updated = await updatePlatformArtifact(row.id, "drift-incident", workspace.orgId, {
       status: "open",
       payload: { ...artifactPayload(row as PlatformArtifact), "remediation-run-id": runId },

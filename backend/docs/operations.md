@@ -9,6 +9,28 @@ description: Maintenance mode, storage layout, backups, and the doctor script.
 
 This page covers the day-to-day operations of a Terrence instance: draining, storage, backups, and diagnostics.
 
+## Operations center
+
+Site administrators can open **Site administration → Operations center** for a browser-facing view of the operational evidence Terrence already records.
+
+The overview shows worker capacity and queue depth, storage headroom, sandbox availability, control-plane heartbeats, restore-rehearsal freshness, and the maintenance-window preview. Node heartbeats are visibility only: Terrence still supports exactly one active control-plane process, and seeing multiple node records does not make an overlapping deployment safe.
+
+The remaining tabs provide:
+
+- **Backup verification** — generate a manifest for an operator-created backup, run integrity verification, or rehearse a disposable restore. These actions read backup copies and never replace the live database or storage directory.
+- **Webhook deliveries** — inspect persisted VCS webhook jobs and explicitly retry or replay failed deliveries.
+- **Support bundles** — generate, download, and delete a bundle for the local control-plane node through the authenticated application API. The browser never receives the separate System API credential.
+
+The backup tab also stores a site-wide **Warn after (days)** threshold for the last successful restore rehearsal. `unknown` means no successful rehearsal is recorded; `overdue` means the durable verified-restore timestamp is older than the configured threshold. This is a recovery-confidence warning, not proof that backups are being created on schedule and not an RPO guarantee.
+
+The corresponding summary endpoints are:
+
+- `GET /api/v2/admin/operations-center`
+- `PATCH /api/v2/admin/operations-center/settings`
+- `GET|POST /api/v2/admin/support-bundles`
+- `GET|DELETE /api/v2/admin/support-bundles/:id`
+- `GET /api/v2/admin/support-bundles/:id/download`
+
 ## Maintenance mode
 
 Maintenance mode stops run execution:

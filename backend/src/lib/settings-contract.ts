@@ -134,6 +134,9 @@ export const settingsContract: Readonly<Record<string, Readonly<Record<string, R
     url: { kind: "url", nullable: true, sensitive: true, allowQuery: true },
     secret: privateString,
   },
+  "operations-center": {
+    "rehearsal-max-age-days": { kind: "integer", min: 1, max: 3650 },
+  },
   "maintenance-windows": {
     enabled: { kind: "boolean" },
     windows: { kind: "windows", sensitive: true },

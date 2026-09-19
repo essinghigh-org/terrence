@@ -29,7 +29,7 @@ import { COMPATIBILITY_VERSION, TFP_API_VERSION } from "../lib/constants";
 // unparseable package.json must never crash the metadata endpoint.
 let cachedAppVersion: string | undefined;
 const NODE_HEARTBEAT_INTERVAL_MS = 10_000;
-const NODE_HEARTBEAT_TIMEOUT_MS = 45_000;
+export const NODE_HEARTBEAT_TIMEOUT_MS = 45_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 export function appVersion(): string {
   if (cachedAppVersion !== undefined) return cachedAppVersion;

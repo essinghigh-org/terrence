@@ -82,6 +82,10 @@ Runs that need confirmation stop in `planned`, `planned_and_saved`, or `policy_s
 
 Runs can also be scheduled to apply at a later time. The worker persists the schedule and applies the confirmed run when its time arrives, including after a restart.
 
+## Run insights
+
+Each run page links to **Insights & compare**. The Insights view can compare the run's retained public plan projection with another retained run from the same workspace, display a correlated retained timeline, and surface contextual runbooks. Comparisons exclude sensitive values and are not live cloud-state checks. See [Workspace and run insights](insights).
+
 ## Operator actions
 
 | Action | Effect |

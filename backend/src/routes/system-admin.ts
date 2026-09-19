@@ -14,6 +14,7 @@ import { landlockAccessFlagsForAbi, probeLandlockAbi, runSandboxRequired } from 
 import { envFlag } from "../lib/env";
 import { readinessNodeId } from "./health";
 import { integerSetting } from "../lib/runtime-config";
+import { auditLog } from "../lib/utils";
 
 type Status = "OK" | "WARNING" | "ERROR";
 type BundleStatus = "generating" | "finished" | "errored" | "deleted";
@@ -105,6 +106,7 @@ const ALL_CHECKS = {
 const BUNDLE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUPPORT_BUNDLE_PATH = "/api/v1/support/bundle-requests";
 const SUPPORT_BUNDLE_COMPATIBILITY_PATH = "/api/v1/support-bundle-requests";
+const ADMIN_SUPPORT_BUNDLE_PATH = "/api/v2/admin/support-bundles";
 const SUPPORT_BUNDLE_PROJECTION_VERSION = "support-bundle-v1";
 let diagnosticsRunning = false;
 
@@ -666,7 +668,7 @@ async function loadBundles(): Promise<readonly BundleRecord[]> {
   }
 }
 
-function bundleResource(record: BundleRecord): Record<string, unknown> {
+function bundleResource(record: BundleRecord, basePath = SUPPORT_BUNDLE_PATH): Record<string, unknown> {
   const manifest =
     record.manifest ??
     bundleManifest(
@@ -703,7 +705,7 @@ function bundleResource(record: BundleRecord): Record<string, unknown> {
     ...(record.sizeBytes === undefined ? {} : { size_bytes: record.sizeBytes }),
     ...(record.error === undefined ? {} : { error: record.error }),
   };
-  const self = `/api/v1/support/bundle-requests/${record.id}`;
+  const self = `${basePath}/${record.id}`;
   return {
     id: record.id,
     type: "support-bundle",
@@ -868,7 +870,10 @@ function requestedNodes(url: QueryUrl): readonly string[] | undefined {
   return values;
 }
 
-async function createSupportBundle({ body, request, set }: SystemContext): Promise<unknown> {
+async function createSupportBundle(
+  { body, request, set }: SystemContext,
+  basePath = SUPPORT_BUNDLE_PATH,
+): Promise<unknown> {
   const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const suppliedNodes = payload["nodes"];
   if (
@@ -906,7 +911,7 @@ async function createSupportBundle({ body, request, set }: SystemContext): Promi
   await saveBundle(withManifest);
   void generateSupportBundle(withManifest, request.headers.get("authorization")).catch((): undefined => undefined);
   (set as { status: number }).status = 202;
-  return { data: bundleResource(withManifest) };
+  return { data: bundleResource(withManifest, basePath) };
 }
 
 function validBundlePagination(pageNumber: number, pageSize: number): boolean {
@@ -952,7 +957,10 @@ function filterBundleRecords(
     .sort((left, right): number => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 }
 
-async function listSupportBundles({ request, set }: SystemContext): Promise<unknown> {
+async function listSupportBundles(
+  { request, set }: SystemContext,
+  options: Readonly<{ basePath?: string; include?: (record: BundleRecord) => boolean }> = {},
+): Promise<unknown> {
   const url = new URL(request.url);
   const numberValue = url.searchParams.get("page[number]") ?? "1";
   const sizeValue = url.searchParams.get("page[size]") ?? "20";
@@ -971,13 +979,15 @@ async function listSupportBundles({ request, set }: SystemContext): Promise<unkn
     return errorResponse(set, 400, "Bad Request", "Invalid creation date filter");
   }
   const nodeFilters = url.searchParams.getAll("filter[nodes]");
-  const filtered = filterBundleRecords(await loadBundles(), { statusFilter, createdAfter, createdBefore, nodeFilters });
+  const candidates = (await loadBundles()).filter(options.include ?? ((): boolean => true));
+  const filtered = filterBundleRecords(candidates, { statusFilter, createdAfter, createdBefore, nodeFilters });
   const totalCount = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const page = filtered.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);
-  const pageLink = (target: number): string => `${SUPPORT_BUNDLE_PATH}?page[number]=${target}&page[size]=${pageSize}`;
+  const basePath = options.basePath ?? SUPPORT_BUNDLE_PATH;
+  const pageLink = (target: number): string => `${basePath}?page[number]=${target}&page[size]=${pageSize}`;
   return {
-    data: page.map(bundleResource),
+    data: page.map((record): Record<string, unknown> => bundleResource(record, basePath)),
     meta: {
       pagination: {
         current_page: pageNumber,
@@ -1015,12 +1025,12 @@ async function downloadSupportBundle({ params, request, set }: SystemContext): P
   return Bun.file(path);
 }
 
-async function getSupportBundle({ params, set }: SystemContext): Promise<unknown> {
+async function getSupportBundle({ params, set }: SystemContext, basePath = SUPPORT_BUNDLE_PATH): Promise<unknown> {
   const loaded = await loadBundle(params["id"] ?? "");
   const record = loaded === undefined ? undefined : await expireBundle(loaded);
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
-  return { data: bundleResource(record) };
+  return { data: bundleResource(record, basePath) };
 }
 
 async function deleteSupportBundle({ params, set }: SystemContext): Promise<unknown> {
@@ -1132,3 +1142,73 @@ export const systemAdminRoutes = new Elysia({ name: "system-admin" })
   .get(`${SUPPORT_BUNDLE_COMPATIBILITY_PATH}/:id/download`, downloadSupportBundle)
   .get(`${SUPPORT_BUNDLE_COMPATIBILITY_PATH}/:id`, getSupportBundle)
   .delete(`${SUPPORT_BUNDLE_COMPATIBILITY_PATH}/:id`, deleteSupportBundle);
+
+function isLocalBrowserBundle(record: BundleRecord): boolean {
+  return record.nodes.length === 1 && record.nodes[0]?.node === readinessNodeId();
+}
+
+async function localBrowserBundle(context: SystemContext): Promise<BundleRecord | undefined> {
+  const id = context.params?.["id"] ?? "";
+  const loaded = await loadBundle(id);
+  if (loaded === undefined) return undefined;
+  const record = await expireBundle(loaded);
+  return isLocalBrowserBundle(record) ? record : undefined;
+}
+
+function browserBundleNotFound(set: SetObject): unknown {
+  return errorResponse(set, 404, "Not Found", "Not Found");
+}
+
+/** Browser-facing, site-admin-only adapter. Never forwards browser credentials to a node. */
+async function localSupportContext(context: SystemContext): Promise<SystemContext> {
+  const subject = context.user as Readonly<{ id?: string }> | null | undefined;
+  await auditLog("support-bundle", "operations-center", context.params?.["id"] ?? "local", subject?.id ?? null, null, {
+    method: (context.request as Request).method,
+    node: readinessNodeId(),
+  });
+  return {
+    ...context,
+    body: { nodes: [readinessNodeId()] },
+    request: { url: context.request.url, headers: { get: (): null => null } },
+  };
+}
+
+let localBundleCreating = false;
+
+export const supportBundleAdminRoutes = new Elysia({ name: "admin-support-bundles" })
+  .use(authPlugin)
+  .onBeforeHandle(({ user, set }: SystemContext): unknown => {
+    if (user?.isSiteAdmin !== true) return errorResponse(set, 404, "Not Found", "Not Found");
+    return undefined;
+  })
+  .get(
+    "/api/v2/admin/support-bundles",
+    async (context: SystemContext): Promise<unknown> =>
+      listSupportBundles(context, { basePath: ADMIN_SUPPORT_BUNDLE_PATH, include: isLocalBrowserBundle }),
+  )
+  .post("/api/v2/admin/support-bundles", async (context: SystemContext): Promise<unknown> => {
+    if (localBundleCreating)
+      return errorResponse(context.set, 409, "Conflict", "A support bundle is already being generated");
+    localBundleCreating = true;
+    try {
+      if (
+        (await loadBundles()).some((bundle): boolean => isLocalBrowserBundle(bundle) && bundle.status === "generating")
+      )
+        return errorResponse(context.set, 409, "Conflict", "A support bundle is already being generated");
+      return await createSupportBundle(await localSupportContext(context), ADMIN_SUPPORT_BUNDLE_PATH);
+    } finally {
+      localBundleCreating = false;
+    }
+  })
+  .get("/api/v2/admin/support-bundles/:id", async (context: SystemContext): Promise<unknown> => {
+    if ((await localBrowserBundle(context)) === undefined) return browserBundleNotFound(context.set);
+    return getSupportBundle(context, ADMIN_SUPPORT_BUNDLE_PATH);
+  })
+  .get("/api/v2/admin/support-bundles/:id/download", async (context: SystemContext): Promise<unknown> => {
+    if ((await localBrowserBundle(context)) === undefined) return browserBundleNotFound(context.set);
+    return downloadSupportBundle(await localSupportContext(context));
+  })
+  .delete("/api/v2/admin/support-bundles/:id", async (context: SystemContext): Promise<unknown> => {
+    if ((await localBrowserBundle(context)) === undefined) return browserBundleNotFound(context.set);
+    return deleteSupportBundle(await localSupportContext(context));
+  });

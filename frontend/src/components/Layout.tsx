@@ -650,6 +650,7 @@ function WorkspaceNav({
     [
       { label: "Overview", to: workspacePath, icon: LayoutDashboard, exact: true },
       { label: "Runs", to: `${workspacePath}/runs`, icon: ListChecks },
+      { label: "Insights", to: `${workspacePath}/insights`, icon: Activity },
       { label: "States", to: `${workspacePath}/states`, icon: Database },
       { label: "Variables", to: `${workspacePath}/variables`, icon: Variable },
       { label: "Settings", to: `${settingsPath}/general`, icon: Settings, trailing: true },
@@ -1089,6 +1090,12 @@ function AdminNav({
     {
       label: "Operations",
       links: [
+        {
+          active: isActivePath(pathname, "/app/admin/operations"),
+          icon: Activity,
+          label: "Operations center",
+          to: "/app/admin/operations",
+        },
         {
           active: isActivePath(pathname, "/app/admin/audit"),
           icon: HistoryIcon,

@@ -52969,6 +52969,254 @@
           }
         }
       }
+    },
+    "/api/v2/admin/operations-center": {
+      "get": {
+        "operationId": "get-api-v2-admin-operations-center",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/operations-center",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/operations-center/settings": {
+      "patch": {
+        "operationId": "patch-api-v2-admin-operations-center-settings",
+        "tags": [
+          "admin"
+        ],
+        "summary": "PATCH /api/v2/admin/operations-center/settings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/support-bundles": {
+      "get": {
+        "operationId": "get-api-v2-admin-support-bundles",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/support-bundles",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post-api-v2-admin-support-bundles",
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v2/admin/support-bundles",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/support-bundles/{id}": {
+      "get": {
+        "operationId": "get-api-v2-admin-support-bundles-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/admin/support-bundles/{id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "410": {
+            "description": "Gone"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete-api-v2-admin-support-bundles-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "DELETE /api/v2/admin/support-bundles/{id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/support-bundles/{id}/download": {
+      "get": {
+        "operationId": "get-api-v2-admin-support-bundles-id-download",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/admin/support-bundles/{id}/download",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
     }
   },
   "components": {
