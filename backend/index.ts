@@ -1,6 +1,6 @@
 import "./src/lib/validate-runtime-config";
 import { validatePersistedConfiguration } from "./src/lib/settings";
-import { integerSetting, listenerSetting } from "./src/lib/runtime-config";
+import { integerSetting, integrationSetting, listenerSetting } from "./src/lib/runtime-config";
 import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
@@ -18,6 +18,8 @@ import { sweepUploadTemps } from "./src/lib/upload-sweep";
 import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import {
+  assertClusterCompatibility,
+  assertPreMigrationClusterCompatibility,
   claimControlPlaneNodeIdentity,
   markControlPlaneNodeDraining,
   startControlPlaneHeartbeat,
@@ -25,13 +27,19 @@ import {
 } from "./src/routes/health";
 import { validateRunSandboxConfig } from "./src/lib/sandbox";
 import { importLegacyGitHubAppConfiguration } from "./src/lib/github-app-config";
-import { assertHaConfiguration, haEnabled } from "./src/lib/ha-config";
+import { assertHaConfiguration, controlPlaneNodeId, haEnabled } from "./src/lib/ha-config";
 import {
   isControlPlaneCoordinatorLeader,
   startControlPlaneCoordinator,
   stopControlPlaneCoordinator,
 } from "./src/lib/control-plane-coordinator";
 import { startDistributedEventBus, stopDistributedEventBus } from "./src/lib/event-bus";
+import {
+  reconcileRecordedDrainRequest,
+  requestNodeDrain,
+  startNodeDrainWatch,
+  stopNodeDrainWatch,
+} from "./src/lib/node-drain";
 
 // SEC-10: a misspelled TERRENCE_RUN_NET_POLICY must fail boot, not surface
 // at the first run execution.
@@ -107,6 +115,10 @@ assertStorageWritable();
 // synchronously at module load inside src/db). Fresh postgres databases
 // must be migrated before the server accepts traffic.
 if (isPostgres) {
+  // Check live peers before applying a schema change. The preflight reads only
+  // HA-2-era node columns and treats absent protocol columns as protocol 1, so
+  // it also works for the first HA-3 rolling upgrade.
+  await assertPreMigrationClusterCompatibility();
   await applyPgMigrations();
 }
 await validatePersistedConfiguration();
@@ -130,10 +142,27 @@ try {
 await resetAdminPassword();
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
+// Check live peer compatibility before registering this process as a cluster node.
+await assertClusterCompatibility();
 await claimControlPlaneNodeIdentity();
 // Route initialization starts background work, so load it only after schema and bootstrap.
 const { app, systemApiApp } = await import("./src/app");
 await startDistributedEventBus();
+// The drain watch must be listening before any work is claimed, so an
+// in-flight rolling upgrade can cordon this node the moment it comes up.
+startNodeDrainWatch();
+if (haEnabled()) {
+  // A node can be started already cordoned (TERRENCE_NODE_STATUS=draining),
+  // or be replacing a node an operator drained moments ago. Honour both
+  // before the worker queues start rather than claiming work and stopping.
+  if (["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"))) {
+    const requested = await requestNodeDrain(controlPlaneNodeId(), { reason: "TERRENCE_NODE_STATUS" });
+    if (requested !== "requested") throw new Error("Unable to persist startup node drain request");
+  }
+  await reconcileRecordedDrainRequest().catch((error: unknown): void => {
+    console.warn("[terrence] Unable to reconcile a recorded node drain request", error);
+  });
+}
 
 if (haEnabled()) {
   startDurableWorkerQueue();
@@ -212,6 +241,7 @@ import { checkpointWal } from "./src/db";
 async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   console.log(`[terrence] ${signal} received; draining worker, stopping server, checkpointing WAL before shutdown`);
   stopWorkerQueue();
+  stopNodeDrainWatch();
   // Freeze the last node heartbeat before marking it draining; otherwise the
   // 10s heartbeat loop can overwrite the durable draining marker while the
   // process waits for local execution to finish.

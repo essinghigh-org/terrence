@@ -997,7 +997,20 @@ export const controlPlaneNodes = sqliteTable(
     instanceId: text("instance_id"),
     role: text("role").notNull().default("standalone"), // standalone | leader | follower | ineligible
     coordinatorEpoch: integer("coordinator_epoch"),
-    status: text("status").notNull().default("active"), // active | draining | maintenance | error
+    status: text("status").notNull().default("active"), // active | draining | drained | maintenance | error
+    // HA-3A: distributed-semantics identity, advertised so a joining node and
+    // the live peers can each veto an unsupported version skew. Nullable by
+    // design: a peer written by a release from before these columns existed
+    // is read as protocol 1 rather than treated as a failure.
+    protocolVersion: integer("protocol_version"),
+    minProtocolVersion: integer("min_protocol_version"),
+    schemaVersion: text("schema_version"),
+    // HA-3C: the durable record of an operator's drain request, so intent
+    // survives a missed NOTIFY, a restart, or a brief database outage.
+    drainRequestedAt: integer("drain_requested_at"),
+    drainRequestedBy: text("drain_requested_by"),
+    drainReason: text("drain_reason"),
+    drainedAt: integer("drained_at"),
     readinessChecks: text("readiness_checks", { mode: "json" })
       .$type<{ check: string; status: string }[]>()
       .notNull()

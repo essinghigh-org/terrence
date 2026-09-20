@@ -570,6 +570,13 @@ export const controlPlaneNodes = pgTable(
     role: text("role").notNull().default("standalone"),
     coordinatorEpoch: bigint("coordinator_epoch", { mode: "number" }),
     status: text("status").notNull().default("active"),
+    protocolVersion: bigint("protocol_version", { mode: "number" }),
+    minProtocolVersion: bigint("min_protocol_version", { mode: "number" }),
+    schemaVersion: text("schema_version"),
+    drainRequestedAt: bigint("drain_requested_at", { mode: "number" }),
+    drainRequestedBy: text("drain_requested_by"),
+    drainReason: text("drain_reason"),
+    drainedAt: bigint("drained_at", { mode: "number" }),
     readinessChecks: jsonb("readiness_checks").notNull().default([]),
     registeredAt: bigint("registered_at", { mode: "number" })
       .notNull()

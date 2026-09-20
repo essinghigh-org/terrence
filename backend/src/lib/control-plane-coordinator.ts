@@ -1,12 +1,17 @@
-import { and, eq, gt, lte, sql } from "drizzle-orm";
+import { and, eq, gt, lte, sql, type SQL } from "drizzle-orm";
 import { databaseCurrentTimeMs, db } from "../db";
+import { isPostgres } from "../db/driver";
 import { controlPlaneLeases } from "../db/schema";
+import { publish, subscribe } from "./event-bus";
 import { log } from "./log";
 import { controlPlaneInstanceId, controlPlaneNodeId, coordinatorEligible, haEnabled } from "./ha-config";
 
 export const CONTROL_PLANE_LEASE_NAME = "scheduler";
 export const CONTROL_PLANE_LEASE_TTL_MS = 15_000;
 export const CONTROL_PLANE_LEASE_RENEW_MS = 5_000;
+/** Broadcast so followers contend the instant a leader resigns, instead of
+ * waiting out the lease TTL during planned maintenance. */
+export const CONTROL_PLANE_RESIGNATION_TOPIC = "ha.coordinator.resigned";
 
 export type ControlPlaneLeaseSnapshot = Readonly<{
   acquired: boolean;
@@ -36,6 +41,39 @@ function snapshot(
     expiresAt: row.expiresAt,
     heartbeatAt: row.heartbeatAt,
   };
+}
+
+export class StaleControlPlaneCoordinatorFenceError extends Error {
+  constructor(fencingEpoch: number) {
+    super(`Control-plane coordinator epoch ${String(fencingEpoch)} is no longer authoritative`);
+    this.name = "StaleControlPlaneCoordinatorFenceError";
+  }
+}
+
+function databaseNowExpression(): SQL {
+  return isPostgres
+    ? sql`CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT)`
+    : sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
+}
+
+/** Lock and validate the current coordinator generation inside a transaction. */
+export async function assertControlPlaneCoordinatorFenceTx(transaction: unknown, fencingEpoch: number): Promise<void> {
+  if (!haEnabled()) return;
+  const tx = transaction as typeof db;
+  const locked = await tx
+    .update(controlPlaneLeases)
+    .set({ fencingEpoch })
+    .where(
+      and(
+        eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+        eq(controlPlaneLeases.ownerNodeId, controlPlaneNodeId()),
+        eq(controlPlaneLeases.ownerInstanceId, controlPlaneInstanceId),
+        eq(controlPlaneLeases.fencingEpoch, fencingEpoch),
+        gt(controlPlaneLeases.expiresAt, databaseNowExpression()),
+      ),
+    )
+    .returning({ name: controlPlaneLeases.name });
+  if (locked.length === 0) throw new StaleControlPlaneCoordinatorFenceError(fencingEpoch);
 }
 
 /**
@@ -135,7 +173,10 @@ const disabledState: CoordinatorState = Object.freeze({
 });
 
 let coordinatorState: CoordinatorState = disabledState;
+/** Suspended nodes observe the coordinator lease but do not contend for it. */
+let coordinatorSuspended = false;
 let coordinatorTimer: ReturnType<typeof setTimeout> | undefined;
+let resignationSubscription: (() => void) | undefined;
 let leadershipWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
 let leadershipValidUntil = 0;
 let coordinatorStarted = false;
@@ -230,8 +271,36 @@ function scheduleCoordinatorTick(): void {
   coordinatorTimer.unref?.();
 }
 
+/** Track the current owner without contending. Used while suspended so the
+ * operations surfaces still report an accurate coordinator during a drain. */
+async function observeCoordinatorTick(): Promise<void> {
+  try {
+    const current = await db.query.controlPlaneLeases.findFirst({
+      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    });
+    coordinatorState = {
+      role: "follower",
+      ownerNodeId: current?.ownerNodeId ?? null,
+      fencingEpoch: current?.fencingEpoch ?? null,
+      expiresAt: current?.expiresAt ?? null,
+      heartbeatAt: current?.heartbeatAt ?? null,
+    };
+  } catch (error: unknown) {
+    log.warn("Control-plane coordinator observation failed while suspended", {
+      nodeId: controlPlaneNodeId(),
+      error: String(error),
+    });
+  } finally {
+    scheduleCoordinatorTick();
+  }
+}
+
 async function coordinatorTick(): Promise<void> {
   if (!coordinatorStarted) return;
+  if (coordinatorSuspended) {
+    await observeCoordinatorTick();
+    return;
+  }
   const identity = {
     nodeId: controlPlaneNodeId(),
     instanceId: controlPlaneInstanceId,
@@ -321,6 +390,71 @@ export async function runControlPlaneCoordinatorTickForTests(): Promise<void> {
   await coordinatorTick();
 }
 
+export function controlPlaneCoordinatorSuspended(): boolean {
+  return coordinatorSuspended;
+}
+
+/**
+ * Resign the local coordinator lease for planned maintenance.
+ * Scheduler work stops before the lease is expired. The release is fenced by
+ * owner instance and epoch; normal PostgreSQL election chooses the successor.
+ */
+export async function resignControlPlaneLease(): Promise<boolean> {
+  const alreadySuspended = coordinatorSuspended;
+  coordinatorSuspended = true;
+  if (!haEnabled()) return false;
+
+  const epoch = coordinatorState.fencingEpoch;
+  const wasLeader = coordinatorState.role === "leader";
+  // Stop the local scheduler generation before the lease is surrendered.
+  if (wasLeader) await loseLeadership();
+  if (!wasLeader && alreadySuspended) return false;
+
+  const currentNow = await databaseCurrentTimeMs();
+  const ownership = and(
+    eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    eq(controlPlaneLeases.ownerInstanceId, controlPlaneInstanceId),
+    epoch === null ? undefined : eq(controlPlaneLeases.fencingEpoch, epoch),
+  );
+  const resigned = await db
+    .update(controlPlaneLeases)
+    .set({ expiresAt: 0, heartbeatAt: currentNow })
+    .where(ownership)
+    .returning({ fencingEpoch: controlPlaneLeases.fencingEpoch });
+  if (resigned.length === 0) return false;
+
+  log.info("Control-plane coordinator lease resigned", {
+    nodeId: controlPlaneNodeId(),
+    fencingEpoch: resigned[0]?.fencingEpoch ?? epoch,
+  });
+  // Wake followers immediately after planned resignation.
+  publish(CONTROL_PLANE_RESIGNATION_TOPIC, {
+    nodeId: controlPlaneNodeId(),
+    instanceId: controlPlaneInstanceId,
+    fencingEpoch: resigned[0]?.fencingEpoch ?? epoch,
+  });
+  return true;
+}
+
+/** Return a resigned node to the election (drain cancelation, uncordon). */
+export function resumeControlPlaneCoordinator(): void {
+  if (!coordinatorSuspended) return;
+  coordinatorSuspended = false;
+  if (!coordinatorStarted) return;
+  if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
+  coordinatorTimer = undefined;
+  void coordinatorTick();
+}
+
+function handleResignationEvent(payload: Readonly<Record<string, unknown>>): void {
+  if (!coordinatorStarted || coordinatorSuspended) return;
+  if (payload["instanceId"] === controlPlaneInstanceId) return;
+  if (coordinatorState.role === "leader") return;
+  if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
+  coordinatorTimer = undefined;
+  void coordinatorTick();
+}
+
 export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbacks): Promise<void> {
   if (!haEnabled()) {
     clearLeadershipWatchdog();
@@ -341,6 +475,10 @@ export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbac
   if (coordinatorStarted) return;
   coordinatorCallbacks = callbacks;
   coordinatorStarted = true;
+  // Preserve a suspension requested before election startup (for example a
+  // node that boots already draining). A fresh process starts unsuspended by
+  // module initialization; stopControlPlaneCoordinator resets it on shutdown.
+  resignationSubscription ??= subscribe(CONTROL_PLANE_RESIGNATION_TOPIC, handleResignationEvent);
   coordinatorState = {
     role: "follower",
     ownerNodeId: null,
@@ -352,6 +490,9 @@ export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbac
 }
 
 export async function stopControlPlaneCoordinator(): Promise<void> {
+  resignationSubscription?.();
+  resignationSubscription = undefined;
+  coordinatorSuspended = false;
   if (!coordinatorStarted) return;
   coordinatorStarted = false;
   if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);

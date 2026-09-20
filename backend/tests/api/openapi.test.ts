@@ -153,6 +153,43 @@ describe("openapi contract", () => {
     expect(deleteBundle?.responses?.["409"]).toBeDefined();
   });
 
+  it("documents HA node drain operations and the pre-HA3 conflict", () => {
+    const localDrain = paths["/api/v1/nodes/drain"]?.["get"] as { responses?: Record<string, unknown> } | undefined;
+    expect(localDrain?.responses?.["200"]).toBeDefined();
+    expect(localDrain?.responses?.["401"]).toBeDefined();
+    expect(localDrain?.responses?.["429"]).toBeDefined();
+
+    const remoteDrain = paths["/api/v1/nodes/{id}/drain"]?.["post"] as
+      | {
+          responses?: Record<string, unknown>;
+          requestBody?: { content?: Record<string, { schema?: Record<string, unknown> }> };
+        }
+      | undefined;
+    expect(remoteDrain?.responses?.["200"]).toBeDefined();
+    expect(remoteDrain?.responses?.["404"]).toBeDefined();
+    expect(remoteDrain?.responses?.["409"]).toBeDefined();
+    expect(remoteDrain?.requestBody?.content?.["application/vnd.api+json"]?.schema).toMatchObject({
+      type: "object",
+      properties: {
+        data: {
+          type: "object",
+          properties: {
+            attributes: {
+              type: "object",
+              properties: { reason: { type: "string" } },
+            },
+          },
+        },
+      },
+    });
+
+    const uncordon = paths["/api/v1/nodes/{id}/drain"]?.["delete"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
+    expect(uncordon?.responses?.["200"]).toBeDefined();
+    expect(uncordon?.responses?.["404"]).toBeDefined();
+  });
+
   it("documents support bundles as gzip archives and rehearsal settings with a typed body", () => {
     for (const path of [
       "/api/v1/support/bundle-requests/{id}/download",

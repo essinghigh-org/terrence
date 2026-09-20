@@ -5,6 +5,7 @@ import { isPostgres } from "../db/driver";
 import { runs, workspaces } from "../db/schema";
 import { controlPlaneInstanceId, controlPlaneNodeId, haEnabled } from "./ha-config";
 import { log } from "./log";
+import { nodeDrainRequested } from "./node-drain";
 
 export const RUN_EXECUTION_LEASE_TTL_MS = 30_000;
 export const RUN_EXECUTION_LEASE_RENEW_MS = 5_000;
@@ -518,9 +519,11 @@ export async function withRunExecutionLease<T>(
     return work();
   }
 
+  // Draining nodes may continue an inherited lease but cannot acquire a new generation.
+  if (nodeDrainRequested()) throw new RunExecutionLeaseUnavailableError(runId);
+
   const claimedLease = await claimRunExecutionLease(runId, phase);
   if (claimedLease === null) throw new RunExecutionLeaseUnavailableError(runId);
-
   let claimConfirmedAt: number;
   try {
     claimConfirmedAt = await databaseCurrentTimeMs();

@@ -1,0 +1,16 @@
+{
+  "$comment": [
+    "PostgreSQL rolling-upgrade contraction approvals.",
+    "CI checks migrations after enforcedFrom. Unregistered contractions fail.",
+    "Each entry approves one exact migration surface; it does not exempt the rest of the migration.",
+    "expandedIn identifies the replacement surface release; approvedFor identifies the first release allowed to remove/narrow the old surface.",
+    "owner and justification record who approved the contraction and why the supported skew window has passed."
+  ],
+  "protocolVersion": 2,
+  "enforcedFrom": "0063_fluffy_zemo",
+  "rollingUpgradeWindow": {
+    "supportedSkew": "N/N-1",
+    "note": "Released peers must be on the same major version and differ by at most one minor version. HA protocol windows must also intersect."
+  },
+  "contractions": []
+}
