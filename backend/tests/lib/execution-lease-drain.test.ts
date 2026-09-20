@@ -1,12 +1,4 @@
-/**
- * HA-3C: the acquisition gate that makes drain safe.
- *
- * A draining node must finish what it already owns and take nothing new. The
- * gate lives in withRunExecutionLease because that is the single entry point
- * every local execution path goes through, and it sits deliberately downstream
- * of the re-entrancy check so an in-flight plan can still proceed into its
- * apply.
- */
+/** Verify drain blocks new execution ownership without revoking an existing run lease. */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
@@ -61,10 +53,13 @@ beforeEach(async (): Promise<void> => {
   process.env["TERRENCE_NODE_ID"] = "drain-gate-node";
   resetNodeDrainStateForTests();
   activeRunExecutions = 0;
-  registerNodeDrainActivityProbe((): { activeRunExecutions: number; activeDurableJobs: number } => ({
-    activeRunExecutions,
-    activeDurableJobs: 0,
-  }));
+  registerNodeDrainActivityProbe(
+    (): { activeRunExecutions: number; activeAssessments: number; activeDurableJobs: number } => ({
+      activeRunExecutions,
+      activeAssessments: 0,
+      activeDurableJobs: 0,
+    }),
+  );
   await db.insert(organizations).values({ id: orgId, name: orgId });
   await db.insert(workspaces).values({ id: workspaceId, orgId, name: workspaceId });
   await db.insert(runs).values([
@@ -91,8 +86,7 @@ describe("draining node execution-lease gate", () => {
 
     await expectLeaseRefused(runB);
 
-    // Refused, not errored: the run keeps no owner, so another replica can
-    // claim it. Surfacing ordinary contention is what makes that true.
+    // Refusal leaves the run unowned and claimable by another replica.
     const row = await db.query.runs.findFirst({ where: eq(runs.id, runB) });
     expect(row).toMatchObject({
       executionOwnerNodeId: null,
@@ -102,8 +96,7 @@ describe("draining node execution-lease gate", () => {
   });
 
   test("an execution already owned when the drain begins runs to completion", async () => {
-    // The property the whole phase exists to protect: drain must not kill a
-    // healthy Terraform execution.
+    // Existing execution ownership survives drain.
     let observedInsideDrain = false;
     const result = await withRunExecutionLease(runA, "plan", noLeaseLoss, async (): Promise<string> => {
       activeRunExecutions = 1;
@@ -116,9 +109,7 @@ describe("draining node execution-lease gate", () => {
   });
 
   test("an in-flight plan can still proceed into its apply while draining", async () => {
-    // The gate is downstream of the re-entrancy check on purpose: automatic
-    // plan-to-apply reuses the live lease generation rather than acquiring a
-    // new one, so a drain must not strand a run half-way through.
+    // Automatic plan-to-apply reuses the current lease generation.
     const phases: string[] = [];
     await withRunExecutionLease(runA, "plan", noLeaseLoss, async (): Promise<void> => {
       phases.push("plan");

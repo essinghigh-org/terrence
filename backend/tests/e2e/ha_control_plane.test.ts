@@ -128,6 +128,17 @@ function numeric(value: number | bigint | string): number {
   return Number(value);
 }
 
+async function seedSystemApiToken(sql: Bun.SQL): Promise<string> {
+  const token = `tfe-system-${crypto.randomUUID()}`;
+  const tokenHash = new Bun.CryptoHasher("sha256").update(token).digest("hex");
+  const now = Date.now();
+  await sql.unsafe(
+    "INSERT INTO system_api_tokens (id, token_hash, description, created_at, expires_at) VALUES ($1, $2, $3, $4, $5)",
+    [`ha-e2e-system-${crypto.randomUUID()}`, tokenHash, "HA readiness probe", now, now + 60_000],
+  );
+  return token;
+}
+
 async function bootstrapAdminToken(replica: Replica): Promise<string> {
   const response = await fetch(`http://127.0.0.1:${replica.port}/api/v2/users/login`, {
     method: "POST",
@@ -392,7 +403,7 @@ haTest(
       const drainedNodeId = initialLease.owner_node_id;
       await cluster.unsafe(
         "UPDATE control_plane_nodes SET drain_requested_at = CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT), " +
-          "drain_requested_by = 'ha-e2e', drain_reason = 'rolling upgrade', status = 'draining' WHERE id = $1",
+          "drain_requested_by = 'ha-e2e', drain_reason = 'rolling upgrade', status = 'maintenance' WHERE id = $1",
         [drainedNodeId],
       );
 
@@ -440,8 +451,9 @@ haTest(
       // load balancer stops sending it new work rather than being killed.
       const liveness = await fetch(`http://127.0.0.1:${drainedReplica.port}/healthz`);
       expect(liveness.ok).toBe(true);
-      const readiness = await fetch(`http://127.0.0.1:${drainedReplica.port}/api/v1/readiness`, {
-        headers: { Accept: "text/plain" },
+      const drainedSystemToken = await seedSystemApiToken(cluster);
+      const readiness = await fetch(`http://127.0.0.1:${drainedReplica.systemPort}/api/v1/readiness`, {
+        headers: { Accept: "text/plain", Authorization: `Bearer ${drainedSystemToken}` },
       });
       expect(readiness.status).toBe(503);
       expect((await readiness.text()).trim()).toBe("DRAINING");
@@ -449,8 +461,9 @@ haTest(
       const survivor = replicas.find((replica): boolean => replica.id !== drainedNodeId);
       expect(survivor).toBeDefined();
       if (survivor === undefined) throw new Error("surviving replica not found");
-      const survivorReadiness = await fetch(`http://127.0.0.1:${survivor.port}/api/v1/readiness`, {
-        headers: { Accept: "text/plain" },
+      const survivorSystemToken = await seedSystemApiToken(cluster);
+      const survivorReadiness = await fetch(`http://127.0.0.1:${survivor.systemPort}/api/v1/readiness`, {
+        headers: { Accept: "text/plain", Authorization: `Bearer ${survivorSystemToken}` },
       });
       // The API stays available on the remaining healthy replica throughout.
       expect(survivorReadiness.status).toBe(200);

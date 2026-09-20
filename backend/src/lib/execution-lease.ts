@@ -519,12 +519,7 @@ export async function withRunExecutionLease<T>(
     return work();
   }
 
-  // HA-3C: a draining node finishes what it already owns but must not take on
-  // a new generation. Refusing here is the single chokepoint that covers every
-  // acquisition path (queue claim, scheduled apply dispatch, assessments).
-  // Surfacing ordinary contention lets the run stay claimable elsewhere rather
-  // than erroring, and the re-entrant path above is deliberately upstream of
-  // this check so an in-flight plan can still proceed into its apply.
+  // Draining nodes may continue an inherited lease but cannot acquire a new generation.
   if (nodeDrainRequested()) throw new RunExecutionLeaseUnavailableError(runId);
 
   const claimedLease = await claimRunExecutionLease(runId, phase);

@@ -1,7 +1,7 @@
 import { executionSetting, integrationSetting, integerSetting } from "../lib/runtime-config";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
-import { databaseCurrentTimeMs, databaseSchemaVersion, db } from "../db";
+import { databaseCurrentTimeMs, databaseSchemaVersion, db, rawQueryAll } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runNetPolicy, runSandboxRequired } from "../lib/sandbox";
 import { envFlag } from "../lib/env";
@@ -17,7 +17,7 @@ import {
 } from "../lib/metrics";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { and, desc, eq, gte, lt, or } from "drizzle-orm";
+import { and, desc, eq, gte, lt, or, sql } from "drizzle-orm";
 import { controlPlaneNodes } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { maintenanceSnapshot } from "../lib/maintenance";
@@ -35,6 +35,7 @@ import {
   cancelNodeDrain,
   nodeDrainRequested,
   nodeDrainSnapshot,
+  recordedNodeDrainPhase,
   reconcileRecordedDrainRequest,
   requestNodeDrain,
 } from "../lib/node-drain";
@@ -669,13 +670,96 @@ function protocolMetadata(): {
   };
 }
 
-/**
- * HA-3A: evaluate this release against the versions the live peers advertise.
- *
- * Only fresh heartbeats are considered. A stale row describes a replica that
- * has already been replaced, and letting one block a rollout would make the
- * very operation this phase exists to enable impossible.
- */
+/** Check live HA peers using only node-registry columns available before this release's migrations. */
+export async function evaluatePreMigrationClusterCompatibility(now?: number): Promise<ClusterCompatibility> {
+  const local = localProtocolIdentity(readinessNodeId(), appVersion());
+  if (!haEnabled()) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "HA is disabled; version compatibility is a single-process concern",
+    };
+  }
+
+  const tableRows = await rawQueryAll<{ exists: boolean }>(
+    sql`SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_name = 'control_plane_nodes'
+    ) AS exists`,
+  );
+  if (tableRows[0]?.exists !== true) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "No control-plane node registry exists yet",
+    };
+  }
+
+  const columnRows = await rawQueryAll<{ columnName: string }>(
+    sql`SELECT column_name AS "columnName"
+        FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'control_plane_nodes'`,
+  );
+  const columns = new Set(columnRows.map((row): string => row.columnName));
+  if (!columns.has("last_heartbeat_at") || !columns.has("version")) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "Control-plane node registry predates HA peer version metadata",
+    };
+  }
+
+  const currentNow = now ?? (await databaseCurrentTimeMs());
+  const cutoff = currentNow - NODE_HEARTBEAT_TIMEOUT_MS;
+  const hasProtocolColumns = columns.has("protocol_version") && columns.has("min_protocol_version");
+  const rows = hasProtocolColumns
+    ? await rawQueryAll<{
+        nodeId: string;
+        applicationVersion: string | null;
+        protocolVersion: number | bigint | string | null;
+        minProtocolVersion: number | bigint | string | null;
+      }>(
+        sql`SELECT id AS "nodeId",
+                   version AS "applicationVersion",
+                   protocol_version AS "protocolVersion",
+                   min_protocol_version AS "minProtocolVersion"
+            FROM control_plane_nodes
+            WHERE last_heartbeat_at >= ${cutoff}`,
+      )
+    : await rawQueryAll<{
+        nodeId: string;
+        applicationVersion: string | null;
+        protocolVersion: null;
+        minProtocolVersion: null;
+      }>(
+        sql`SELECT id AS "nodeId",
+                   version AS "applicationVersion",
+                   NULL AS "protocolVersion",
+                   NULL AS "minProtocolVersion"
+            FROM control_plane_nodes
+            WHERE last_heartbeat_at >= ${cutoff}`,
+      );
+
+  const peers: ClusterPeer[] = rows.map(
+    (row): ClusterPeer => ({
+      nodeId: row.nodeId,
+      applicationVersion: row.applicationVersion,
+      protocolVersion: row.protocolVersion === null ? null : Number(row.protocolVersion),
+      minProtocolVersion: row.minProtocolVersion === null ? null : Number(row.minProtocolVersion),
+    }),
+  );
+  return evaluateClusterCompatibility(local, peers);
+}
+
+export async function assertPreMigrationClusterCompatibility(): Promise<void> {
+  if (!haEnabled()) return;
+  const compatibility = await evaluatePreMigrationClusterCompatibility();
+  if (!compatibility.compatible) throw new ClusterProtocolIncompatibleError(compatibility);
+}
+
 export async function evaluateLiveClusterCompatibility(now?: number): Promise<ClusterCompatibility> {
   const local = localProtocolIdentity(readinessNodeId(), appVersion());
   if (!haEnabled()) {
@@ -710,14 +794,7 @@ export async function evaluateLiveClusterCompatibility(now?: number): Promise<Cl
   return evaluateClusterCompatibility(local, peers);
 }
 
-/**
- * Refuse to join a cluster this release cannot safely interoperate with.
- *
- * Failing startup is deliberately preferable to booting into a half-supported
- * skew: an incompatible replica that serves traffic can write values an older
- * peer will not understand, which breaks HA while the database itself remains
- * perfectly available.
- */
+/** Refuse startup when a live peer is outside the supported release or HA protocol window. */
 export async function assertClusterCompatibility(): Promise<void> {
   if (!haEnabled()) return;
   const compatibility = await evaluateLiveClusterCompatibility();
@@ -737,6 +814,8 @@ export async function claimControlPlaneNodeIdentity(now?: number): Promise<void>
   const replaceable = or(
     eq(controlPlaneNodes.instanceId, controlPlaneInstanceId),
     lt(controlPlaneNodes.lastHeartbeatAt, currentNow - NODE_HEARTBEAT_TIMEOUT_MS),
+    // "draining" is the legacy graceful-shutdown marker. A live planned
+    // HA-3 drain uses "maintenance" until it reaches "drained".
     eq(controlPlaneNodes.status, "draining"),
     eq(controlPlaneNodes.status, "drained"),
   );
@@ -752,9 +831,7 @@ export async function claimControlPlaneNodeIdentity(now?: number): Promise<void>
       status: "active",
       lastHeartbeatAt: currentNow,
       ...protocol,
-      // A replacement process starts clean: the drain that retired the
-      // previous instance must not immediately cordon its successor, which is
-      // exactly the rolling-replacement case (drain old, start new, same ID).
+      // Reusing a DRAINED node ID starts a fresh ACTIVE instance.
       drainRequestedAt: null,
       drainRequestedBy: null,
       drainReason: null,
@@ -917,10 +994,7 @@ async function buildReadinessResult(
   };
   if (haEnabled()) {
     result.checks.push({ check: "coordinator", status: controlPlaneCoordinatorState().role.toUpperCase() });
-    // HA-3A/HA-3D: the rollout orchestrator reads these. "cluster-compatibility"
-    // is the gate a new replica must pass to take traffic; "ha-protocol" and
-    // "node-drain" let an operator watch a rolling upgrade progress without
-    // querying the database directly.
+    // Rolling-upgrade state exposed to the orchestrator.
     result.checks.push({ check: "cluster-compatibility", status: compatibilityStatus });
     result.checks.push({ check: "ha-protocol", status: String(protocolMetadata().protocolVersion) });
     result.checks.push({ check: "node-drain", status: nodeDrainSnapshot().phase.toUpperCase() });
@@ -956,10 +1030,9 @@ async function persistReadinessNode(
   const nodeId = readinessNodeId();
   const metadata = nodeCoordinatorMetadata();
   const drain = nodeDrainSnapshot();
-  // "drained" is a stronger claim than "draining": it asserts this node owns
-  // no run execution and no durable job, which is what makes termination safe.
+  // DRAINED is written only after local run, assessment, durable-job, and coordinator work is clear.
   const nodeStatus =
-    status === "ERROR" ? "error" : drain.phase === "drained" ? "drained" : draining ? "draining" : "active";
+    status === "ERROR" ? "error" : drain.phase === "drained" ? "drained" : draining ? "maintenance" : "active";
   const values = {
     hostname: nodeId,
     address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
@@ -1159,6 +1232,24 @@ const systemHealthGuard = ({
   return undefined;
 };
 
+function systemDrainAttributes(body: unknown): Record<string, unknown> {
+  let parsed = body;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const data = (parsed as Record<string, unknown>)["data"];
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return {};
+  const attributes = (data as Record<string, unknown>)["attributes"];
+  return attributes !== null && typeof attributes === "object" && !Array.isArray(attributes)
+    ? (attributes as Record<string, unknown>)
+    : {};
+}
+
 export const systemHealthRoutes = new Elysia({ name: "system-health" })
   .use(authPlugin)
   .onBeforeHandle(systemHealthGuard)
@@ -1243,7 +1334,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
                   ? current.status
                   : node.status === "error"
                     ? "ERROR"
-                    : node.status === "draining" || node.status === "drained"
+                    : node.status === "draining" || node.status === "drained" || node.status === "maintenance"
                       ? "DRAINING"
                       : "OK",
               checks: node.id === readinessNodeId() ? current.checks : node.readinessChecks,
@@ -1281,10 +1372,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
       links: { self: "/api/v1/nodes" },
     };
   })
-  // HA-3C/HA-3D: the drain lifecycle an orchestrator drives during a rolling
-  // upgrade — request a drain, poll until the node reports DRAINED, terminate,
-  // replace. Draining is deliberately reversible so an aborted rollout can put
-  // a node back into service without a restart.
+  // System API surface for planned drain, polling, and uncordon.
   .get("/api/v1/nodes/drain", (): Record<string, unknown> => {
     const snapshot = nodeDrainSnapshot();
     return {
@@ -1298,6 +1386,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
           reason: snapshot.reason,
           "drained-at": snapshot.drainedAt,
           "active-run-executions": snapshot.activeRunExecutions,
+          "active-assessments": snapshot.activeAssessments,
           "active-durable-jobs": snapshot.activeDurableJobs,
           coordinator: snapshot.coordinator,
         },
@@ -1317,19 +1406,32 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
       body: unknown;
       systemToken?: Readonly<{ id: string }> | null;
     }): Promise<unknown> => {
-      const attributes = (body as { data?: { attributes?: Record<string, unknown> } } | null)?.data?.attributes ?? {};
+      const attributes = systemDrainAttributes(body);
       const rawReason = attributes["reason"];
       const reason = typeof rawReason === "string" && rawReason.trim() !== "" ? rawReason.trim().slice(0, 500) : null;
       const requested = await requestNodeDrain(params.id, {
         requestedBy: systemToken?.id ?? null,
         reason,
       });
-      if (!requested) {
+      if (requested === "not-found") {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found", detail: `Unknown control-plane node ${params.id}` }] };
       }
+      if (requested === "unsupported") {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [
+            {
+              status: "409",
+              title: "Conflict",
+              detail: `Control-plane node ${params.id} predates HA drain support; stop it gracefully during this rollout`,
+            },
+          ],
+        };
+      }
+      const targetPhase = (await recordedNodeDrainPhase(params.id)) ?? "draining";
       return {
-        data: { id: params.id, type: "node-drains", attributes: { phase: nodeDrainSnapshot().phase, reason } },
+        data: { id: params.id, type: "node-drains", attributes: { phase: targetPhase, reason } },
       };
     },
   )

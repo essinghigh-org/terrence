@@ -1469,6 +1469,7 @@ export const app = new Elysia()
 // The System API has its own listener in production; privileged diagnostics
 // are deliberately not mounted on the public application listener.
 export const systemApiApp = new Elysia({ name: "system-api-listener" })
+  .onParse(parseBoundedRequestBody)
   .use(systemHealthRoutes)
   .use(systemAdminRoutes)
   // Security-header and error-handling parity with the application listener:

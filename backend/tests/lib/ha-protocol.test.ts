@@ -84,17 +84,17 @@ describe("cluster compatibility", () => {
     expect(result.oldestPeerProtocolVersion).toBe(1);
   });
 
-  test("never rejects a cluster because of the node's own row", () => {
+  test("does not ignore a live peer merely because it uses the same node id", () => {
     const identity = local(2, 2);
     const result = evaluateClusterCompatibility(identity, [peer(identity.nodeId, 1, 1, "1.4.0")]);
-    expect(result.compatible).toBe(true);
+    expect(result.compatible).toBe(false);
   });
 
-  test("reports release skew inside a compatible protocol as advisory only", () => {
+  test("rejects application versions outside the supported N/N-1 window", () => {
     const result = evaluateClusterCompatibility(local(1, 1, "1.7.0"), [peer("node-lagging", 1, 1, "1.2.0")]);
-    expect(result.compatible).toBe(true);
-    expect(result.summary).toContain("outside");
-    expect(result.summary).toContain("node-lagging");
+    expect(result.compatible).toBe(false);
+    expect(result.incompatiblePeers[0]?.nodeId).toBe("node-lagging");
+    expect(result.incompatiblePeers[0]?.reason).toContain("N/N-1");
   });
 
   test("an empty cluster is compatible", () => {
@@ -104,8 +104,6 @@ describe("cluster compatibility", () => {
   });
 
   test("this release declares a window of at most one protocol version", () => {
-    // The supported skew is N/N-1. A release that widens this has changed the
-    // rolling-upgrade contract and must say so deliberately.
     expect(HA_PROTOCOL_VERSION - HA_MIN_COMPATIBLE_PROTOCOL_VERSION).toBeLessThanOrEqual(1);
     const identity = localProtocolIdentity("node-a", "1.5.0");
     expect(identity.protocolVersion).toBe(HA_PROTOCOL_VERSION);

@@ -19,6 +19,7 @@ import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import {
   assertClusterCompatibility,
+  assertPreMigrationClusterCompatibility,
   claimControlPlaneNodeIdentity,
   markControlPlaneNodeDraining,
   startControlPlaneHeartbeat,
@@ -26,7 +27,7 @@ import {
 } from "./src/routes/health";
 import { validateRunSandboxConfig } from "./src/lib/sandbox";
 import { importLegacyGitHubAppConfiguration } from "./src/lib/github-app-config";
-import { assertHaConfiguration, haEnabled } from "./src/lib/ha-config";
+import { assertHaConfiguration, controlPlaneNodeId, haEnabled } from "./src/lib/ha-config";
 import {
   isControlPlaneCoordinatorLeader,
   startControlPlaneCoordinator,
@@ -34,8 +35,8 @@ import {
 } from "./src/lib/control-plane-coordinator";
 import { startDistributedEventBus, stopDistributedEventBus } from "./src/lib/event-bus";
 import {
-  beginLocalNodeDrain,
   reconcileRecordedDrainRequest,
+  requestNodeDrain,
   startNodeDrainWatch,
   stopNodeDrainWatch,
 } from "./src/lib/node-drain";
@@ -114,6 +115,10 @@ assertStorageWritable();
 // synchronously at module load inside src/db). Fresh postgres databases
 // must be migrated before the server accepts traffic.
 if (isPostgres) {
+  // Check live peers before applying a schema change. The preflight reads only
+  // HA-2-era node columns and treats absent protocol columns as protocol 1, so
+  // it also works for the first HA-3 rolling upgrade.
+  await assertPreMigrationClusterCompatibility();
   await applyPgMigrations();
 }
 await validatePersistedConfiguration();
@@ -137,9 +142,7 @@ try {
 await resetAdminPassword();
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
-// HA-3A: refuse to join a cluster whose live peers this release cannot
-// interoperate with. This runs before the node claims its identity so an
-// unsupported binary never advertises itself as a usable replica.
+// Check live peer compatibility before registering this process as a cluster node.
 await assertClusterCompatibility();
 await claimControlPlaneNodeIdentity();
 // Route initialization starts background work, so load it only after schema and bootstrap.
@@ -153,7 +156,8 @@ if (haEnabled()) {
   // or be replacing a node an operator drained moments ago. Honour both
   // before the worker queues start rather than claiming work and stopping.
   if (["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"))) {
-    await beginLocalNodeDrain({ reason: "TERRENCE_NODE_STATUS" });
+    const requested = await requestNodeDrain(controlPlaneNodeId(), { reason: "TERRENCE_NODE_STATUS" });
+    if (requested !== "requested") throw new Error("Unable to persist startup node drain request");
   }
   await reconcileRecordedDrainRequest().catch((error: unknown): void => {
     console.warn("[terrence] Unable to reconcile a recorded node drain request", error);

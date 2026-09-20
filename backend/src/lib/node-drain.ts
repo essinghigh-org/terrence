@@ -1,35 +1,16 @@
-/**
- * HA-3C: node drain as a real lifecycle rather than a status label.
+/** Planned node drain lifecycle.
  *
- *   ACTIVE
- *      | operator requests drain
- *      v
- *   DRAINING
- *      |-- stop accepting new coordinator work (resign the lease immediately)
- *      |-- stop claiming durable jobs
- *      |-- stop taking new local execution leases
- *      |-- allow existing run leases to finish
- *      v
- *   DRAINED   (0 run executions, 0 durable jobs, not coordinator)
- *
- * The crucial property is that draining must not kill a healthy Terraform or
- * OpenTofu execution. Phase 2 gave every run independent, fenced ownership, so
- * a drain only has to stop *acquisition*: run-123 with token 47 stays valid on
- * a draining node while run-789 is refused and claimed elsewhere.
- *
- * Authority split:
- *   - the durable request lives in `control_plane_nodes.drain_requested_at`,
- *     so an operator's intent survives a missed NOTIFY or a brief outage;
- *   - a control event makes the transition immediate instead of waiting for
- *     the next heartbeat;
- *   - the live process owns its own phase, so a restarted node comes back
- *     ACTIVE unless the request is still recorded against it.
+ * DRAINING blocks new local work while existing run leases and durable jobs
+ * finish. Coordinator-owned assessments finish before leader resignation.
+ * The node reaches DRAINED only after the durable request is still present and
+ * no local work or coordinator ownership remains.
  */
 
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { databaseCurrentTimeMs, db } from "../db";
 import { controlPlaneNodes } from "../db/schema";
 import {
+  controlPlaneCoordinatorSuspended,
   isControlPlaneCoordinatorLeader,
   resignControlPlaneLease,
   resumeControlPlaneCoordinator,
@@ -42,6 +23,7 @@ export const NODE_DRAIN_TOPIC = "ha.node.drain";
 const DRAIN_COMPLETION_POLL_MS = 1_000;
 
 export type NodeDrainPhase = "active" | "draining" | "drained";
+export type NodeDrainRequestResult = "requested" | "not-found" | "unsupported";
 
 /**
  * Live local work that keeps a drain from completing. The worker registers
@@ -50,6 +32,7 @@ export type NodeDrainPhase = "active" | "draining" | "drained";
  */
 export type NodeDrainActivityProbe = () => Readonly<{
   activeRunExecutions: number;
+  activeAssessments: number;
   activeDurableJobs: number;
 }>;
 
@@ -61,6 +44,7 @@ export type NodeDrainSnapshot = Readonly<{
   reason: string | null;
   drainedAt: number | null;
   activeRunExecutions: number;
+  activeAssessments: number;
   activeDurableJobs: number;
   coordinator: boolean;
 }>;
@@ -72,8 +56,13 @@ let reason: string | null = null;
 let drainedAt: number | null = null;
 let completionTimer: ReturnType<typeof setTimeout> | undefined;
 let unsubscribeDrainEvents: (() => void) | undefined;
-let activityProbe: NodeDrainActivityProbe = (): { activeRunExecutions: number; activeDurableJobs: number } => ({
+let activityProbe: NodeDrainActivityProbe = (): {
+  activeRunExecutions: number;
+  activeAssessments: number;
+  activeDurableJobs: number;
+} => ({
   activeRunExecutions: 0,
+  activeAssessments: 0,
   activeDurableJobs: 0,
 });
 
@@ -94,6 +83,16 @@ export function nodeDrainPhase(): NodeDrainPhase {
   return phase;
 }
 
+export async function recordedNodeDrainPhase(nodeId: string): Promise<NodeDrainPhase | null> {
+  const row = await db.query.controlPlaneNodes.findFirst({
+    where: eq(controlPlaneNodes.id, nodeId),
+    columns: { drainRequestedAt: true, drainedAt: true },
+  });
+  if (row === undefined) return null;
+  if (row.drainedAt !== null) return "drained";
+  return row.drainRequestedAt === null ? "active" : "draining";
+}
+
 export function nodeDrainSnapshot(): NodeDrainSnapshot {
   const activity = activityProbe();
   return {
@@ -104,6 +103,7 @@ export function nodeDrainSnapshot(): NodeDrainSnapshot {
     reason,
     drainedAt,
     activeRunExecutions: activity.activeRunExecutions,
+    activeAssessments: activity.activeAssessments,
     activeDurableJobs: activity.activeDurableJobs,
     coordinator: isControlPlaneCoordinatorLeader(),
   };
@@ -111,25 +111,35 @@ export function nodeDrainSnapshot(): NodeDrainSnapshot {
 
 function drainComplete(): boolean {
   const activity = activityProbe();
-  return activity.activeRunExecutions === 0 && activity.activeDurableJobs === 0 && !isControlPlaneCoordinatorLeader();
+  return (
+    activity.activeRunExecutions === 0 &&
+    activity.activeAssessments === 0 &&
+    activity.activeDurableJobs === 0 &&
+    !isControlPlaneCoordinatorLeader() &&
+    controlPlaneCoordinatorSuspended()
+  );
 }
 
-async function persistDrainedAt(at: number): Promise<void> {
-  await db
-    .update(controlPlaneNodes)
-    .set({ status: "drained", drainedAt: at, lastHeartbeatAt: at })
-    .where(
-      and(
-        eq(controlPlaneNodes.id, controlPlaneNodeId()),
-        eq(controlPlaneNodes.instanceId, controlPlaneInstanceId),
-        isNotNull(controlPlaneNodes.drainRequestedAt),
-      ),
-    )
-    .catch((error: unknown): void => {
-      log.warn("Unable to record drained control-plane node", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+async function persistDrainedAt(at: number): Promise<boolean> {
+  try {
+    const updated = await db
+      .update(controlPlaneNodes)
+      .set({ status: "drained", drainedAt: at, lastHeartbeatAt: at })
+      .where(
+        and(
+          eq(controlPlaneNodes.id, controlPlaneNodeId()),
+          eq(controlPlaneNodes.instanceId, controlPlaneInstanceId),
+          isNotNull(controlPlaneNodes.drainRequestedAt),
+        ),
+      )
+      .returning({ id: controlPlaneNodes.id });
+    return updated.length > 0;
+  } catch (error: unknown) {
+    log.warn("Unable to record drained control-plane node", {
+      error: error instanceof Error ? error.message : String(error),
     });
+    return false;
+  }
 }
 
 function scheduleCompletionCheck(): void {
@@ -145,21 +155,42 @@ function clearCompletionCheck(): void {
   completionTimer = undefined;
 }
 
+async function quiesceCoordinatorForDrain(): Promise<void> {
+  const activity = activityProbe();
+
+  // Assessments are coordinator-owned and do not have independent execution
+  // leases. A leader keeps renewing while an assessment finishes so a new
+  // coordinator cannot reconcile the same live assessment as interrupted.
+  if (isControlPlaneCoordinatorLeader() && activity.activeAssessments > 0) return;
+
+  if (controlPlaneCoordinatorSuspended()) return;
+  await resignControlPlaneLease().catch((error: unknown): void => {
+    log.warn("Coordinator resignation during drain failed; waiting for lease expiry", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 /**
- * Promote DRAINING to DRAINED once nothing local is still owned. Exported so
- * callers (and tests) can force an immediate evaluation rather than waiting
- * for the poll.
+ * Promote DRAINING to DRAINED once local work has settled and the node cannot
+ * re-enter coordinator election.
  */
 export async function evaluateNodeDrainCompletion(): Promise<NodeDrainPhase> {
   if (phase !== "draining") return phase;
+  await quiesceCoordinatorForDrain();
   if (!drainComplete()) {
     scheduleCompletionCheck();
     return phase;
   }
+  const completedAt = await databaseCurrentTimeMs().catch((): number => Date.now());
+  if (!(await persistDrainedAt(completedAt))) {
+    scheduleCompletionCheck();
+    return phase;
+  }
+
   clearCompletionCheck();
   phase = "drained";
-  drainedAt = await databaseCurrentTimeMs().catch((): number => Date.now());
-  await persistDrainedAt(drainedAt);
+  drainedAt = completedAt;
   log.info("Control-plane node drained; safe to terminate", {
     nodeId: controlPlaneNodeId(),
     requestedBy,
@@ -168,15 +199,7 @@ export async function evaluateNodeDrainCompletion(): Promise<NodeDrainPhase> {
   return phase;
 }
 
-/**
- * Enter DRAINING on this node.
- *
- * Coordinator ownership is relinquished first and explicitly. Waiting for the
- * 15s lease TTL to lapse is correct but needlessly slow for planned
- * maintenance; resigning lets a follower win the existing atomic claim right
- * away. This is leader resignation, not leader transfer: no successor is
- * nominated, so no second consensus mechanism is introduced.
- */
+/** Enter local DRAINING state for an already-recorded drain request. */
 export async function beginLocalNodeDrain(
   options: Readonly<{ requestedBy?: string | null; reason?: string | null }> = {},
 ): Promise<NodeDrainSnapshot> {
@@ -190,13 +213,6 @@ export async function beginLocalNodeDrain(
       nodeId: controlPlaneNodeId(),
       requestedBy,
       reason,
-    });
-    await resignControlPlaneLease().catch((error: unknown): void => {
-      // A failed resignation is not fatal: the lease still expires on its own
-      // TTL and the local scheduler generation has already stopped.
-      log.warn("Coordinator resignation during drain failed; falling back to lease expiry", {
-        error: error instanceof Error ? error.message : String(error),
-      });
     });
   }
   await evaluateNodeDrainCompletion();
@@ -218,6 +234,54 @@ export async function cancelLocalNodeDrain(): Promise<NodeDrainSnapshot> {
   return nodeDrainSnapshot();
 }
 
+async function wakeDrainTarget(
+  targetNodeId: string,
+  requestedBy: string | null,
+  drainReason: string | null,
+): Promise<void> {
+  publish(NODE_DRAIN_TOPIC, {
+    nodeId: targetNodeId,
+    drain: true,
+    requestedBy,
+    reason: drainReason,
+  });
+  if (targetNodeId === controlPlaneNodeId()) {
+    await beginLocalNodeDrain({ requestedBy, reason: drainReason });
+  }
+}
+
+async function persistDrainRequest(
+  targetNodeId: string,
+  requestedBy: string | null,
+  drainReason: string | null,
+): Promise<boolean> {
+  const now = await databaseCurrentTimeMs();
+  const updated = await db
+    .update(controlPlaneNodes)
+    .set({
+      // Protocol-1 nodes treat "draining" as immediately replaceable.
+      status: "maintenance",
+      drainRequestedAt: now,
+      drainRequestedBy: requestedBy,
+      drainReason,
+      drainedAt: null,
+    })
+    .where(and(eq(controlPlaneNodes.id, targetNodeId), isNull(controlPlaneNodes.drainRequestedAt)))
+    .returning({ id: controlPlaneNodes.id });
+  return updated.length > 0;
+}
+
+async function drainRequestExists(targetNodeId: string): Promise<boolean> {
+  const current = await db.query.controlPlaneNodes.findFirst({
+    where: eq(controlPlaneNodes.id, targetNodeId),
+    columns: { drainRequestedAt: true },
+  });
+  return current !== undefined && current.drainRequestedAt !== null;
+}
+
+function supportsNodeDrain(protocolVersion: number | null): boolean {
+  return (protocolVersion ?? 1) >= 2;
+}
 /**
  * Record an operator's drain request for any node and wake that node now.
  * Callable from any replica: the row is the durable record of intent and the
@@ -226,36 +290,37 @@ export async function cancelLocalNodeDrain(): Promise<NodeDrainSnapshot> {
 export async function requestNodeDrain(
   targetNodeId: string,
   options: Readonly<{ requestedBy?: string | null; reason?: string | null }> = {},
-): Promise<boolean> {
-  const now = await databaseCurrentTimeMs();
-  const updated = await db
-    .update(controlPlaneNodes)
-    .set({
-      status: "draining",
-      drainRequestedAt: now,
-      drainRequestedBy: options.requestedBy ?? null,
-      drainReason: options.reason ?? null,
-      drainedAt: null,
-    })
-    .where(eq(controlPlaneNodes.id, targetNodeId))
-    .returning({ id: controlPlaneNodes.id });
-  if (updated.length === 0) return false;
-
-  publish(NODE_DRAIN_TOPIC, {
-    nodeId: targetNodeId,
-    drain: true,
-    requestedBy: options.requestedBy ?? null,
-    reason: options.reason ?? null,
+): Promise<NodeDrainRequestResult> {
+  const target = await db.query.controlPlaneNodes.findFirst({
+    where: eq(controlPlaneNodes.id, targetNodeId),
+    columns: {
+      protocolVersion: true,
+      drainRequestedAt: true,
+      drainRequestedBy: true,
+      drainReason: true,
+    },
   });
-  if (targetNodeId === controlPlaneNodeId()) {
-    await beginLocalNodeDrain({ requestedBy: options.requestedBy ?? null, reason: options.reason ?? null });
+  if (target === undefined) return "not-found";
+
+  if (!supportsNodeDrain(target.protocolVersion)) return "unsupported";
+
+  if (target.drainRequestedAt !== null) {
+    await wakeDrainTarget(targetNodeId, target.drainRequestedBy, target.drainReason);
+    return "requested";
   }
-  return true;
+
+  const requestedBy = options.requestedBy ?? null;
+  const drainReason = options.reason ?? null;
+  if (!(await persistDrainRequest(targetNodeId, requestedBy, drainReason))) {
+    return (await drainRequestExists(targetNodeId)) ? "requested" : "not-found";
+  }
+
+  await wakeDrainTarget(targetNodeId, requestedBy, drainReason);
+  return "requested";
 }
 
 /** Clear a recorded drain request and return the node to service. */
 export async function cancelNodeDrain(targetNodeId: string): Promise<boolean> {
-  const now = await databaseCurrentTimeMs();
   const updated = await db
     .update(controlPlaneNodes)
     .set({
@@ -264,9 +329,8 @@ export async function cancelNodeDrain(targetNodeId: string): Promise<boolean> {
       drainRequestedBy: null,
       drainReason: null,
       drainedAt: null,
-      lastHeartbeatAt: now,
     })
-    .where(eq(controlPlaneNodes.id, targetNodeId))
+    .where(and(eq(controlPlaneNodes.id, targetNodeId), isNotNull(controlPlaneNodes.drainRequestedAt)))
     .returning({ id: controlPlaneNodes.id });
   if (updated.length === 0) return false;
 
@@ -291,11 +355,7 @@ function handleDrainEvent(payload: Readonly<Record<string, unknown>>): void {
   });
 }
 
-/**
- * Adopt a drain request recorded against this node while it was not running
- * (or that arrived while NOTIFY was unavailable). Called from the heartbeat so
- * intent is never silently lost.
- */
+/** Reconcile the local phase with the drain request persisted on the node row. */
 export async function reconcileRecordedDrainRequest(): Promise<void> {
   const row = await db.query.controlPlaneNodes
     .findFirst({
@@ -329,8 +389,9 @@ export function resetNodeDrainStateForTests(): void {
   requestedBy = null;
   reason = null;
   drainedAt = null;
-  activityProbe = (): { activeRunExecutions: number; activeDurableJobs: number } => ({
+  activityProbe = (): { activeRunExecutions: number; activeAssessments: number; activeDurableJobs: number } => ({
     activeRunExecutions: 0,
+    activeAssessments: 0,
     activeDurableJobs: 0,
   });
 }

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
+import { isPostgres } from "../../src/db/driver";
 import { controlPlaneLeases } from "../../src/db/schema";
 import {
+  assertControlPlaneCoordinatorFenceTx,
   CONTROL_PLANE_LEASE_NAME,
   claimControlPlaneLease,
   controlPlaneCoordinatorState,
@@ -12,6 +14,7 @@ import {
   resumeControlPlaneCoordinator,
   runControlPlaneCoordinatorTickForTests,
   startControlPlaneCoordinator,
+  StaleControlPlaneCoordinatorFenceError,
   stopControlPlaneCoordinator,
 } from "../../src/lib/control-plane-coordinator";
 import { controlPlaneInstanceId } from "../../src/lib/ha-config";
@@ -25,6 +28,7 @@ import {
 
 const identityA = { nodeId: "node-a", instanceId: "instance-a" };
 const identityB = { nodeId: "node-b", instanceId: "instance-b" };
+const postgresTest = isPostgres ? test : test.skip;
 const originalHaEnabled = process.env["TERRENCE_HA_ENABLED"];
 const originalDisableWorker = process.env["TERRENCE_DISABLE_WORKER"];
 const originalNodeId = process.env["TERRENCE_NODE_ID"];
@@ -117,18 +121,26 @@ describe("control-plane coordinator leases", () => {
     });
   });
 
-  test("stops scheduler ownership without revoking an independently leased execution", async () => {
+  test("stops scheduler and assessment work without revoking an independently leased run", async () => {
     process.env["TERRENCE_HA_ENABLED"] = "true";
     process.env["TERRENCE_DISABLE_WORKER"] = "false";
     process.env["TERRENCE_NODE_ID"] = "node-a";
 
     let leadershipLost = 0;
-    let killCalls = 0;
+    let runKillCalls = 0;
+    let assessmentKillCalls = 0;
     const runId = "coordinator-lease-loss-" + crypto.randomUUID();
     trackRunProcessForTests(runId, {
       pid: null,
       kill: (): void => {
-        killCalls += 1;
+        runKillCalls += 1;
+      },
+      exited: new Promise<number>(() => undefined),
+    });
+    trackRunProcessForTests(`assessment-${crypto.randomUUID()}`, {
+      pid: null,
+      kill: (): void => {
+        assessmentKillCalls += 1;
       },
       exited: new Promise<number>(() => undefined),
     });
@@ -165,13 +177,54 @@ describe("control-plane coordinator leases", () => {
       fencingEpoch: 2,
     });
     expect(coordinatorWorkerRunningForTests()).toBe(false);
-    // Phase 2 run/workspace execution leases are independent of the scheduler
-    // coordinator. The run self-fences only if its own lease is lost.
-    expect(killCalls).toBe(0);
+    // Run/workspace execution leases remain independent of the scheduler,
+    // while coordinator-owned assessments are fenced immediately.
+    expect(runKillCalls).toBe(0);
+    expect(assessmentKillCalls).toBe(1);
+  });
+
+  postgresTest("transactional coordinator fence rejects a stale epoch", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    const epoch = controlPlaneCoordinatorState().fencingEpoch;
+    expect(epoch).toBe(1);
+    if (epoch === null) throw new Error("expected coordinator epoch");
+
+    await db.transaction(async (transaction): Promise<void> => {
+      await assertControlPlaneCoordinatorFenceTx(transaction, epoch);
+    });
+
+    const now = Date.now();
+    await db
+      .update(controlPlaneLeases)
+      .set({
+        ownerNodeId: "node-b",
+        ownerInstanceId: "other-instance",
+        fencingEpoch: epoch + 1,
+        expiresAt: now + 60_000,
+        heartbeatAt: now,
+      })
+      .where(eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME));
+
+    let staleError: unknown;
+    try {
+      await db.transaction(async (transaction): Promise<void> => {
+        await assertControlPlaneCoordinatorFenceTx(transaction, epoch);
+      });
+    } catch (error: unknown) {
+      staleError = error;
+    }
+    expect(staleError).toBeInstanceOf(StaleControlPlaneCoordinatorFenceError);
   });
 });
 
-describe("coordinator resignation (HA-3C)", () => {
+describe("coordinator resignation", () => {
   test("resigning expires the lease so a follower can claim without waiting out the TTL", async () => {
     process.env["TERRENCE_HA_ENABLED"] = "true";
     process.env["TERRENCE_DISABLE_WORKER"] = "false";
@@ -219,8 +272,7 @@ describe("coordinator resignation (HA-3C)", () => {
     expect(controlPlaneCoordinatorState().role).toBe("leader");
     await resignControlPlaneLease();
 
-    // Without suspension the very next renewal tick would take the lease
-    // straight back and silently undo the drain.
+    // Suspension prevents the next renewal tick from taking the lease back.
     await runControlPlaneCoordinatorTickForTests();
     expect(controlPlaneCoordinatorState().role).not.toBe("leader");
 
@@ -279,5 +331,26 @@ describe("coordinator resignation (HA-3C)", () => {
     // else's ownership by resigning.
     expect(lease).toMatchObject({ ownerNodeId: "node-b", fencingEpoch: 1 });
     expect(lease?.expiresAt).toBe(85_000);
+  });
+
+  test("a drain suspension requested before election startup is preserved", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    expect(await resignControlPlaneLease()).toBe(false);
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    await runControlPlaneCoordinatorTickForTests();
+
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+    expect(controlPlaneCoordinatorState().role).toBe("follower");
+    expect(
+      await db.query.controlPlaneLeases.findFirst({ where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME) }),
+    ).toBeUndefined();
   });
 });

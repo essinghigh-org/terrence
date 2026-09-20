@@ -1,28 +1,9 @@
-/**
- * HA-3A: mixed-version compatibility for rolling upgrades.
+/** Mixed-version compatibility for rolling HA upgrades.
  *
- * Phase 1 and 2 answer "what happens when a replica fails?". This module
- * answers the different question a deployment asks: "may these two binaries
- * serve the same database at the same time?".
- *
- * Two separate versions are tracked because they change at different rates:
- *
- *   application version  marketing/release identity (1.4.0, 1.5.1, ...)
- *   HA protocol version  distributed semantics (leases, fencing, control
- *                        events, node registry, durable-job payloads)
- *
- * Two application releases that do not change distributed semantics share one
- * protocol version and may coexist freely. A release that does change them
- * bumps `HA_PROTOCOL_VERSION`, and declares how far back it is still willing to
- * interoperate with `HA_MIN_COMPATIBLE_PROTOCOL_VERSION`.
- *
- * Compatibility is an intersection of two advertised windows rather than a
- * one-sided check, so both the joining node and the incumbent peers get a veto:
+ * Application versions enforce the supported release skew. Protocol versions
+ * cover cross-replica semantics and are checked in both directions:
  *
  *   compatible(a, b) <=> a.protocol >= b.minProtocol && b.protocol >= a.minProtocol
- *
- * That is what makes `N <-> N-1` supportable without supporting arbitrary skew:
- * release N ships `min = N-1`, so N and N-1 intersect, while N and N-2 do not.
  */
 
 /**
@@ -33,7 +14,7 @@
  * or payload shapes, node registry fields another replica reads, durable-job
  * payload shapes, or any enum-like status value a peer must recognise.
  */
-export const HA_PROTOCOL_VERSION = 1;
+export const HA_PROTOCOL_VERSION = 2;
 
 /**
  * Oldest protocol this release will serve alongside.
@@ -85,13 +66,7 @@ export function localProtocolIdentity(nodeId: string, applicationVersion: string
 
 export type ReleaseVersion = Readonly<{ major: number; minor: number; patch: number }>;
 
-/**
- * Parse a release identity. Development builds ("dev", a git SHA, a channel
- * suffix) deliberately return null: an unparseable version is not evidence of
- * incompatibility, and refusing to start a developer build against a released
- * peer would make local debugging of an HA cluster impossible. Protocol
- * versions, which every build does advertise, remain authoritative.
- */
+/** Parse a released semantic version. Development/non-release identities return null and use protocol-only compatibility. */
 export function parseReleaseVersion(value: string | null | undefined): ReleaseVersion | null {
   if (typeof value !== "string") return null;
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value.trim());
@@ -101,13 +76,8 @@ export function parseReleaseVersion(value: string | null | undefined): ReleaseVe
   return { major, minor, patch };
 }
 
-/**
- * Advisory release-window check: same major, at most one minor apart. This is
- * reported for operator visibility but is not by itself a startup veto,
- * because the protocol version is the semantic contract. A release that
- * genuinely breaks N-1 must bump the protocol version rather than relying on
- * its minor number.
- */
+/** Same major and at most one minor apart. Development builds skip this
+ * release-number check and remain governed by the HA protocol window. */
 export function withinRollingReleaseWindow(left: string | null | undefined, right: string | null | undefined): boolean {
   const a = parseReleaseVersion(left);
   const b = parseReleaseVersion(right);
@@ -116,13 +86,7 @@ export function withinRollingReleaseWindow(left: string | null | undefined, righ
   return Math.abs(a.minor - b.minor) <= 1;
 }
 
-/**
- * A peer row written before this feature shipped has no protocol columns. Such
- * a peer is, by definition, running the release that introduced protocol 1, so
- * treat a missing value as protocol 1 rather than as a hard failure. This is
- * the expand half of expand/migrate/contract applied to the node registry
- * itself: the column can be read by new nodes before every old node writes it.
- */
+/** Rows written before HA protocol metadata existed are protocol 1. */
 function peerProtocol(peer: ClusterPeer): { protocol: number; min: number } {
   return {
     protocol: peer.protocolVersion ?? 1,
@@ -130,20 +94,7 @@ function peerProtocol(peer: ClusterPeer): { protocol: number; min: number } {
   };
 }
 
-function describePeer(peer: ClusterPeer): string {
-  const version = peer.applicationVersion ?? "unknown";
-  const { protocol } = peerProtocol(peer);
-  return `${peer.nodeId} (${version}, HA protocol ${String(protocol)})`;
-}
-
-/**
- * Evaluate whether this node may join the live cluster.
- *
- * `peers` should contain only nodes whose heartbeat is still fresh; a stale
- * row describes a replica that has already been replaced and must not block a
- * rollout. The local node is excluded by the caller so that a node never
- * refuses to start because of its own previous row.
- */
+/** Evaluate this node against the supplied fresh peer rows. */
 export function evaluateClusterCompatibility(
   local: LocalProtocolIdentity,
   peers: readonly ClusterPeer[],
@@ -152,7 +103,6 @@ export function evaluateClusterCompatibility(
   let oldest = local.protocolVersion;
 
   for (const peer of peers) {
-    if (peer.nodeId === local.nodeId) continue;
     const { protocol, min } = peerProtocol(peer);
     oldest = Math.min(oldest, protocol);
 
@@ -173,8 +123,18 @@ export function evaluateClusterCompatibility(
         applicationVersion: peer.applicationVersion,
         protocolVersion: protocol,
         reason:
-          `peer requires at least HA protocol ${String(min)} but this release speaks ` +
-          String(local.protocolVersion),
+          `peer requires at least HA protocol ${String(min)} but this release speaks ` + String(local.protocolVersion),
+      });
+      continue;
+    }
+    if (!withinRollingReleaseWindow(local.applicationVersion, peer.applicationVersion)) {
+      incompatiblePeers.push({
+        nodeId: peer.nodeId,
+        applicationVersion: peer.applicationVersion,
+        protocolVersion: protocol,
+        reason:
+          `application version ${peer.applicationVersion ?? "unknown"} is outside the supported N/N-1 window for ` +
+          local.applicationVersion,
       });
     }
   }
@@ -192,17 +152,12 @@ export function evaluateClusterCompatibility(
     };
   }
 
-  const skewed = peers.filter(
-    (peer): boolean =>
-      peer.nodeId !== local.nodeId && !withinRollingReleaseWindow(local.applicationVersion, peer.applicationVersion),
-  );
-  const summary =
-    skewed.length > 0
-      ? `HA protocol ${String(local.protocolVersion)} is compatible, but ${String(skewed.length)} peer(s) are outside ` +
-        `the N/N-1 release window: ${skewed.map(describePeer).join(", ")}`
-      : `HA protocol ${String(local.protocolVersion)} is compatible with ${String(peers.length)} live peer(s)`;
-
-  return { compatible: true, oldestPeerProtocolVersion: oldest, incompatiblePeers: [], summary };
+  return {
+    compatible: true,
+    oldestPeerProtocolVersion: oldest,
+    incompatiblePeers: [],
+    summary: `HA protocol ${String(local.protocolVersion)} is compatible with ${String(peers.length)} live peer(s)`,
+  };
 }
 
 export class ClusterProtocolIncompatibleError extends Error {

@@ -60,16 +60,13 @@ const POLL_MS = 500;
 /** Attempts before a durable job dead-letters (todo 186); shared with the webhook delivery mirror. */
 export const DURABLE_MAX_ATTEMPTS = 3;
 let workerRunning = false;
-/**
- * In-flight durable jobs owned by this process. A node drain (HA-3C) is only
- * complete once this reaches zero, so the count must cover the whole handler
- * lifetime rather than just the claim.
- */
+/** Durable-job handlers and claims that still block node drain completion. */
 let activeDurableJobs = 0;
+let activeDurableClaims = 0;
 const NO_EXISTING_DURABLE_JOB = Symbol("no-existing-durable-job");
 
 export function activeDurableJobCount(): number {
-  return activeDurableJobs;
+  return activeDurableJobs + activeDurableClaims;
 }
 
 /** A queue admission failure is explicit and carries a retry hint. */
@@ -588,19 +585,32 @@ export function startDurableJobWorker(handlers: Readonly<Partial<Record<DurableJ
       schedulePoll();
       return;
     }
+    let claimCounted = false;
     try {
+      activeDurableClaims += 1;
+      claimCounted = true;
       const job = await claimDurableJob(workerId, kinds);
-      if (job !== undefined) {
+      if (job === undefined) {
+        activeDurableClaims -= 1;
+        claimCounted = false;
+      } else {
         const handler = handlers[job.kind as DurableJobKind];
         if (handler === undefined) {
           await finishDurableJob(job, "failed", `No handler registered for ${job.kind}`);
+          activeDurableClaims -= 1;
+          claimCounted = false;
         } else {
+          // runJob increments activeDurableJobs synchronously before its first
+          // await, so there is no zero-activity gap between claim and handler.
+          activeDurableClaims -= 1;
+          claimCounted = false;
           await runJob(job, handler);
         }
       }
     } catch (error: unknown) {
       log.error("Durable job poll failed", { error: String(error) });
     } finally {
+      if (claimCounted) activeDurableClaims -= 1;
       schedulePoll();
     }
   };
