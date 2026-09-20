@@ -126,6 +126,11 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
     expect(active?.status).toBe("active");
     expect(active?.drainRequestedAt).toBeNull();
     expect(active?.lastHeartbeatAt).toBe(heartbeatAt);
+
+    const noRecordedDrain = await systemRequest(`/api/v1/nodes/${nodeId}/drain`, { method: "DELETE" });
+    expect(noRecordedDrain.status).toBe(404);
+    const missingBody = await noRecordedDrain.json();
+    expect(missingBody.errors?.[0]?.detail).toContain("unknown or has no recorded drain request");
   });
 
   test("remote drain rejects a live pre-HA3 node instead of recording ignored intent", async () => {

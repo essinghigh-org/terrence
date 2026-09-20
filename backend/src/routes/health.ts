@@ -1032,7 +1032,7 @@ async function persistReadinessNode(
   const drain = nodeDrainSnapshot();
   // DRAINED is written only after local run, assessment, durable-job, and coordinator work is clear.
   const nodeStatus =
-    status === "ERROR" ? "error" : drain.phase === "drained" ? "drained" : draining ? "maintenance" : "active";
+    drain.phase === "drained" ? "drained" : status === "ERROR" ? "error" : draining ? "maintenance" : "active";
   const values = {
     hostname: nodeId,
     address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
@@ -1441,7 +1441,15 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
       const canceled = await cancelNodeDrain(params.id);
       if (!canceled) {
         (set as { status: number }).status = 404;
-        return { errors: [{ status: "404", title: "Not Found", detail: `Unknown control-plane node ${params.id}` }] };
+        return {
+          errors: [
+            {
+              status: "404",
+              title: "Not Found",
+              detail: `Control-plane node ${params.id} is unknown or has no recorded drain request`,
+            },
+          ],
+        };
       }
       return { data: { id: params.id, type: "node-drains", attributes: { phase: "active" } } };
     },

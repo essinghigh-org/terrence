@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${BASE_SHA:?BASE_SHA is required}"
 : "${DATABASE_URL:?DATABASE_URL is required}"
 
+# Last release commit that speaks HA protocol 1. Update this pin when the
+# minimum compatible protocol advances.
+protocol_1_fixture_sha="${HA_PROTOCOL_1_FIXTURE_SHA:-cd0037c6dcfc8532c7d4c1bf0ed52c503b41f534}"
+
 root="$(git rev-parse --show-toplevel)"
-base_dir="${RUNNER_TEMP:-/tmp}/terrence-ha-base-$$"
+base_dir="${RUNNER_TEMP:-/tmp}/terrence-ha-protocol1-$$"
 storage_dir="${RUNNER_TEMP:-/tmp}/terrence-ha-storage-$$"
 log_dir="${RUNNER_TEMP:-/tmp}/terrence-ha-logs-$$"
 old_port=38181
@@ -36,7 +39,13 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$storage_dir" "$log_dir"
-git -C "$root" worktree add --detach "$base_dir" "$BASE_SHA" >/dev/null
+if ! git -C "$root" cat-file -e "$protocol_1_fixture_sha^{commit}"; then
+  echo "Pinned HA protocol-1 fixture is unavailable: $protocol_1_fixture_sha" >&2
+  exit 1
+fi
+# The protocol-1 fixture predates explicit protocol columns; HA-3 deliberately
+# interprets missing/null protocol metadata as protocol 1 during first upgrade.
+git -C "$root" worktree add --detach "$base_dir" "$protocol_1_fixture_sha" >/dev/null
 (
   cd "$base_dir"
   bun install --frozen-lockfile >/dev/null
@@ -103,6 +112,46 @@ wait_health() {
   return 1
 }
 
+create_system_token() {
+  (
+    cd "$root/backend"
+    env "${common_env[@]}" bun -e '
+      const { createSystemApiToken } = await import("./src/lib/system-api");
+      const created = await createSystemApiToken("HA mixed-version smoke", 1);
+      process.stdout.write(created.token);
+    '
+  )
+}
+
+protocol_rows_json() {
+  (
+    cd "$root/backend"
+    env DATABASE_URL="$DATABASE_URL" bun -e '
+      const { SQL } = await import("bun");
+      const client = new SQL(process.env.DATABASE_URL);
+      try {
+        const rows = await client.unsafe(
+          "SELECT id, COALESCE(protocol_version, 1)::int AS protocol FROM control_plane_nodes WHERE id IN ($1, $2) ORDER BY id",
+          ["ha-n-1", "ha-n"],
+        );
+        process.stdout.write(JSON.stringify(rows));
+      } finally {
+        await client.close();
+      }
+    '
+  )
+}
+
+assert_system_readiness() {
+  local system_port="$1"
+  local node_id="$2"
+  local token="$3"
+  curl --fail --silent \
+    -H "Authorization: Bearer $token" \
+    "http://127.0.0.1:$system_port/api/v1/nodes/readiness" |
+    jq -e --arg node_id "$node_id" '.data | any(.id == $node_id and .attributes.status == "OK")' >/dev/null
+}
+
 start_node "$base_dir" "ha-n-1" "$base_version" "$old_port" "$log_dir/old.log"
 old_pid=$started_pid
 wait_health "$old_port" "$log_dir/old.log" "$old_pid"
@@ -111,8 +160,21 @@ start_node "$root" "ha-n" "$next_version" "$new_port" "$log_dir/new.log"
 new_pid=$started_pid
 wait_health "$new_port" "$log_dir/new.log" "$new_pid"
 
-# N-1 must remain ready after N applies its additive schema migration.
+# Protocol 1 must remain ready after protocol 2 applies its additive schema migration.
 curl --fail --silent "http://127.0.0.1:$old_port/healthz" >/dev/null
 curl --fail --silent "http://127.0.0.1:$new_port/healthz" >/dev/null
 
-echo "Mixed-version HA smoke passed: $BASE_SHA ($base_version/protocol 1) and HEAD ($next_version/protocol 2)."
+protocols="$(protocol_rows_json)"
+if ! jq -e '
+  length == 2 and
+  (map({key: .id, value: .protocol}) | from_entries) == {"ha-n-1": 1, "ha-n": 2}
+' <<<"$protocols" >/dev/null; then
+  echo "Unexpected HA protocol registrations: $protocols" >&2
+  exit 1
+fi
+
+system_token="$(create_system_token)"
+assert_system_readiness "$((old_port + 100))" "ha-n-1" "$system_token"
+assert_system_readiness "$((new_port + 100))" "ha-n" "$system_token"
+
+echo "Mixed-version HA smoke passed: $protocol_1_fixture_sha ($base_version/protocol 1) and HEAD ($next_version/protocol 2)."

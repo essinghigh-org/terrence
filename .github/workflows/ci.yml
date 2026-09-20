@@ -128,9 +128,8 @@ jobs:
           bun-version: 1.4.2
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Run current/base HA compatibility smoke
+      - name: Run protocol-1/protocol-2 HA compatibility smoke
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_mixed
         run: bash scripts/ha-mixed-version-smoke.sh
   frontend:

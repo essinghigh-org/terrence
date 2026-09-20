@@ -298,6 +298,24 @@ haTest(
       const duplicateLog = await readFile(duplicate.logPath, "utf8");
       expect(duplicateLog).toContain("already registered by another live control-plane instance");
 
+      // Leave a coordinator-owned assessment in the running state. The
+      // successor must reconcile it before its scheduler begins polling, so it
+      // cannot permanently consume HEALTH_ASSESSMENT_CONCURRENCY after failover.
+      const assessmentOrgId = `ha-assessment-org-${crypto.randomUUID()}`;
+      const assessmentWorkspaceId = `ha-assessment-ws-${crypto.randomUUID()}`;
+      const assessmentId = `ha-assessment-${crypto.randomUUID()}`;
+      await cluster.unsafe("INSERT INTO organizations (id, name) VALUES ($1, $2)", [assessmentOrgId, assessmentOrgId]);
+      await cluster.unsafe("INSERT INTO workspaces (id, name, org_id, created_at) VALUES ($1, $2, $3, $4)", [
+        assessmentWorkspaceId,
+        assessmentWorkspaceId,
+        assessmentOrgId,
+        Date.now(),
+      ]);
+      await cluster.unsafe(
+        "INSERT INTO assessment_results (id, workspace_id, status, created_at) VALUES ($1, $2, 'running', $3)",
+        [assessmentId, assessmentWorkspaceId, Date.now()],
+      );
+
       const leader = replicas.find(
         (replica): boolean => replica.id === initialLease?.owner_node_id && replica.proc.exitCode === null,
       );
@@ -324,6 +342,17 @@ haTest(
       if (replacement === undefined) throw new Error("expected coordinator failover");
       expect(replacement.owner_node_id).not.toBe(initialLease.owner_node_id);
       expect(numeric(replacement.fencing_epoch)).toBeGreaterThanOrEqual(2);
+
+      let assessmentStatus: string | undefined;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const rows = (await cluster.unsafe("SELECT status FROM assessment_results WHERE id = $1", [
+          assessmentId,
+        ])) as unknown as { status: string }[];
+        assessmentStatus = rows[0]?.status;
+        if (assessmentStatus === "errored") break;
+        await sleep(125);
+      }
+      expect(assessmentStatus).toBe("errored");
 
       const survivors = replicas.filter(
         (replica): boolean =>

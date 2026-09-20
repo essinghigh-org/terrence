@@ -7776,7 +7776,7 @@ async function errorInterruptedAssessment(assessmentId: string): Promise<boolean
     .update(assessmentResults)
     .set({
       status: "errored",
-      errorMessage: "Terrence restarted during this health assessment",
+      errorMessage: "Terrence was interrupted during this health assessment",
       completedAt: Date.now(),
     })
     .where(and(eq(assessmentResults.id, assessmentId), eq(assessmentResults.status, "running")))
@@ -7795,9 +7795,10 @@ async function errorInterruptedAssessment(assessmentId: string): Promise<boolean
 }
 
 async function errorInterruptedAssessments(): Promise<number> {
-  // Running assessments die with the process too; they count against the
-  // assessment concurrency budget, so error them and let the next discovery
-  // cycle create a fresh pending result.
+  // This runs on process startup and on every coordinator acquisition before
+  // the scheduler starts. Any assessment left running by the previous owner
+  // is errored before pollAssessmentQueue can count it against concurrency.
+  // The next discovery cycle creates a fresh pending result.
   const runningAssessments = await db.query.assessmentResults.findMany({
     where: eq(assessmentResults.status, "running"),
     columns: { id: true },
