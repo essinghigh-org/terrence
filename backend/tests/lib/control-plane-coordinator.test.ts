@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
 import { isPostgres } from "../../src/db/driver";
@@ -32,6 +32,11 @@ const postgresTest = isPostgres ? test : test.skip;
 const originalHaEnabled = process.env["TERRENCE_HA_ENABLED"];
 const originalDisableWorker = process.env["TERRENCE_DISABLE_WORKER"];
 const originalNodeId = process.env["TERRENCE_NODE_ID"];
+
+beforeEach(async (): Promise<void> => {
+  await stopControlPlaneCoordinator();
+  await db.delete(controlPlaneLeases).where(eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME));
+});
 
 afterEach(async (): Promise<void> => {
   await stopControlPlaneCoordinator();
