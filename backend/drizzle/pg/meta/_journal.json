@@ -456,6 +456,13 @@
       "when": 1789857431267,
       "tag": "0064_fluffy_tag",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790038764819,
+      "tag": "0065_purple_sabretooth",
+      "breakpoints": true
     }
   ]
 }

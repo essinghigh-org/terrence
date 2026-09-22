@@ -49,6 +49,7 @@ jobs:
           BRANCH="chore/provider-surface-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
           git checkout -B "$BRANCH"
           git add backend/src/data/provider_surface.json backend/tests/e2e/provider_surface.json
           git commit -m "chore: refresh provider surface to ${VERSION}"
