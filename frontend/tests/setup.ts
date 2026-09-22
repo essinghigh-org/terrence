@@ -16,7 +16,14 @@ let customLocation: unknown;
 const win = new Proxy(jsdom.window, {
   get(target, prop, receiver) {
     if (prop === "location" && customLocation !== undefined) return customLocation;
-    return Reflect.get(target, prop, receiver);
+    const value = Reflect.get(target, prop, receiver);
+    // jsdom 30.1 tightened WebIDL brand checks for EventTarget. Calling these
+    // methods through the location-overriding Proxy otherwise supplies the
+    // Proxy as `this`, which is not a valid jsdom Window/EventTarget wrapper.
+    if (prop === "dispatchEvent" || prop === "addEventListener" || prop === "removeEventListener") {
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+    return value;
   },
   set(target, prop, value, receiver) {
     if (prop === "location") {
