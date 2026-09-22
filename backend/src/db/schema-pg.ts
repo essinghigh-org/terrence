@@ -2304,6 +2304,10 @@ export const scimSettings = pgTable("scim_settings", {
   siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => pgSchema["scimGroups"]!["id"], {
     onDelete: "set null",
   }),
+  // Keep this nullable column unconstrained during the rolling-upgrade
+  // expansion. The FK can be added in a later contract migration once the
+  // previous release is outside the supported skew window.
+  siteAuditorGroupScimId: text("site_auditor_group_scim_id"),
   updatedAt: bigint("updated_at", { mode: "number" })
     .notNull()
     .$defaultFn(() => sqliteSchema["scimSettings"]["updatedAt"].defaultFn!()),
@@ -2822,6 +2826,7 @@ export const users = pgTable(
     deletedEmailHash: text("deleted_email_hash"),
     emailVerifiedAt: bigint("email_verified_at", { mode: "number" }),
     scimSiteAdmin: boolean("scim_site_admin").notNull().default(false),
+    scimSiteAuditor: boolean("scim_site_auditor").notNull().default(false),
   },
   (table) => [uniqueIndex("users_sso_identity_idx").on(table["ssoProvider"], table["ssoSubject"])],
 );
