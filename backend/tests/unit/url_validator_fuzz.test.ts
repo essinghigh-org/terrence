@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
+import * as fc from "fast-check";
 import { validateExternalUrl } from "../../src/lib/utils";
 import { resolveExternalUrl, validateExternalUrlResolved, type HostResolver } from "../../src/lib/url-safety";
 
 /**
  * Fuzz coverage for the outbound URL validators (review item 22.5).
  *
- * A seeded PRNG (deterministic across runs and CI hosts) generates
- * adversarial URLs from a grammar covering the review's list: IPv4 odd
+ * fast-check generates adversarial URLs from a grammar covering the
+ * review's list: IPv4 odd
  * forms, IPv6, IPv4-mapped IPv6, encoded hostnames, userinfo, plus
  * trailing dots, scheme variants and DNS-rebinding wrapper domains.
  *
@@ -18,18 +19,6 @@ import { resolveExternalUrl, validateExternalUrlResolved, type HostResolver } fr
  *     non-http(s) schemes and unparseable URLs,
  *   - blocked results only use the documented error messages.
  */
-
-/** mulberry32: tiny seeded PRNG, deterministic per seed. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return (): number => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const PRIVATE_V4 = [
   "127.0.0.1",
@@ -119,6 +108,9 @@ const PUBLIC_HOSTS = [
 
 const PRIVATE_POOLS: readonly string[][] = [PRIVATE_V4, ODD_V4_PRIVATE, PRIVATE_V6, LOCALHOST];
 const PUBLIC_POOLS: readonly string[][] = [PUBLIC_V4, PUBLIC_V6, PUBLIC_HOSTS];
+const SCHEMES = ["http", "https", "ftp", "file", "javascript", "ws"] as const;
+const PATHS = ["", "/", "/path/to/resource", "/%2e%2e/x?q=1#frag", "?a=b&c=d", "/:8080"] as const;
+const USERINFOS = ["", "user:pass@", "admin@", "%75ser@"] as const;
 
 type GenUrl = {
   url: string;
@@ -126,77 +118,73 @@ type GenUrl = {
   expectBlocked: boolean;
 };
 
-function generateUrls(rand: () => number, count: number): GenUrl[] {
-  const schemes = ["http", "https", "ftp", "file", "javascript", "ws", "http"];
-  const paths = ["", "/", "/path/to/resource", "/%2e%2e/x?q=1#frag", "?a=b&c=d", "/:8080"];
-  const userinfos = ["", "user:pass@", "admin@", "%75ser@"];
-  const out: GenUrl[] = [];
-  for (let i = 0; i < count; i += 1) {
-    const roll = rand();
-    const scheme = schemes[Math.floor(rand() * schemes.length)] ?? "http";
-    const userinfo = userinfos[Math.floor(rand() * userinfos.length)] ?? "";
-    const path = paths[Math.floor(rand() * paths.length)] ?? "";
-    let host: string;
-    let hostPrivate: boolean;
-    const isPrivatePool = roll < 0.55;
-    const pool = isPrivatePool
-      ? (PRIVATE_POOLS[Math.floor(rand() * PRIVATE_POOLS.length)] ?? PRIVATE_V4)
-      : (PUBLIC_POOLS[Math.floor(rand() * PUBLIC_POOLS.length)] ?? PUBLIC_V4);
-    host = pool[Math.floor(rand() * pool.length)] ?? "example.com";
-    hostPrivate = isPrivatePool;
-    if (!isPrivatePool && rand() < 0.08) {
-      host = REBINDING[Math.floor(rand() * REBINDING.length)] ?? "127.0.0.1.nip.io";
-      hostPrivate = false; // not an IP literal; sync cannot classify
-    }
-    const port = rand() < 0.2 ? `:${Math.floor(rand() * 65535)}` : "";
-    const schemeOk = scheme === "http" || scheme === "https";
-    out.push({
-      url: `${scheme}://${userinfo}${host}${port}${path}`,
-      expectBlocked: !schemeOk || hostPrivate,
-    });
-  }
-  return out;
-}
+const privateHostArbitrary = fc.oneof(...PRIVATE_POOLS.map((pool) => fc.constantFrom(...pool)));
+const publicHostArbitrary = fc.oneof(...PUBLIC_POOLS.map((pool) => fc.constantFrom(...pool)));
+const hostArbitrary: fc.Arbitrary<{ host: string; hostPrivate: boolean }> = fc.oneof(
+  privateHostArbitrary.map((host) => ({ host, hostPrivate: true })),
+  publicHostArbitrary.map((host) => ({ host, hostPrivate: false })),
+  fc.constantFrom(...REBINDING).map((host) => ({ host, hostPrivate: false })),
+);
+const portArbitrary = fc
+  .option(fc.integer({ min: 0, max: 65_534 }), { nil: undefined })
+  .map((port) => (port === undefined ? "" : `:${port}`));
+
+const generatedUrlArbitrary: fc.Arbitrary<GenUrl> = fc
+  .tuple(
+    fc.constantFrom(...SCHEMES),
+    fc.constantFrom(...USERINFOS),
+    hostArbitrary,
+    portArbitrary,
+    fc.constantFrom(...PATHS),
+  )
+  .map(([scheme, userinfo, { host, hostPrivate }, port, path]) => ({
+    url: `${scheme}://${userinfo}${host}${port}${path}`,
+    expectBlocked: (scheme !== "http" && scheme !== "https") || hostPrivate,
+  }));
 
 describe("fuzz: outbound URL validator", () => {
-  it("rejects private literals and accepts public literals across 3000 seeded URLs", (): void => {
-    const rand = mulberry32(0x5eed22_5);
-    const urls = generateUrls(rand, 3000);
-    for (const { url, expectBlocked } of urls) {
-      const result = validateExternalUrl(url);
-      if (expectBlocked) {
-        expect(result, `expected ${url} to be blocked`).not.toBeNull();
-      } else {
-        expect(result, `expected ${url} to be accepted`).toBeNull();
-      }
-    }
+  it("rejects private literals and accepts public literals across 3000 generated URLs", (): void => {
+    fc.assert(
+      fc.property(generatedUrlArbitrary, ({ url, expectBlocked }) => {
+        const result = validateExternalUrl(url);
+        if (expectBlocked) {
+          expect(result, `expected ${url} to be blocked`).not.toBeNull();
+        } else {
+          expect(result, `expected ${url} to be accepted`).toBeNull();
+        }
+      }),
+      { numRuns: 3000, seed: 0x5eed225 },
+    );
   });
 
   it("never throws and only uses the documented error messages", (): void => {
-    const rand = mulberry32(0xdeadbeef);
-    const urls = generateUrls(rand, 2000);
     const known = new Set([
       "Only http and https URLs are allowed",
       "URL points to a private or loopback address",
       "Invalid URL",
     ]);
-    for (const { url } of urls) {
-      const result = validateExternalUrl(url);
-      expect(result === null || typeof result === "string", `unexpected result type for ${url}`).toBe(true);
-      if (result !== null) expect(known.has(result), `unexpected message for ${url}: ${result}`).toBe(true);
-    }
+    fc.assert(
+      fc.property(generatedUrlArbitrary, ({ url }) => {
+        const result = validateExternalUrl(url);
+        expect(result === null || typeof result === "string", `unexpected result type for ${url}`).toBe(true);
+        if (result !== null) expect(known.has(result), `unexpected message for ${url}: ${result}`).toBe(true);
+      }),
+      { numRuns: 2000, seed: -559038737 },
+    );
   });
 
   it("allowPrivate=true still rejects non-http schemes and unparseable URLs", (): void => {
-    const rand = mulberry32(0x1234abcd);
-    for (const { url } of generateUrls(rand, 1500)) {
-      const result = validateExternalUrl(url, true);
-      if (url.startsWith("http://") || url.startsWith("https://")) {
-        // Private literal hosts are now allowed; only genuinely invalid
-        // inputs (the URL parser rejects) stay blocked.
-        expect(result, `unexpected block for ${url}`).toBeNull();
-      }
-    }
+    fc.assert(
+      fc.property(generatedUrlArbitrary, ({ url }) => {
+        const result = validateExternalUrl(url, true);
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+          // Private literal hosts are now allowed; only genuinely invalid
+          // inputs (the URL parser rejects) stay blocked.
+          expect(result, `unexpected block for ${url}`).toBeNull();
+        }
+      }),
+      { numRuns: 1500, seed: 0x1234abcd },
+    );
     expect(validateExternalUrl("ftp://example.com/", true)).toContain("http and https");
     expect(validateExternalUrl("not a url", true)).toBe("Invalid URL");
     expect(validateExternalUrl("http://", true)).toBe("Invalid URL");

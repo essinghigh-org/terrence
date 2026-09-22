@@ -41,6 +41,10 @@ export const users = sqliteTable(
     // access. Kept separate from the SAML provenance flag so either provider
     // can reconcile its own grant without revoking the other.
     scimSiteAdmin: integer("scim_site_admin", { mode: "boolean" }).notNull().default(false),
+    // True only when SCIM granted site-auditor access to an account that did
+    // not already hold that role manually. This lets SCIM revoke only its own
+    // grants when a user leaves the configured auditor group.
+    scimSiteAuditor: integer("scim_site_auditor", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject)],
 );
@@ -160,6 +164,9 @@ export const scimSettings = sqliteTable("scim_settings", {
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => scimGroups.id, { onDelete: "set null" }),
+  // Kept application-enforced to match PostgreSQL's expand-only schema
+  // during rolling upgrades; SCIM group deletion clears this mapping explicitly.
+  siteAuditorGroupScimId: text("site_auditor_group_scim_id"),
   updatedAt: integer("updated_at")
     .notNull()
     .$defaultFn(() => Date.now()),
@@ -997,7 +1004,20 @@ export const controlPlaneNodes = sqliteTable(
     instanceId: text("instance_id"),
     role: text("role").notNull().default("standalone"), // standalone | leader | follower | ineligible
     coordinatorEpoch: integer("coordinator_epoch"),
-    status: text("status").notNull().default("active"), // active | draining | maintenance | error
+    status: text("status").notNull().default("active"), // active | draining | drained | maintenance | error
+    // HA-3A: distributed-semantics identity, advertised so a joining node and
+    // the live peers can each veto an unsupported version skew. Nullable by
+    // design: a peer written by a release from before these columns existed
+    // is read as protocol 1 rather than treated as a failure.
+    protocolVersion: integer("protocol_version"),
+    minProtocolVersion: integer("min_protocol_version"),
+    schemaVersion: text("schema_version"),
+    // HA-3C: the durable record of an operator's drain request, so intent
+    // survives a missed NOTIFY, a restart, or a brief database outage.
+    drainRequestedAt: integer("drain_requested_at"),
+    drainRequestedBy: text("drain_requested_by"),
+    drainReason: text("drain_reason"),
+    drainedAt: integer("drained_at"),
     readinessChecks: text("readiness_checks", { mode: "json" })
       .$type<{ check: string; status: string }[]>()
       .notNull()

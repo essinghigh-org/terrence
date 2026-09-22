@@ -53,6 +53,7 @@ async function currentSettings(): Promise<ScimSettings> {
       enabled: false,
       paused: false,
       siteAdminGroupScimId: null,
+      siteAuditorGroupScimId: null,
       updatedAt: Date.now(),
     })
     .onConflictDoNothing();
@@ -62,10 +63,14 @@ async function currentSettings(): Promise<ScimSettings> {
 }
 
 async function settingsResource(settings: ScimSettings): Promise<Record<string, unknown>> {
-  const group =
+  const [adminGroup, auditorGroup] = await Promise.all([
     settings.siteAdminGroupScimId === null
       ? undefined
-      : await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, settings.siteAdminGroupScimId) });
+      : db.query.scimGroups.findFirst({ where: eq(scimGroups.id, settings.siteAdminGroupScimId) }),
+    settings.siteAuditorGroupScimId === null
+      ? undefined
+      : db.query.scimGroups.findFirst({ where: eq(scimGroups.id, settings.siteAuditorGroupScimId) }),
+  ]);
   return {
     id: SCIM_SETTINGS_ID,
     type: "scim-settings",
@@ -73,7 +78,9 @@ async function settingsResource(settings: ScimSettings): Promise<Record<string, 
       enabled: settings.enabled,
       paused: settings.paused,
       "site-admin-group-scim-id": settings.siteAdminGroupScimId,
-      "site-admin-group-display-name": group?.name ?? null,
+      "site-admin-group-display-name": adminGroup?.name ?? null,
+      "site-auditor-group-scim-id": settings.siteAuditorGroupScimId,
+      "site-auditor-group-display-name": auditorGroup?.name ?? null,
     },
   };
 }
@@ -174,7 +181,7 @@ export async function reconcileTeam(team: MappedTeam, groupId: string, transacti
 }
 
 /** Reconcile the configured SCIM site-admin group without touching manual or SAML grants. */
-export async function reconcileScimSiteAdmins(transaction: unknown): Promise<void> {
+async function reconcileScimSiteAdminsOnly(transaction: unknown): Promise<void> {
   const tx = transaction as typeof db;
   const settings = await tx.query.scimSettings.findFirst({ where: eq(scimSettings.id, SCIM_SETTINGS_ID) });
   const groupId = settings?.enabled === true ? settings.siteAdminGroupScimId : null;
@@ -217,6 +224,59 @@ export async function reconcileScimSiteAdmins(transaction: unknown): Promise<voi
   }
 }
 
+async function reconcileScimSiteAuditors(transaction: unknown): Promise<void> {
+  const tx = transaction as typeof db;
+  const settings = await tx.query.scimSettings.findFirst({ where: eq(scimSettings.id, SCIM_SETTINGS_ID) });
+  const groupId = settings?.enabled === true ? settings.siteAuditorGroupScimId : null;
+  const desiredUserIds = new Set<string>();
+  if (groupId !== null) {
+    const links = await tx.query.scimGroupMemberships.findMany({
+      where: eq(scimGroupMemberships.groupId, groupId),
+      columns: { scimUserId: true },
+    });
+    if (links.length > 0) {
+      const identities = await tx.query.scimUserIdentities.findMany({
+        where: inArray(
+          scimUserIdentities.id,
+          links.map((link): string => link.scimUserId),
+        ),
+        columns: { userId: true },
+      });
+      for (const identity of identities) desiredUserIds.add(identity.userId);
+    }
+  }
+
+  const current = await tx.query.users.findMany({
+    where: eq(users.scimSiteAuditor, true),
+    columns: { id: true },
+  });
+  for (const user of current) {
+    if (desiredUserIds.has(user.id)) continue;
+    await tx.update(users).set({ scimSiteAuditor: false, isSiteAuditor: false }).where(eq(users.id, user.id));
+  }
+  if (desiredUserIds.size === 0) return;
+  const liveUsers = await tx.query.users.findMany({
+    where: and(inArray(users.id, [...desiredUserIds]), isNull(users.deletedAt)),
+    columns: { id: true, isSiteAuditor: true, scimSiteAuditor: true },
+  });
+  for (const user of liveUsers) {
+    // An existing manual auditor grant remains manual. SCIM should not claim
+    // ownership of it merely because the user joins the mapped group.
+    if (user.isSiteAuditor === true && user.scimSiteAuditor !== true) continue;
+    await tx.update(users).set({ scimSiteAuditor: true, isSiteAuditor: true }).where(eq(users.id, user.id));
+  }
+}
+
+/**
+ * Reconcile the configured SCIM site-role groups. Kept under the historical
+ * exported name because SCIM mutation routes already use it as their single
+ * reconciliation hook.
+ */
+export async function reconcileScimSiteAdmins(transaction: unknown): Promise<void> {
+  await reconcileScimSiteAdminsOnly(transaction);
+  await reconcileScimSiteAuditors(transaction);
+}
+
 function validateSettingsFlags(attributes: Readonly<Record<string, unknown>>): { detail: string } | null {
   if (attributes["enabled"] !== undefined && typeof attributes["enabled"] !== "boolean") {
     return { detail: "enabled must be a boolean" };
@@ -227,12 +287,11 @@ function validateSettingsFlags(attributes: Readonly<Record<string, unknown>>): {
   if (attributes["paused"] !== undefined && typeof attributes["paused"] !== "boolean") {
     return { detail: "paused must be a boolean" };
   }
-  const requestedGroup = attributes["site-admin-group-scim-id"];
-  if (requestedGroup !== undefined && requestedGroup !== null && typeof requestedGroup !== "string") {
-    return { detail: "site-admin-group-scim-id must be a string or null" };
-  }
-  if (requestedGroup === "") {
-    return { detail: "site-admin-group-scim-id must not be empty" };
+  for (const attribute of ["site-admin-group-scim-id", "site-auditor-group-scim-id"] as const) {
+    const requestedGroup = attributes[attribute];
+    if (requestedGroup !== undefined && requestedGroup !== null && typeof requestedGroup !== "string") {
+      return { detail: `${attribute} must be a string or null` };
+    }
   }
   return null;
 }
@@ -248,31 +307,38 @@ async function resolveSettingsPatch(
   const enabled = attributes["enabled"] === true || current.enabled;
   const paused = typeof attributes["paused"] === "boolean" ? attributes["paused"] : current.paused;
   if (paused && !enabled) return { detail: "SCIM must be enabled before it can be paused" };
-  if (typeof attributes["site-admin-group-scim-id"] === "string") {
+  for (const attribute of ["site-admin-group-scim-id", "site-auditor-group-scim-id"] as const) {
+    const requestedGroup = attributes[attribute];
+    if (typeof requestedGroup !== "string" || requestedGroup === "") continue;
     const group = await db.query.scimGroups.findFirst({
-      where: eq(scimGroups.id, attributes["site-admin-group-scim-id"]),
+      where: eq(scimGroups.id, requestedGroup),
     });
-    if (group === undefined) return { detail: "SCIM group not found" };
+    if (group === undefined) return { detail: `${attribute} references a SCIM group that does not exist` };
   }
   return { enabled, paused };
 }
 
 async function persistSettingsPatch(
   current: ScimSettings,
-  requestedGroup: unknown,
+  requestedAdminGroup: unknown,
+  requestedAuditorGroup: unknown,
   enabled: boolean,
   paused: boolean,
 ): Promise<void> {
-  // validateSettingsFlags already rejected non-string non-null values; treat
-  // anything outside string|null|undefined as "not provided".
-  const groupId = typeof requestedGroup === "string" ? requestedGroup : requestedGroup === null ? null : undefined;
+  const normalizeGroupId = (value: unknown): string | null | undefined => {
+    if (value === null || value === "") return null;
+    return typeof value === "string" ? value : undefined;
+  };
+  const adminGroupId = normalizeGroupId(requestedAdminGroup);
+  const auditorGroupId = normalizeGroupId(requestedAuditorGroup);
   await db.transaction(async (tx): Promise<void> => {
     await tx
       .update(scimSettings)
       .set({
         enabled,
         paused,
-        siteAdminGroupScimId: groupId === undefined ? current.siteAdminGroupScimId : groupId,
+        siteAdminGroupScimId: adminGroupId === undefined ? current.siteAdminGroupScimId : adminGroupId,
+        siteAuditorGroupScimId: auditorGroupId === undefined ? current.siteAuditorGroupScimId : auditorGroupId,
         updatedAt: Date.now(),
       })
       .where(eq(scimSettings.id, SCIM_SETTINGS_ID));
@@ -288,9 +354,13 @@ async function checkMappingPreconditions(
 ): Promise<{ error: unknown } | { ok: true }> {
   if (team === undefined || group === undefined) return { error: apiError(set, 404, "Not Found") };
   if (!settings.enabled) return { error: apiError(set, 422, "Unprocessable Entity", "SCIM is not enabled") };
-  if (team.name.toLocaleLowerCase() === "owners" || settings.siteAdminGroupScimId === group.id) {
+  if (
+    team.name.toLocaleLowerCase() === "owners" ||
+    settings.siteAdminGroupScimId === group.id ||
+    settings.siteAuditorGroupScimId === group.id
+  ) {
     return {
-      error: apiError(set, 422, "Unprocessable Entity", "Owners and site administrator groups cannot be mapped"),
+      error: apiError(set, 422, "Unprocessable Entity", "Owners and site role groups cannot be mapped"),
     };
   }
   return { ok: true };
@@ -341,7 +411,13 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const resolved = await resolveSettingsPatch(attributes, current);
     if ("detail" in resolved) return apiError(set, 422, "Unprocessable Entity", resolved.detail);
 
-    await persistSettingsPatch(current, attributes["site-admin-group-scim-id"], resolved.enabled, resolved.paused);
+    await persistSettingsPatch(
+      current,
+      attributes["site-admin-group-scim-id"],
+      attributes["site-auditor-group-scim-id"],
+      resolved.enabled,
+      resolved.paused,
+    );
     return { data: await settingsResource(await currentSettings()) };
   })
   .delete("/api/v2/admin/scim-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -355,6 +431,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
           enabled: false,
           paused: false,
           siteAdminGroupScimId: null,
+          siteAuditorGroupScimId: null,
           updatedAt: Date.now(),
         })
         .where(eq(scimSettings.id, SCIM_SETTINGS_ID));

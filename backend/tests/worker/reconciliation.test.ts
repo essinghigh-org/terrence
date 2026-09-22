@@ -157,7 +157,7 @@ describe("startup reconciliation of interrupted local runs", () => {
       where: eq(assessmentResults.id, RUNNING_ASSESSMENT_ID),
     });
     expect(running?.status).toBe("errored");
-    expect(running?.errorMessage).toContain("restarted");
+    expect(running?.errorMessage).toContain("interrupted");
     const pending = await db.query.assessmentResults.findFirst({
       where: eq(assessmentResults.id, PENDING_ASSESSMENT_ID),
     });

@@ -1,7 +1,7 @@
 import { executionSetting, integrationSetting, integerSetting } from "../lib/runtime-config";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
-import { databaseCurrentTimeMs, db } from "../db";
+import { databaseCurrentTimeMs, databaseSchemaVersion, db, rawQueryAll } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runNetPolicy, runSandboxRequired } from "../lib/sandbox";
 import { envFlag } from "../lib/env";
@@ -17,13 +17,28 @@ import {
 } from "../lib/metrics";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { and, desc, eq, gte, lt, or } from "drizzle-orm";
+import { and, desc, eq, gte, lt, or, sql } from "drizzle-orm";
 import { controlPlaneNodes } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { maintenanceSnapshot } from "../lib/maintenance";
 import { COMPATIBILITY_VERSION, TFP_API_VERSION } from "../lib/constants";
 import { controlPlaneCoordinatorState } from "../lib/control-plane-coordinator";
 import { controlPlaneInstanceId, controlPlaneNodeId, haEnabled } from "../lib/ha-config";
+import {
+  ClusterProtocolIncompatibleError,
+  evaluateClusterCompatibility,
+  localProtocolIdentity,
+  type ClusterCompatibility,
+  type ClusterPeer,
+} from "../lib/ha-protocol";
+import {
+  cancelNodeDrain,
+  nodeDrainRequested,
+  nodeDrainSnapshot,
+  recordedNodeDrainPhase,
+  reconcileRecordedDrainRequest,
+  requestNodeDrain,
+} from "../lib/node-drain";
 
 // Single source of truth for the reported application version:
 // BUILD_VERSION env wins, otherwise the root package.json version,
@@ -632,15 +647,177 @@ function nodeCoordinatorMetadata(): {
   };
 }
 
+function bundledSchemaVersion(): string | null {
+  try {
+    // A missing migration journal on a fresh boot must not break node
+    // registration, exactly as it must not fail readiness.
+    return databaseSchemaVersion();
+  } catch {
+    return null;
+  }
+}
+
+function protocolMetadata(): {
+  protocolVersion: number;
+  minProtocolVersion: number;
+  schemaVersion: string | null;
+} {
+  const identity = localProtocolIdentity(controlPlaneNodeId(), appVersion());
+  return {
+    protocolVersion: identity.protocolVersion,
+    minProtocolVersion: identity.minProtocolVersion,
+    schemaVersion: bundledSchemaVersion(),
+  };
+}
+
+/** Check live HA peers using only node-registry columns available before this release's migrations. */
+export async function evaluatePreMigrationClusterCompatibility(now?: number): Promise<ClusterCompatibility> {
+  const local = localProtocolIdentity(readinessNodeId(), appVersion());
+  if (!haEnabled()) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "HA is disabled; version compatibility is a single-process concern",
+    };
+  }
+
+  const tableRows = await rawQueryAll<{ exists: boolean }>(
+    sql`SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_name = 'control_plane_nodes'
+    ) AS exists`,
+  );
+  if (tableRows[0]?.exists !== true) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "No control-plane node registry exists yet",
+    };
+  }
+
+  const columnRows = await rawQueryAll<{ columnName: string }>(
+    sql`SELECT column_name AS "columnName"
+        FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'control_plane_nodes'`,
+  );
+  const columns = new Set(columnRows.map((row): string => row.columnName));
+  if (!columns.has("last_heartbeat_at") || !columns.has("version")) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "Control-plane node registry predates HA peer version metadata",
+    };
+  }
+
+  const currentNow = now ?? (await databaseCurrentTimeMs());
+  const cutoff = currentNow - NODE_HEARTBEAT_TIMEOUT_MS;
+  const hasProtocolColumns = columns.has("protocol_version") && columns.has("min_protocol_version");
+  const rows = hasProtocolColumns
+    ? await rawQueryAll<{
+        nodeId: string;
+        applicationVersion: string | null;
+        protocolVersion: number | bigint | string | null;
+        minProtocolVersion: number | bigint | string | null;
+      }>(
+        sql`SELECT id AS "nodeId",
+                   version AS "applicationVersion",
+                   protocol_version AS "protocolVersion",
+                   min_protocol_version AS "minProtocolVersion"
+            FROM control_plane_nodes
+            WHERE last_heartbeat_at >= ${cutoff}`,
+      )
+    : await rawQueryAll<{
+        nodeId: string;
+        applicationVersion: string | null;
+        protocolVersion: null;
+        minProtocolVersion: null;
+      }>(
+        sql`SELECT id AS "nodeId",
+                   version AS "applicationVersion",
+                   NULL AS "protocolVersion",
+                   NULL AS "minProtocolVersion"
+            FROM control_plane_nodes
+            WHERE last_heartbeat_at >= ${cutoff}`,
+      );
+
+  const peers: ClusterPeer[] = rows.map(
+    (row): ClusterPeer => ({
+      nodeId: row.nodeId,
+      applicationVersion: row.applicationVersion,
+      protocolVersion: row.protocolVersion === null ? null : Number(row.protocolVersion),
+      minProtocolVersion: row.minProtocolVersion === null ? null : Number(row.minProtocolVersion),
+    }),
+  );
+  return evaluateClusterCompatibility(local, peers);
+}
+
+export async function assertPreMigrationClusterCompatibility(): Promise<void> {
+  if (!haEnabled()) return;
+  const compatibility = await evaluatePreMigrationClusterCompatibility();
+  if (!compatibility.compatible) throw new ClusterProtocolIncompatibleError(compatibility);
+}
+
+export async function evaluateLiveClusterCompatibility(now?: number): Promise<ClusterCompatibility> {
+  const local = localProtocolIdentity(readinessNodeId(), appVersion());
+  if (!haEnabled()) {
+    return {
+      compatible: true,
+      oldestPeerProtocolVersion: local.protocolVersion,
+      incompatiblePeers: [],
+      summary: "HA is disabled; version compatibility is a single-process concern",
+    };
+  }
+  const currentNow = now ?? (await databaseCurrentTimeMs());
+  const rows = await db.query.controlPlaneNodes.findMany({
+    where: gte(controlPlaneNodes.lastHeartbeatAt, currentNow - NODE_HEARTBEAT_TIMEOUT_MS),
+    columns: {
+      id: true,
+      instanceId: true,
+      version: true,
+      protocolVersion: true,
+      minProtocolVersion: true,
+    },
+  });
+  const peers: ClusterPeer[] = rows
+    .filter((row): boolean => row.instanceId !== controlPlaneInstanceId)
+    .map(
+      (row): ClusterPeer => ({
+        nodeId: row.id,
+        applicationVersion: row.version,
+        protocolVersion: row.protocolVersion,
+        minProtocolVersion: row.minProtocolVersion,
+      }),
+    );
+  return evaluateClusterCompatibility(local, peers);
+}
+
+/** Refuse startup when a live peer is outside the supported release or HA protocol window. */
+export async function assertClusterCompatibility(): Promise<void> {
+  if (!haEnabled()) return;
+  const compatibility = await evaluateLiveClusterCompatibility();
+  if (compatibility.compatible) {
+    log.info("Cluster version compatibility verified", { summary: compatibility.summary });
+    return;
+  }
+  throw new ClusterProtocolIncompatibleError(compatibility);
+}
+
 export async function claimControlPlaneNodeIdentity(now?: number): Promise<void> {
   if (!haEnabled()) return;
   const currentNow = now ?? (await databaseCurrentTimeMs());
   const nodeId = readinessNodeId();
   const metadata = nodeCoordinatorMetadata();
+  const protocol = protocolMetadata();
   const replaceable = or(
     eq(controlPlaneNodes.instanceId, controlPlaneInstanceId),
     lt(controlPlaneNodes.lastHeartbeatAt, currentNow - NODE_HEARTBEAT_TIMEOUT_MS),
+    // "draining" is the legacy graceful-shutdown marker. A live planned
+    // HA-3 drain uses "maintenance" until it reaches "drained".
     eq(controlPlaneNodes.status, "draining"),
+    eq(controlPlaneNodes.status, "drained"),
   );
   const updated = await db
     .update(controlPlaneNodes)
@@ -653,6 +830,12 @@ export async function claimControlPlaneNodeIdentity(now?: number): Promise<void>
       coordinatorEpoch: metadata.coordinatorEpoch,
       status: "active",
       lastHeartbeatAt: currentNow,
+      ...protocol,
+      // Reusing a DRAINED node ID starts a fresh ACTIVE instance.
+      drainRequestedAt: null,
+      drainRequestedBy: null,
+      drainReason: null,
+      drainedAt: null,
     })
     .where(and(eq(controlPlaneNodes.id, nodeId), replaceable))
     .returning({ id: controlPlaneNodes.id });
@@ -672,6 +855,7 @@ export async function claimControlPlaneNodeIdentity(now?: number): Promise<void>
       readinessChecks: [],
       registeredAt: currentNow,
       lastHeartbeatAt: currentNow,
+      ...protocol,
     })
     .onConflictDoNothing()
     .returning({ id: controlPlaneNodes.id });
@@ -757,17 +941,23 @@ function resolveReadinessStatus(
   sandboxAbiStatus: ReadinessStatus,
   netPolicyStatus: ReadinessStatus,
   nodeIdentityStatus: ReadinessStatus,
+  compatibilityStatus: ReadinessStatus,
   set: SetCtx["set"],
 ): { status: ReadinessOverall; draining: boolean } {
   const maintenance = maintenanceSnapshot();
+  // A drained node keeps answering /healthz — it is still a healthy process —
+  // but must report DRAINING so the load balancer stops sending it new work.
   const draining =
-    maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
+    maintenance.active ||
+    nodeDrainRequested() ||
+    ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
   const status =
     database === "ERROR" ||
     disk === "ERROR" ||
     sandboxAbiStatus === "ERROR" ||
     netPolicyStatus === "ERROR" ||
-    nodeIdentityStatus === "ERROR"
+    nodeIdentityStatus === "ERROR" ||
+    compatibilityStatus === "ERROR"
       ? "ERROR"
       : draining
         ? "DRAINING"
@@ -784,6 +974,7 @@ async function buildReadinessResult(
   sandboxAbiStatus: ReadinessStatus,
   netPolicyStatus: ReadinessStatus,
   nodeIdentityStatus: ReadinessStatus,
+  compatibilityStatus: ReadinessStatus,
 ): Promise<ReadinessResult> {
   const result: ReadinessResult = {
     node: readinessNodeId(),
@@ -803,6 +994,10 @@ async function buildReadinessResult(
   };
   if (haEnabled()) {
     result.checks.push({ check: "coordinator", status: controlPlaneCoordinatorState().role.toUpperCase() });
+    // Rolling-upgrade state exposed to the orchestrator.
+    result.checks.push({ check: "cluster-compatibility", status: compatibilityStatus });
+    result.checks.push({ check: "ha-protocol", status: String(protocolMetadata().protocolVersion) });
+    result.checks.push({ check: "node-drain", status: nodeDrainSnapshot().phase.toUpperCase() });
   }
   // Todo 271: include the bundled DB schema target alongside the
   // database liveness check so /api/v1/readiness and /readyz agree.
@@ -834,6 +1029,10 @@ async function persistReadinessNode(
   const now = await databaseCurrentTimeMs();
   const nodeId = readinessNodeId();
   const metadata = nodeCoordinatorMetadata();
+  const drain = nodeDrainSnapshot();
+  // DRAINED is written only after local run, assessment, durable-job, and coordinator work is clear.
+  const nodeStatus =
+    drain.phase === "drained" ? "drained" : status === "ERROR" ? "error" : draining ? "maintenance" : "active";
   const values = {
     hostname: nodeId,
     address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
@@ -841,9 +1040,10 @@ async function persistReadinessNode(
     instanceId: controlPlaneInstanceId,
     role: metadata.role,
     coordinatorEpoch: metadata.coordinatorEpoch,
-    status: status === "ERROR" ? "error" : draining ? "draining" : "active",
+    status: nodeStatus,
     readinessChecks: checks,
     lastHeartbeatAt: now,
+    ...protocolMetadata(),
   };
 
   const write = haEnabled()
@@ -887,6 +1087,25 @@ function readinessPlainText(
   return { response: new Response(status, { status: set.status === undefined ? 200 : Number(set.status), headers }) };
 }
 
+async function probeClusterCompatibilityReadiness(database: ReadinessStatus): Promise<ReadinessStatus> {
+  if (!haEnabled() || database !== "OK") return "OK";
+  try {
+    const compatibility = await evaluateLiveClusterCompatibility();
+    if (!compatibility.compatible) {
+      log.error("Live cluster version compatibility check failed", { summary: compatibility.summary });
+      return "ERROR";
+    }
+    return "OK";
+  } catch (error: unknown) {
+    // A failed read is not evidence of incompatibility; the database check
+    // already reports the underlying failure.
+    log.warn("Unable to evaluate cluster version compatibility", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "OK";
+  }
+}
+
 async function readinessResponse(
   set: SetCtx["set"],
   timeoutSeconds: number,
@@ -898,12 +1117,20 @@ async function readinessResponse(
   const worker = envFlag("TERRENCE_DISABLE_WORKER") ? (haEnabled() ? "STANDBY" : "ERROR") : "OK";
   const sandbox = probeSandboxReadiness();
   const nodeIdentity = database === "OK" ? await probeNodeIdentityReadiness() : "ERROR";
+  // Only the heartbeat adopts a recorded drain request: readiness is probed by
+  // load balancers on short intervals, and a state transition per probe would
+  // be both wasteful and surprising.
+  if (persistNode && haEnabled() && database === "OK") {
+    await reconcileRecordedDrainRequest().catch((): void => undefined);
+  }
+  const compatibility = await probeClusterCompatibilityReadiness(database);
   const resolved = resolveReadinessStatus(
     database,
     disk,
     sandbox.sandboxAbiStatus,
     sandbox.netPolicyStatus,
     nodeIdentity,
+    compatibility,
     set,
   );
 
@@ -915,6 +1142,7 @@ async function readinessResponse(
     sandbox.sandboxAbiStatus,
     sandbox.netPolicyStatus,
     nodeIdentity,
+    compatibility,
   );
   await persistReadinessNode(database, nodeIdentity, persistNode, resolved.status, resolved.draining, result.checks);
   const text = readinessPlainText(request, set, resolved.status);
@@ -1004,6 +1232,24 @@ const systemHealthGuard = ({
   return undefined;
 };
 
+function systemDrainAttributes(body: unknown): Record<string, unknown> {
+  let parsed = body;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const data = (parsed as Record<string, unknown>)["data"];
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return {};
+  const attributes = (data as Record<string, unknown>)["attributes"];
+  return attributes !== null && typeof attributes === "object" && !Array.isArray(attributes)
+    ? (attributes as Record<string, unknown>)
+    : {};
+}
+
 export const systemHealthRoutes = new Elysia({ name: "system-health" })
   .use(authPlugin)
   .onBeforeHandle(systemHealthGuard)
@@ -1058,6 +1304,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
         })
         .catch(() => []);
       const byId = new Map(nodes.map((node): [string, typeof node] => [node.id, node]));
+      const localDrain = nodeDrainSnapshot();
       byId.set(readinessNodeId(), {
         id: readinessNodeId(),
         hostname: readinessNodeId(),
@@ -1070,6 +1317,11 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
         readinessChecks: current.checks,
         registeredAt: now,
         lastHeartbeatAt: now,
+        ...protocolMetadata(),
+        drainRequestedAt: localDrain.requestedAt,
+        drainRequestedBy: localDrain.requestedBy,
+        drainReason: localDrain.reason,
+        drainedAt: localDrain.drainedAt,
       });
       return {
         data: [...byId.values()].map(
@@ -1082,10 +1334,18 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
                   ? current.status
                   : node.status === "error"
                     ? "ERROR"
-                    : node.status === "draining"
+                    : node.status === "draining" || node.status === "drained" || node.status === "maintenance"
                       ? "DRAINING"
                       : "OK",
               checks: node.id === readinessNodeId() ? current.checks : node.readinessChecks,
+              "drain-phase":
+                node.id === readinessNodeId()
+                  ? localDrain.phase
+                  : node.drainedAt !== null
+                    ? "drained"
+                    : node.drainRequestedAt !== null
+                      ? "draining"
+                      : "active",
             },
           }),
         ),
@@ -1111,7 +1371,89 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
       ),
       links: { self: "/api/v1/nodes" },
     };
-  });
+  })
+  // System API surface for planned drain, polling, and uncordon.
+  .get("/api/v1/nodes/drain", (): Record<string, unknown> => {
+    const snapshot = nodeDrainSnapshot();
+    return {
+      data: {
+        id: snapshot.nodeId,
+        type: "node-drains",
+        attributes: {
+          phase: snapshot.phase,
+          "requested-at": snapshot.requestedAt,
+          "requested-by": snapshot.requestedBy,
+          reason: snapshot.reason,
+          "drained-at": snapshot.drainedAt,
+          "active-run-executions": snapshot.activeRunExecutions,
+          "active-assessments": snapshot.activeAssessments,
+          "active-durable-jobs": snapshot.activeDurableJobs,
+          coordinator: snapshot.coordinator,
+        },
+      },
+      links: { self: "/api/v1/nodes/drain" },
+    };
+  })
+  .post(
+    "/api/v1/nodes/:id/drain",
+    async ({
+      params,
+      body,
+      set,
+      systemToken,
+    }: SetCtx & {
+      params: Readonly<{ id: string }>;
+      body: unknown;
+      systemToken?: Readonly<{ id: string }> | null;
+    }): Promise<unknown> => {
+      const attributes = systemDrainAttributes(body);
+      const rawReason = attributes["reason"];
+      const reason = typeof rawReason === "string" && rawReason.trim() !== "" ? rawReason.trim().slice(0, 500) : null;
+      const requested = await requestNodeDrain(params.id, {
+        requestedBy: systemToken?.id ?? null,
+        reason,
+      });
+      if (requested === "not-found") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: `Unknown control-plane node ${params.id}` }] };
+      }
+      if (requested === "unsupported") {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [
+            {
+              status: "409",
+              title: "Conflict",
+              detail: `Control-plane node ${params.id} predates HA drain support; stop it gracefully during this rollout`,
+            },
+          ],
+        };
+      }
+      const targetPhase = (await recordedNodeDrainPhase(params.id)) ?? "draining";
+      return {
+        data: { id: params.id, type: "node-drains", attributes: { phase: targetPhase, reason } },
+      };
+    },
+  )
+  .delete(
+    "/api/v1/nodes/:id/drain",
+    async ({ params, set }: SetCtx & { params: Readonly<{ id: string }> }): Promise<unknown> => {
+      const canceled = await cancelNodeDrain(params.id);
+      if (!canceled) {
+        (set as { status: number }).status = 404;
+        return {
+          errors: [
+            {
+              status: "404",
+              title: "Not Found",
+              detail: `Control-plane node ${params.id} is unknown or has no recorded drain request`,
+            },
+          ],
+        };
+      }
+      return { data: { id: params.id, type: "node-drains", attributes: { phase: "active" } } };
+    },
+  );
 
 export const healthRoutes = new Elysia({ name: "health" })
   .use(authPlugin)
