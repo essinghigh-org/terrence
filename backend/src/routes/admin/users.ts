@@ -771,6 +771,14 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
         (set as { status: number }).status = 400;
         return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site auditor" }] };
       }
+      if (target.scimSiteAuditor === true) {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [
+            { status: "409", title: "Conflict", detail: "Site-auditor access is managed by the configured SCIM group" },
+          ],
+        };
+      }
       await db.update(users).set({ isSiteAuditor: false }).where(eq(users.id, userId));
       await auditLog("revoke-auditor", "users", userId, user.id, null, { username: target.username });
       publish("authz.changed", { "user-id": userId });

@@ -1031,11 +1031,18 @@ export const scimRoutes = new Elysia({ name: "scim" })
       return {};
     }
     const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
-    if (settings?.siteAdminGroupScimId === g.id)
+    const clearsSiteAdmin = settings?.siteAdminGroupScimId === g.id;
+    const clearsSiteAuditor = settings?.siteAuditorGroupScimId === g.id;
+    if (clearsSiteAdmin || clearsSiteAuditor) {
       await db
         .update(scimSettings)
-        .set({ siteAdminGroupScimId: null, updatedAt: Date.now() })
+        .set({
+          ...(clearsSiteAdmin ? { siteAdminGroupScimId: null } : {}),
+          ...(clearsSiteAuditor ? { siteAuditorGroupScimId: null } : {}),
+          updatedAt: Date.now(),
+        })
         .where(eq(scimSettings.id, "scim"));
+    }
     await removeMappedTeamRows([g.id]);
     await db.delete(scimGroups).where(eq(scimGroups.id, g.id));
     await db.transaction(reconcileScimSiteAdmins);

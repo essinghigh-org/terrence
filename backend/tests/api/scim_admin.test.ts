@@ -31,6 +31,7 @@ const teamId = `team-scim-${suffix}`;
 const ownersTeamId = `team-scim-owners-${suffix}`;
 const engineeringGroupId = `scim-group-engineering-${suffix}`;
 const adminGroupId = `scim-group-admin-${suffix}`;
+const auditorGroupId = `scim-group-auditor-${suffix}`;
 const teamTokenId = `api-scim-team-${suffix}`;
 const adminToken = `scim-admin-token-${suffix}`;
 const ownerToken = `scim-owner-token-${suffix}`;
@@ -101,6 +102,7 @@ beforeAll(async () => {
   await db.insert(scimGroups).values([
     { id: engineeringGroupId, name: `Engineering ${suffix}` },
     { id: adminGroupId, name: `Terrence Admins ${suffix}` },
+    { id: auditorGroupId, name: `Terrence Auditors ${suffix}` },
   ]);
   await db.insert(scimUserIdentities).values({
     id: `scim-user-${suffix}`,
@@ -124,9 +126,9 @@ afterAll(async () => {
   await db.delete(teamScimGroupMappings).where(inArray(teamScimGroupMappings.teamId, [teamId, ownersTeamId]));
   await db
     .delete(scimGroupMemberships)
-    .where(inArray(scimGroupMemberships.groupId, [engineeringGroupId, adminGroupId]));
+    .where(inArray(scimGroupMemberships.groupId, [engineeringGroupId, adminGroupId, auditorGroupId]));
   await db.delete(scimUserIdentities).where(eq(scimUserIdentities.userId, groupUserId));
-  await db.delete(scimGroups).where(inArray(scimGroups.id, [engineeringGroupId, adminGroupId]));
+  await db.delete(scimGroups).where(inArray(scimGroups.id, [engineeringGroupId, adminGroupId, auditorGroupId]));
   await db.delete(scimTokens);
   await db.delete(scimSettings).where(eq(scimSettings.id, "scim"));
   await db.delete(samlSettings).where(eq(samlSettings.id, "saml"));
@@ -149,6 +151,8 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
     paused: false,
     "site-admin-group-scim-id": null,
     "site-admin-group-display-name": null,
+    "site-auditor-group-scim-id": null,
+    "site-auditor-group-display-name": null,
   });
 
   const settingsPayload = {
@@ -158,6 +162,7 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
         enabled: true,
         paused: false,
         "site-admin-group-scim-id": adminGroupId,
+        "site-auditor-group-scim-id": "",
       },
     },
   };
@@ -185,6 +190,79 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   const grantedScimAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
   expect(grantedScimAdmin?.isSiteAdmin).toBeTrue();
   expect(grantedScimAdmin?.scimSiteAdmin).toBeTrue();
+
+  await db.insert(scimGroupMemberships).values({
+    id: `scim-auditor-member-${suffix}`,
+    groupId: auditorGroupId,
+    scimUserId: `scim-user-${suffix}`,
+  });
+  const linkedAuditor = await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+    data: {
+      type: "scim-settings",
+      attributes: { "site-auditor-group-scim-id": auditorGroupId },
+    },
+  });
+  expect(linkedAuditor.status).toBe(200);
+  expect((await linkedAuditor.json()).data.attributes).toMatchObject({
+    "site-auditor-group-scim-id": auditorGroupId,
+    "site-auditor-group-display-name": `Terrence Auditors ${suffix}`,
+  });
+  const grantedScimAuditor = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(grantedScimAuditor?.isSiteAuditor).toBeTrue();
+  expect(grantedScimAuditor?.scimSiteAuditor).toBeTrue();
+  expect(
+    (await request("POST", `/api/v2/admin/users/${groupUserId}/actions/revoke_site_auditor`, adminToken)).status,
+  ).toBe(409);
+
+  const clearedAuditor = await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+    data: {
+      type: "scim-settings",
+      attributes: { "site-auditor-group-scim-id": "" },
+    },
+  });
+  expect(clearedAuditor.status).toBe(200);
+  expect((await clearedAuditor.json()).data.attributes["site-auditor-group-scim-id"]).toBeNull();
+  const revokedScimAuditor = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(revokedScimAuditor?.isSiteAuditor).toBeFalse();
+  expect(revokedScimAuditor?.scimSiteAuditor).toBeFalse();
+
+  expect(
+    (await request("POST", `/api/v2/admin/users/${groupUserId}/actions/grant_site_auditor`, adminToken)).status,
+  ).toBe(200);
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-auditor-group-scim-id": auditorGroupId } },
+      })
+    ).status,
+  ).toBe(200);
+  const manualAuditorWhileMapped = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(manualAuditorWhileMapped?.isSiteAuditor).toBeTrue();
+  expect(manualAuditorWhileMapped?.scimSiteAuditor).toBeFalse();
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-auditor-group-scim-id": "" } },
+      })
+    ).status,
+  ).toBe(200);
+  const manualAuditorAfterUnlink = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(manualAuditorAfterUnlink?.isSiteAuditor).toBeTrue();
+  expect(manualAuditorAfterUnlink?.scimSiteAuditor).toBeFalse();
+  expect(
+    (await request("POST", `/api/v2/admin/users/${groupUserId}/actions/revoke_site_auditor`, adminToken)).status,
+  ).toBe(200);
+
+  const clearedAdmin = await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+    data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": "" } },
+  });
+  expect(clearedAdmin.status).toBe(200);
+  expect((await clearedAdmin.json()).data.attributes["site-admin-group-scim-id"]).toBeNull();
+  const restoredAdmin = await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+    data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": adminGroupId } },
+  });
+  expect(restoredAdmin.status).toBe(200);
+
   expect(
     (
       await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
@@ -386,6 +464,27 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   const changedScimUser = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
   expect(changedScimUser?.email).toBe(`scim-after-${suffix}@example.com`);
   expect(changedScimUser?.emailVerifiedAt).toBeNull();
+
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-auditor-group-scim-id": auditorGroupId } },
+      })
+    ).status,
+  ).toBe(200);
+  const auditorBeforeGroupDelete = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(auditorBeforeGroupDelete?.isSiteAuditor).toBeTrue();
+  expect(auditorBeforeGroupDelete?.scimSiteAuditor).toBeTrue();
+  expect((await request("DELETE", `/scim/v2/Groups/${auditorGroupId}`, secondToken.attributes.token)).status).toBe(204);
+  const settingsAfterAuditorGroupDelete = await request("GET", "/api/v2/admin/scim-settings", adminToken);
+  expect((await settingsAfterAuditorGroupDelete.json()).data.attributes).toMatchObject({
+    "site-auditor-group-scim-id": null,
+    "site-auditor-group-display-name": null,
+  });
+  const auditorAfterGroupDelete = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(auditorAfterGroupDelete?.isSiteAuditor).toBeFalse();
+  expect(auditorAfterGroupDelete?.scimSiteAuditor).toBeFalse();
+
   const disabled = await request("DELETE", "/api/v2/admin/scim-settings", adminToken);
   expect(disabled.status).toBe(200);
   expect((await disabled.json()).data.attributes).toEqual({
@@ -393,6 +492,8 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
     paused: false,
     "site-admin-group-scim-id": null,
     "site-admin-group-display-name": null,
+    "site-auditor-group-scim-id": null,
+    "site-auditor-group-display-name": null,
   });
   expect(await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, engineeringGroupId) })).toBeUndefined();
   expect(await db.query.scimTokens.findFirst({ where: eq(scimTokens.id, secondToken.id) })).toBeUndefined();

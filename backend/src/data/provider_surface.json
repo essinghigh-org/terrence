@@ -1,7 +1,7 @@
 {
-  "_comment": "Authoritative hashicorp/tfe v0.80.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
-  "provider": "hashicorp/tfe v0.80.0",
-  "resource_count": 72,
+  "_comment": "Authoritative hashicorp/tfe v0.81.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "provider": "hashicorp/tfe v0.81.0",
+  "resource_count": 73,
   "data_source_count": 43,
   "resources_covered": 72,
   "data_sources_covered": 43,
@@ -69,7 +69,7 @@
     {
       "name": "tfe_hyok_configuration",
       "status": "covered",
-      "schema_hash": "c62a587d59fe370e0c04e72636906e081030d446b7c763e35e4ff589a6eaf25e"
+      "schema_hash": "975de87a7bade0ec10119ed421f55326e46f5c91f8d7680e3cb9154d66d74fae"
     },
     {
       "name": "tfe_no_code_module",
@@ -139,7 +139,7 @@
     {
       "name": "tfe_policy_set",
       "status": "covered",
-      "schema_hash": "6782c117bbc40e6c398ee942e385a26aa6cc4c47e8bc64f2e4bc786021e90f3a"
+      "schema_hash": "ec3ab85649e2e2ebc0673965a42cb65f62172ec7c118648fbb6c57d6ee7f8055"
     },
     {
       "name": "tfe_policy_set_parameter",
@@ -164,7 +164,7 @@
     {
       "name": "tfe_project_policy_set",
       "status": "covered",
-      "schema_hash": "c88bac3901e3b0cda6562fc75273a3aed94cc686db5024d7ba271c3f4829134f"
+      "schema_hash": "5c07c2b04e2e7243b0fea96f36ad605b0403f029bca0871a28ec5fda9716d681"
     },
     {
       "name": "tfe_project_policy_set_exclusion",
@@ -209,7 +209,7 @@
     {
       "name": "tfe_saml_settings",
       "status": "covered",
-      "schema_hash": "c8c45de535e5ef337ac8789b2e7284918f543b2a7964fa803169d5116bb15971"
+      "schema_hash": "7b234214710404c6401ffb6ff7c697d563d9b12430fa1ef7c0ec12cdb39e6ab6"
     },
     {
       "name": "tfe_scim_group_mapping",
@@ -219,7 +219,7 @@
     {
       "name": "tfe_scim_settings",
       "status": "covered",
-      "schema_hash": "20a5b390938ced010209a0108a5a59389f2583e3db52cc4f6c970a4ac97775f2"
+      "schema_hash": "5797fb4d2ac07c2af47164b93a3d2826a79729445d394c43170d69ea1ef08b7d"
     },
     {
       "name": "tfe_scim_token",
@@ -335,6 +335,11 @@
       "name": "tfe_workspace",
       "status": "covered",
       "schema_hash": "69428007236b3f8b46e6bddeea486409561b85f0b4b412b7d4f3ad12526b29fb"
+    },
+    {
+      "name": "tfe_workspace_hyok_enabled",
+      "status": "backend-gap",
+      "schema_hash": "602aea4c4fb6d88c47c70c0b0b6ef131411b0f31322293618982886f4e05c610"
     },
     {
       "name": "tfe_workspace_policy_set",
@@ -511,7 +516,7 @@
     {
       "name": "tfe_saml_settings",
       "status": "covered",
-      "schema_hash": "6d9ce773d48c62698215da5be5625f40ed6c83e1255eec8682b3136dba8e18ec"
+      "schema_hash": "aa853fa62ee2ae23c82f2073aa9e7b8b2512babafc1a5fa03df42b603a6800d0"
     },
     {
       "name": "tfe_scim_group",
@@ -521,7 +526,7 @@
     {
       "name": "tfe_scim_settings",
       "status": "covered",
-      "schema_hash": "0b0bb40fb1a8bcb9e5f24b52623e1fd159cd480cbb93c7309f83979831d70a40"
+      "schema_hash": "ae4776334ef43fe92aa6fe0c2200e5998ca1ea7db6e0d2068b2f78ec31173cf5"
     },
     {
       "name": "tfe_scim_token",
