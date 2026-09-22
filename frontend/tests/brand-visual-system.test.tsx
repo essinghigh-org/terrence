@@ -58,7 +58,9 @@ test("engine marks float independently of the character without tiles or grips",
   const svg = render(<Terrence pose="ecosystem" />).container.querySelector("svg");
   const marks = svg?.querySelector('[data-prop="engine-marks"]');
   expect(marks).not.toBeNull();
-  expect(marks?.querySelectorAll("g > svg > svg").length).toBe(2);
+  const engineMarks = [...(marks?.querySelectorAll(":scope > g > svg") ?? [])];
+  expect(engineMarks).toHaveLength(2);
+  expect(engineMarks.every((mark): boolean => mark.querySelector("path") !== null)).toBeTrue();
   expect(marks?.closest(".terrence-body")).toBeNull();
   expect(marks?.querySelector("rect, .terrence-paw")).toBeNull();
   expect(svg?.querySelector(".terrence-orbit--back")).not.toBeNull();
