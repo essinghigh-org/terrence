@@ -128,6 +128,17 @@ function numeric(value: number | bigint | string): number {
   return Number(value);
 }
 
+async function seedSystemApiToken(sql: Bun.SQL): Promise<string> {
+  const token = `tfe-system-${crypto.randomUUID()}`;
+  const tokenHash = new Bun.CryptoHasher("sha256").update(token).digest("hex");
+  const now = Date.now();
+  await sql.unsafe(
+    "INSERT INTO system_api_tokens (id, token_hash, description, created_at, expires_at) VALUES ($1, $2, $3, $4, $5)",
+    [`ha-e2e-system-${crypto.randomUUID()}`, tokenHash, "HA readiness probe", now, now + 60_000],
+  );
+  return token;
+}
+
 async function bootstrapAdminToken(replica: Replica): Promise<string> {
   const response = await fetch(`http://127.0.0.1:${replica.port}/api/v2/users/login`, {
     method: "POST",
@@ -287,6 +298,24 @@ haTest(
       const duplicateLog = await readFile(duplicate.logPath, "utf8");
       expect(duplicateLog).toContain("already registered by another live control-plane instance");
 
+      // Leave a coordinator-owned assessment in the running state. The
+      // successor must reconcile it before its scheduler begins polling, so it
+      // cannot permanently consume HEALTH_ASSESSMENT_CONCURRENCY after failover.
+      const assessmentOrgId = `ha-assessment-org-${crypto.randomUUID()}`;
+      const assessmentWorkspaceId = `ha-assessment-ws-${crypto.randomUUID()}`;
+      const assessmentId = `ha-assessment-${crypto.randomUUID()}`;
+      await cluster.unsafe("INSERT INTO organizations (id, name) VALUES ($1, $2)", [assessmentOrgId, assessmentOrgId]);
+      await cluster.unsafe("INSERT INTO workspaces (id, name, org_id, created_at) VALUES ($1, $2, $3, $4)", [
+        assessmentWorkspaceId,
+        assessmentWorkspaceId,
+        assessmentOrgId,
+        Date.now(),
+      ]);
+      await cluster.unsafe(
+        "INSERT INTO assessment_results (id, workspace_id, status, created_at) VALUES ($1, $2, 'running', $3)",
+        [assessmentId, assessmentWorkspaceId, Date.now()],
+      );
+
       const leader = replicas.find(
         (replica): boolean => replica.id === initialLease?.owner_node_id && replica.proc.exitCode === null,
       );
@@ -314,6 +343,17 @@ haTest(
       expect(replacement.owner_node_id).not.toBe(initialLease.owner_node_id);
       expect(numeric(replacement.fencing_epoch)).toBeGreaterThanOrEqual(2);
 
+      let assessmentStatus: string | undefined;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const rows = (await cluster.unsafe("SELECT status FROM assessment_results WHERE id = $1", [
+          assessmentId,
+        ])) as unknown as { status: string }[];
+        assessmentStatus = rows[0]?.status;
+        if (assessmentStatus === "errored") break;
+        await sleep(125);
+      }
+      expect(assessmentStatus).toBe("errored");
+
       const survivors = replicas.filter(
         (replica): boolean =>
           replica.id !== initialLease.owner_node_id &&
@@ -334,4 +374,154 @@ haTest(
     }
   },
   75_000,
+);
+
+haTest(
+  "draining the coordinator hands off without waiting out the lease TTL or canceling work",
+  async () => {
+    const databaseName = `terrence_ha_drain_${crypto.randomUUID().replaceAll("-", "")}`;
+    const root = await mkdtemp(join(tmpdir(), "terrence-ha-drain-e2e-"));
+    const storageDir = join(root, "storage");
+    const logsDir = join(root, "logs");
+    await Promise.all([mkdir(join(storageDir, "binaries"), { recursive: true }), mkdir(logsDir, { recursive: true })]);
+
+    const admin = new Bun.SQL(incomingDatabaseUrl);
+    const target = new URL(incomingDatabaseUrl);
+    target.pathname = `/${databaseName}`;
+    const databaseUrl = target.toString();
+    const cluster = new Bun.SQL(databaseUrl);
+    const replicas: Replica[] = [];
+
+    try {
+      await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+      const publicPort = await freeOperationalTestPort();
+      const publicUrl = `http://127.0.0.1:${publicPort}`;
+
+      const started = await Promise.all(
+        ["drain-node-a", "drain-node-b"].map((id) => startReplica(id, databaseUrl, storageDir, publicUrl, logsDir)),
+      );
+      replicas.push(...started);
+      await Promise.all(replicas.map((replica) => waitForHealth(replica)));
+
+      let initialLease: LeaseRow | undefined;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        initialLease = await leaseRow(cluster);
+        if (initialLease?.active === true) break;
+        await sleep(125);
+      }
+      expect(initialLease).toBeDefined();
+      if (initialLease === undefined) throw new Error("expected an elected coordinator");
+
+      // Every live node advertises the protocol version it speaks, which is
+      // what lets a joining replica and the incumbents each veto an
+      // unsupported skew.
+      let protocolRows: { id: string; protocol_version: number | bigint | string | null }[] = [];
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        protocolRows = (await cluster.unsafe(
+          "SELECT id, protocol_version FROM control_plane_nodes WHERE id LIKE 'drain-node-%' ORDER BY id",
+        )) as unknown as typeof protocolRows;
+        if (protocolRows.length === 2 && protocolRows.every((row) => row.protocol_version !== null)) break;
+        await sleep(125);
+      }
+      expect(protocolRows).toHaveLength(2);
+      for (const row of protocolRows) expect(numeric(row.protocol_version ?? 0)).toBeGreaterThanOrEqual(1);
+
+      // Record the drain against the elected coordinator. Writing the row
+      // rather than calling the API exercises the durable-intent path: an
+      // operator's request must survive a missed NOTIFY.
+      const drainedNodeId = initialLease.owner_node_id;
+      await cluster.unsafe(
+        "UPDATE control_plane_nodes SET drain_requested_at = CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT), " +
+          "drain_requested_by = 'ha-e2e', drain_reason = 'rolling upgrade', status = 'maintenance' WHERE id = $1",
+        [drainedNodeId],
+      );
+
+      // Resignation collapses failover from the 15s lease TTL to one follower
+      // claim. Allow for the heartbeat interval that adopts the request, but
+      // still assert the successor arrives well inside a TTL-expiry timeline.
+      let successor: LeaseRow | undefined;
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        const candidate = await leaseRow(cluster);
+        if (candidate !== undefined && candidate.owner_node_id !== drainedNodeId && candidate.active) {
+          successor = candidate;
+          break;
+        }
+        await sleep(125);
+      }
+      expect(successor).toBeDefined();
+      if (successor === undefined) throw new Error("expected coordinator handoff after drain");
+      expect(successor.owner_node_id).not.toBe(drainedNodeId);
+      expect(numeric(successor.fencing_epoch)).toBeGreaterThan(numeric(initialLease.fencing_epoch));
+
+      // Invariant: exactly one coordinator lease exists at any time.
+      const leaseCount = (await cluster.unsafe(
+        "SELECT COUNT(*)::int AS count FROM control_plane_leases WHERE name = 'scheduler'",
+      )) as unknown as { count: number }[];
+      expect(leaseCount[0]?.count).toBe(1);
+
+      // The drained node converges to a terminal, durable phase so an
+      // orchestrator knows termination is safe.
+      let drainedStatus: string | undefined;
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        const rows = (await cluster.unsafe("SELECT status, drained_at FROM control_plane_nodes WHERE id = $1", [
+          drainedNodeId,
+        ])) as unknown as { status: string; drained_at: number | bigint | string | null }[];
+        drainedStatus = rows[0]?.status;
+        if (drainedStatus === "drained" && rows[0]?.drained_at !== null) break;
+        await sleep(125);
+      }
+      expect(drainedStatus).toBe("drained");
+
+      const drainedReplica = replicas.find((replica): boolean => replica.id === drainedNodeId);
+      expect(drainedReplica).toBeDefined();
+      if (drainedReplica === undefined) throw new Error("drained replica process not found");
+
+      // A drained node is still a healthy process; it reports DRAINING so the
+      // load balancer stops sending it new work rather than being killed.
+      const liveness = await fetch(`http://127.0.0.1:${drainedReplica.port}/healthz`);
+      expect(liveness.ok).toBe(true);
+      const drainedSystemToken = await seedSystemApiToken(cluster);
+      const readiness = await fetch(`http://127.0.0.1:${drainedReplica.systemPort}/api/v1/readiness`, {
+        headers: { Accept: "text/plain", Authorization: `Bearer ${drainedSystemToken}` },
+      });
+      expect(readiness.status).toBe(503);
+      expect((await readiness.text()).trim()).toBe("DRAINING");
+
+      const survivor = replicas.find((replica): boolean => replica.id !== drainedNodeId);
+      expect(survivor).toBeDefined();
+      if (survivor === undefined) throw new Error("surviving replica not found");
+      const survivorSystemToken = await seedSystemApiToken(cluster);
+      const survivorReadiness = await fetch(`http://127.0.0.1:${survivor.systemPort}/api/v1/readiness`, {
+        headers: { Accept: "text/plain", Authorization: `Bearer ${survivorSystemToken}` },
+      });
+      // The API stays available on the remaining healthy replica throughout.
+      expect(survivorReadiness.status).toBe(200);
+
+      // Replacing the drained node with a fresh process reuses the node ID and
+      // must come back ACTIVE, which is the ordinary drain/terminate/replace
+      // rollout step.
+      await terminate(drainedReplica);
+      const replacement = await startReplica(drainedNodeId, databaseUrl, storageDir, publicUrl, logsDir);
+      replicas.push(replacement);
+      await waitForHealth(replacement);
+
+      let replacementStatus: string | undefined;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const rows = (await cluster.unsafe("SELECT status, drain_requested_at FROM control_plane_nodes WHERE id = $1", [
+          drainedNodeId,
+        ])) as unknown as { status: string; drain_requested_at: number | bigint | string | null }[];
+        replacementStatus = rows[0]?.status;
+        if (replacementStatus === "active" && rows[0]?.drain_requested_at === null) break;
+        await sleep(125);
+      }
+      expect(replacementStatus).toBe("active");
+    } finally {
+      await Promise.all(replicas.map((replica) => terminate(replica).catch((): void => undefined)));
+      await cluster.close().catch((): void => undefined);
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch((): void => undefined);
+      await admin.close().catch((): void => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  120_000,
 );

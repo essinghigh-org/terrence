@@ -40,6 +40,7 @@ import {
 import { eq, desc, asc, and, gt, lt, lte, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { spawn } from "bun";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac } from "node:crypto";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
@@ -87,7 +88,13 @@ import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-toke
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { pruneControlEvents, publish } from "./lib/event-bus";
-import { isControlPlaneCoordinatorLeader } from "./lib/control-plane-coordinator";
+import {
+  assertControlPlaneCoordinatorFenceTx,
+  controlPlaneCoordinatorState,
+  isControlPlaneCoordinatorLeader,
+  StaleControlPlaneCoordinatorFenceError,
+} from "./lib/control-plane-coordinator";
+import { nodeDrainRequested, registerNodeDrainActivityProbe } from "./lib/node-drain";
 import {
   assertLocalRunExecutionLease,
   clearExpiredRunExecutionLease,
@@ -119,7 +126,7 @@ import {
 import { log, safeJsonStringify } from "./lib/log";
 import { extractSafeTarArchive } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
-import { startDurableJobWorker } from "./lib/durable-jobs";
+import { activeDurableJobCount, startDurableJobWorker } from "./lib/durable-jobs";
 import { handleOutboxDeliveryJob, repairOutboxJobs } from "./lib/outbox";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
@@ -763,6 +770,14 @@ export function terminateActiveRunExecutions(): void {
   }
 }
 
+export function terminateActiveAssessmentExecutions(): void {
+  const processKeys = new Set(
+    [...activeRunProcesses.keys()].filter((runId): boolean => runId.startsWith("assessment-")),
+  );
+  for (const assessmentId of activeAssessmentExecutionIds) processKeys.add(`assessment-${assessmentId}`);
+  for (const processKey of processKeys) cancelRunExecution(processKey, true);
+}
+
 /** Tear down a finished run's cgroup. Call from run finalization/cleanup. */
 export function cleanupRunCgroup(runId: string): void {
   if (!activeRunCgroups.delete(runId)) return;
@@ -1030,12 +1045,13 @@ async function storePlanCheckResults(
   workspaceId: string,
   planJson: JsonObject,
   association: Readonly<{ assessmentResultId?: string; runId?: string }>,
+  database: typeof db = db,
 ): Promise<StoredCheckSummary> {
   const rawChecks = Array.isArray(planJson["checks"]) ? planJson["checks"] : [];
   if (association.runId !== undefined) {
-    await db.delete(assessmentCheckResults).where(eq(assessmentCheckResults.runId, association.runId));
+    await database.delete(assessmentCheckResults).where(eq(assessmentCheckResults.runId, association.runId));
   } else if (association.assessmentResultId !== undefined) {
-    await db
+    await database
       .delete(assessmentCheckResults)
       .where(eq(assessmentCheckResults.assessmentResultId, association.assessmentResultId));
   }
@@ -1061,7 +1077,7 @@ async function storePlanCheckResults(
       createdAt: Date.now(),
     });
   }
-  if (rows.length > 0) await db.insert(assessmentCheckResults).values(rows);
+  if (rows.length > 0) await database.insert(assessmentCheckResults).values(rows);
   return summary;
 }
 
@@ -1109,6 +1125,7 @@ async function readPlanJson(
     let keepStdout = false;
     let outputPromise: Promise<CapturedProcessOutput> | undefined;
     try {
+      if (!requireExecutionLease) assertAssessmentCoordinatorOwnership();
       const child = spawnRunProcess(
         runId,
         [binary, "show", "-json", tfplanPath],
@@ -5356,6 +5373,7 @@ async function captureProcess(
   timeoutMs: number,
   outputDirectory: string,
 ): Promise<CapturedProcess> {
+  assertAssessmentCoordinatorOwnership();
   const child = spawnRunProcess(runId, args, { cwd, env, stdout: "pipe", stderr: "pipe" }, runSandbox, false);
   const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "assessment");
   const [exitCode, capturedOutput] = await waitForTrackedProcess(runId, "assessment", child, outputPromise, timeoutMs);
@@ -5744,9 +5762,55 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
   return enqueued;
 }
 
-/** Tracked wrapper: shutdown drain waits for in-flight assessments. */
-async function executeAssessment(assessmentResultId: string): Promise<void> {
-  return trackLocalExecution(executeAssessmentImpl(assessmentResultId));
+class AssessmentCoordinatorLeaseLostError extends Error {
+  constructor() {
+    super("Health assessment lost coordinator ownership");
+    this.name = "AssessmentCoordinatorLeaseLostError";
+  }
+}
+
+const assessmentCoordinatorContext = new AsyncLocalStorage<number | null>();
+const activeAssessmentExecutionIds = new Set<string>();
+let activeAssessmentClaims = 0;
+
+function assessmentCoordinatorEpoch(): number | null {
+  return assessmentCoordinatorContext.getStore() ?? null;
+}
+
+function assertAssessmentCoordinatorOwnership(): void {
+  const expectedEpoch = assessmentCoordinatorEpoch();
+  if (!haEnabled() || expectedEpoch === null) return;
+  const current = controlPlaneCoordinatorState();
+  if (!isControlPlaneCoordinatorLeader() || current.fencingEpoch !== expectedEpoch) {
+    throw new AssessmentCoordinatorLeaseLostError();
+  }
+}
+
+async function withAssessmentCoordinatorFence<T>(work: (database: typeof db) => Promise<T>): Promise<T> {
+  const expectedEpoch = assessmentCoordinatorEpoch();
+  if (!haEnabled() || expectedEpoch === null) return work(db);
+  assertAssessmentCoordinatorOwnership();
+  try {
+    return await db.transaction(async (transaction): Promise<T> => {
+      await assertControlPlaneCoordinatorFenceTx(transaction, expectedEpoch);
+      return work(transaction);
+    });
+  } catch (error: unknown) {
+    if (error instanceof StaleControlPlaneCoordinatorFenceError) throw new AssessmentCoordinatorLeaseLostError();
+    throw error;
+  }
+}
+
+/** Tracked wrapper: shutdown and node drain wait for in-flight assessments. */
+async function executeAssessment(assessmentResultId: string, coordinatorEpoch: number | null): Promise<void> {
+  activeAssessmentExecutionIds.add(assessmentResultId);
+  try {
+    await assessmentCoordinatorContext.run(coordinatorEpoch, async (): Promise<void> => {
+      await trackLocalExecution(executeAssessmentImpl(assessmentResultId));
+    });
+  } finally {
+    activeAssessmentExecutionIds.delete(assessmentResultId);
+  }
 }
 
 async function checkAssessmentEnabled(
@@ -5755,16 +5819,20 @@ async function checkAssessmentEnabled(
   assessmentResultId: string,
 ): Promise<boolean> {
   if (workspace.assessmentsEnabled !== true && organization?.assessmentsEnforced !== true) {
-    await db
-      .update(assessmentResults)
-      .set({
-        status: "canceled",
-        succeeded: false,
-        errorMessage: "Health assessments are disabled",
-        completedAt: Date.now(),
-      })
-      .where(eq(assessmentResults.id, assessmentResultId));
-    scheduleExplorerInventory(workspace.id);
+    const canceled = await withAssessmentCoordinatorFence(async (database): Promise<boolean> => {
+      const updated = await database
+        .update(assessmentResults)
+        .set({
+          status: "canceled",
+          succeeded: false,
+          errorMessage: "Health assessments are disabled",
+          completedAt: Date.now(),
+        })
+        .where(and(eq(assessmentResults.id, assessmentResultId), eq(assessmentResults.status, "running")))
+        .returning({ id: assessmentResults.id });
+      return updated.length > 0;
+    });
+    if (canceled) scheduleExplorerInventory(workspace.id);
     return false;
   }
   return true;
@@ -5963,7 +6031,7 @@ async function runAssessmentPlanCapture(
   }
 
   const generatedPlan = await readPlanJson(
-    assessmentResultId,
+    `assessment-${assessmentResultId}`,
     executionDir,
     resolved.binaryPath,
     assessmentTimeoutMs,
@@ -5997,6 +6065,11 @@ async function readAssessmentProviderSchema(
   return {};
 }
 
+type AssessmentCompletionOutcome =
+  | Readonly<{ status: "stale" }>
+  | Readonly<{ status: "canceled" }>
+  | Readonly<{ status: "completed"; drifted: boolean; allChecksSucceeded: boolean }>;
+
 async function completeAssessmentRun(
   assessmentResultId: string,
   workspaceId: string,
@@ -6004,53 +6077,66 @@ async function completeAssessmentRun(
   providerSchema: JsonObject,
   output: readonly string[],
 ): Promise<void> {
-  const activeRun = await db.query.runs.findFirst({
-    where: and(eq(runs.workspaceId, workspaceId), notInArray(runs.status, FINAL_RUN_STATUSES)),
-  });
-  if (activeRun !== undefined) {
-    await db
+  const resources = assessmentResourceCounts(planJson);
+  const outcome = await withAssessmentCoordinatorFence(async (database): Promise<AssessmentCompletionOutcome> => {
+    // Conditional no-op update locks the assessment row for the rest of the
+    // transaction. A user cancellation or takeover reconciliation therefore
+    // cannot race final check/result publication.
+    const locked = await database
+      .update(assessmentResults)
+      .set({ status: "running" })
+      .where(and(eq(assessmentResults.id, assessmentResultId), eq(assessmentResults.status, "running")))
+      .returning({ id: assessmentResults.id });
+    if (locked.length === 0) return { status: "stale" };
+
+    const activeRun = await database.query.runs.findFirst({
+      where: and(eq(runs.workspaceId, workspaceId), notInArray(runs.status, FINAL_RUN_STATUSES)),
+    });
+    if (activeRun !== undefined) {
+      await database
+        .update(assessmentResults)
+        .set({
+          status: "canceled",
+          succeeded: false,
+          errorMessage: "Canceled because an ordinary run started",
+          logOutput: output.join("\n"),
+          completedAt: Date.now(),
+        })
+        .where(eq(assessmentResults.id, assessmentResultId));
+      return { status: "canceled" };
+    }
+
+    const checks = await storePlanCheckResults(workspaceId, planJson, { assessmentResultId }, database);
+    const allChecksSucceeded = checks.failed === 0 && checks.errored === 0 && checks.unknown === 0;
+    await database
       .update(assessmentResults)
       .set({
-        status: "canceled",
-        succeeded: false,
-        errorMessage: "Canceled because an ordinary run started",
+        status: "completed",
+        succeeded: true,
+        drifted: resources.drifted > 0,
+        errorMessage: null,
+        resourcesDrifted: resources.drifted,
+        resourcesUndrifted: resources.undrifted,
+        allChecksSucceeded,
+        checksPassed: checks.passed,
+        checksFailed: checks.failed,
+        checksErrored: checks.errored,
+        checksUnknown: checks.unknown,
+        jsonOutput: planJson,
+        jsonSchema: providerSchema,
+        artifactSchemaVersion: 1,
         logOutput: output.join("\n"),
         completedAt: Date.now(),
       })
       .where(eq(assessmentResults.id, assessmentResultId));
-    scheduleExplorerInventory(workspaceId);
-    return;
-  }
+    return { status: "completed", drifted: resources.drifted > 0, allChecksSucceeded };
+  });
 
-  const [resources, checks] = await Promise.all([
-    Promise.resolve(assessmentResourceCounts(planJson)),
-    storePlanCheckResults(workspaceId, planJson, { assessmentResultId }),
-  ]);
-  const allChecksSucceeded = checks.failed === 0 && checks.errored === 0 && checks.unknown === 0;
-  await db
-    .update(assessmentResults)
-    .set({
-      status: "completed",
-      succeeded: true,
-      drifted: resources.drifted > 0,
-      errorMessage: null,
-      resourcesDrifted: resources.drifted,
-      resourcesUndrifted: resources.undrifted,
-      allChecksSucceeded,
-      checksPassed: checks.passed,
-      checksFailed: checks.failed,
-      checksErrored: checks.errored,
-      checksUnknown: checks.unknown,
-      jsonOutput: planJson,
-      jsonSchema: providerSchema,
-      artifactSchemaVersion: 1,
-      logOutput: output.join("\n"),
-      completedAt: Date.now(),
-    })
-    .where(eq(assessmentResults.id, assessmentResultId));
+  if (outcome.status === "stale") return;
   scheduleExplorerInventory(workspaceId);
-  if (resources.drifted > 0) queueAssessmentNotification(assessmentResultId, "assessment:drifted");
-  if (!allChecksSucceeded) queueAssessmentNotification(assessmentResultId, "assessment:check_failure");
+  if (outcome.status !== "completed") return;
+  if (outcome.drifted) queueAssessmentNotification(assessmentResultId, "assessment:drifted");
+  if (!outcome.allChecksSucceeded) queueAssessmentNotification(assessmentResultId, "assessment:check_failure");
 }
 
 async function failAssessmentRun(
@@ -6062,17 +6148,27 @@ async function failAssessmentRun(
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   appendOutput(`[terrence ERROR] ${message}`);
-  await db
-    .update(assessmentResults)
-    .set({
-      status: "errored",
-      succeeded: false,
-      drifted: null,
-      errorMessage: message,
-      logOutput: output.join("\n"),
-      completedAt: Date.now(),
-    })
-    .where(eq(assessmentResults.id, assessmentResultId));
+  const updated = await withAssessmentCoordinatorFence(async (database): Promise<boolean> => {
+    const locked = await database
+      .update(assessmentResults)
+      .set({ status: "running" })
+      .where(and(eq(assessmentResults.id, assessmentResultId), eq(assessmentResults.status, "running")))
+      .returning({ id: assessmentResults.id });
+    if (locked.length === 0) return false;
+    await database
+      .update(assessmentResults)
+      .set({
+        status: "errored",
+        succeeded: false,
+        drifted: null,
+        errorMessage: message,
+        logOutput: output.join("\n"),
+        completedAt: Date.now(),
+      })
+      .where(eq(assessmentResults.id, assessmentResultId));
+    return true;
+  });
+  if (!updated) return;
   scheduleExplorerInventory(workspaceId);
   queueAssessmentNotification(assessmentResultId, "assessment:failed");
 }
@@ -6094,10 +6190,11 @@ async function cleanupAssessmentRun(assessmentResultId: string, workDir: string)
 
 async function executeAssessmentImpl(assessmentResultId: string): Promise<void> {
   assertRunSandboxAvailable();
+  assertAssessmentCoordinatorOwnership();
   const assessment = await db.query.assessmentResults.findFirst({
     where: eq(assessmentResults.id, assessmentResultId),
   });
-  if (assessment === undefined || ["completed", "errored", "canceled"].includes(assessment.status)) return;
+  if (assessment === undefined || assessment.status !== "running") return;
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, assessment.workspaceId),
@@ -6106,9 +6203,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   const organization = await db.query.organizations.findFirst({
     where: eq(organizations.id, workspace.orgId),
   });
-  if (!(await checkAssessmentEnabled(workspace, organization, assessmentResultId))) return;
 
-  await db.update(assessmentResults).set({ status: "running" }).where(eq(assessmentResults.id, assessmentResultId));
   const workDir = assessmentWorkDir(assessmentResultId);
   const output: string[] = [];
   const appendOutput = (text: string): void => {
@@ -6116,6 +6211,8 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   };
 
   try {
+    if (!(await checkAssessmentEnabled(workspace, organization, assessmentResultId))) return;
+    assertAssessmentCoordinatorOwnership();
     // Existing assessment rows may have null legacy artifacts; malformed
     // imported artifacts fail this worker with a typed row-aware diagnostic.
     parsePersistedArtifact(assessment.jsonOutput, assessment.artifactSchemaVersion, assessment.id);
@@ -6173,7 +6270,21 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
 
     await completeAssessmentRun(assessmentResultId, workspace.id, planJson, providerSchema, output);
   } catch (error: unknown) {
-    await failAssessmentRun(assessmentResultId, workspace.id, output, appendOutput, error);
+    if (error instanceof AssessmentCoordinatorLeaseLostError) {
+      log.warn("Health assessment fenced after coordinator ownership changed", { assessmentResultId });
+      return;
+    }
+    try {
+      await failAssessmentRun(assessmentResultId, workspace.id, output, appendOutput, error);
+    } catch (failureError: unknown) {
+      if (failureError instanceof AssessmentCoordinatorLeaseLostError) {
+        log.warn("Health assessment error publication fenced after coordinator ownership changed", {
+          assessmentResultId,
+        });
+        return;
+      }
+      throw failureError;
+    }
   } finally {
     await cleanupAssessmentRun(assessmentResultId, workDir);
   }
@@ -6207,36 +6318,69 @@ async function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise
   return run;
 }
 
+async function claimAssessmentExecution(assessmentResultId: string): Promise<number | null | undefined> {
+  if (!haEnabled()) {
+    const updated = await db
+      .update(assessmentResults)
+      .set({ status: "running" })
+      .where(and(eq(assessmentResults.id, assessmentResultId), eq(assessmentResults.status, "pending")))
+      .returning({ id: assessmentResults.id });
+    return updated.length === 0 ? undefined : null;
+  }
+
+  const coordinator = controlPlaneCoordinatorState();
+  if (!isControlPlaneCoordinatorLeader() || coordinator.fencingEpoch === null) return undefined;
+  const epoch = coordinator.fencingEpoch;
+  try {
+    return await db.transaction(async (transaction): Promise<number | undefined> => {
+      await assertControlPlaneCoordinatorFenceTx(transaction, epoch);
+      const database = transaction as typeof db;
+      const updated = await database
+        .update(assessmentResults)
+        .set({ status: "running" })
+        .where(and(eq(assessmentResults.id, assessmentResultId), eq(assessmentResults.status, "pending")))
+        .returning({ id: assessmentResults.id });
+      return updated.length === 0 ? undefined : epoch;
+    });
+  } catch (error: unknown) {
+    if (error instanceof StaleControlPlaneCoordinatorFenceError) return undefined;
+    throw error;
+  }
+}
 export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
     if (isMaintenanceActive()) return [];
     if (coordinatorWorkerDraining()) return [];
-    const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
-    const running = await db.query.assessmentResults.findMany({
-      where: eq(assessmentResults.status, "running"),
-      columns: { id: true },
-    });
-    const available = Math.max(0, maximum - running.length);
-    if (available === 0) return [];
-    const pending = await db.query.assessmentResults.findMany({
-      where: eq(assessmentResults.status, "pending"),
-      orderBy: [asc(assessmentResults.createdAt)],
-      limit: available,
-    });
-    const claimed: string[] = [];
-    for (const assessment of pending) {
-      const updated = await db
-        .update(assessmentResults)
-        .set({ status: "running" })
-        .where(and(eq(assessmentResults.id, assessment.id), eq(assessmentResults.status, "pending")))
-        .returning({ id: assessmentResults.id });
-      if (updated.length === 0) continue;
-      claimed.push(assessment.id);
-      executeAssessment(assessment.id).catch((error: unknown): void => {
-        log.error("Assessment failed", { assessmentId: assessment.id, error });
+
+    activeAssessmentClaims += 1;
+    try {
+      const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
+      const running = await db.query.assessmentResults.findMany({
+        where: eq(assessmentResults.status, "running"),
+        columns: { id: true },
       });
+      const available = Math.max(0, maximum - running.length);
+      if (available === 0) return [];
+      const pending = await db.query.assessmentResults.findMany({
+        where: eq(assessmentResults.status, "pending"),
+        orderBy: [asc(assessmentResults.createdAt)],
+        limit: available,
+      });
+      const claimed: string[] = [];
+      for (const assessment of pending) {
+        const coordinatorEpoch = await claimAssessmentExecution(assessment.id);
+        if (coordinatorEpoch === undefined) continue;
+        claimed.push(assessment.id);
+        // executeAssessment records activity synchronously, so drain state
+        // cannot reach DRAINED between a successful claim and execution.
+        executeAssessment(assessment.id, coordinatorEpoch).catch((error: unknown): void => {
+          log.error("Assessment failed", { assessmentId: assessment.id, error });
+        });
+      }
+      return claimed;
+    } finally {
+      activeAssessmentClaims -= 1;
     }
-    return claimed;
   });
 }
 
@@ -7042,6 +7186,7 @@ export function stopCoordinatorWorkerQueue(): void {
  */
 export function handleControlPlaneLeadershipLost(): void {
   stopCoordinatorWorkerQueue();
+  terminateActiveAssessmentExecutions();
 }
 
 /** Test-only visibility for coordinator scheduler ownership. */
@@ -7061,15 +7206,22 @@ export function stopWorkerQueue(): void {
   localExecutionLifecycle.stop();
 }
 
+/** True during process shutdown or an operator-requested node drain. */
 export function workerQueueDraining(): boolean {
-  return localExecutionLifecycle.isDraining();
+  return localExecutionLifecycle.isDraining() || nodeDrainRequested();
 }
 
+// Drain completion reads local execution activity through this probe.
+registerNodeDrainActivityProbe(
+  (): { activeRunExecutions: number; activeAssessments: number; activeDurableJobs: number } => ({
+    activeRunExecutions: localExecutionLifecycle.activeRunExecutionCount(),
+    activeAssessments: activeAssessmentExecutionIds.size + activeAssessmentClaims,
+    activeDurableJobs: activeDurableJobCount(),
+  }),
+);
+
 function coordinatorWorkerDraining(): boolean {
-  return (
-    localExecutionLifecycle.isDraining() ||
-    (haEnabled() && (!coordinatorWorkerRunning || !isControlPlaneCoordinatorLeader()))
-  );
+  return workerQueueDraining() || (haEnabled() && (!coordinatorWorkerRunning || !isControlPlaneCoordinatorLeader()));
 }
 
 /**
@@ -7624,7 +7776,7 @@ async function errorInterruptedAssessment(assessmentId: string): Promise<boolean
     .update(assessmentResults)
     .set({
       status: "errored",
-      errorMessage: "Terrence restarted during this health assessment",
+      errorMessage: "Terrence was interrupted during this health assessment",
       completedAt: Date.now(),
     })
     .where(and(eq(assessmentResults.id, assessmentId), eq(assessmentResults.status, "running")))
@@ -7643,9 +7795,10 @@ async function errorInterruptedAssessment(assessmentId: string): Promise<boolean
 }
 
 async function errorInterruptedAssessments(): Promise<number> {
-  // Running assessments die with the process too; they count against the
-  // assessment concurrency budget, so error them and let the next discovery
-  // cycle create a fresh pending result.
+  // This runs on process startup and on every coordinator acquisition before
+  // the scheduler starts. Any assessment left running by the previous owner
+  // is errored before pollAssessmentQueue can count it against concurrency.
+  // The next discovery cycle creates a fresh pending result.
   const runningAssessments = await db.query.assessmentResults.findMany({
     where: eq(assessmentResults.status, "running"),
     columns: { id: true },
@@ -7778,13 +7931,13 @@ export function startCoordinatorWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries).
   if (envFlag("TERRENCE_DISABLE_WORKER")) return;
-  if (coordinatorWorkerRunning || localExecutionLifecycle.isDraining()) return;
+  if (coordinatorWorkerRunning || workerQueueDraining()) return;
   coordinatorWorkerRunning = true;
   coordinatorWorkerGeneration += 1;
   const generation = coordinatorWorkerGeneration;
 
   const generationActive = (): boolean =>
-    coordinatorWorkerRunning && coordinatorWorkerGeneration === generation && !localExecutionLifecycle.isDraining();
+    coordinatorWorkerRunning && coordinatorWorkerGeneration === generation && !workerQueueDraining();
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {
     if (!generationActive()) return;

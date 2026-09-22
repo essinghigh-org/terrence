@@ -17,6 +17,7 @@ import { integerSetting } from "../lib/runtime-config";
 import { auditLog } from "../lib/utils";
 import { controlPlaneCoordinatorState } from "../lib/control-plane-coordinator";
 import { controlPlaneInstanceId, haEnabled } from "../lib/ha-config";
+import { HA_MIN_COMPATIBLE_PROTOCOL_VERSION, HA_PROTOCOL_VERSION } from "../lib/ha-protocol";
 
 type Status = "OK" | "WARNING" | "ERROR";
 type BundleStatus = "generating" | "finished" | "errored" | "deleted";
@@ -452,6 +453,13 @@ async function activeControlPlaneNodes(): Promise<readonly (typeof controlPlaneN
       readinessChecks: [],
       registeredAt: now,
       lastHeartbeatAt: now,
+      protocolVersion: haEnabled() ? HA_PROTOCOL_VERSION : null,
+      minProtocolVersion: haEnabled() ? HA_MIN_COMPATIBLE_PROTOCOL_VERSION : null,
+      schemaVersion: null,
+      drainRequestedAt: null,
+      drainRequestedBy: null,
+      drainReason: null,
+      drainedAt: null,
     },
     ...nodes,
   ];

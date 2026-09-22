@@ -570,6 +570,13 @@ export const controlPlaneNodes = pgTable(
     role: text("role").notNull().default("standalone"),
     coordinatorEpoch: bigint("coordinator_epoch", { mode: "number" }),
     status: text("status").notNull().default("active"),
+    protocolVersion: bigint("protocol_version", { mode: "number" }),
+    minProtocolVersion: bigint("min_protocol_version", { mode: "number" }),
+    schemaVersion: text("schema_version"),
+    drainRequestedAt: bigint("drain_requested_at", { mode: "number" }),
+    drainRequestedBy: text("drain_requested_by"),
+    drainReason: text("drain_reason"),
+    drainedAt: bigint("drained_at", { mode: "number" }),
     readinessChecks: jsonb("readiness_checks").notNull().default([]),
     registeredAt: bigint("registered_at", { mode: "number" })
       .notNull()
@@ -2297,6 +2304,10 @@ export const scimSettings = pgTable("scim_settings", {
   siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => pgSchema["scimGroups"]!["id"], {
     onDelete: "set null",
   }),
+  // Keep this nullable column unconstrained during the rolling-upgrade
+  // expansion. The FK can be added in a later contract migration once the
+  // previous release is outside the supported skew window.
+  siteAuditorGroupScimId: text("site_auditor_group_scim_id"),
   updatedAt: bigint("updated_at", { mode: "number" })
     .notNull()
     .$defaultFn(() => sqliteSchema["scimSettings"]["updatedAt"].defaultFn!()),
@@ -2815,6 +2826,7 @@ export const users = pgTable(
     deletedEmailHash: text("deleted_email_hash"),
     emailVerifiedAt: bigint("email_verified_at", { mode: "number" }),
     scimSiteAdmin: boolean("scim_site_admin").notNull().default(false),
+    scimSiteAuditor: boolean("scim_site_auditor").notNull().default(false),
   },
   (table) => [uniqueIndex("users_sso_identity_idx").on(table["ssoProvider"], table["ssoSubject"])],
 );

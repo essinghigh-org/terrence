@@ -96,7 +96,105 @@ If a replica loses coordinator ownership, it immediately stops its scheduler gen
 
 Every replica may start concurrently against a fresh or upgraded database. PostgreSQL migrations are serialized with a session advisory lock, so exactly one startup process applies or verifies migrations at a time.
 
-This makes concurrent boot safe. It does **not** by itself guarantee that arbitrary mixed Terrence versions are rolling-upgrade compatible. Until a release explicitly documents mixed-version compatibility, replace/drain replicas using the normal upgrade procedure rather than assuming old and new binaries can serve concurrently.
+## Rolling upgrades and version compatibility
+
+HA nodes advertise two versions:
+
+- the application release (`1.4.0`, `1.5.0`, and so on);
+- an HA protocol version for cross-replica semantics.
+
+A node may join only when both checks pass:
+
+1. released builds are on the same major version and differ by at most one minor version;
+2. the HA protocol windows intersect.
+
+Development builds do not have a meaningful release number, so only the protocol check applies to them.
+
+HA-3 uses protocol `2` and accepts protocol `1`. A row created by a pre-HA3 node has no protocol value and is treated as protocol `1`. Only peers with a fresh heartbeat participate in the check. An incompatible node fails startup and readiness.
+
+The protocol version must be bumped when a release changes semantics another replica must understand, including lease/fencing rules, node-registry meaning, control-event payloads, durable-job payloads, or persisted enum-like values.
+
+### First upgrade to HA-3
+
+Protocol-1 nodes can run alongside HA-3 nodes, but they do not implement the remote drain lifecycle. The drain API returns `409 Conflict` if asked to drain such a node. Upgrade those nodes one at a time with the existing graceful process shutdown. After every live node is HA-3 capable, use the drain API for subsequent rolling replacements.
+
+### Migration compatibility
+
+PostgreSQL migrations used during a rolling upgrade must remain safe for the previous supported release. Use an expand/migrate/contract sequence for renames or removals:
+
+```text
+N     add the replacement surface; keep the old one usable
+N+1   move all supported code to the replacement
+N+2   remove the old surface
+```
+
+`bun run check:schema-compat` checks PostgreSQL migrations after the pre-HA3 baseline. It rejects unapproved contractions such as dropped/renamed columns, required columns without defaults, type changes, removed defaults, and new uniqueness or integrity constraints.
+
+An approved contraction must name the exact migration and surface in `backend/src/data/schema_contractions.json`, with release, owner, and justification metadata. Registering one surface does not exempt other changes in the same migration.
+
+SQLite is not checked because HA does not support SQLite.
+
+The same compatibility rule applies to persisted values and message payloads, not only SQL schema.
+
+## Node draining
+
+A planned drain has three phases:
+
+```text
+ACTIVE -> DRAINING -> DRAINED
+```
+
+When a node enters `DRAINING` it stops acquiring new local execution leases, durable jobs, assessment work, and coordinator scheduler work. Existing fenced Terraform/OpenTofu runs and durable jobs are allowed to finish.
+
+Health assessments are coordinator-owned rather than independently leased. If the draining node is coordinator and an assessment is already running, it keeps the coordinator lease until that assessment finishes. It then resigns immediately instead of waiting for the normal coordinator lease timeout.
+
+`DRAINED` means:
+
+- no local run executions;
+- no assessment execution or assessment claim in progress;
+- no durable job or durable-job claim in progress;
+- the node is not coordinator and is suspended from coordinator election.
+
+A drained process remains alive but returns `DRAINING` readiness, so it should be out of the load-balancer pool before termination.
+
+Drain intent is stored on the node row; the control event only reduces reaction time. A missed event is recovered from the persisted request. Reusing a node ID after it reaches `DRAINED` clears the old request and starts the replacement as `ACTIVE`.
+
+A node can start cordoned with `TERRENCE_NODE_STATUS=draining` or `TERRENCE_NODE_STATUS=maintenance`.
+
+System API:
+
+```text
+POST   /api/v1/nodes/:id/drain
+GET    /api/v1/nodes/drain
+DELETE /api/v1/nodes/:id/drain
+```
+
+`GET` reports the local node's phase and remaining run, assessment, and durable-job activity. `POST` may be sent to any HA-3 replica and targets the node ID in the path.
+
+## Coordinator resignation
+
+A planned drain does not wait for the 15-second coordinator TTL once coordinator-owned assessment work is clear. The node:
+
+1. stops taking new scheduler work;
+2. suspends itself from coordinator contention;
+3. expires only the coordinator lease generation it owns;
+4. continues observing the elected coordinator without trying to reclaim leadership.
+
+Another eligible replica then acquires the lease through the normal PostgreSQL compare-and-set path. No successor is nominated.
+
+## Rolling upgrade procedure
+
+For HA-3-capable nodes:
+
+1. deploy or start a compatible replacement where the topology permits it;
+2. confirm `cluster-compatibility` readiness;
+3. request drain on the old node;
+4. wait for `DRAINED`;
+5. terminate the old process;
+6. start the replacement if it reuses the same node ID;
+7. repeat for the remaining nodes.
+
+For the initial upgrade from a pre-HA3 release, replace step 3 with graceful process shutdown because protocol-1 nodes do not implement remote drain.
 
 ## Cross-replica events and SSE
 
@@ -228,3 +326,7 @@ Execution-lease tests additionally verify:
 - PostgreSQL row locks keep a higher-token takeover blocked until an in-flight authoritative state/artifact fence transaction commits;
 - expired interrupted leases recover while still-live leases remain authoritative;
 - expired ownership metadata on resting/final runs is cleared without resetting the fencing token.
+
+Rolling-upgrade tests cover the compatibility window, coordinator resignation, startup cordons, execution-lease drain gating, health-assessment drain behavior, durable drain intent, and exact-surface schema contraction checks.
+
+The PostgreSQL HA system test also exercises a real coordinator drain across multiple Terrence processes and verifies coordinator handoff, durable `DRAINED` state, readiness of the surviving replica, and reuse of the drained node ID by a replacement process.
