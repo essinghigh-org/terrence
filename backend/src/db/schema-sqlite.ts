@@ -41,6 +41,10 @@ export const users = sqliteTable(
     // access. Kept separate from the SAML provenance flag so either provider
     // can reconcile its own grant without revoking the other.
     scimSiteAdmin: integer("scim_site_admin", { mode: "boolean" }).notNull().default(false),
+    // True only when SCIM granted site-auditor access to an account that did
+    // not already hold that role manually. This lets SCIM revoke only its own
+    // grants when a user leaves the configured auditor group.
+    scimSiteAuditor: integer("scim_site_auditor", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject)],
 );
@@ -160,6 +164,9 @@ export const scimSettings = sqliteTable("scim_settings", {
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => scimGroups.id, { onDelete: "set null" }),
+  // Kept application-enforced to match PostgreSQL's expand-only schema
+  // during rolling upgrades; SCIM group deletion clears this mapping explicitly.
+  siteAuditorGroupScimId: text("site_auditor_group_scim_id"),
   updatedAt: integer("updated_at")
     .notNull()
     .$defaultFn(() => Date.now()),
