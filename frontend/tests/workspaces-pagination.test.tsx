@@ -80,7 +80,15 @@ test("export is explicit, reports progress and cancellation never publishes a pa
   let finishExport!: (response: Response) => void;
   let exportSignal: AbortSignal | null | undefined;
   let exports = 0;
+  let downloadActivations = 0;
   const revokedUrls: string[] = [];
+  const observeDownloadActivation = (event: MouseEvent): void => {
+    const target = event.target;
+    if (!(target instanceof HTMLAnchorElement) || target.getAttribute("href") !== "#test-export") return;
+    downloadActivations += 1;
+    event.preventDefault();
+  };
+  document.addEventListener("click", observeDownloadActivation, true);
   URL.createObjectURL = (blob) => {
     if (!(blob instanceof Blob)) throw new Error("Expected Blob download");
     downloads.push(blob);
@@ -136,8 +144,10 @@ test("export is explicit, reports progress and cancellation never publishes a pa
     expect(payload.organization).toBe("acme");
     expect(payload.workspaces).toHaveLength(150);
     expect(new Set(payload.workspaces.map((workspace: { id: string }) => workspace.id)).size).toBe(150);
+    expect(downloadActivations).toBe(1);
     expect(revokedUrls).toEqual(["#test-export"]);
   } finally {
+    document.removeEventListener("click", observeDownloadActivation, true);
     URL.createObjectURL = originalCreate;
     URL.revokeObjectURL = originalRevoke;
   }
