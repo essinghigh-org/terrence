@@ -8,7 +8,6 @@ import type { JsonValue } from "../src/lib/json";
 const originalFetch = globalThis.fetch;
 const originalCreateObjectURL = URL.createObjectURL.bind(URL);
 const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL);
-const anchorClickDescriptor = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, "click");
 
 function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -137,9 +136,6 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
-  if (anchorClickDescriptor !== undefined) {
-    Object.defineProperty(HTMLAnchorElement.prototype, "click", anchorClickDescriptor);
-  }
 });
 
 // Issue #580: the run page must surface an interrupted-apply recovery copy
@@ -240,11 +236,9 @@ test("download fetches the recovery copy", async () => {
   const rawState = '{ "version": 4, "serial": 7, "large": 123456789012345678901234567890 }\n';
   URL.createObjectURL = mock((blob: Blob): string => {
     downloaded = blob;
-    return "blob:recovery";
+    return "#recovery";
   }) as unknown as typeof URL.createObjectURL;
   URL.revokeObjectURL = mock((): boolean => true) as unknown as typeof URL.revokeObjectURL;
-  // jsdom cannot navigate: swallow the programmatic download click.
-  HTMLAnchorElement.prototype.click = mock((): boolean => true) as unknown as typeof HTMLAnchorElement.prototype.click;
   installFetch(
     "run-rec",
     runFixture("run-rec", { "has-recovery-state": true }),
