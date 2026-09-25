@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Workspaces } from "../src/views/Workspaces";
@@ -80,16 +80,14 @@ test("export is explicit, reports progress and cancellation never publishes a pa
   let finishExport!: (response: Response) => void;
   let exportSignal: AbortSignal | null | undefined;
   let exports = 0;
-  const click = spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
-    /* Capture the download without navigating jsdom. */
-  });
+  const revokedUrls: string[] = [];
   URL.createObjectURL = (blob) => {
     if (!(blob instanceof Blob)) throw new Error("Expected Blob download");
     downloads.push(blob);
-    return "blob:test-export";
+    return "#test-export";
   };
-  URL.revokeObjectURL = () => {
-    /* The test URL holds no browser resources. */
+  URL.revokeObjectURL = (url) => {
+    revokedUrls.push(url);
   };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -138,9 +136,8 @@ test("export is explicit, reports progress and cancellation never publishes a pa
     expect(payload.organization).toBe("acme");
     expect(payload.workspaces).toHaveLength(150);
     expect(new Set(payload.workspaces.map((workspace: { id: string }) => workspace.id)).size).toBe(150);
-    expect(click).toHaveBeenCalledTimes(1);
+    expect(revokedUrls).toEqual(["#test-export"]);
   } finally {
-    click.mockRestore();
     URL.createObjectURL = originalCreate;
     URL.revokeObjectURL = originalRevoke;
   }
