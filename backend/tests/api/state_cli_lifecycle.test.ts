@@ -61,7 +61,11 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
-  await app.server?.stop();
+  const running = app as unknown as { server: { stop(): unknown } | null };
+  if (running.server !== null) {
+    await running.server.stop();
+    running.server = null;
+  }
 });
 
 for (const engine of ["terraform", "tofu"] as const) {
