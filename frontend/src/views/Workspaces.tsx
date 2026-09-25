@@ -1258,8 +1258,13 @@ export function Workspaces(): React.JSX.Element {
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = `${orgName.replace(/[^a-zA-Z0-9._-]/g, "_")}-workspaces.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      document.body.appendChild(anchor);
+      try {
+        anchor.click();
+      } finally {
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
     } catch (error: unknown) {
       if (!controller.signal.aborted)
         toast.add({
