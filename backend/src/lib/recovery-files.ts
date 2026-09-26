@@ -40,10 +40,14 @@ export const RECOVERY_MARKER_FILENAME = ".recovered";
 export const RECOVERY_EVIDENCE_FILENAME = ".evidence.json";
 export const RECOVERY_PROMOTED_FILENAME = ".promoted";
 export const RECOVERY_PROMOTION_LOCK_FILENAME = ".promoting";
+export const RECOVERY_CAPTURE_LOCK_FILENAME = ".capturing";
 const STAGING_PREFIX = ".staging-";
 const RECOVERY_EVIDENCE_VERSION = 1;
 const MAX_RECOVERY_EVIDENCE_BYTES = 16 * 1024;
 const PROMOTION_LOCK_TTL_MS = 10 * 60 * 1000;
+const CAPTURE_LOCK_TTL_MS = 10 * 60 * 1000;
+const CAPTURE_LOCK_WAIT_MS = 25;
+const CAPTURE_LOCK_WAIT_TIMEOUT_MS = 30_000;
 
 export type RecoveryCaptureEvidence = Readonly<{
   version: 1;
@@ -94,6 +98,10 @@ export function recoveryPromotedPathFor(storageDir: string, runId: string): stri
 
 export function recoveryPromotionLockPathFor(storageDir: string, runId: string): string {
   return join(recoveryDirFor(storageDir, runId), RECOVERY_PROMOTION_LOCK_FILENAME);
+}
+
+export function recoveryCaptureLockPathFor(storageDir: string, runId: string): string {
+  return join(recoveryDirFor(storageDir, runId), RECOVERY_CAPTURE_LOCK_FILENAME);
 }
 
 function stagingPathFor(dir: string, name: string): string {
@@ -387,12 +395,8 @@ export async function inspectRecoveryCopy(
   };
 }
 
-/** Claim a promotion attempt with an expiring filesystem lock. This closes
- * the cross-process window where two identical POSTs could both commit. */
-export async function acquireRecoveryPromotionLock(storageDir: string, runId: string): Promise<boolean> {
-  const dir = recoveryDirFor(storageDir, runId);
+async function tryAcquireRecoveryFileLock(dir: string, path: string, ttlMs: number): Promise<boolean> {
   await mkdirDurable(dir);
-  const path = recoveryPromotionLockPathFor(storageDir, runId);
   try {
     const handle = await open(path, "wx", 0o600);
     try {
@@ -407,15 +411,37 @@ export async function acquireRecoveryPromotionLock(storageDir: string, runId: st
     if (!isErrno(error, "EEXIST")) throw error;
     try {
       const info = await stat(path);
-      if (Date.now() - info.mtimeMs > PROMOTION_LOCK_TTL_MS) {
+      if (Date.now() - info.mtimeMs > ttlMs) {
         await rm(path, { force: true });
-        return await acquireRecoveryPromotionLock(storageDir, runId);
+        return await tryAcquireRecoveryFileLock(dir, path, ttlMs);
       }
     } catch {
       // A concurrent owner may have completed between open and stat.
     }
     return false;
   }
+}
+
+async function withRecoveryCaptureLock<T>(storageDir: string, runId: string, fn: () => Promise<T>): Promise<T> {
+  const dir = recoveryDirFor(storageDir, runId);
+  const path = recoveryCaptureLockPathFor(storageDir, runId);
+  const deadline = Date.now() + CAPTURE_LOCK_WAIT_TIMEOUT_MS;
+  while (!(await tryAcquireRecoveryFileLock(dir, path, CAPTURE_LOCK_TTL_MS))) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for recovery capture lock for run ${runId}`);
+    await Bun.sleep(CAPTURE_LOCK_WAIT_MS);
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(path, { force: true });
+  }
+}
+
+/** Claim a promotion attempt with an expiring filesystem lock. This closes
+ * the cross-process window where two identical POSTs could both commit. */
+export async function acquireRecoveryPromotionLock(storageDir: string, runId: string): Promise<boolean> {
+  const dir = recoveryDirFor(storageDir, runId);
+  return tryAcquireRecoveryFileLock(dir, recoveryPromotionLockPathFor(storageDir, runId), PROMOTION_LOCK_TTL_MS);
 }
 
 export async function releaseRecoveryPromotionLock(storageDir: string, runId: string): Promise<void> {
@@ -637,14 +663,7 @@ async function restorePreviousCapture(
  * callers must treat that as a failed capture and preserve the work
  * directory for manual recovery instead of deleting it.
  */
-export async function captureInterruptedApplyState(
-  storageDir: string,
-  runId: string,
-  workRoot: string,
-): Promise<boolean> {
-  const source = await findStateSource(workRoot);
-  if (source === null) return false;
-
+async function captureRecoveryStatePayloadUnlocked(storageDir: string, runId: string, payload: string): Promise<void> {
   const recoveryDir = recoveryDirFor(storageDir, runId);
   const markerPath = recoveryMarkerPathFor(storageDir, runId);
   await mkdirDurable(recoveryDir);
@@ -652,18 +671,8 @@ export async function captureInterruptedApplyState(
   const previous = await readPreviousCapture(storageDir, runId, markerPath);
   try {
     await clearSupersededCapture(recoveryDir, storageDir, runId, markerPath, previous);
-    // Raw bytes on purpose: utf8 decoding replaces split multibyte
-    // sequences, which would let a corrupted copy pass verification. If
-    // the source is not valid UTF-8 the encryption layer cannot preserve
-    // it, so reject here (throwing preserves the work directory).
-    const raw = await readFile(source);
-    const payload = raw.toString("utf8");
-    if (!Buffer.from(payload, "utf8").equals(raw)) {
-      throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
-    }
     await publishCapture(recoveryDir, storageDir, runId, payload);
     markerWritten = true;
-    return true;
   } catch (error: unknown) {
     markerWritten =
       previous.marker !== null && previous.state !== null
@@ -673,13 +682,37 @@ export async function captureInterruptedApplyState(
             state: previous.state,
           })
         : false;
-    // Never leave a markerless partial behind: without the marker the copy
-    // is unreadable by design, so an incomplete capture is just garbage.
-    // (When the replacement itself was published but unverifiable, the
-    // source work directory is preserved by the caller, so nothing is lost.)
     if (!markerWritten) await rm(recoveryDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+export async function captureRecoveryStatePayload(storageDir: string, runId: string, payload: string): Promise<void> {
+  await withRecoveryCaptureLock(
+    storageDir,
+    runId,
+    async (): Promise<void> => captureRecoveryStatePayloadUnlocked(storageDir, runId, payload),
+  );
+}
+
+export async function captureInterruptedApplyState(
+  storageDir: string,
+  runId: string,
+  workRoot: string,
+): Promise<boolean> {
+  const source = await findStateSource(workRoot);
+  if (source === null) return false;
+
+  // Raw bytes on purpose: utf8 decoding replaces split multibyte sequences,
+  // which would let a corrupted copy pass verification. If the source is not
+  // valid UTF-8 the encryption layer cannot preserve it, so reject here.
+  const raw = await readFile(source);
+  const payload = raw.toString("utf8");
+  if (!Buffer.from(payload, "utf8").equals(raw)) {
+    throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
+  }
+  await captureRecoveryStatePayload(storageDir, runId, payload);
+  return true;
 }
 
 export type RecoverySweepResult = Readonly<{

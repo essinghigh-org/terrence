@@ -7,12 +7,22 @@ import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
 import {
   configurationVersions,
+  controlPlaneNodes,
   organizations,
   registryModules,
   registryModuleVersions,
   workspaces,
 } from "../../src/db/schema";
-import { checkSqliteExport, sweepUploadTemps } from "../../src/lib/upload-sweep";
+import { ABANDONED_UPLOAD_GRACE_MS, checkSqliteExport, sweepUploadTemps } from "../../src/lib/upload-sweep";
+import { controlPlaneInstanceId } from "../../src/lib/ha-config";
+import { HA_PROTOCOL_VERSION } from "../../src/lib/ha-protocol";
+import {
+  acquireUploadTempLease,
+  readUploadTempLease,
+  releaseUploadTempLease,
+  uploadTempLeasePath,
+  withUploadTempLeaseMutationLock,
+} from "../../src/lib/upload-temp-lease";
 
 // Issue #619: the boot sweep removes crash-stranded upload temps and
 // orphaned archives while keeping referenced files and valid exports.
@@ -23,9 +33,11 @@ describe("sweepUploadTemps", (): void => {
   const cvId = "sweep-cv-" + suffix;
   const moduleId = "sweep-mod-" + suffix;
   const versionId = "sweep-ver-" + suffix;
+  const liveNodeId = "sweep-node-" + suffix;
   let root = "";
 
   afterAll(async (): Promise<void> => {
+    await db.delete(controlPlaneNodes).where(eq(controlPlaneNodes.id, liveNodeId));
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, versionId));
     await db.delete(registryModules).where(eq(registryModules.id, moduleId));
     await db.delete(configurationVersions).where(eq(configurationVersions.id, cvId));
@@ -43,6 +55,17 @@ describe("sweepUploadTemps", (): void => {
     for (const dir of [stateUploadsDir, cvDir, exportsDir, modulesDir]) {
       await mkdir(dir, { recursive: true });
     }
+    await db.insert(controlPlaneNodes).values({
+      id: liveNodeId,
+      hostname: liveNodeId,
+      instanceId: controlPlaneInstanceId,
+      role: "follower",
+      status: "active",
+      protocolVersion: HA_PROTOCOL_VERSION,
+      readinessChecks: [],
+      registeredAt: Date.now(),
+      lastHeartbeatAt: Date.now(),
+    });
 
     // Referenced files the sweep must keep.
     const keptCvArchive = join(cvDir, "config-kept.tar.gz");
@@ -83,13 +106,32 @@ describe("sweepUploadTemps", (): void => {
     const stateKeep = join(stateUploadsDir, "README.txt");
     const cvKeep = join(cvDir, "notes.txt");
     const validExport = join(exportsDir, "valid.db");
+    const activeStateUpload = join(stateUploadsDir, "state-active.json");
+    const activeCvArchive = join(cvDir, "config-active-token.tar.gz");
+    const activeCvTemp = `${activeCvArchive}.tmp`;
+    const orphanStateLeaseTarget = join(stateUploadsDir, "state-orphan.json");
+    const orphanCvLeaseTarget = join(cvDir, "config-orphan-lease.tar.gz");
     await writeFile(stateKeep, "not a temp");
     await writeFile(cvKeep, "not a temp");
     await writeFile(keptCvArchive, "referenced archive");
     await writeFile(keptModuleArchive, "referenced archive");
+    await writeFile(activeStateUpload, "{}");
+    await writeFile(activeCvTemp, "active partial body");
+    await acquireUploadTempLease(activeStateUpload);
+    await acquireUploadTempLease(activeCvArchive);
+
+    const abandonedClaimedAt = Date.now() - ABANDONED_UPLOAD_GRACE_MS - 120_000;
+    await writeFile(
+      uploadTempLeasePath(orphanStateLeaseTarget),
+      JSON.stringify({ ownerInstanceId: "dead-instance", claimedAt: abandonedClaimedAt }),
+    );
+    await writeFile(
+      uploadTempLeasePath(orphanCvLeaseTarget),
+      JSON.stringify({ ownerInstanceId: "dead-instance", claimedAt: abandonedClaimedAt }),
+    );
 
     // Model files stranded before startup, independent of filesystem clock precision.
-    const old = new Date(Date.now() - 60_000);
+    const old = new Date(Date.now() - ABANDONED_UPLOAD_GRACE_MS - 60_000);
     for (const path of [
       stateTemp,
       cvTmp,
@@ -98,14 +140,19 @@ describe("sweepUploadTemps", (): void => {
       orphanModuleArchive,
       partialExport,
       garbageExport,
+      activeStateUpload,
+      activeCvTemp,
+      uploadTempLeasePath(activeStateUpload),
+      uploadTempLeasePath(orphanStateLeaseTarget),
+      uploadTempLeasePath(orphanCvLeaseTarget),
     ]) {
       await utimes(path, old, old);
     }
     const result = await sweepUploadTemps(root);
 
     expect(result).toEqual({
-      stateUploads: 1,
-      cvTemps: 2,
+      stateUploads: 2,
+      cvTemps: 3,
       unclaimedArchives: 1,
       invalidExports: 2,
       orphanedModuleArchives: 1,
@@ -118,13 +165,52 @@ describe("sweepUploadTemps", (): void => {
       orphanModuleArchive,
       partialExport,
       garbageExport,
+      uploadTempLeasePath(orphanStateLeaseTarget),
+      uploadTempLeasePath(orphanCvLeaseTarget),
     ]) {
       expect(await Bun.file(gone).exists()).toBe(false);
     }
-    for (const kept of [stateKeep, cvKeep, keptCvArchive, keptModuleArchive, validExport]) {
+    for (const kept of [
+      stateKeep,
+      cvKeep,
+      keptCvArchive,
+      keptModuleArchive,
+      validExport,
+      activeStateUpload,
+      activeCvTemp,
+    ]) {
       expect(await Bun.file(kept).exists()).toBe(true);
     }
+    await releaseUploadTempLease(activeStateUpload);
+    await releaseUploadTempLease(activeCvArchive);
   });
+});
+
+test("lease acquisition waits for orphan cleanup of the same target", async (): Promise<void> => {
+  const dir = await mkdtemp(join(tmpdir(), "terrence-upload-lease-race-"));
+  try {
+    const target = join(dir, "config-race.tar.gz");
+    const oldLease = { ownerInstanceId: "dead-instance", claimedAt: Date.now() - ABANDONED_UPLOAD_GRACE_MS - 60_000 };
+    await writeFile(uploadTempLeasePath(target), JSON.stringify(oldLease));
+
+    let replacementFinished = false;
+    let replacement: Promise<void> | undefined;
+    await withUploadTempLeaseMutationLock(target, async (): Promise<void> => {
+      replacement = acquireUploadTempLease(target).then((): void => {
+        replacementFinished = true;
+      });
+      await Bun.sleep(25);
+      expect(replacementFinished).toBe(false);
+      await rm(uploadTempLeasePath(target), { force: true });
+    });
+    await replacement;
+
+    const current = await readUploadTempLease(target);
+    expect(current?.ownerInstanceId).toBe(controlPlaneInstanceId);
+    expect(current?.claimedAt).toBeGreaterThan(oldLease.claimedAt);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 describe("checkSqliteExport", (): void => {

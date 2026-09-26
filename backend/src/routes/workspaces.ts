@@ -44,6 +44,7 @@ import {
   caseInsensitiveLike,
   checkOrgPermission,
   checkOrganizationPermission,
+  checkProjectWorkspaceOperation,
   checkWorkspacePermission,
   workspacePermissionSets,
   workspaceAllows,
@@ -942,31 +943,25 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const actor = actorScope(user, principalOrgId, teamId);
-      if (
-        !(await checkOrganizationPermission(
-          org.id,
-          actor.actorId,
-          actor.actorOrgId,
-          actor.actorTeamId,
-          "manage-workspaces",
-        ))
-      ) {
-        (set as { status: number }).status = 403;
-        return { errors: [{ status: "403", title: "Forbidden" }] };
-      }
       const parsed = parseWorkspaceUpdateBody(body);
       const attributes = parsed.attributes;
       const preambleError = validateCreatePreamble(attributes);
       if (preambleError !== null) return failWorkspaceUpdate(set, 422, preambleError);
-      const nameResult = await resolveCreateNameAndDup(parsed, org.id);
-      if ("error" in nameResult) return failWorkspaceUpdate(set, nameResult.status, nameResult.error);
       const fieldTypesError = validateCreateFieldTypes(attributes, parsed.executionMode);
       if (fieldTypesError !== null) return failWorkspaceUpdate(set, 422, fieldTypesError);
+      const project = await resolveAuthorizedCreateProject(parsed.rels, org.id, actor);
+      if ("error" in project) {
+        return project.status === 403
+          ? failWorkspaceUpdate(set, 403, project.error)
+          : failWorkspaceUpdate(set, 422, project.error);
+      }
+      const nameResult = await resolveCreateNameAndDup(parsed, org.id);
+      if ("error" in nameResult) return failWorkspaceUpdate(set, nameResult.status, nameResult.error);
       const workingDirAndTags = await resolveCreateWorkingDirAndTags(attributes, parsed.rels);
       if ("error" in workingDirAndTags) return failWorkspaceUpdate(set, 422, workingDirAndTags.error);
       const id = newResourceId("ws");
       const execution = await resolveCreateExecutionChain({
-        rels: parsed.rels,
+        project: project.project,
         orgId: org.id,
         rawSettingOverwrites: attributes["setting-overwrites"],
         executionMode: parsed.executionMode,
@@ -2452,16 +2447,17 @@ async function resolveCreateWorkingDirAndTags(
   return { dir, tagBindings };
 }
 
-async function resolveCreateProject(
-  rels: Readonly<Record<string, unknown>>,
-  orgId: string,
-): Promise<{ project: typeof projects.$inferSelect } | { error: string }> {
+type CreateProjectReference =
+  | Readonly<{ projectId: null; useDefault: true }>
+  | Readonly<{ projectId: string; useDefault: false }>;
+
+function createProjectReference(rels: Readonly<Record<string, unknown>>): CreateProjectReference | { error: string } {
   const projectRel = rels["project"];
   if (
     projectRel === undefined ||
     (typeof projectRel === "object" && projectRel !== null && (projectRel as Record<string, unknown>)["data"] === null)
   ) {
-    return { project: await ensureDefaultProject(orgId) };
+    return { projectId: null, useDefault: true };
   }
   const relationship =
     typeof projectRel === "object" && projectRel !== null ? (projectRel as Record<string, unknown>) : {};
@@ -2470,13 +2466,57 @@ async function resolveCreateProject(
       ? (relationship["data"] as Record<string, unknown>)
       : {};
   const projectId = typeof projectData["id"] === "string" ? projectData["id"] : "";
-  const found = await db.query.projects.findFirst({
-    where: and(eq(projects.id, projectId), eq(projects.orgId, orgId)),
-  });
-  if (found === undefined || (projectData["type"] !== undefined && projectData["type"] !== "projects")) {
+  if (projectId === "" || (projectData["type"] !== undefined && projectData["type"] !== "projects")) {
     return { error: "Project must belong to the workspace organization" };
   }
-  return { project: found };
+  return { projectId, useDefault: false };
+}
+
+async function resolveAuthorizedCreateProject(
+  rels: Readonly<Record<string, unknown>>,
+  orgId: string,
+  actor: ActorScope,
+): Promise<{ project: typeof projects.$inferSelect } | { error: string; status: 403 | 422 }> {
+  const reference = createProjectReference(rels);
+  if ("error" in reference) return { error: reference.error, status: 422 };
+
+  if (reference.useDefault) {
+    const existingDefault = await db.query.projects.findFirst({
+      where: and(eq(projects.orgId, orgId), eq(projects.isDefault, true)),
+    });
+    if (
+      !(await checkProjectWorkspaceOperation(
+        existingDefault?.id ?? null,
+        orgId,
+        actor.actorId,
+        actor.actorOrgId,
+        actor.actorTeamId,
+        "create",
+      ))
+    ) {
+      return { error: "Forbidden", status: 403 };
+    }
+    return { project: existingDefault ?? (await ensureDefaultProject(orgId)) };
+  }
+
+  if (
+    !(await checkProjectWorkspaceOperation(
+      reference.projectId,
+      orgId,
+      actor.actorId,
+      actor.actorOrgId,
+      actor.actorTeamId,
+      "create",
+    ))
+  ) {
+    return { error: "Forbidden", status: 403 };
+  }
+  const found = await db.query.projects.findFirst({
+    where: and(eq(projects.id, reference.projectId), eq(projects.orgId, orgId)),
+  });
+  return found === undefined
+    ? { error: "Project must belong to the workspace organization", status: 422 }
+    : { project: found };
 }
 
 function validateCreateExecutionRequirements(
@@ -2528,7 +2568,7 @@ type ResolvedCreateExecution = Readonly<{
 
 async function resolveCreateExecutionChain(
   args: Readonly<{
-    rels: Readonly<Record<string, unknown>>;
+    project: typeof projects.$inferSelect;
     orgId: string;
     rawSettingOverwrites: unknown;
     executionMode: unknown;
@@ -2536,8 +2576,7 @@ async function resolveCreateExecutionChain(
     workspaceId: string;
   }>,
 ): Promise<ResolvedCreateExecution | { error: string }> {
-  const project = await resolveCreateProject(args.rels, args.orgId);
-  if ("error" in project) return project;
+  const project = args.project;
   const parsedOverwrites = parseSettingOverwrites(args.rawSettingOverwrites, undefined);
   if ("error" in parsedOverwrites) return { error: parsedOverwrites.error };
   const suppliedOverwrites = args.rawSettingOverwrites as Record<string, unknown> | undefined;
@@ -2558,10 +2597,10 @@ async function resolveCreateExecutionChain(
   const execution = resolveCreateExecutionState({
     executionMode: args.executionMode,
     executionOverride,
-    projectDefaultMode: project.project.defaultExecutionMode,
+    projectDefaultMode: project.defaultExecutionMode,
     agentPoolOverride,
     rawAgentPoolId: args.rawAgentPoolId,
-    projectDefaultPoolId: project.project.defaultAgentPoolId,
+    projectDefaultPoolId: project.defaultAgentPoolId,
   });
   if (execution.mode === "agent" && execution.poolId === null) {
     return { error: "An agent pool is required for agent execution mode" };
@@ -2569,9 +2608,9 @@ async function resolveCreateExecutionChain(
   if (execution.mode !== "agent" && typeof args.rawAgentPoolId === "string") {
     return { error: "agent-pool-id is only valid for agent execution mode" };
   }
-  const poolError = await checkAgentPoolAccess(execution.poolId, args.orgId, args.workspaceId, project.project.id);
+  const poolError = await checkAgentPoolAccess(execution.poolId, args.orgId, args.workspaceId, project.id);
   if (poolError !== null) return { error: poolError };
-  return { project: project.project, mode: execution.mode, poolId: execution.poolId, settingOverwrites };
+  return { project, mode: execution.mode, poolId: execution.poolId, settingOverwrites };
 }
 
 function validateCreateDuration(attributes: Readonly<Record<string, unknown>>): string | null {
@@ -3513,6 +3552,21 @@ async function updateWorkspaceResponse(
   const project = await resolveUpdateProject(parsed.rels, workspace);
   if ("error" in project) return failWorkspaceUpdate(set, 422, project.error);
   const newProjectId = project.project.id;
+  if (
+    parsed.rels["project"] !== undefined &&
+    newProjectId !== workspace.projectId &&
+    !(await checkProjectWorkspaceOperation(
+      newProjectId,
+      workspace.orgId,
+      principal.userId,
+      principal.principalOrgId,
+      principal.teamId,
+      "move",
+      [workspace.id],
+    ))
+  ) {
+    return failWorkspaceUpdate(set, 403, "Forbidden");
+  }
   const rawSettingOverwrites = attributes["setting-overwrites"];
   const parsedOverwrites = parseSettingOverwrites(rawSettingOverwrites, workspace.settingOverwrites);
   if ("error" in parsedOverwrites) return failWorkspaceUpdate(set, 422, parsedOverwrites.error);

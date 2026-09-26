@@ -41,6 +41,7 @@ import { authPlugin } from "../auth";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-output-index";
 import { persistUploadBody } from "../lib/upload-body";
+import { acquireUploadTempLease, releaseUploadTempLease } from "../lib/upload-temp-lease";
 import { storageDir } from "../db/driver";
 import { auditLogValues } from "../lib/audit-trail";
 import { authorizedStateAccess } from "../lib/authorized-resources";
@@ -136,6 +137,7 @@ async function requestBodyText(body: unknown, request: Request): Promise<BodyTex
   const uploadDir = join(storageDir, "state-uploads");
   const path = join(uploadDir, `state-${crypto.randomUUID()}.json`);
   await mkdir(uploadDir, { recursive: true });
+  await acquireUploadTempLease(path);
   try {
     try {
       await persistUploadBody(body, request, path, MAX_IMPORTED_STATE_BYTES);
@@ -149,6 +151,7 @@ async function requestBodyText(body: unknown, request: Request): Promise<BodyTex
     return { ok: true, text: await readFile(path, "utf8") };
   } finally {
     await rm(path, { force: true });
+    await releaseUploadTempLease(path).catch((): void => undefined);
   }
 }
 

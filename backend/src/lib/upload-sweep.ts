@@ -4,17 +4,25 @@ import { isNotNull } from "drizzle-orm";
 import { db } from "../db";
 import { configurationVersions, registryModuleVersions } from "../db/schema";
 import { log } from "./log";
+import {
+  readUploadTempLease,
+  releaseUploadTempLease,
+  uploadTempLeasePath,
+  UPLOAD_TEMP_LEASE_SUFFIX,
+  withUploadTempLeaseMutationLock,
+} from "./upload-temp-lease";
 
 // Startup sweep for crash-stranded upload temps and orphaned archives
 // (issue #619). Request-completion paths already clean up after themselves;
 // only a crash between the write and the cleanup strands these files.
 //
-// Storage is single-owner by design (a multi-replica deployment is
-// explicitly unsupported: the event bus, worker queue, and sandbox are
-// in-process). Even so, the sweep only removes files whose mtime predates
-// its own start, so a file being actively published while this instance
-// boots is never touched: publication always writes newer bytes than the
-// sweep start.
+// HA replicas share STORAGE_DIR. Upload request paths publish a sidecar lease
+// before writing temporary state/configuration files; the coordinator sweep
+// honors leases owned by a live replica and gives dead/legacy owners a long
+// grace period before treating their files as abandoned.
+
+export const ABANDONED_UPLOAD_GRACE_MS = 60 * 60 * 1000;
+const LIVE_UPLOAD_OWNER_STALE_MS = 2 * 60 * 1000;
 
 export type UploadSweepResult = Readonly<{
   stateUploads: number;
@@ -35,16 +43,81 @@ async function listFiles(dir: string): Promise<string[]> {
   }
 }
 
-/** True when the file exists and was last modified at or before the sweep
- * started. Anything newer may still be written to; leave it for the next
- * boot. Unstatable files are skipped, never removed. */
-async function predatesSweepStart(dir: string, name: string, startedAt: number): Promise<boolean> {
+/** True when a file is old enough to be considered abandoned. Unstatable
+ * files are skipped, never removed. */
+async function isAbandonedByAge(dir: string, name: string, startedAt: number): Promise<boolean> {
   try {
     const { mtimeMs } = await stat(join(dir, name));
-    return mtimeMs <= startedAt;
+    return mtimeMs <= startedAt - ABANDONED_UPLOAD_GRACE_MS;
   } catch {
     return false;
   }
+}
+
+async function liveUploadOwnerInstanceIds(startedAt: number): Promise<ReadonlySet<string>> {
+  try {
+    const rows = await db.query.controlPlaneNodes.findMany({
+      columns: { instanceId: true, lastHeartbeatAt: true },
+    });
+    return new Set(
+      rows
+        .filter(
+          (row): row is typeof row & { instanceId: string } =>
+            row.instanceId !== null && row.lastHeartbeatAt >= startedAt - LIVE_UPLOAD_OWNER_STALE_MS,
+        )
+        .map((row): string => row.instanceId),
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
+async function uploadLeaseProtects(
+  targetPath: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule flags it here.
+  liveOwners: ReadonlySet<string>,
+  startedAt: number,
+): Promise<boolean> {
+  const lease = await readUploadTempLease(targetPath);
+  if (lease === null) return false;
+  if (liveOwners.has(lease.ownerInstanceId)) return true;
+  return lease.claimedAt > startedAt - ABANDONED_UPLOAD_GRACE_MS;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sweepOrphanedUploadLeases(
+  dir: string,
+  startedAt: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule flags it here.
+  liveOwners: ReadonlySet<string>,
+): Promise<number> {
+  let removed = 0;
+  for (const name of await listFiles(dir)) {
+    if (!name.endsWith(UPLOAD_TEMP_LEASE_SUFFIX)) continue;
+    const leasePath = join(dir, name);
+    const targetPath = leasePath.slice(0, -UPLOAD_TEMP_LEASE_SUFFIX.length);
+    const removedLease = await withUploadTempLeaseMutationLock(targetPath, async (): Promise<boolean> => {
+      // Re-check everything while acquisition/release of this exact target is
+      // serialized. Without this second age/owner check a retry could replace
+      // an old sidecar after the sweep inspected it but before unlink.
+      if (!(await isAbandonedByAge(dir, name, startedAt))) return false;
+      if (await uploadLeaseProtects(targetPath, liveOwners, startedAt)) return false;
+      // A configuration upload can rename <tar>.tmp to <tar> before its finally
+      // block releases the lease. Keep the lease while either form still exists.
+      if ((await pathExists(targetPath)) || (await pathExists(`${targetPath}.tmp`))) return false;
+      return removeLeftover(uploadTempLeasePath(targetPath), "upload-leases", name);
+    });
+    if (removedLease) removed += 1;
+  }
+  return removed;
 }
 
 async function removeLeftover(path: string, area: string, file: string): Promise<boolean> {
@@ -130,31 +203,51 @@ export async function checkSqliteExport(path: string): Promise<ExportValidity> {
 
 /** State-upload request bodies: every state-*.json is a request-scoped temp
  * that the handler deletes in a finally block. */
-async function sweepStateUploads(dir: string, startedAt: number): Promise<number> {
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule flags it here.
+async function sweepStateUploads(dir: string, startedAt: number, liveOwners: ReadonlySet<string>): Promise<number> {
   let removed = 0;
   for (const name of await listFiles(dir)) {
-    if (!name.startsWith("state-") || !name.endsWith(".json")) continue;
-    if (!(await predatesSweepStart(dir, name, startedAt))) continue;
-    if (await removeLeftover(join(dir, name), "state-uploads", name)) removed += 1;
+    if (!name.startsWith("state-") || !name.endsWith(".json") || name.endsWith(UPLOAD_TEMP_LEASE_SUFFIX)) continue;
+    if (!(await isAbandonedByAge(dir, name, startedAt))) continue;
+    const full = join(dir, name);
+    if (await uploadLeaseProtects(full, liveOwners, startedAt)) continue;
+    if (await removeLeftover(full, "state-uploads", name)) {
+      await releaseUploadTempLease(full).catch((): void => undefined);
+      removed += 1;
+    }
   }
+  removed += await sweepOrphanedUploadLeases(dir, startedAt, liveOwners);
   return removed;
 }
 
 /** Configuration-version and module upload temps: *.tmp while the body
  * streams, *.upload while a module archive ingests. */
-async function sweepCvTemps(cvDir: string, startedAt: number): Promise<number> {
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule flags it here.
+async function sweepCvTemps(cvDir: string, startedAt: number, liveOwners: ReadonlySet<string>): Promise<number> {
   let removed = 0;
   for (const name of await listFiles(cvDir)) {
     if (!name.endsWith(".tmp") && !name.endsWith(".upload")) continue;
-    if (!(await predatesSweepStart(cvDir, name, startedAt))) continue;
-    if (await removeLeftover(join(cvDir, name), "cv", name)) removed += 1;
+    if (!(await isAbandonedByAge(cvDir, name, startedAt))) continue;
+    const full = join(cvDir, name);
+    const leaseTarget = name.endsWith(".tmp") ? full.slice(0, -4) : full;
+    if (await uploadLeaseProtects(leaseTarget, liveOwners, startedAt)) continue;
+    if (await removeLeftover(full, "cv", name)) {
+      await releaseUploadTempLease(leaseTarget).catch((): void => undefined);
+      removed += 1;
+    }
   }
+  removed += await sweepOrphanedUploadLeases(cvDir, startedAt, liveOwners);
   return removed;
 }
 
 /** Finalized-but-unclaimed CV archives: a crash between the rename and the
  * row update strands a config-*.tar.gz no row references. */
-async function sweepUnclaimedArchives(cvDir: string, startedAt: number): Promise<number> {
+async function sweepUnclaimedArchives(
+  cvDir: string,
+  startedAt: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule flags it here.
+  liveOwners: ReadonlySet<string>,
+): Promise<number> {
   try {
     const rows = await db.query.configurationVersions.findMany({
       where: isNotNull(configurationVersions.archivePath),
@@ -165,8 +258,13 @@ async function sweepUnclaimedArchives(cvDir: string, startedAt: number): Promise
     for (const name of await listFiles(cvDir)) {
       if (!name.startsWith("config-") || !name.endsWith(".tar.gz")) continue;
       if (claimed.has(name)) continue;
-      if (!(await predatesSweepStart(cvDir, name, startedAt))) continue;
-      if (await removeLeftover(join(cvDir, name), "cv", name)) removed += 1;
+      if (!(await isAbandonedByAge(cvDir, name, startedAt))) continue;
+      const full = join(cvDir, name);
+      if (await uploadLeaseProtects(full, liveOwners, startedAt)) continue;
+      if (await removeLeftover(full, "cv", name)) {
+        await releaseUploadTempLease(full).catch((): void => undefined);
+        removed += 1;
+      }
     }
     return removed;
   } catch (error: unknown) {
@@ -184,7 +282,7 @@ async function sweepInvalidExports(exportsDir: string, startedAt: number): Promi
   let removed = 0;
   for (const name of await listFiles(exportsDir)) {
     if (!name.toLowerCase().endsWith(".db")) continue;
-    if (!(await predatesSweepStart(exportsDir, name, startedAt))) continue;
+    if (!(await isAbandonedByAge(exportsDir, name, startedAt))) continue;
     const full = join(exportsDir, name);
     const validity = await checkSqliteExport(full);
     if (validity === "valid" || validity === "unknown") {
@@ -211,7 +309,7 @@ async function sweepOrphanedModuleArchives(modulesDir: string, startedAt: number
     for (const name of await listFiles(modulesDir)) {
       if (!name.endsWith(".tar.gz")) continue;
       if (referenced.has(name)) continue;
-      if (!(await predatesSweepStart(modulesDir, name, startedAt))) continue;
+      if (!(await isAbandonedByAge(modulesDir, name, startedAt))) continue;
       if (await removeLeftover(join(modulesDir, name), "modules", name)) removed += 1;
     }
     return removed;
@@ -230,11 +328,12 @@ async function sweepOrphanedModuleArchives(modulesDir: string, startedAt: number
  */
 export async function sweepUploadTemps(storageDir: string): Promise<UploadSweepResult> {
   const startedAt = Date.now();
+  const liveOwners = await liveUploadOwnerInstanceIds(startedAt);
   const cvDir = join(storageDir, "cv");
   const result: UploadSweepResult = {
-    stateUploads: await sweepStateUploads(join(storageDir, "state-uploads"), startedAt),
-    cvTemps: await sweepCvTemps(cvDir, startedAt),
-    unclaimedArchives: await sweepUnclaimedArchives(cvDir, startedAt),
+    stateUploads: await sweepStateUploads(join(storageDir, "state-uploads"), startedAt, liveOwners),
+    cvTemps: await sweepCvTemps(cvDir, startedAt, liveOwners),
+    unclaimedArchives: await sweepUnclaimedArchives(cvDir, startedAt, liveOwners),
     invalidExports: await sweepInvalidExports(join(storageDir, "exports"), startedAt),
     orphanedModuleArchives: await sweepOrphanedModuleArchives(join(storageDir, "modules"), startedAt),
   };

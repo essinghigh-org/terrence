@@ -4,7 +4,7 @@ import { db } from "../db";
 import { teamProjects, teams, projects, type users } from "../db/schema";
 import { and, eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { checkOrgPermission } from "../lib/utils";
+import { checkProjectPermission } from "../lib/utils";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
 
@@ -331,7 +331,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      if (!(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId, tokenTeamId))) {
+      if (!(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId, "read"))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -373,7 +373,9 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
           ],
         };
       }
-      if (!(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))) {
+      if (
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId, "manage-teams"))
+      ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -403,7 +405,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
         !project ||
         team?.orgId !== project.orgId ||
         (tp.organizationId !== null && tp.organizationId !== project.orgId) ||
-        !(await checkOrgPermission(user?.id, project.orgId, "member", tokenOrgId, tokenTeamId))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId, "read"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -427,7 +429,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
         !project ||
         team?.orgId !== project.orgId ||
         (tp.organizationId !== null && tp.organizationId !== project.orgId) ||
-        !(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId, "manage-teams"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -470,7 +472,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
         !project ||
         team?.orgId !== project.orgId ||
         (tp.organizationId !== null && tp.organizationId !== project.orgId) ||
-        !(await checkOrgPermission(user?.id, project.orgId, "owner", tokenOrgId, tokenTeamId))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId, "manage-teams"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };

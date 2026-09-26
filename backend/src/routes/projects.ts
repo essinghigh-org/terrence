@@ -4,7 +4,15 @@ import { db } from "../db";
 import { agentPools, projects, projectTags, workspaces, teamWorkspaces, type users } from "../db/schema";
 import { eq, and, inArray, count, countDistinct, asc, isNotNull, sql } from "drizzle-orm";
 import { projectResource, projectTagBindingResource } from "../lib/response";
-import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
+import {
+  checkOrgPermission,
+  checkOrganizationPermission,
+  checkProjectPermission,
+  checkProjectWorkspaceOperation,
+  projectIdsForPermission,
+  pageRequest,
+  pagination,
+} from "../lib/utils";
 import { agentPoolAllowsProject } from "../lib/agent-pool-scope";
 import { isExecutionMode } from "../lib/constants";
 import { authPlugin } from "../auth";
@@ -382,14 +390,25 @@ export const projectRoutes = new Elysia({ name: "projects" })
     async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
       const orgName = params["org_name"] ?? "";
       const org = await cachedOrgByName(orgName);
-      if (
-        org === undefined ||
-        !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))
-      ) {
+      if (org === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (!(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId))) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const { number, size } = pageRequest(request);
+      const allowedProjectIds = await projectIdsForPermission(
+        org.id,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+        "read",
+      );
+      if (allowedProjectIds !== null && allowedProjectIds.length === 0) {
+        return { data: [], ...pagination(request, number, size, 0) };
+      }
       // Audit finding 11: the CLI lists with filter[names] and scans only the
       // returned page for an exact match. Accept repeated params and
       // comma-separated values (both go-tfe encodings) so lookups hit past
@@ -399,10 +418,11 @@ export const projectRoutes = new Elysia({ name: "projects" })
         .flatMap((value): string[] => value.split(","))
         .map((value): string => value.trim())
         .filter((value): boolean => value !== "");
-      const scope =
-        nameFilter.length > 0
-          ? and(eq(projects.orgId, org.id), inArray(projects.name, nameFilter))
-          : eq(projects.orgId, org.id);
+      const accessScope =
+        allowedProjectIds === null
+          ? eq(projects.orgId, org.id)
+          : and(eq(projects.orgId, org.id), inArray(projects.id, [...allowedProjectIds]));
+      const scope = nameFilter.length > 0 ? and(accessScope, inArray(projects.name, nameFilter)) : accessScope;
       const [projList, countRows] = await Promise.all([
         db.query.projects.findMany({
           where: scope,
@@ -474,24 +494,41 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const projectCounts = (await countsByProject([projectId])).get(projectId) ?? { workspaceCount: 0, teamCount: 0 };
-      const canManage = await checkOrganizationPermission(
+      const canUpdate = await checkProjectPermission(
+        project.id,
         project.orgId,
         user?.id,
         tokenOrgId,
         tokenTeamId ?? null,
-        "manage-projects",
+        "update",
+      );
+      const canDestroy = await checkProjectPermission(
+        project.id,
+        project.orgId,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+        "delete",
+      );
+      const canCreateWorkspace = await checkProjectWorkspaceOperation(
+        project.id,
+        project.orgId,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+        "create",
       );
       return {
         data: await projectResource(project, projectCounts.workspaceCount, projectCounts.teamCount, {
-          "can-update": canManage,
-          "can-destroy": canManage,
-          "can-create-workspace": canManage,
+          "can-update": canUpdate,
+          "can-destroy": canDestroy,
+          "can-create-workspace": canCreateWorkspace,
         }),
       };
     },
@@ -503,13 +540,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(
-          project.orgId,
-          user?.id,
-          tokenOrgId,
-          tokenTeamId ?? null,
-          "manage-projects",
-        ))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "update"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -568,13 +599,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(
-          project.orgId,
-          user?.id,
-          tokenOrgId,
-          tokenTeamId ?? null,
-          "manage-projects",
-        ))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "delete"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -603,7 +628,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -623,7 +648,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -643,13 +668,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(
-          project.orgId,
-          user?.id,
-          tokenOrgId,
-          tokenTeamId ?? null,
-          "manage-projects",
-        ))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "update"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -724,13 +743,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(
-          project.orgId,
-          user?.id,
-          tokenOrgId,
-          tokenTeamId ?? null,
-          "manage-projects",
-        ))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "update"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -829,13 +842,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (
         project === undefined ||
-        !(await checkOrganizationPermission(
-          project.orgId,
-          user?.id,
-          tokenOrgId,
-          tokenTeamId ?? null,
-          "manage-projects",
-        ))
+        !(await checkProjectPermission(project.id, project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "update"))
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
@@ -871,16 +878,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
       const projectId = params["project_id"] ?? "";
       const destination = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
-      if (
-        destination === undefined ||
-        !(await checkOrganizationPermission(
-          destination.orgId,
-          user?.id,
-          tokenOrgId,
-          tokenTeamId ?? null,
-          "manage-projects",
-        ))
-      ) {
+      if (destination === undefined) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -906,6 +904,20 @@ export const projectRoutes = new Elysia({ name: "projects" })
             },
           ],
         };
+      }
+      if (
+        !(await checkProjectWorkspaceOperation(
+          destination.id,
+          destination.orgId,
+          user?.id,
+          tokenOrgId,
+          tokenTeamId ?? null,
+          "move",
+          workspaceIds,
+        ))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const sourceWorkspaces = await db.query.workspaces.findMany({ where: inArray(workspaces.id, workspaceIds) });
       if (

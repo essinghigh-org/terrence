@@ -4,6 +4,7 @@ import { isPostgres } from "../db/driver";
 import { controlPlaneLeases } from "../db/schema";
 import { publish, subscribe } from "./event-bus";
 import { log } from "./log";
+import { conservativeLeaseRemainingMs } from "./lease-deadline";
 import { controlPlaneInstanceId, controlPlaneNodeId, coordinatorEligible, haEnabled } from "./ha-config";
 
 export const CONTROL_PLANE_LEASE_NAME = "scheduler";
@@ -311,8 +312,10 @@ async function coordinatorTick(): Promise<void> {
       // Verify the returned lease against the same authoritative clock after
       // the claim completes. A stalled network response must not resurrect a
       // lease that already expired while the process was waiting.
+      const confirmationStartedAt = performance.now();
       const databaseNow = await databaseCurrentTimeMs();
-      if (lease.expiresAt <= databaseNow) {
+      const remainingMs = conservativeLeaseRemainingMs(lease.expiresAt, databaseNow, confirmationStartedAt);
+      if (remainingMs <= 0) {
         if (coordinatorState.role === "leader") await loseLeadership();
         coordinatorState = {
           role: "follower",
@@ -337,7 +340,7 @@ async function coordinatorTick(): Promise<void> {
         heartbeatAt: lease.heartbeatAt,
       };
       if (becameLeader) leadershipGeneration += 1;
-      armLeadershipWatchdog(lease.expiresAt - databaseNow);
+      armLeadershipWatchdog(remainingMs);
       if (becameLeader) {
         const generation = leadershipGeneration;
         log.info("Control-plane coordinator lease acquired", {

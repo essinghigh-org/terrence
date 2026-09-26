@@ -18,6 +18,7 @@ import { mkdir, rm, rename } from "fs/promises";
 import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
 import { persistUploadBody } from "../lib/upload-body";
+import { acquireUploadTempLease, releaseUploadTempLease } from "../lib/upload-temp-lease";
 import {
   beginIdempotency,
   completeIdempotency,
@@ -525,20 +526,30 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       const { cv } = authorized;
       const claimed = await claimConfigUpload(cvId, set);
       if ("error" in claimed) return claimed.error;
-      const received = await receiveUploadBody(body, request, cvId, claimed.claimToken, claimed.temporaryPath, set);
-      if ("error" in received) return received.error;
-      const validated = await validateUploadArchive(claimed.temporaryPath, cvId, claimed.claimToken, set);
-      if ("error" in validated) return validated.error;
-      const finalized = await finalizeConfigUpload(
-        cvId,
-        cv,
-        claimed.tarPath,
-        claimed.temporaryPath,
-        claimed.claimToken,
-        set,
-      );
-      if ("error" in finalized) return finalized.error;
-      return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
+      try {
+        await acquireUploadTempLease(claimed.tarPath);
+      } catch (error: unknown) {
+        await releaseUploadClaim(cvId, claimed.claimToken);
+        throw error;
+      }
+      try {
+        const received = await receiveUploadBody(body, request, cvId, claimed.claimToken, claimed.temporaryPath, set);
+        if ("error" in received) return received.error;
+        const validated = await validateUploadArchive(claimed.temporaryPath, cvId, claimed.claimToken, set);
+        if ("error" in validated) return validated.error;
+        const finalized = await finalizeConfigUpload(
+          cvId,
+          cv,
+          claimed.tarPath,
+          claimed.temporaryPath,
+          claimed.claimToken,
+          set,
+        );
+        if ("error" in finalized) return finalized.error;
+        return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
+      } finally {
+        await releaseUploadTempLease(claimed.tarPath).catch((): void => undefined);
+      }
     },
   )
   .post(

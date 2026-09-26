@@ -54,6 +54,7 @@ let requestedAt: number | null = null;
 let requestedBy: string | null = null;
 let reason: string | null = null;
 let drainedAt: number | null = null;
+let identityLost = false;
 let completionTimer: ReturnType<typeof setTimeout> | undefined;
 let unsubscribeDrainEvents: (() => void) | undefined;
 let activityProbe: NodeDrainActivityProbe = (): {
@@ -221,6 +222,11 @@ export async function beginLocalNodeDrain(
 
 /** Return a drained or draining node to service (an "uncordon"). */
 export async function cancelLocalNodeDrain(): Promise<NodeDrainSnapshot> {
+  // Losing the durable node incarnation is a permanent fence for this
+  // process. A delayed cancellation event created before replacement must not
+  // resurrect the displaced process. A replacement process starts with a
+  // fresh module instance and therefore a clear latch.
+  if (identityLost) return nodeDrainSnapshot();
   if (phase !== "active") {
     clearCompletionCheck();
     phase = "active";
@@ -236,22 +242,25 @@ export async function cancelLocalNodeDrain(): Promise<NodeDrainSnapshot> {
 
 async function wakeDrainTarget(
   targetNodeId: string,
+  targetInstanceId: string,
   requestedBy: string | null,
   drainReason: string | null,
 ): Promise<void> {
   publish(NODE_DRAIN_TOPIC, {
     nodeId: targetNodeId,
+    instanceId: targetInstanceId,
     drain: true,
     requestedBy,
     reason: drainReason,
   });
-  if (targetNodeId === controlPlaneNodeId()) {
+  if (targetNodeId === controlPlaneNodeId() && targetInstanceId === controlPlaneInstanceId) {
     await beginLocalNodeDrain({ requestedBy, reason: drainReason });
   }
 }
 
 async function persistDrainRequest(
   targetNodeId: string,
+  targetInstanceId: string,
   requestedBy: string | null,
   drainReason: string | null,
 ): Promise<boolean> {
@@ -266,14 +275,20 @@ async function persistDrainRequest(
       drainReason,
       drainedAt: null,
     })
-    .where(and(eq(controlPlaneNodes.id, targetNodeId), isNull(controlPlaneNodes.drainRequestedAt)))
+    .where(
+      and(
+        eq(controlPlaneNodes.id, targetNodeId),
+        eq(controlPlaneNodes.instanceId, targetInstanceId),
+        isNull(controlPlaneNodes.drainRequestedAt),
+      ),
+    )
     .returning({ id: controlPlaneNodes.id });
   return updated.length > 0;
 }
 
-async function drainRequestExists(targetNodeId: string): Promise<boolean> {
+async function drainRequestExists(targetNodeId: string, targetInstanceId: string): Promise<boolean> {
   const current = await db.query.controlPlaneNodes.findFirst({
-    where: eq(controlPlaneNodes.id, targetNodeId),
+    where: and(eq(controlPlaneNodes.id, targetNodeId), eq(controlPlaneNodes.instanceId, targetInstanceId)),
     columns: { drainRequestedAt: true },
   });
   return current !== undefined && current.drainRequestedAt !== null;
@@ -294,6 +309,7 @@ export async function requestNodeDrain(
   const target = await db.query.controlPlaneNodes.findFirst({
     where: eq(controlPlaneNodes.id, targetNodeId),
     columns: {
+      instanceId: true,
       protocolVersion: true,
       drainRequestedAt: true,
       drainRequestedBy: true,
@@ -302,20 +318,20 @@ export async function requestNodeDrain(
   });
   if (target === undefined) return "not-found";
 
-  if (!supportsNodeDrain(target.protocolVersion)) return "unsupported";
+  if (!supportsNodeDrain(target.protocolVersion) || target.instanceId === null) return "unsupported";
 
   if (target.drainRequestedAt !== null) {
-    await wakeDrainTarget(targetNodeId, target.drainRequestedBy, target.drainReason);
+    await wakeDrainTarget(targetNodeId, target.instanceId, target.drainRequestedBy, target.drainReason);
     return "requested";
   }
 
   const requestedBy = options.requestedBy ?? null;
   const drainReason = options.reason ?? null;
-  if (!(await persistDrainRequest(targetNodeId, requestedBy, drainReason))) {
-    return (await drainRequestExists(targetNodeId)) ? "requested" : "not-found";
+  if (!(await persistDrainRequest(targetNodeId, target.instanceId, requestedBy, drainReason))) {
+    return (await drainRequestExists(targetNodeId, target.instanceId)) ? "requested" : "not-found";
   }
 
-  await wakeDrainTarget(targetNodeId, requestedBy, drainReason);
+  await wakeDrainTarget(targetNodeId, target.instanceId, requestedBy, drainReason);
   return "requested";
 }
 
@@ -331,19 +347,30 @@ export async function cancelNodeDrain(targetNodeId: string): Promise<boolean> {
       drainedAt: null,
     })
     .where(and(eq(controlPlaneNodes.id, targetNodeId), isNotNull(controlPlaneNodes.drainRequestedAt)))
-    .returning({ id: controlPlaneNodes.id });
-  if (updated.length === 0) return false;
+    .returning({ id: controlPlaneNodes.id, instanceId: controlPlaneNodes.instanceId });
+  const canceled = updated[0];
+  if (canceled === undefined) return false;
 
-  publish(NODE_DRAIN_TOPIC, { nodeId: targetNodeId, drain: false });
-  if (targetNodeId === controlPlaneNodeId()) await cancelLocalNodeDrain();
+  publish(NODE_DRAIN_TOPIC, { nodeId: targetNodeId, instanceId: canceled.instanceId, drain: false });
+  if (targetNodeId === controlPlaneNodeId() && canceled.instanceId === controlPlaneInstanceId) {
+    await cancelLocalNodeDrain();
+  }
   return true;
 }
 
 function handleDrainEvent(payload: Readonly<Record<string, unknown>>): void {
   const target = payload["nodeId"];
-  if (typeof target !== "string" || target !== controlPlaneNodeId()) return;
+  const targetInstance = payload["instanceId"];
+  if (
+    typeof target !== "string" ||
+    target !== controlPlaneNodeId() ||
+    typeof targetInstance !== "string" ||
+    targetInstance !== controlPlaneInstanceId
+  )
+    return;
   const drain = payload["drain"];
   if (drain === false) {
+    if (identityLost) return;
     void cancelLocalNodeDrain();
     return;
   }
@@ -360,10 +387,31 @@ export async function reconcileRecordedDrainRequest(): Promise<void> {
   const row = await db.query.controlPlaneNodes
     .findFirst({
       where: eq(controlPlaneNodes.id, controlPlaneNodeId()),
-      columns: { drainRequestedAt: true, drainRequestedBy: true, drainReason: true },
+      columns: { instanceId: true, drainRequestedAt: true, drainRequestedBy: true, drainReason: true },
     })
     .catch((): undefined => undefined);
   if (row === undefined) return;
+  if (row.instanceId !== controlPlaneInstanceId) {
+    identityLost = true;
+    // The node ID has been reused by a replacement process. The displaced
+    // incarnation must remain locally fenced even though the replacement row
+    // has no drain request. Never interpret replacement metadata as an
+    // uncordon for this process.
+    clearCompletionCheck();
+    if (phase === "active") {
+      phase = "draining";
+      requestedAt = Date.now();
+      requestedBy = "system";
+      reason = "control-plane node identity replaced";
+      drainedAt = null;
+    }
+    await resignControlPlaneLease().catch((error: unknown): void => {
+      log.warn("Unable to resign coordinator after control-plane identity loss", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return;
+  }
   if (row.drainRequestedAt !== null && phase === "active") {
     await beginLocalNodeDrain({ requestedBy: row.drainRequestedBy, reason: row.drainReason });
     return;
@@ -385,6 +433,7 @@ export function stopNodeDrainWatch(): void {
 export function resetNodeDrainStateForTests(): void {
   stopNodeDrainWatch();
   phase = "active";
+  identityLost = false;
   requestedAt = null;
   requestedBy = null;
   reason = null;
