@@ -16,7 +16,13 @@ import {
 import { ABANDONED_UPLOAD_GRACE_MS, checkSqliteExport, sweepUploadTemps } from "../../src/lib/upload-sweep";
 import { controlPlaneInstanceId } from "../../src/lib/ha-config";
 import { HA_PROTOCOL_VERSION } from "../../src/lib/ha-protocol";
-import { acquireUploadTempLease, releaseUploadTempLease, uploadTempLeasePath } from "../../src/lib/upload-temp-lease";
+import {
+  acquireUploadTempLease,
+  readUploadTempLease,
+  releaseUploadTempLease,
+  uploadTempLeasePath,
+  withUploadTempLeaseMutationLock,
+} from "../../src/lib/upload-temp-lease";
 
 // Issue #619: the boot sweep removes crash-stranded upload temps and
 // orphaned archives while keeping referenced files and valid exports.
@@ -178,6 +184,33 @@ describe("sweepUploadTemps", (): void => {
     await releaseUploadTempLease(activeStateUpload);
     await releaseUploadTempLease(activeCvArchive);
   });
+});
+
+test("lease acquisition waits for orphan cleanup of the same target", async (): Promise<void> => {
+  const dir = await mkdtemp(join(tmpdir(), "terrence-upload-lease-race-"));
+  try {
+    const target = join(dir, "config-race.tar.gz");
+    const oldLease = { ownerInstanceId: "dead-instance", claimedAt: Date.now() - ABANDONED_UPLOAD_GRACE_MS - 60_000 };
+    await writeFile(uploadTempLeasePath(target), JSON.stringify(oldLease));
+
+    let replacementFinished = false;
+    let replacement: Promise<void> | undefined;
+    await withUploadTempLeaseMutationLock(target, async (): Promise<void> => {
+      replacement = acquireUploadTempLease(target).then((): void => {
+        replacementFinished = true;
+      });
+      await Bun.sleep(25);
+      expect(replacementFinished).toBe(false);
+      await rm(uploadTempLeasePath(target), { force: true });
+    });
+    await replacement;
+
+    const current = await readUploadTempLease(target);
+    expect(current?.ownerInstanceId).toBe(controlPlaneInstanceId);
+    expect(current?.claimedAt).toBeGreaterThan(oldLease.claimedAt);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 describe("checkSqliteExport", (): void => {

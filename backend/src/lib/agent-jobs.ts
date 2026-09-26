@@ -1536,6 +1536,36 @@ async function completeAgentJobInTransaction(
   return { job: updatedJob, runStatus: outcome.runStatus };
 }
 
+class CanceledApplyRecoveryCaptureError extends Error {
+  constructor(runId: string, options: Readonly<{ cause: unknown }>) {
+    super(
+      `Canceled apply ${runId} cannot be acknowledged until its returned state is durably captured for recovery`,
+      options,
+    );
+    this.name = "CanceledApplyRecoveryCaptureError";
+  }
+}
+
+async function captureCanceledApplyStateBeforeAcknowledgment(
+  agentId: string,
+  jobId: string,
+  fencingToken: number,
+  statePayload: string,
+): Promise<void> {
+  const recoveryRunId = await canceledApplyRecoveryRunId(agentId, jobId, fencingToken);
+  if (recoveryRunId === null) return;
+  try {
+    await captureRecoveryStatePayload(storageDir, recoveryRunId, statePayload);
+  } catch (error: unknown) {
+    // Fail closed. The remote agent journals an unacknowledged completion and,
+    // for apply recovery, retains its work directory until the server ACKs.
+    // Releasing the workspace lock here would allow a new apply to start while
+    // the only post-mutation state still lives on the agent. A retry repeats
+    // the same fencing predicates and capture before acknowledgment.
+    throw new CanceledApplyRecoveryCaptureError(recoveryRunId, { cause: error });
+  }
+}
+
 export async function completeAgentJob(
   agentId: string,
   jobId: string,
@@ -1555,14 +1585,11 @@ export async function completeAgentJob(
         })
       : undefined;
   if (completion.statePayload !== null) {
-    const recoveryRunId = await canceledApplyRecoveryRunId(agentId, jobId, fencingToken);
-    if (recoveryRunId !== null) {
-      // Durable filesystem capture happens before the DB transaction so the
-      // transaction never blocks unrelated statements on fsync/read-back I/O.
-      // The transaction below repeats the exact canceled-job fencing checks
-      // before releasing the workspace lock or acknowledging the agent.
-      await captureRecoveryStatePayload(storageDir, recoveryRunId, completion.statePayload);
-    }
+    // Durable filesystem capture happens before the DB transaction so the
+    // transaction never blocks unrelated statements on fsync/read-back I/O.
+    // The transaction below repeats the exact canceled-job fencing checks
+    // before releasing the workspace lock or acknowledging the agent.
+    await captureCanceledApplyStateBeforeAcknowledgment(agentId, jobId, fencingToken, completion.statePayload);
   }
 
   const applyGateReason =

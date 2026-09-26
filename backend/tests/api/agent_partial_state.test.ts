@@ -202,3 +202,99 @@ test("canceled remote-agent apply durably captures returned state before releasi
     marker: true,
   });
 }, 30_000);
+
+test("canceled remote-agent apply stays unacknowledged until recovery capture succeeds (#930)", async () => {
+  const result = await runAgentProtocolScript(`
+    const { mkdir, rm, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const { agentJobs, agentPools, agents, organizations, runs, workspaces } =
+      await import("./src/db/schema.ts");
+    const { completeAgentJob } = await import("./src/lib/agent-jobs.ts");
+
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "busy", lastPingAt: now });
+    await db.insert(workspaces).values({
+      id: "workspace",
+      orgId: "org",
+      name: "workspace",
+      executionMode: "agent",
+      agentPoolId: "pool",
+      locked: true,
+      lockedReason: "Run run is applying",
+      lockOwnerType: "agent-run",
+      lockOwnerId: "run",
+    });
+    await db.insert(runs).values({
+      id: "run",
+      workspaceId: "workspace",
+      agentPoolId: "pool",
+      agentId: "agent",
+      status: "canceled",
+      createdAt: now,
+    });
+    await db.insert(agentJobs).values({
+      id: "job",
+      runId: "run",
+      agentPoolId: "pool",
+      agentId: "agent",
+      phase: "apply",
+      status: "canceled",
+      fencingToken: 7,
+      claimedAt: now,
+      createdAt: now,
+    });
+
+    const completion = {
+      status: "errored",
+      errorMessage: "canceled after mutation",
+      resourceAdditions: null,
+      resourceChanges: null,
+      resourceDestructions: null,
+      resourceImports: null,
+      planJson: null,
+      statePayload: JSON.stringify({ version: 4, serial: 3, lineage: "retry", resources: [{ type: "partial" }] }),
+      jsonState: null,
+      jsonStateOutputs: null,
+      result: {},
+    };
+
+    const storage = process.env.STORAGE_DIR;
+    await mkdir(storage, { recursive: true });
+    await writeFile(join(storage, "recovery"), "blocked");
+    let firstError = null;
+    try {
+      await completeAgentJob("agent", "job", 7, completion);
+    } catch (error) {
+      firstError = error instanceof Error ? error.message : String(error);
+    }
+    const lockedAfterFailure = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") }))?.locked;
+    const agentAfterFailure = (await db.query.agents.findFirst({ where: eq(agents.id, "agent") }))?.status;
+
+    await rm(join(storage, "recovery"), { force: true });
+    const retried = await completeAgentJob("agent", "job", 7, completion);
+    const lockedAfterRetry = (await db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") }))?.locked;
+    const agentAfterRetry = (await db.query.agents.findFirst({ where: eq(agents.id, "agent") }))?.status;
+
+    console.log(JSON.stringify({
+      firstError,
+      lockedAfterFailure,
+      agentAfterFailure,
+      retryAcked: retried !== undefined,
+      lockedAfterRetry,
+      agentAfterRetry,
+    }));
+  `);
+
+  expect(result).toEqual({
+    firstError: "Canceled apply run cannot be acknowledged until its returned state is durably captured for recovery",
+    lockedAfterFailure: true,
+    agentAfterFailure: "busy",
+    retryAcked: true,
+    lockedAfterRetry: false,
+    agentAfterRetry: "idle",
+  });
+}, 30_000);

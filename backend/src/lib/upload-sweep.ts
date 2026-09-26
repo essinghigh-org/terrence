@@ -4,7 +4,13 @@ import { isNotNull } from "drizzle-orm";
 import { db } from "../db";
 import { configurationVersions, registryModuleVersions } from "../db/schema";
 import { log } from "./log";
-import { readUploadTempLease, releaseUploadTempLease, UPLOAD_TEMP_LEASE_SUFFIX } from "./upload-temp-lease";
+import {
+  readUploadTempLease,
+  releaseUploadTempLease,
+  uploadTempLeasePath,
+  UPLOAD_TEMP_LEASE_SUFFIX,
+  withUploadTempLeaseMutationLock,
+} from "./upload-temp-lease";
 
 // Startup sweep for crash-stranded upload temps and orphaned archives
 // (issue #619). Request-completion paths already clean up after themselves;
@@ -96,14 +102,20 @@ async function sweepOrphanedUploadLeases(
   let removed = 0;
   for (const name of await listFiles(dir)) {
     if (!name.endsWith(UPLOAD_TEMP_LEASE_SUFFIX)) continue;
-    if (!(await isAbandonedByAge(dir, name, startedAt))) continue;
     const leasePath = join(dir, name);
     const targetPath = leasePath.slice(0, -UPLOAD_TEMP_LEASE_SUFFIX.length);
-    if (await uploadLeaseProtects(targetPath, liveOwners, startedAt)) continue;
-    // A configuration upload can rename <tar>.tmp to <tar> before its finally
-    // block releases the lease. Keep the lease while either form still exists.
-    if ((await pathExists(targetPath)) || (await pathExists(`${targetPath}.tmp`))) continue;
-    if (await removeLeftover(leasePath, "upload-leases", name)) removed += 1;
+    const removedLease = await withUploadTempLeaseMutationLock(targetPath, async (): Promise<boolean> => {
+      // Re-check everything while acquisition/release of this exact target is
+      // serialized. Without this second age/owner check a retry could replace
+      // an old sidecar after the sweep inspected it but before unlink.
+      if (!(await isAbandonedByAge(dir, name, startedAt))) return false;
+      if (await uploadLeaseProtects(targetPath, liveOwners, startedAt)) return false;
+      // A configuration upload can rename <tar>.tmp to <tar> before its finally
+      // block releases the lease. Keep the lease while either form still exists.
+      if ((await pathExists(targetPath)) || (await pathExists(`${targetPath}.tmp`))) return false;
+      return removeLeftover(uploadTempLeasePath(targetPath), "upload-leases", name);
+    });
+    if (removedLease) removed += 1;
   }
   return removed;
 }
