@@ -804,10 +804,6 @@ function assessmentFromChecks(
   };
 }
 
-export function clearWorkspacePreflightCacheForTests(): void {
-  preflightCache.clear();
-}
-
 export async function assessWorkspacePreflight(
   workspace: WorkspaceRow,
   options: WorkspacePreflightOptions = {},

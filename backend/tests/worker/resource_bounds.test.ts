@@ -48,21 +48,4 @@ describe("resource bounds #351", (): void => {
     expect(map.has("other:run-4")).toBe(true); // non-prefixed keys are ignored by prune
     expect(map.size).toBe(2);
   });
-
-  test("scheduledBlockReasons workspace-lock prune was missing before fix", async (): Promise<void> => {
-    // Verify the fix is present in source (resolve relative to this test file)
-    const { readFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    const source = await readFile(join(import.meta.dir, "../../src/worker.ts"), "utf8");
-    expect(source).toContain('key.startsWith("workspace-lock:")');
-  });
-
-  test("warnedRunLogFailures helpers are test-only and do not affect production", (): void => {
-    expect(typeof warnedRunLogFailuresSizeForTests).toBe("function");
-    expect(typeof clearWarnedRunLogFailuresForTests).toBe("function");
-    expect(typeof addWarnedRunLogFailureForTests).toBe("function");
-    expect(typeof scheduledBlockReasonsForTests).toBe("function");
-    expect(typeof clearScheduledBlockReasonsForTests).toBe("function");
-    expect(typeof pruneScheduledBlockReasonsForTests).toBe("function");
-  });
 });

@@ -26,11 +26,7 @@ export type {
 // Workspace run readiness is exported from the operations library as part of
 // the public operations surface; the implementation lives in its own module
 // so route loading does not entangle the existing apply gates.
-export {
-  assessWorkspacePreflight,
-  clearWorkspacePreflightCacheForTests,
-  preflightResource,
-} from "./workspace-preflight";
+export { assessWorkspacePreflight, preflightResource } from "./workspace-preflight";
 export type {
   PreflightAssessmentStatus,
   PreflightCheckStatus,

@@ -44,9 +44,9 @@ jobs:
           # Keep pull requests fast and deterministic; the scheduled run
           # expands the independent lifecycle model's seed corpus.
           TERRENCE_PROPERTY_CASES: ${{ github.event_name == 'schedule' && '2000' || '256' }}
-        # The backend package script serializes Bun workers because the test
-        # suite shares its Elysia app and SQLite connection across files.
-        run: cd backend && bun run test
+        # Generic backend CI excludes the real provider lifecycle; the
+        # dedicated compatibility jobs below own that expensive contract.
+        run: cd backend && bun run test:ci
       - name: Prove critical guard tests detect mutations
         run: bun backend/scripts/check-guard-mutations.ts
 
@@ -88,15 +88,72 @@ jobs:
         env:
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # The backend package script serializes Bun workers because the test
-        # suite shares its Elysia app and SQLite connection across files.
-        run: cd backend && bun run test
+        # Keep DB/API/worker coverage here; the real provider lifecycle runs
+        # in a parallel Postgres profile below instead of serializing this job.
+        run: cd backend && bun run test:ci
       - name: Run SQLite to PostgreSQL migration and export contracts
         env:
           PG_TEST_ADMIN_URL: postgres://terrence:terrence@localhost:5432/terrence_test
         # Keep DATABASE_URL absent: the application must start on SQLite so
         # the actual migration path runs, not the already-PostgreSQL guard.
         run: cd backend && bun test tests/api/db-migration.test.ts tests/api/db-export.test.ts --max-concurrency=1 --no-orphans
+
+  provider-postgres:
+    name: Provider and CLI (Postgres, current)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: terrence
+          POSTGRES_PASSWORD: terrence
+          POSTGRES_DB: terrence_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
+      TERRENCE_E2E_TIER: current
+      TERRENCE_E2E_SEED: eng21-postgres-current
+      TERRENCE_E2E_RESULTS_DIR: ${{ github.workspace }}/provider-postgres-results
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build frontend for provider API journeys
+        run: cd frontend && bun run build
+      - name: Cache verified CLI binaries and provider packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            backend/storage/binaries
+            backend/storage/e2e-plugin-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-cli-postgres-current-${{ hashFiles('backend/tests/e2e/cli_matrix.json', 'backend/tests/e2e/provider_surface.json') }}
+      - name: Run current provider lifecycle against PostgreSQL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun run test:profile -- postgres-cli
+      - name: Upload PostgreSQL provider lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-postgres-current
+          path: provider-postgres-results/*
+          if-no-files-found: ignore
+          retention-days: 30
 
   ha-mixed-version:
     name: HA mixed-version smoke
@@ -222,10 +279,9 @@ jobs:
         run: bun run --cwd frontend scripts/brand-assets.tsx --check
       - name: Typecheck
         run: bun run typecheck
-      - name: Lint (baseline report)
-        run: bun run lint
-        continue-on-error: true
       - name: Lint debt budget
+        # lint:budget runs ESLint itself and enforces the checked-in zero-debt
+        # baseline, so a separate full-tree lint pass only duplicates ~2 min.
         run: bun run lint:budget
       - name: Knip
         run: bun run knip
@@ -244,6 +300,10 @@ jobs:
   # exposure is closed out.
   coverage:
     name: Backend coverage report
+    # Coverage is reporting-only (no threshold gate) and reruns most of the
+    # SQLite backend suite. Keep the evidence on merged/scheduled revisions
+    # without charging every PR for a third backend execution.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -485,6 +545,7 @@ jobs:
       - build-verification
       - browser-tests
       - provider-compatibility
+      - provider-postgres
       - cli-compatibility-report
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
