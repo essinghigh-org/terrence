@@ -4,6 +4,7 @@ import { db } from "../../src/db";
 import { controlPlaneNodes } from "../../src/db/schema";
 import { controlPlaneInstanceId } from "../../src/lib/ha-config";
 import { HA_PROTOCOL_VERSION } from "../../src/lib/ha-protocol";
+import { publish } from "../../src/lib/event-bus";
 import { claimControlPlaneNodeIdentity } from "../../src/routes/health";
 import {
   controlPlaneCoordinatorSuspended,
@@ -19,10 +20,12 @@ import {
   nodeDrainPhase,
   nodeDrainRequested,
   nodeDrainSnapshot,
+  NODE_DRAIN_TOPIC,
   reconcileRecordedDrainRequest,
   registerNodeDrainActivityProbe,
   requestNodeDrain,
   resetNodeDrainStateForTests,
+  startNodeDrainWatch,
 } from "../../src/lib/node-drain";
 
 const NODE_ID = "drain-test-node";
@@ -345,15 +348,25 @@ describe("recorded drain requests", () => {
     expect(nodeDrainPhase()).toBe("draining");
     expect(nodeDrainRequested()).toBe(true);
     expect(controlPlaneCoordinatorSuspended()).toBe(true);
+
+    // A delayed pre-replacement uncordon event still names this process's
+    // instance ID. Identity loss is a permanent local fence, so it must not
+    // revive the displaced process.
+    startNodeDrainWatch();
+    publish(NODE_DRAIN_TOPIC, { nodeId: NODE_ID, instanceId: controlPlaneInstanceId, drain: false });
+    await Bun.sleep(0);
+    expect(nodeDrainPhase()).toBe("draining");
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
   });
 
   test("a displaced drained process stays fenced when its node id is reused", async () => {
-    primeActivity(1, 0);
+    primeActivity(0, 0);
     await db
       .update(controlPlaneNodes)
       .set({ drainRequestedAt: Date.now(), drainRequestedBy: "ops", drainReason: "replace", status: "maintenance" })
       .where(eq(controlPlaneNodes.id, NODE_ID));
     await reconcileRecordedDrainRequest();
+    expect(nodeDrainPhase()).toBe("drained");
     expect(nodeDrainRequested()).toBe(true);
 
     // A replacement process takes the same durable node ID and starts active.
@@ -369,9 +382,8 @@ describe("recorded drain requests", () => {
       })
       .where(eq(controlPlaneNodes.id, NODE_ID));
 
-    primeActivity(0, 0);
     await reconcileRecordedDrainRequest();
-    expect(nodeDrainPhase()).not.toBe("active");
+    expect(nodeDrainPhase()).toBe("drained");
     expect(nodeDrainRequested()).toBe(true);
     expect(controlPlaneCoordinatorSuspended()).toBe(true);
   });

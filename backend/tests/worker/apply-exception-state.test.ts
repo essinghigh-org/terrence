@@ -22,6 +22,7 @@ async function runWorkerScript(script: string): Promise<Record<string, unknown>>
         TERRENCE_RUN_SANDBOX: TEST_RUN_SANDBOX,
         NODE_ENV: "production",
         SIMULATED_RUNS: "false",
+        TERRENCE_TEST_APPLY_TIMEOUT_MS: "50",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -74,7 +75,7 @@ test("exceptional local apply preserves the only state copy when persistence and
       "  init) exit 0 ;;",
       '  plan) echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan; exit 0 ;;',
       "  show) echo " + JSON.stringify(showJson) + " ;;",
-      "  apply) echo " + JSON.stringify(stateJson) + " > terraform.tfstate; echo APPLY_STREAM_FAIL; sleep 0.05; exit 0 ;;",
+      "  apply) echo " + JSON.stringify(stateJson) + " > terraform.tfstate; sleep 2; exit 0 ;;",
       "  *) exit 2 ;;",
       "esac",
     ].join("\\n"));
@@ -121,11 +122,6 @@ test("exceptional local apply preserves the only state copy when persistence and
       createdAt: Date.now(),
     });
 
-    await db.run(sql.raw(
-      "CREATE TRIGGER fail_apply_stream_log BEFORE INSERT ON logs " +
-      "WHEN NEW.phase = 'apply' AND instr(NEW.output_text, 'APPLY_STREAM_FAIL') > 0 " +
-      "BEGIN SELECT RAISE(FAIL, 'forced apply output failure'); END"
-    ));
     await db.run(sql.raw(
       "CREATE TRIGGER fail_run_state BEFORE INSERT ON state_versions " +
       "WHEN NEW.run_id = 'run' BEGIN SELECT RAISE(FAIL, 'forced state persistence failure'); END"

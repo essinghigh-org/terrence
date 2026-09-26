@@ -78,6 +78,36 @@ async function uploadLeaseProtects(
   return lease.claimedAt > startedAt - ABANDONED_UPLOAD_GRACE_MS;
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sweepOrphanedUploadLeases(
+  dir: string,
+  startedAt: number,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ReadonlySet is immutable; the rule flags it here.
+  liveOwners: ReadonlySet<string>,
+): Promise<number> {
+  let removed = 0;
+  for (const name of await listFiles(dir)) {
+    if (!name.endsWith(UPLOAD_TEMP_LEASE_SUFFIX)) continue;
+    if (!(await isAbandonedByAge(dir, name, startedAt))) continue;
+    const leasePath = join(dir, name);
+    const targetPath = leasePath.slice(0, -UPLOAD_TEMP_LEASE_SUFFIX.length);
+    if (await uploadLeaseProtects(targetPath, liveOwners, startedAt)) continue;
+    // A configuration upload can rename <tar>.tmp to <tar> before its finally
+    // block releases the lease. Keep the lease while either form still exists.
+    if ((await pathExists(targetPath)) || (await pathExists(`${targetPath}.tmp`))) continue;
+    if (await removeLeftover(leasePath, "upload-leases", name)) removed += 1;
+  }
+  return removed;
+}
+
 async function removeLeftover(path: string, area: string, file: string): Promise<boolean> {
   try {
     await rm(path, { force: true });
@@ -174,6 +204,7 @@ async function sweepStateUploads(dir: string, startedAt: number, liveOwners: Rea
       removed += 1;
     }
   }
+  removed += await sweepOrphanedUploadLeases(dir, startedAt, liveOwners);
   return removed;
 }
 
@@ -193,6 +224,7 @@ async function sweepCvTemps(cvDir: string, startedAt: number, liveOwners: Readon
       removed += 1;
     }
   }
+  removed += await sweepOrphanedUploadLeases(cvDir, startedAt, liveOwners);
   return removed;
 }
 

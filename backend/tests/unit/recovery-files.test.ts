@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 import {
   captureInterruptedApplyState,
+  captureRecoveryStatePayload,
+  recoveryCaptureLockPathFor,
   recoveryMarkerPathFor,
   recoveryStatePathFor,
   sweepIncompleteRecoveryCopies,
@@ -77,6 +79,22 @@ describe("captureInterruptedApplyState (#579)", () => {
     expect(decodeStatePayload(stored)).toBe(STATE_JSON);
     expect(await readFile(recoveryMarkerPathFor(storageDir, "run-1"), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect((await stat(recoveryStatePathFor(storageDir, "run-1"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("serializes concurrent captures for the same run", async () => {
+    await isolateStorage();
+    const first = JSON.stringify({ version: 4, serial: 8, lineage: "first", resources: [] });
+    const second = JSON.stringify({ version: 4, serial: 9, lineage: "second", resources: [] });
+
+    await Promise.all([
+      captureRecoveryStatePayload(storageDir, "run-concurrent", first),
+      captureRecoveryStatePayload(storageDir, "run-concurrent", second),
+    ]);
+
+    const stored = decodeStatePayload(await readFile(recoveryStatePathFor(storageDir, "run-concurrent"), "utf8"));
+    expect([first, second]).toContain(stored);
+    expect(await readFile(recoveryMarkerPathFor(storageDir, "run-concurrent"), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(await Bun.file(recoveryCaptureLockPathFor(storageDir, "run-concurrent")).exists()).toBe(false);
   });
 
   it("captures partial non-JSON bytes without parsing them (cancel path contract)", async () => {

@@ -1261,8 +1261,42 @@ export async function checkProjectPermission(
   return ids === null || ids.includes(projectId);
 }
 
+async function projectWorkspaceScopesAllow(
+  scopes: TokenScopes,
+  projectId: string | null,
+  orgId: string,
+  workspaceIds: readonly string[],
+): Promise<boolean> {
+  if (!scopeCoversOrg(scopes, orgId) || !scopeGrants(scopes, "workspaces:write")) return false;
+  if (scopes.projects !== null && (projectId === null || !scopes.projects.includes(projectId))) return false;
+  const scopedWorkspaceIds = await scopeWorkspaceIdsForOrg(scopes, orgId);
+  if (workspaceIds.length === 0) {
+    // Creation has no existing workspace ID to intersect with. Workspace- or
+    // tag-only selectors fail closed; only an explicit project selector can
+    // authorize creating a new workspace when the scope is narrowed.
+    return scopedWorkspaceIds === null || scopes.projects !== null;
+  }
+  if (scopedWorkspaceIds === null) return true;
+  const allowed = new Set(scopedWorkspaceIds);
+  return workspaceIds.every((workspaceId): boolean => allowed.has(workspaceId));
+}
+
+async function sourceWorkspacesAllowMove(
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+  workspaceIds: readonly string[],
+): Promise<boolean> {
+  if (workspaceIds.length === 0) return true;
+  const adminIds = await workspaceIdsForPermission(orgId, userId, tokenOrgId ?? null, tokenTeamId ?? null, "admin");
+  if (adminIds === null) return true;
+  const allowedSources = new Set(adminIds);
+  return workspaceIds.every((workspaceId): boolean => allowedSources.has(workspaceId));
+}
+
 export async function checkProjectWorkspaceOperation(
-  projectId: string,
+  projectId: string | null,
   orgId: string,
   userId: string | undefined,
   tokenOrgId: string | null | undefined,
@@ -1271,26 +1305,16 @@ export async function checkProjectWorkspaceOperation(
   workspaceIds: readonly string[] = [],
 ): Promise<boolean> {
   const scopes = currentTokenScopes();
-  if (scopes !== null) {
-    if (!scopeCoversOrg(scopes, orgId) || !scopeGrants(scopes, "workspaces:write")) return false;
-    const scopedWorkspaceIds = await scopeWorkspaceIdsForOrg(scopes, orgId);
-    if (workspaceIds.length > 0) {
-      if (scopedWorkspaceIds !== null) {
-        const allowed = new Set(scopedWorkspaceIds);
-        if (workspaceIds.some((workspaceId): boolean => !allowed.has(workspaceId))) return false;
-      }
-    } else if (scopedWorkspaceIds !== null) {
-      // Creation has no existing workspace ID to intersect with. A restricted
-      // token may create only when its project selector explicitly covers the
-      // destination project; workspace/tag-only selectors fail closed.
-      if (scopes.projects === null || !scopes.projects.includes(projectId)) return false;
-    }
+  if (scopes !== null && !(await projectWorkspaceScopesAllow(scopes, projectId, orgId, workspaceIds))) return false;
+  if (required === "move" && !(await sourceWorkspacesAllowMove(orgId, userId, tokenOrgId, tokenTeamId, workspaceIds))) {
+    return false;
   }
-
   if (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "manage-workspaces")) return true;
+  if (projectId === null) return false;
   const projectGrants = await teamProjectGrantsForPrincipal(orgId, userId, tokenTeamId);
-  const matching = projectGrants.filter((entry): boolean => entry.projectId === projectId);
-  return matching.some((entry): boolean => resolvedTeamProjectWorkspaceAccess(entry)[required] === true);
+  return projectGrants.some(
+    (entry): boolean => entry.projectId === projectId && resolvedTeamProjectWorkspaceAccess(entry)[required] === true,
+  );
 }
 
 function derivesFromTeamToken(

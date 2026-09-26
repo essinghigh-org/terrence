@@ -431,6 +431,60 @@ describe("fine-grained user tokens", () => {
     }
   });
 
+  it("project-scoped write tokens cannot move or create into an out-of-scope project", async () => {
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        projects: [s.projectA],
+        permissions: { "workspaces:write": true },
+      },
+    });
+    try {
+      const move = await request(`/api/v2/projects/${s.projectB}/relationships/workspaces`, {
+        method: "POST",
+        headers: headers(created.secret),
+        body: JSON.stringify({ data: [{ type: "workspaces", id: s.wsA1 }] }),
+      });
+      expect(move.status).toBe(404);
+      const unchanged = await db.query.workspaces.findFirst({ where: eq(workspaces.id, s.wsA1) });
+      expect(unchanged?.projectId).toBe(s.projectA);
+
+      // Authorization must run before duplicate-name/project-dependent error
+      // details. ws-b1 already exists in project B, but this scoped token should
+      // see only the authorization failure.
+      const explicitCreate = await request(`/api/v2/organizations/${s.orgName}/workspaces`, {
+        method: "POST",
+        headers: headers(created.secret),
+        body: JSON.stringify({
+          data: {
+            type: "workspaces",
+            attributes: { name: "ws-b1" },
+            relationships: { project: { data: { type: "projects", id: s.projectB } } },
+          },
+        }),
+      });
+      expect(explicitCreate.status).toBe(403);
+
+      const defaultBefore = await db.query.projects.findFirst({
+        where: (project, { and, eq }) => and(eq(project.orgId, s.orgId), eq(project.isDefault, true)),
+      });
+      expect(defaultBefore).toBeUndefined();
+      const defaultCreate = await request(`/api/v2/organizations/${s.orgName}/workspaces`, {
+        method: "POST",
+        headers: headers(created.secret),
+        body: JSON.stringify({ data: { type: "workspaces", attributes: { name: `fg-default-denied-${s.suffix}` } } }),
+      });
+      expect(defaultCreate.status).toBe(403);
+      const defaultAfter = await db.query.projects.findFirst({
+        where: (project, { and, eq }) => and(eq(project.orgId, s.orgId), eq(project.isDefault, true)),
+      });
+      expect(defaultAfter).toBeUndefined();
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
+    }
+  });
+
   it("requires settings:read to read org settings", async () => {
     // Insert tokens directly (no HTTP creation) under the dedicated rate-limit
     // user so this test's requests don't consume the shared admin bucket.

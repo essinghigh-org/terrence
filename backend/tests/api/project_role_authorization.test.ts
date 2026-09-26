@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { and, eq } from "drizzle-orm";
-import { db } from "../../src/db";
+import { db, isPostgres } from "../../src/db";
 import {
   organizationMembershipRoles,
   organizationMemberships,
@@ -190,6 +190,25 @@ describe("project and direct-role authorization", () => {
     expect(await checkProjectPermission(projectId, orgId, projectUserId, null, null, "manage-teams")).toBe(true);
     expect(await checkProjectWorkspaceOperation(projectId, orgId, projectUserId, null, null, "move")).toBe(true);
 
+    // Destination-project admin is not ownership of an unrelated source
+    // workspace. A direct source-admin grant is required before the move can
+    // be authorized.
+    expect(
+      await checkProjectWorkspaceOperation(projectId, orgId, projectUserId, null, null, "move", [unrelatedWorkspaceId]),
+    ).toBe(false);
+    const moveSourceGrantId = `auth-move-source-${suffix}`;
+    await db.insert(teamWorkspaces).values({
+      id: moveSourceGrantId,
+      teamId,
+      workspaceId: unrelatedWorkspaceId,
+      access: "admin",
+      permissions: null,
+    });
+    expect(
+      await checkProjectWorkspaceOperation(projectId, orgId, projectUserId, null, null, "move", [unrelatedWorkspaceId]),
+    ).toBe(true);
+    await db.delete(teamWorkspaces).where(eq(teamWorkspaces.id, moveSourceGrantId));
+
     await setAccess(
       "custom",
       { settings: "update", teams: "manage" },
@@ -248,15 +267,21 @@ describe("project and direct-role authorization", () => {
     expect(await checkWorkspacePermission(unrelatedWorkspace!, projectUserId, null, null, "read")).toBe(true);
     expect(await checkProjectPermission(projectId, orgId, projectUserId, null, null, "read")).toBe(false);
 
-    await db.insert(teamProjects).values({
-      id: teamProjectId,
-      teamId,
-      projectId,
-      organizationId: null,
-      access: "read",
-    });
-    expect(await checkProjectPermission(projectId, orgId, projectUserId, null, null, "read")).toBe(true);
-    expect(await checkWorkspacePermission(workspace!, projectUserId, null, null, "read")).toBe(true);
+    // Legacy SQLite databases can contain pre-orgId team-project rows. The
+    // PostgreSQL schema uses a MATCH FULL composite FK and correctly rejects
+    // a non-null team ID paired with a null organization ID, so this
+    // compatibility shape is SQLite-only.
+    if (!isPostgres) {
+      await db.insert(teamProjects).values({
+        id: teamProjectId,
+        teamId,
+        projectId,
+        organizationId: null,
+        access: "read",
+      });
+      expect(await checkProjectPermission(projectId, orgId, projectUserId, null, null, "read")).toBe(true);
+      expect(await checkWorkspacePermission(workspace!, projectUserId, null, null, "read")).toBe(true);
+    }
 
     await db.delete(teamWorkspaces).where(eq(teamWorkspaces.id, directGrantId));
     await db.delete(teamProjects).where(eq(teamProjects.id, teamProjectId));

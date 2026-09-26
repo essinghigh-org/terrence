@@ -103,6 +103,8 @@ describe("sweepUploadTemps", (): void => {
     const activeStateUpload = join(stateUploadsDir, "state-active.json");
     const activeCvArchive = join(cvDir, "config-active-token.tar.gz");
     const activeCvTemp = `${activeCvArchive}.tmp`;
+    const orphanStateLeaseTarget = join(stateUploadsDir, "state-orphan.json");
+    const orphanCvLeaseTarget = join(cvDir, "config-orphan-lease.tar.gz");
     await writeFile(stateKeep, "not a temp");
     await writeFile(cvKeep, "not a temp");
     await writeFile(keptCvArchive, "referenced archive");
@@ -111,6 +113,16 @@ describe("sweepUploadTemps", (): void => {
     await writeFile(activeCvTemp, "active partial body");
     await acquireUploadTempLease(activeStateUpload);
     await acquireUploadTempLease(activeCvArchive);
+
+    const abandonedClaimedAt = Date.now() - ABANDONED_UPLOAD_GRACE_MS - 120_000;
+    await writeFile(
+      uploadTempLeasePath(orphanStateLeaseTarget),
+      JSON.stringify({ ownerInstanceId: "dead-instance", claimedAt: abandonedClaimedAt }),
+    );
+    await writeFile(
+      uploadTempLeasePath(orphanCvLeaseTarget),
+      JSON.stringify({ ownerInstanceId: "dead-instance", claimedAt: abandonedClaimedAt }),
+    );
 
     // Model files stranded before startup, independent of filesystem clock precision.
     const old = new Date(Date.now() - ABANDONED_UPLOAD_GRACE_MS - 60_000);
@@ -125,14 +137,16 @@ describe("sweepUploadTemps", (): void => {
       activeStateUpload,
       activeCvTemp,
       uploadTempLeasePath(activeStateUpload),
+      uploadTempLeasePath(orphanStateLeaseTarget),
+      uploadTempLeasePath(orphanCvLeaseTarget),
     ]) {
       await utimes(path, old, old);
     }
     const result = await sweepUploadTemps(root);
 
     expect(result).toEqual({
-      stateUploads: 1,
-      cvTemps: 2,
+      stateUploads: 2,
+      cvTemps: 3,
       unclaimedArchives: 1,
       invalidExports: 2,
       orphanedModuleArchives: 1,
@@ -145,6 +159,8 @@ describe("sweepUploadTemps", (): void => {
       orphanModuleArchive,
       partialExport,
       garbageExport,
+      uploadTempLeasePath(orphanStateLeaseTarget),
+      uploadTempLeasePath(orphanCvLeaseTarget),
     ]) {
       expect(await Bun.file(gone).exists()).toBe(false);
     }

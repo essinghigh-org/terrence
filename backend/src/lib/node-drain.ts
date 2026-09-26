@@ -54,6 +54,7 @@ let requestedAt: number | null = null;
 let requestedBy: string | null = null;
 let reason: string | null = null;
 let drainedAt: number | null = null;
+let identityLost = false;
 let completionTimer: ReturnType<typeof setTimeout> | undefined;
 let unsubscribeDrainEvents: (() => void) | undefined;
 let activityProbe: NodeDrainActivityProbe = (): {
@@ -221,6 +222,11 @@ export async function beginLocalNodeDrain(
 
 /** Return a drained or draining node to service (an "uncordon"). */
 export async function cancelLocalNodeDrain(): Promise<NodeDrainSnapshot> {
+  // Losing the durable node incarnation is a permanent fence for this
+  // process. A delayed cancellation event created before replacement must not
+  // resurrect the displaced process. A replacement process starts with a
+  // fresh module instance and therefore a clear latch.
+  if (identityLost) return nodeDrainSnapshot();
   if (phase !== "active") {
     clearCompletionCheck();
     phase = "active";
@@ -364,6 +370,7 @@ function handleDrainEvent(payload: Readonly<Record<string, unknown>>): void {
     return;
   const drain = payload["drain"];
   if (drain === false) {
+    if (identityLost) return;
     void cancelLocalNodeDrain();
     return;
   }
@@ -385,6 +392,7 @@ export async function reconcileRecordedDrainRequest(): Promise<void> {
     .catch((): undefined => undefined);
   if (row === undefined) return;
   if (row.instanceId !== controlPlaneInstanceId) {
+    identityLost = true;
     // The node ID has been reused by a replacement process. The displaced
     // incarnation must remain locally fenced even though the replacement row
     // has no drain request. Never interpret replacement metadata as an
@@ -425,6 +433,7 @@ export function stopNodeDrainWatch(): void {
 export function resetNodeDrainStateForTests(): void {
   stopNodeDrainWatch();
   phase = "active";
+  identityLost = false;
   requestedAt = null;
   requestedBy = null;
   reason = null;

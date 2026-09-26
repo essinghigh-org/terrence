@@ -7401,6 +7401,16 @@ function timeoutSeconds(value: unknown, fallback: number): number {
 }
 
 async function executionTimeoutMs(phase: "plan" | "apply"): Promise<number> {
+  // Fault-injection hook used only by isolated worker subprocess tests. Keep it
+  // outside the documented runtime-config surface so production timeout
+  // semantics remain the persisted admin settings below.
+  if (phase === "apply") {
+    const testOverride = Reflect.get(process.env, "TERRENCE_TEST_APPLY_TIMEOUT_MS");
+    if (typeof testOverride === "string" && testOverride !== "") {
+      const parsed = Number(testOverride);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
   const settings = await db.query.adminGeneralSettings.findFirst({
     where: eq(adminGeneralSettings.id, "general"),
     columns: { planTimeout: true, applyTimeout: true },

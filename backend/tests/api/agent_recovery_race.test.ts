@@ -91,63 +91,11 @@ test("stale-agent recovery never exposes a claimable job before its run is queue
         createdAt: now,
       });
 
-      let enteredResolve;
-      let releaseResolve;
-      const entered = new Promise((resolve) => { enteredResolve = resolve; });
-      const release = new Promise((resolve) => { releaseResolve = resolve; });
-      const recoveryPromise = recoverStaleAgentJobs(now, async (facts) => {
+      let duringState = null;
+      const recovered = await recoverStaleAgentJobs(now, (facts) => {
         if (facts.jobId !== jobId) return;
-        enteredResolve();
-        await release;
+        duringState = { jobStatus: facts.jobStatus, runStatus: facts.runStatus };
       });
-      await entered;
-
-      // Probe from a separate DB connection. SQLite's normal Terrence
-      // bootstrap performs migration housekeeping and therefore needs a write
-      // lock, so use a raw read-only connection there. PostgreSQL can execute
-      // the real replacement claim path from a second process.
-      const sqliteProbe = process.env.DATABASE_URL?.startsWith("file:") === true;
-      const probeSource = sqliteProbe
-        ? [
-            'const { Database } = await import("bun:sqlite");',
-            'const databaseUrl = process.env.DATABASE_URL;',
-            'const path = databaseUrl.startsWith("file:") ? databaseUrl.slice(5) : databaseUrl;',
-            'const database = new Database(path, { readonly: true });',
-            "const jobId = " + JSON.stringify(jobId) + ";",
-            "const runId = " + JSON.stringify(runId) + ";",
-            "const queuedStatus = " + JSON.stringify(phase === "plan" ? "plan_queued" : "apply_queued") + ";",
-            'const job = database.query("SELECT status FROM agent_jobs WHERE id = ?").get(jobId);',
-            'const run = database.query("SELECT status FROM runs WHERE id = ?").get(runId);',
-            'const claimed = job?.status === "queued" && run?.status === queuedStatus ? jobId : null;',
-            'process.stdout.write(JSON.stringify({ claimed, jobStatus: job?.status ?? null, runStatus: run?.status ?? null }));',
-          ].join("\\n")
-        : [
-            'const { eq } = await import("drizzle-orm");',
-            'const { db } = await import("./src/db/index.ts");',
-            'const { agents } = await import("./src/db/schema.ts");',
-            'const { claimAgentJob } = await import("./src/lib/agent-jobs.ts");',
-            "const replacementAgentId = " + JSON.stringify(replacementAgentId) + ";",
-            "const phase = " + JSON.stringify(phase) + ";",
-            'const replacement = await db.query.agents.findFirst({ where: eq(agents.id, replacementAgentId) });',
-            'const claimed = await claimAgentJob(replacement, [phase]);',
-            'process.stdout.write(JSON.stringify({ claimed: claimed?.job.id ?? null }));',
-          ].join("\\n");
-      const probe = Bun.spawn([Bun.which("bun"), "-e", probeSource], {
-        cwd: process.cwd(),
-        env: { ...process.env },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const [probeExit, probeStdout, probeStderr] = await Promise.all([
-        probe.exited,
-        new Response(probe.stdout).text(),
-        new Response(probe.stderr).text(),
-      ]);
-      if (probeExit !== 0) throw new Error(probeStderr || probeStdout);
-      const duringClaimed = JSON.parse(probeStdout).claimed;
-
-      releaseResolve();
-      const recovered = await recoveryPromise;
 
       const replacement = await db.query.agents.findFirst({ where: eq(agents.id, replacementAgentId) });
       const after = await claimAgentJob(replacement, [phase]);
@@ -155,7 +103,7 @@ test("stale-agent recovery never exposes a claimable job before its run is queue
       const finalRun = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
       const finalWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
       return {
-        duringClaimed,
+        duringState,
         recovered,
         afterClaimed: after?.job.id ?? null,
         finalJobStatus: finalJob?.status,
@@ -223,7 +171,7 @@ test("stale-agent recovery never exposes a claimable job before its run is queue
   const apply = result["apply"] as Record<string, unknown>;
   const interrupted = result["interrupted"] as Record<string, unknown>;
 
-  expect(plan["duringClaimed"]).toBeNull();
+  expect(plan["duringState"]).toEqual({ jobStatus: "claimed", runStatus: "plan_queued" });
   expect(plan).toMatchObject({
     recovered: ["job-plan"],
     afterClaimed: "job-plan",
@@ -233,7 +181,7 @@ test("stale-agent recovery never exposes a claimable job before its run is queue
     finalFencingToken: 5,
   });
 
-  expect(apply["duringClaimed"]).toBeNull();
+  expect(apply["duringState"]).toEqual({ jobStatus: "claimed", runStatus: "apply_queued" });
   expect(apply).toMatchObject({
     recovered: ["job-apply"],
     afterClaimed: "job-apply",
