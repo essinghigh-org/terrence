@@ -244,6 +244,10 @@ jobs:
   # exposure is closed out.
   coverage:
     name: Backend coverage report
+    # Coverage is reporting-only (no threshold gate) and reruns most of the
+    # SQLite backend suite. Keep the evidence on merged/scheduled revisions
+    # without charging every PR for a third backend execution.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

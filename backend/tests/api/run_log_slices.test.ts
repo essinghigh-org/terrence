@@ -7,6 +7,7 @@ import {
   archiveRunLogs,
   deleteRunLogArchive,
   readRunLogSlice,
+  readRunLogs,
   readRunLogsPage,
   runLogArchivePath,
 } from "../../src/lib/run-logs";
@@ -125,6 +126,11 @@ describe("run log slices", () => {
       }
       await db.insert(logs).values(batch);
     }
+
+    const boundedLiveRows = await readRunLogs(bigRunId);
+    expect(boundedLiveRows).toHaveLength(10_000);
+    expect(boundedLiveRows[0]?.outputText).toBe("line-5");
+    expect(boundedLiveRows.at(-1)?.outputText).toBe("line-10004");
 
     const live = await readRunLogsPage(bigRunId, { number: 1, size: 20 });
     expect(live.totalCount).toBe(total);

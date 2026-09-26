@@ -196,6 +196,27 @@ describe("fetchBinaryArchive", (): void => {
     expect((failure as Error).message).toContain("too large");
   });
 
+  test("rejects a streamed body that exceeds the cap without a content-length", async (): Promise<void> => {
+    const chunk = new Uint8Array(1024 * 1024);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        // Reuse one backing buffer so the test exercises the byte accounting
+        // without allocating the entire 101 MiB response in the fixture.
+        for (let index = 0; index < 101; index += 1) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async (): Promise<Response> => new Response(body, { status: 200 })) as unknown as typeof fetch;
+
+    const failure = await fetchBinaryArchive("https://example.invalid/pkg.zip", 5000).then(
+      (): null => null,
+      (error: unknown): unknown => error,
+    );
+    expect(failure).toBeInstanceOf(BinaryDownloadError);
+    expect((failure as BinaryDownloadError).retryable).toBe(false);
+    expect((failure as Error).message).toContain("too large");
+  });
+
   test("a hung download surfaces a retryable timeout", async (): Promise<void> => {
     // A signal-aware hang: rejects with the signal reason on abort, like the
     // real fetch does when AbortSignal.timeout fires.
