@@ -1117,9 +1117,9 @@ async function readinessResponse(
   const worker = envFlag("TERRENCE_DISABLE_WORKER") ? (haEnabled() ? "STANDBY" : "ERROR") : "OK";
   const sandbox = probeSandboxReadiness();
   const nodeIdentity = database === "OK" ? await probeNodeIdentityReadiness() : "ERROR";
-  // Only the heartbeat adopts a recorded drain request: readiness is probed by
-  // load balancers on short intervals, and a state transition per probe would
-  // be both wasteful and surprising.
+  // Only the heartbeat adopts recorded drain/identity state: readiness is
+  // probed by load balancers on short intervals. Reconciliation also fences a
+  // process whose node ID has been taken over by another instance.
   if (persistNode && haEnabled() && database === "OK") {
     await reconcileRecordedDrainRequest().catch((): void => undefined);
   }

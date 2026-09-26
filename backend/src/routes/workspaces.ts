@@ -44,6 +44,7 @@ import {
   caseInsensitiveLike,
   checkOrgPermission,
   checkOrganizationPermission,
+  checkProjectWorkspaceOperation,
   checkWorkspacePermission,
   workspacePermissionSets,
   workspaceAllows,
@@ -942,18 +943,6 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const actor = actorScope(user, principalOrgId, teamId);
-      if (
-        !(await checkOrganizationPermission(
-          org.id,
-          actor.actorId,
-          actor.actorOrgId,
-          actor.actorTeamId,
-          "manage-workspaces",
-        ))
-      ) {
-        (set as { status: number }).status = 403;
-        return { errors: [{ status: "403", title: "Forbidden" }] };
-      }
       const parsed = parseWorkspaceUpdateBody(body);
       const attributes = parsed.attributes;
       const preambleError = validateCreatePreamble(attributes);
@@ -974,6 +963,19 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         workspaceId: id,
       });
       if ("error" in execution) return failWorkspaceUpdate(set, 422, execution.error);
+      if (
+        !(await checkProjectWorkspaceOperation(
+          execution.project.id,
+          org.id,
+          actor.actorId,
+          actor.actorOrgId,
+          actor.actorTeamId,
+          "create",
+        ))
+      ) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden" }] };
+      }
       const durationError = validateCreateDuration(attributes);
       if (durationError !== null) return failWorkspaceUpdate(set, 422, durationError);
       // Boundary narrowing: validateCreatePreamble/validateCreateDuration
@@ -3513,6 +3515,21 @@ async function updateWorkspaceResponse(
   const project = await resolveUpdateProject(parsed.rels, workspace);
   if ("error" in project) return failWorkspaceUpdate(set, 422, project.error);
   const newProjectId = project.project.id;
+  if (
+    parsed.rels["project"] !== undefined &&
+    newProjectId !== workspace.projectId &&
+    !(await checkProjectWorkspaceOperation(
+      newProjectId,
+      workspace.orgId,
+      principal.userId,
+      principal.principalOrgId,
+      principal.teamId,
+      "move",
+      [workspace.id],
+    ))
+  ) {
+    return failWorkspaceUpdate(set, 403, "Forbidden");
+  }
   const rawSettingOverwrites = attributes["setting-overwrites"];
   const parsedOverwrites = parseSettingOverwrites(rawSettingOverwrites, workspace.settingOverwrites);
   if ("error" in parsedOverwrites) return failWorkspaceUpdate(set, 422, parsedOverwrites.error);

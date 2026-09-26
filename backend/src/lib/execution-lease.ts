@@ -5,6 +5,7 @@ import { isPostgres } from "../db/driver";
 import { runs, workspaces } from "../db/schema";
 import { controlPlaneInstanceId, controlPlaneNodeId, haEnabled } from "./ha-config";
 import { log } from "./log";
+import { conservativeLeaseRemainingMs } from "./lease-deadline";
 import { nodeDrainRequested } from "./node-drain";
 
 export const RUN_EXECUTION_LEASE_TTL_MS = 30_000;
@@ -525,6 +526,7 @@ export async function withRunExecutionLease<T>(
   const claimedLease = await claimRunExecutionLease(runId, phase);
   if (claimedLease === null) throw new RunExecutionLeaseUnavailableError(runId);
   let claimConfirmedAt: number;
+  const claimConfirmationStartedAt = performance.now();
   try {
     claimConfirmedAt = await databaseCurrentTimeMs();
   } catch {
@@ -535,14 +537,19 @@ export async function withRunExecutionLease<T>(
     await releaseRunExecutionLease(claimedLease).catch((): void => undefined);
     throw new RunExecutionLeaseUnavailableError(runId);
   }
-  if (claimedLease.expiresAt <= claimConfirmedAt) {
+  const initialRemainingMs = conservativeLeaseRemainingMs(
+    claimedLease.expiresAt,
+    claimConfirmedAt,
+    claimConfirmationStartedAt,
+  );
+  if (initialRemainingMs <= 0) {
     await releaseRunExecutionLease(claimedLease).catch((): void => undefined);
     throw new RunExecutionLeaseUnavailableError(runId);
   }
   const context: RunExecutionLeaseContext = {
     lease: claimedLease,
     valid: true,
-    validUntil: performance.now() + (claimedLease.expiresAt - claimConfirmedAt),
+    validUntil: performance.now() + initialRemainingMs,
   };
 
   let stopped = false;
@@ -571,10 +578,9 @@ export async function withRunExecutionLease<T>(
     await hooks.onLeaseLost(context.lease, reason);
   };
 
-  const armWatchdog = (databaseNow: number): void => {
+  const armWatchdog = (remainingMs: number): void => {
     if (stopped || lost) return;
     if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
-    const remainingMs = Math.max(0, context.lease.expiresAt - databaseNow);
     context.validUntil = performance.now() + remainingMs;
     watchdogTimer = setTimeout((): void => {
       void lose("lease watchdog expired before a successful renewal");
@@ -600,18 +606,24 @@ export async function withRunExecutionLease<T>(
             return;
           }
 
+          const renewalConfirmationStartedAt = performance.now();
           const renewalConfirmedAt = await databaseCurrentTimeMs();
           if (lost || stopped) {
             await releaseRunExecutionLease(renewed).catch((): void => undefined);
             return;
           }
+          const renewalRemainingMs = conservativeLeaseRemainingMs(
+            renewed.expiresAt,
+            renewalConfirmedAt,
+            renewalConfirmationStartedAt,
+          );
           context.lease = renewed;
-          if (renewed.expiresAt <= renewalConfirmedAt) {
+          if (renewalRemainingMs <= 0) {
             await releaseRunExecutionLease(renewed).catch((): void => undefined);
             await lose("renewed lease expired before post-response database confirmation");
             return;
           }
-          armWatchdog(renewalConfirmedAt);
+          armWatchdog(renewalRemainingMs);
           scheduleRenewal();
         } catch (error: unknown) {
           await lose(`lease renewal failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -621,7 +633,7 @@ export async function withRunExecutionLease<T>(
     renewTimer.unref?.();
   };
 
-  armWatchdog(claimConfirmedAt);
+  armWatchdog(initialRemainingMs);
   scheduleRenewal();
 
   try {

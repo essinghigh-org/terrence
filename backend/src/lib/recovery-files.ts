@@ -637,14 +637,7 @@ async function restorePreviousCapture(
  * callers must treat that as a failed capture and preserve the work
  * directory for manual recovery instead of deleting it.
  */
-export async function captureInterruptedApplyState(
-  storageDir: string,
-  runId: string,
-  workRoot: string,
-): Promise<boolean> {
-  const source = await findStateSource(workRoot);
-  if (source === null) return false;
-
+export async function captureRecoveryStatePayload(storageDir: string, runId: string, payload: string): Promise<void> {
   const recoveryDir = recoveryDirFor(storageDir, runId);
   const markerPath = recoveryMarkerPathFor(storageDir, runId);
   await mkdirDurable(recoveryDir);
@@ -652,18 +645,8 @@ export async function captureInterruptedApplyState(
   const previous = await readPreviousCapture(storageDir, runId, markerPath);
   try {
     await clearSupersededCapture(recoveryDir, storageDir, runId, markerPath, previous);
-    // Raw bytes on purpose: utf8 decoding replaces split multibyte
-    // sequences, which would let a corrupted copy pass verification. If
-    // the source is not valid UTF-8 the encryption layer cannot preserve
-    // it, so reject here (throwing preserves the work directory).
-    const raw = await readFile(source);
-    const payload = raw.toString("utf8");
-    if (!Buffer.from(payload, "utf8").equals(raw)) {
-      throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
-    }
     await publishCapture(recoveryDir, storageDir, runId, payload);
     markerWritten = true;
-    return true;
   } catch (error: unknown) {
     markerWritten =
       previous.marker !== null && previous.state !== null
@@ -673,13 +656,29 @@ export async function captureInterruptedApplyState(
             state: previous.state,
           })
         : false;
-    // Never leave a markerless partial behind: without the marker the copy
-    // is unreadable by design, so an incomplete capture is just garbage.
-    // (When the replacement itself was published but unverifiable, the
-    // source work directory is preserved by the caller, so nothing is lost.)
     if (!markerWritten) await rm(recoveryDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+export async function captureInterruptedApplyState(
+  storageDir: string,
+  runId: string,
+  workRoot: string,
+): Promise<boolean> {
+  const source = await findStateSource(workRoot);
+  if (source === null) return false;
+
+  // Raw bytes on purpose: utf8 decoding replaces split multibyte sequences,
+  // which would let a corrupted copy pass verification. If the source is not
+  // valid UTF-8 the encryption layer cannot preserve it, so reject here.
+  const raw = await readFile(source);
+  const payload = raw.toString("utf8");
+  if (!Buffer.from(payload, "utf8").equals(raw)) {
+    throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
+  }
+  await captureRecoveryStatePayload(storageDir, runId, payload);
+  return true;
 }
 
 export type RecoverySweepResult = Readonly<{

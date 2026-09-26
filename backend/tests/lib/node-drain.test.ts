@@ -326,6 +326,56 @@ describe("recorded drain requests", () => {
     expect(row?.lastHeartbeatAt).toBe(1_234);
   });
 
+  test("losing the registered node incarnation fences an active local process", async () => {
+    expect(nodeDrainPhase()).toBe("active");
+    await db
+      .update(controlPlaneNodes)
+      .set({
+        instanceId: "replacement-instance",
+        status: "active",
+        drainRequestedAt: null,
+        drainRequestedBy: null,
+        drainReason: null,
+        drainedAt: null,
+      })
+      .where(eq(controlPlaneNodes.id, NODE_ID));
+
+    await reconcileRecordedDrainRequest();
+
+    expect(nodeDrainPhase()).toBe("draining");
+    expect(nodeDrainRequested()).toBe(true);
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+  });
+
+  test("a displaced drained process stays fenced when its node id is reused", async () => {
+    primeActivity(1, 0);
+    await db
+      .update(controlPlaneNodes)
+      .set({ drainRequestedAt: Date.now(), drainRequestedBy: "ops", drainReason: "replace", status: "maintenance" })
+      .where(eq(controlPlaneNodes.id, NODE_ID));
+    await reconcileRecordedDrainRequest();
+    expect(nodeDrainRequested()).toBe(true);
+
+    // A replacement process takes the same durable node ID and starts active.
+    await db
+      .update(controlPlaneNodes)
+      .set({
+        instanceId: "replacement-instance",
+        status: "active",
+        drainRequestedAt: null,
+        drainRequestedBy: null,
+        drainReason: null,
+        drainedAt: null,
+      })
+      .where(eq(controlPlaneNodes.id, NODE_ID));
+
+    primeActivity(0, 0);
+    await reconcileRecordedDrainRequest();
+    expect(nodeDrainPhase()).not.toBe("active");
+    expect(nodeDrainRequested()).toBe(true);
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+  });
+
   test("a live planned-drain node id cannot be replaced until the node is DRAINED", async () => {
     await db
       .update(controlPlaneNodes)

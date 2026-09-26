@@ -3,6 +3,7 @@ import { newResourceId } from "./resource-id";
 import { tokenHashCandidates } from "./token-service";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db";
+import { storageDir } from "../db/driver";
 import {
   agentJobs,
   agentPoolTokens,
@@ -29,6 +30,7 @@ import { encryptStatePayload } from "./validation";
 import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./run-status";
+import { captureRecoveryStatePayload } from "./recovery-files";
 import { agentSupportsPhase, effectiveAgentExecutionPolicy, LEGACY_AGENT_CAPABILITIES } from "./agent-protocol";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
@@ -397,17 +399,23 @@ async function recordAgentPolicyChecks(
   return { evaluated: true, hardFailed, softFailed };
 }
 
-export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]> {
+type StaleAgentRecoveryHook = (
+  facts: Readonly<{ jobId: string; runId: string; phase: string }>,
+) => void | Promise<void>;
+
+class StaleAgentRecoveryRaceError extends Error {
+  constructor() {
+    super("Stale-agent recovery raced another job mutation");
+    this.name = "StaleAgentRecoveryRaceError";
+  }
+}
+
+export async function recoverStaleAgentJobs(
+  now = Date.now(),
+  afterRunQueued?: StaleAgentRecoveryHook,
+): Promise<string[]> {
   const timeout = configuredHeartbeatTimeoutMs();
   const cutoff = now - timeout;
-  // ponytail: run the sweep on the shared connection WITHOUT a write transaction.
-  // The process shares a single stable bun:sqlite connection, so a write
-  // transaction here would hold that connection's write lock across the entire
-  // sweep and stall concurrent queries on this worker poll. Recovery is
-  // race-safe without the transaction: every update below is conditional on the
-  // row's current status and its returning() is checked, and a partially-
-  // recovered job is simply picked up by the next poll (1.5s later).
-  // ponytail: global sweep is fine for homelab; add heartbeat indexes only if agent volume makes it measurable.
   const unavailableAgents = await db
     .select({ id: agents.id })
     .from(agents)
@@ -438,86 +446,99 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
   });
   const recoveredJobs: { jobId: string; runId: string; runStatus: string }[] = [];
 
-  // Pre-fetch all affected runs in a single query to avoid N+1
-  const staleRunIds = [...new Set(staleJobs.map((job): string => job.runId))];
-  const staleRuns =
-    staleRunIds.length === 0
-      ? new Map<string, typeof runs.$inferSelect>()
-      : new Map(
-          (
-            await db.query.runs.findMany({
-              where: inArray(runs.id, staleRunIds),
-            })
-          ).map((r): [string, typeof runs.$inferSelect] => [r.id, r]),
-        );
-
   for (const job of staleJobs) {
     const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
     const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
     const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
 
-    const updatedJobs = await db
-      .update(agentJobs)
-      .set({
-        agentId: null,
-        status: "queued",
-        claimedAt: null,
-        completedAt: null,
-        errorMessage: null,
-        fencingToken: sql`${agentJobs.fencingToken} + 1`,
-      })
-      .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed"), owner))
-      .returning({ id: agentJobs.id });
-    if (updatedJobs.length === 0) {
-      // An agent claimed or completed this job mid-sweep; leave the run alone.
-      continue;
-    }
+    // Make the run safe for a replacement before making the job claimable.
+    // This ordering matters on SQLite because all async callers share one
+    // connection and can observe writes made by an open transaction. A
+    // queued run with a still-claimed job is temporarily unavailable but
+    // consistent; the inverse pair lets a replacement claim and cancel it.
+    let recovered: { jobId: string; runId: string; runStatus: string } | null;
+    try {
+      recovered = await db.transaction(
+        async (transaction): Promise<{ jobId: string; runId: string; runStatus: string } | null> => {
+          const database = transaction as unknown as Database;
+          const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+          if (run === undefined) {
+            await database
+              .update(agentJobs)
+              .set({ status: "canceled", completedAt: now, errorMessage: "Run is no longer waiting for this job" })
+              .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed"), owner));
+            return null;
+          }
 
-    const run = staleRuns.get(job.runId);
-    const updatedRuns =
-      run === undefined
-        ? []
-        : await db
-            .update(runs)
+          if (run.status === expectedRunStatus) {
+            const updatedRuns = await database
+              .update(runs)
+              .set({
+                agentId: null,
+                status: queuedRunStatus,
+                statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
+              })
+              .where(and(eq(runs.id, job.runId), eq(runs.status, expectedRunStatus)))
+              .returning({ id: runs.id });
+            if (updatedRuns.length === 0) return null;
+          } else if (run.status === queuedRunStatus) {
+            // Repair an interrupted recovery from an older process/version:
+            // the run was queued but the stale job never became claimable.
+            await database.update(runs).set({ agentId: null }).where(eq(runs.id, run.id));
+          } else {
+            await database
+              .update(agentJobs)
+              .set({
+                status: "canceled",
+                completedAt: now,
+                errorMessage: "Run is no longer waiting for this job",
+              })
+              .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed"), owner));
+            return null;
+          }
+
+          await afterRunQueued?.({
+            jobId: job.id,
+            runId: job.runId,
+            phase: job.phase,
+          });
+
+          const updatedJobs = await database
+            .update(agentJobs)
             .set({
               agentId: null,
-              status: queuedRunStatus,
-              statusTimestamps: timestampsWithStatus(run.statusTimestamps, queuedRunStatus),
+              status: "queued",
+              claimedAt: null,
+              completedAt: null,
+              errorMessage: null,
+              fencingToken: sql`${agentJobs.fencingToken} + 1`,
             })
-            .where(and(eq(runs.id, job.runId), eq(runs.status, expectedRunStatus)))
-            .returning({ id: runs.id });
-    if (run === undefined || updatedRuns.length === 0) {
-      // The run is no longer waiting for this job; drop the requeued job so it
-      // is not left orphaned, the claim path reconciles any in-flight claim.
-      await db
-        .update(agentJobs)
-        .set({
-          status: "canceled",
-          completedAt: now,
-          errorMessage: "Run is no longer waiting for this job",
-        })
-        .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "queued")));
-      continue;
+            .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed"), owner))
+            .returning({ id: agentJobs.id });
+          // Roll back a run transition if a concurrent cancel/completion won.
+          if (updatedJobs.length === 0) throw new StaleAgentRecoveryRaceError();
+
+          if (job.phase === "apply") {
+            await database
+              .update(workspaces)
+              .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+              .where(
+                and(
+                  eq(workspaces.id, run.workspaceId),
+                  eq(workspaces.locked, true),
+                  eq(workspaces.lockOwnerType, "agent-run"),
+                  eq(workspaces.lockOwnerId, run.id),
+                ),
+              );
+          }
+          return { jobId: job.id, runId: job.runId, runStatus: queuedRunStatus };
+        },
+      );
+    } catch (error: unknown) {
+      if (error instanceof StaleAgentRecoveryRaceError) continue;
+      throw error;
     }
-    if (job.phase === "apply") {
-      await db
-        .update(workspaces)
-        .set({
-          locked: false,
-          lockedReason: null,
-          lockOwnerType: null,
-          lockOwnerId: null,
-        })
-        .where(
-          and(
-            eq(workspaces.id, run.workspaceId),
-            eq(workspaces.locked, true),
-            eq(workspaces.lockOwnerType, "agent-run"),
-            eq(workspaces.lockOwnerId, run.id),
-          ),
-        );
-    }
-    recoveredJobs.push({ jobId: job.id, runId: job.runId, runStatus: queuedRunStatus });
+    if (recovered !== null) recoveredJobs.push(recovered);
   }
 
   for (const item of recoveredJobs) void reportRunVcsStatus(item.runId, item.runStatus);
@@ -1321,7 +1342,7 @@ async function persistApplyStateVersion(
   completion: AgentJobCompletion,
   now: number,
 ): Promise<void> {
-  if (completion.status !== "completed" || job.phase !== "apply" || completion.statePayload === null) return;
+  if (job.phase !== "apply" || completion.statePayload === null) return;
   await insertStateVersionWithSerialTx(database, {
     id: crypto.randomUUID(),
     workspaceId: run.workspaceId,
@@ -1396,6 +1417,7 @@ async function acknowledgeCanceledAgentJob(
   agentId: string,
   jobId: string,
   fencingToken: number,
+  completion: AgentJobCompletion,
 ): Promise<CompletionResult | undefined> {
   const job = await database.query.agentJobs.findFirst({
     where: and(
@@ -1408,6 +1430,12 @@ async function acknowledgeCanceledAgentJob(
   if (job === undefined) return undefined;
   const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
   if (run === undefined || (run.status !== "canceled" && run.status !== "force_canceled")) return undefined;
+  if (job.phase === "apply" && completion.statePayload !== null) {
+    // Cancellation is intentionally review-before-promote, matching the local
+    // worker path. Do not acknowledge the agent until the recovery copy is
+    // durable, otherwise it may delete its only local copy.
+    await captureRecoveryStatePayload(storageDir, run.id, completion.statePayload);
+  }
   await releaseApplyWorkspaceLock(database, job, run);
   await database.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
   return { job, runStatus: run.status };
@@ -1437,7 +1465,7 @@ async function completeAgentJobInTransaction(
   // held, free the agent, and ack without touching the (already terminal)
   // run. Anything else is still a fencing conflict.
   if (job === undefined) {
-    return acknowledgeCanceledAgentJob(database, agentId, jobId, fencingToken);
+    return acknowledgeCanceledAgentJob(database, agentId, jobId, fencingToken, completion);
   }
   const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
   const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";

@@ -20,12 +20,14 @@ import {
   logs,
   organizationMemberships,
   projectTags,
+  projects,
   reservedTagKeys,
   organizations,
   registryPartnerships,
   teams,
   teamMemberships,
   teamWorkspaces,
+  teamProjects,
   organizationMembershipRoles,
   organizationRoles,
   apiTokens,
@@ -417,12 +419,35 @@ async function loadUserTeamRosterUncached(
   return { teamIds, userTeams };
 }
 
+async function teamProjectGrantsForTeams(
+  orgId: string,
+  teamIds: readonly string[],
+): Promise<readonly (typeof teamProjects.$inferSelect)[]> {
+  if (teamIds.length === 0) return [];
+  const candidates = await db.query.teamProjects.findMany({
+    where: and(
+      inArray(teamProjects.teamId, [...teamIds]),
+      or(eq(teamProjects.organizationId, orgId), isNull(teamProjects.organizationId)),
+    ),
+  });
+  if (candidates.length === 0) return [];
+  const projectIds = [...new Set(candidates.map((entry): string => entry.projectId))];
+  const validProjects = await db.query.projects.findMany({
+    where: and(eq(projects.orgId, orgId), inArray(projects.id, projectIds)),
+    columns: { id: true },
+  });
+  const validProjectIds = new Set(validProjects.map((project): string => project.id));
+  return candidates.filter((entry): boolean => validProjectIds.has(entry.projectId));
+}
+
 async function loadUserTeamAccess(
   orgId: string,
   userId: string,
 ): Promise<{
   readonly teamIds: readonly string[];
   readonly teamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
+  readonly teamProjects: readonly (typeof teamProjects.$inferSelect)[];
+  readonly projectWorkspaces: readonly (typeof workspaces.$inferSelect)[];
   readonly userTeams: readonly (typeof teams.$inferSelect)[];
 }> {
   const key = `teamAccess:${userId}:${orgId}`;
@@ -439,12 +464,26 @@ async function loadUserTeamAccessUncached(
 ): Promise<{
   readonly teamIds: readonly string[];
   readonly teamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
+  readonly teamProjects: readonly (typeof teamProjects.$inferSelect)[];
+  readonly projectWorkspaces: readonly (typeof workspaces.$inferSelect)[];
   readonly userTeams: readonly (typeof teams.$inferSelect)[];
 }> {
   const { teamIds, userTeams } = await loadUserTeamRoster(orgId, userId);
-  if (teamIds.length === 0) return { teamIds, teamWorkspaces: [], userTeams };
-  const accesses = await db.query.teamWorkspaces.findMany({ where: inArray(teamWorkspaces.teamId, teamIds) });
-  return { teamIds, teamWorkspaces: accesses, userTeams };
+  if (teamIds.length === 0) {
+    return { teamIds, teamWorkspaces: [], teamProjects: [], projectWorkspaces: [], userTeams };
+  }
+  const [workspaceAccesses, projectAccesses] = await Promise.all([
+    db.query.teamWorkspaces.findMany({ where: inArray(teamWorkspaces.teamId, teamIds) }),
+    teamProjectGrantsForTeams(orgId, teamIds),
+  ]);
+  const projectIds = [...new Set(projectAccesses.map((entry): string => entry.projectId))];
+  const projectWorkspaces =
+    projectIds.length === 0
+      ? []
+      : await db.query.workspaces.findMany({
+          where: and(eq(workspaces.orgId, orgId), inArray(workspaces.projectId, projectIds)),
+        });
+  return { teamIds, teamWorkspaces: workspaceAccesses, teamProjects: projectAccesses, projectWorkspaces, userTeams };
 }
 
 async function loadOrgAccessDetails(orgId: string, userId: string): Promise<OrgAccessDetails> {
@@ -852,11 +891,16 @@ type WorkspaceAccessBase = DeepReadonly<{
   tokenTeamId: string | null;
   tokenTeam: typeof teams.$inferSelect | null;
   tokenTeamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
+  tokenTeamProjects: (typeof teamProjects.$inferSelect)[];
+  tokenProjectWorkspaces: (typeof workspaces.$inferSelect)[];
+  directRoles: (typeof organizationRoles.$inferSelect)[];
   isOwner: boolean;
   isMember: boolean;
   userTeamData: {
     teamIds: string[];
     teamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
+    teamProjects: (typeof teamProjects.$inferSelect)[];
+    projectWorkspaces: (typeof workspaces.$inferSelect)[];
     userTeams: (typeof teams.$inferSelect)[];
   } | null;
 }>;
@@ -882,10 +926,18 @@ async function loadWorkspaceAccessBaseUncached(
   tokenTeamId: string | null,
 ): Promise<WorkspaceAccessBase> {
   if (tokenTeamId !== null) {
-    const [team, accesses] = await Promise.all([
+    const [team, accesses, projectAccesses] = await Promise.all([
       db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) }),
       db.query.teamWorkspaces.findMany({ where: eq(teamWorkspaces.teamId, tokenTeamId) }),
+      teamProjectGrantsForTeams(orgId, [tokenTeamId]),
     ]);
+    const projectIds = [...new Set(projectAccesses.map((entry): string => entry.projectId))];
+    const projectWorkspaces =
+      projectIds.length === 0
+        ? []
+        : await db.query.workspaces.findMany({
+            where: and(eq(workspaces.orgId, orgId), inArray(workspaces.projectId, projectIds)),
+          });
     return {
       orgId,
       userId,
@@ -893,6 +945,9 @@ async function loadWorkspaceAccessBaseUncached(
       tokenTeamId,
       tokenTeam: team ?? null,
       tokenTeamWorkspaces: accesses,
+      tokenTeamProjects: projectAccesses,
+      tokenProjectWorkspaces: projectWorkspaces,
+      directRoles: [],
       isOwner: false,
       isMember: false,
       userTeamData: null,
@@ -906,6 +961,9 @@ async function loadWorkspaceAccessBaseUncached(
       tokenTeamId: null,
       tokenTeam: null,
       tokenTeamWorkspaces: [],
+      tokenTeamProjects: [],
+      tokenProjectWorkspaces: [],
+      directRoles: [],
       isOwner: false,
       isMember: false,
       userTeamData: null,
@@ -919,19 +977,33 @@ async function loadWorkspaceAccessBaseUncached(
       tokenTeamId: null,
       tokenTeam: null,
       tokenTeamWorkspaces: [],
+      tokenTeamProjects: [],
+      tokenProjectWorkspaces: [],
+      directRoles: [],
       isOwner: false,
       isMember: false,
       userTeamData: null,
     };
   }
-  // The base describes the user's UNDERLYING access, so membership facts are
-  // loaded with token scopes suspended (a fine-grained token must never
-  // shrink the base it intersects with — the scope narrows it later).
-  const facts = await loadMembershipFacts(userId, orgId);
+  // Load the same direct roles and membership facts used by organization
+  // authorization. Fine-grained scopes narrow the derived workspace set later.
+  const details = await loadOrgAccessDetails(orgId, userId);
   let userTeamData: WorkspaceAccessBase["userTeamData"] = null;
-  if (!facts.isOwner && facts.isMember) {
-    const { teamIds, teamWorkspaces, userTeams } = await loadUserTeamAccess(orgId, userId);
-    userTeamData = { teamIds, teamWorkspaces, userTeams };
+  if (!details.isOwner && details.isMember) {
+    const {
+      teamIds,
+      teamWorkspaces: accesses,
+      teamProjects: projectAccesses,
+      projectWorkspaces,
+      userTeams,
+    } = await loadUserTeamAccess(orgId, userId);
+    userTeamData = {
+      teamIds: [...teamIds],
+      teamWorkspaces: [...accesses],
+      teamProjects: [...projectAccesses],
+      projectWorkspaces: [...projectWorkspaces],
+      userTeams: [...userTeams],
+    };
   }
   return {
     orgId,
@@ -940,8 +1012,11 @@ async function loadWorkspaceAccessBaseUncached(
     tokenTeamId: null,
     tokenTeam: null,
     tokenTeamWorkspaces: [],
-    isOwner: facts.isOwner,
-    isMember: facts.isMember,
+    tokenTeamProjects: [],
+    tokenProjectWorkspaces: [],
+    directRoles: [...details.directRoles],
+    isOwner: details.isOwner,
+    isMember: details.isMember,
     userTeamData,
   };
 }
@@ -951,6 +1026,273 @@ async function loadWorkspaceAccessBaseUncached(
  * Pure in-memory; mirrors the exact early-return semantics of the original
  * single-level implementation so behavior is unchanged.
  */
+const TEAM_PROJECT_PROJECT_PRESETS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  read: { settings: "read", teams: "none" },
+  write: { settings: "read", teams: "none" },
+  maintain: { settings: "read", teams: "none" },
+  admin: { settings: "delete", teams: "manage" },
+};
+
+function resolvedTeamProjectProjectAccess(
+  grant: DeepReadonly<typeof teamProjects.$inferSelect>,
+): Readonly<Record<string, string>> {
+  if (grant.access === "custom") return grant.projectAccess ?? {};
+  return TEAM_PROJECT_PROJECT_PRESETS[grant.access] ?? TEAM_PROJECT_PROJECT_PRESETS["read"] ?? {};
+}
+
+export type ProjectPermission = "read" | "update" | "delete" | "manage-teams";
+
+function teamProjectAllows(
+  grant: DeepReadonly<typeof teamProjects.$inferSelect>,
+  required: ProjectPermission,
+): boolean {
+  const access = resolvedTeamProjectProjectAccess(grant);
+  const settings = access["settings"] ?? "read";
+  const teamAccess = access["teams"] ?? "none";
+  if (required === "read")
+    return ["read", "update", "delete"].includes(settings) || ["read", "manage"].includes(teamAccess);
+  if (required === "update") return settings === "update" || settings === "delete";
+  if (required === "delete") return settings === "delete";
+  return teamAccess === "manage";
+}
+
+const TEAM_PROJECT_WORKSPACE_PRESETS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  read: {
+    create: false,
+    move: false,
+    locking: false,
+    delete: false,
+    runs: "read",
+    variables: "read",
+    "state-versions": "read",
+    "run-tasks": false,
+    "policy-overrides": false,
+  },
+  write: {
+    create: false,
+    move: false,
+    locking: true,
+    delete: false,
+    runs: "apply",
+    variables: "write",
+    "state-versions": "write",
+    "run-tasks": false,
+    "policy-overrides": false,
+  },
+  maintain: {
+    create: true,
+    move: false,
+    locking: true,
+    delete: true,
+    runs: "apply",
+    variables: "write",
+    "state-versions": "write",
+    "run-tasks": true,
+    "policy-overrides": true,
+  },
+  admin: {
+    create: true,
+    move: true,
+    locking: true,
+    delete: true,
+    runs: "apply",
+    variables: "write",
+    "state-versions": "write",
+    "run-tasks": true,
+    "policy-overrides": true,
+  },
+};
+
+function resolvedTeamProjectWorkspaceAccess(
+  grant: DeepReadonly<typeof teamProjects.$inferSelect>,
+): Readonly<Record<string, unknown>> {
+  if (grant.access === "custom") return grant.workspaceAccess ?? {};
+  return TEAM_PROJECT_WORKSPACE_PRESETS[grant.access] ?? TEAM_PROJECT_WORKSPACE_PRESETS["read"] ?? {};
+}
+
+function teamProjectRunAccessAllows(
+  access: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
+  const runs = typeof access["runs"] === "string" ? access["runs"] : "read";
+  if (required === "read" || required === "run-read") return ["read", "plan", "apply"].includes(runs);
+  if (required === "plan") return runs === "plan" || runs === "apply";
+  if (required === "apply" || required === "discard" || required === "cancel") return runs === "apply";
+  return null;
+}
+
+function teamProjectWorkspaceControlAllows(
+  access: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
+  if (required === "lock") return access["locking"] === true;
+  if (required === "admin") return access["delete"] === true;
+  if (required === "run-tasks" || required === "run-tasks-read") return access["run-tasks"] === true;
+  if (required === "policy-override") return access["policy-overrides"] === true;
+  return null;
+}
+
+function teamProjectVariableAccessAllows(
+  access: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
+  const variables = typeof access["variables"] === "string" ? access["variables"] : "none";
+  if (required === "variables-read") return variables === "read" || variables === "write";
+  if (required === "variables-write") return variables === "write";
+  return null;
+}
+
+function teamProjectStateAccessAllows(
+  access: Readonly<Record<string, unknown>>,
+  required: WorkspacePermission,
+): boolean | null {
+  const state = typeof access["state-versions"] === "string" ? access["state-versions"] : "none";
+  if (required === "state-outputs") return ["read-outputs", "read", "write"].includes(state);
+  if (required === "state-read") return state === "read" || state === "write";
+  if (required === "state-write") return state === "write";
+  return null;
+}
+
+function teamProjectWorkspaceAllows(
+  grant: DeepReadonly<typeof teamProjects.$inferSelect>,
+  required: WorkspacePermission,
+): boolean {
+  const access = resolvedTeamProjectWorkspaceAccess(grant);
+  return (
+    teamProjectRunAccessAllows(access, required) ??
+    teamProjectWorkspaceControlAllows(access, required) ??
+    teamProjectVariableAccessAllows(access, required) ??
+    teamProjectStateAccessAllows(access, required) ??
+    false
+  );
+}
+
+function projectWorkspaceIdsForRequired(
+  grants: readonly DeepReadonly<typeof teamProjects.$inferSelect>[],
+  projectWorkspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
+  required: WorkspacePermission,
+): readonly string[] {
+  const allowedProjectIds = new Set(
+    grants
+      .filter((grant): boolean => teamProjectWorkspaceAllows(grant, required))
+      .map((grant): string => grant.projectId),
+  );
+  return projectWorkspaces
+    .filter((workspace): boolean => workspace.projectId !== null && allowedProjectIds.has(workspace.projectId))
+    .map((workspace): string => workspace.id);
+}
+
+function organizationAccessGrantsWorkspace(
+  access: Readonly<Record<string, boolean>>,
+  required: WorkspacePermission,
+): boolean {
+  if (teamOrganizationAllows(access, "manage-workspaces")) return true;
+  if (required === "read" && access["manage-policies"] === true) return true;
+  if (required === "policy-override" && access["manage-policy-overrides"] === true) return true;
+  return (
+    ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required) &&
+    teamOrganizationAllows(access, "read-workspaces")
+  );
+}
+
+async function teamProjectGrantsForPrincipal(
+  orgId: string,
+  userId: string | undefined,
+  tokenTeamId: string | null | undefined,
+): Promise<readonly (typeof teamProjects.$inferSelect)[]> {
+  if (tokenTeamId !== null && tokenTeamId !== undefined) {
+    const team = await db.query.teams.findFirst({ where: and(eq(teams.id, tokenTeamId), eq(teams.orgId, orgId)) });
+    if (team === undefined) return [];
+    return teamProjectGrantsForTeams(orgId, [tokenTeamId]);
+  }
+  if (userId === undefined) return [];
+  const details = await loadOrgAccessDetails(orgId, userId);
+  if (!details.isMember || details.teamIds.length === 0) return [];
+  return teamProjectGrantsForTeams(orgId, details.teamIds);
+}
+
+function scopeProjectIds(
+  scopes: TokenScopes | null,
+  orgId: string,
+  ids: readonly string[] | null,
+  requiredGrant: WorkspacePermissionGrant,
+): readonly string[] | null {
+  if (scopes === null) return ids;
+  if (!scopeCoversOrg(scopes, orgId) || !scopeGrants(scopes, requiredGrant)) return [];
+  if (scopes.projects === null) return ids;
+  const scoped = new Set(scopes.projects);
+  if (ids === null) return [...scoped];
+  return ids.filter((id): boolean => scoped.has(id));
+}
+
+export async function projectIdsForPermission(
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+  required: ProjectPermission,
+): Promise<readonly string[] | null> {
+  const orgRequired: OrganizationPermission = required === "read" ? "read-projects" : "manage-projects";
+  const grant: WorkspacePermissionGrant = required === "read" ? "projects:read" : "projects:write";
+  const orgWide = await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, orgRequired);
+  let allowed: readonly string[] | null = null;
+  if (!orgWide) {
+    const projectGrants = await teamProjectGrantsForPrincipal(orgId, userId, tokenTeamId);
+    allowed = [
+      ...new Set(
+        projectGrants
+          .filter((entry): boolean => teamProjectAllows(entry, required))
+          .map((entry): string => entry.projectId),
+      ),
+    ];
+  }
+  return scopeProjectIds(currentTokenScopes(), orgId, allowed, grant);
+}
+
+export async function checkProjectPermission(
+  projectId: string,
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+  required: ProjectPermission,
+): Promise<boolean> {
+  const ids = await projectIdsForPermission(orgId, userId, tokenOrgId, tokenTeamId, required);
+  return ids === null || ids.includes(projectId);
+}
+
+export async function checkProjectWorkspaceOperation(
+  projectId: string,
+  orgId: string,
+  userId: string | undefined,
+  tokenOrgId: string | null | undefined,
+  tokenTeamId: string | null | undefined,
+  required: "create" | "move" | "delete",
+  workspaceIds: readonly string[] = [],
+): Promise<boolean> {
+  const scopes = currentTokenScopes();
+  if (scopes !== null) {
+    if (!scopeCoversOrg(scopes, orgId) || !scopeGrants(scopes, "workspaces:write")) return false;
+    const scopedWorkspaceIds = await scopeWorkspaceIdsForOrg(scopes, orgId);
+    if (workspaceIds.length > 0) {
+      if (scopedWorkspaceIds !== null) {
+        const allowed = new Set(scopedWorkspaceIds);
+        if (workspaceIds.some((workspaceId): boolean => !allowed.has(workspaceId))) return false;
+      }
+    } else if (scopedWorkspaceIds !== null) {
+      // Creation has no existing workspace ID to intersect with. A restricted
+      // token may create only when its project selector explicitly covers the
+      // destination project; workspace/tag-only selectors fail closed.
+      if (scopes.projects === null || !scopes.projects.includes(projectId)) return false;
+    }
+  }
+
+  if (await checkOrganizationPermission(orgId, userId, tokenOrgId, tokenTeamId, "manage-workspaces")) return true;
+  const projectGrants = await teamProjectGrantsForPrincipal(orgId, userId, tokenTeamId);
+  const matching = projectGrants.filter((entry): boolean => entry.projectId === projectId);
+  return matching.some((entry): boolean => resolvedTeamProjectWorkspaceAccess(entry)[required] === true);
+}
+
 function derivesFromTeamToken(
   base: WorkspaceAccessBase,
   required: WorkspacePermission,
@@ -958,32 +1300,18 @@ function derivesFromTeamToken(
   if (base.tokenTeamId === null) return undefined;
   const team = base.tokenTeam;
   if (team === null || team.orgId !== base.orgId) return [];
-  if (teamOrganizationAllows(team.organizationAccess, "manage-workspaces")) return null;
-  if (grantsTeamOrgWide(team, required)) return null;
+  if (organizationAccessGrantsWorkspace(team.organizationAccess, required)) return null;
   const delegateTeamIds =
     required === "policy-override" ? new Set(teamOverrideDelegationActive(team) ? [team.id] : []) : null;
-  return [
-    ...new Set(
-      base.tokenTeamWorkspaces
-        .filter(
-          (entry): boolean =>
-            teamWorkspaceAllows(entry.access, entry.permissions, required) &&
-            (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)),
-        )
-        .map((entry): string => entry.workspaceId),
-    ),
-  ];
-}
-
-function grantsTeamOrgWide(team: DeepReadonly<typeof teams.$inferSelect>, required: WorkspacePermission): boolean {
-  if (required === "read" && team.organizationAccess["manage-policies"] === true) return true;
-  if (required === "policy-override" && team.organizationAccess["manage-policy-overrides"] === true) return true;
-  if (
-    ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required) &&
-    teamOrganizationAllows(team.organizationAccess, "read-workspaces")
-  )
-    return true;
-  return false;
+  const directIds = base.tokenTeamWorkspaces
+    .filter(
+      (entry): boolean =>
+        teamWorkspaceAllows(entry.access, entry.permissions, required) &&
+        (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)),
+    )
+    .map((entry): string => entry.workspaceId);
+  const projectIds = projectWorkspaceIdsForRequired(base.tokenTeamProjects, base.tokenProjectWorkspaces, required);
+  return [...new Set([...directIds, ...projectIds])];
 }
 
 function derivesFromOrgToken(
@@ -996,42 +1324,30 @@ function derivesFromOrgToken(
 }
 
 function grantsUserOrgWide(
+  directRoles: readonly DeepReadonly<typeof organizationRoles.$inferSelect>[],
   userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[],
   required: WorkspacePermission,
 ): boolean {
-  if (userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces")))
+  if (directRoles.some((role): boolean => organizationAccessGrantsWorkspace(role.permissions ?? {}, required))) {
     return true;
-  if (required === "read" && userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true))
-    return true;
-  if (
-    required === "policy-override" &&
-    userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)
-  )
-    return true;
-  if (
-    ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required) &&
-    userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))
-  )
-    return true;
-  return false;
+  }
+  return userTeams.some((team): boolean => organizationAccessGrantsWorkspace(team.organizationAccess, required));
 }
 
 function deriveForUserTeams(base: WorkspaceAccessBase, required: WorkspacePermission): readonly string[] | null {
   const teamData = base.userTeamData;
+  if (grantsUserOrgWide(base.directRoles, teamData?.userTeams ?? [], required)) return null;
   if (teamData === null || teamData.teamIds.length === 0) return [];
-  if (grantsUserOrgWide(teamData.userTeams, required)) return null;
   const delegateTeamIds = buildDelegateTeamIds(teamData.userTeams, required);
-  return [
-    ...new Set(
-      teamData.teamWorkspaces
-        .filter(
-          (entry): boolean =>
-            teamWorkspaceAllows(entry.access, entry.permissions, required) &&
-            (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)),
-        )
-        .map((entry): string => entry.workspaceId),
-    ),
-  ];
+  const directIds = teamData.teamWorkspaces
+    .filter(
+      (entry): boolean =>
+        teamWorkspaceAllows(entry.access, entry.permissions, required) &&
+        (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)),
+    )
+    .map((entry): string => entry.workspaceId);
+  const projectIds = projectWorkspaceIdsForRequired(teamData.teamProjects, teamData.projectWorkspaces, required);
+  return [...new Set([...directIds, ...projectIds])];
 }
 
 function buildDelegateTeamIds(

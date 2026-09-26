@@ -4265,6 +4265,7 @@ async function spawnAndWaitApply(
   executionDir: string,
   envVars: Record<string, string>,
   applyTimeoutMs: number,
+  progress: { captureFailed: boolean; started: boolean },
 ): Promise<ApplyProcessOutcome> {
   // Record the state file produced by the apply. terraform writes the
   // state on failure too (with the successfully applied resources), and
@@ -4285,11 +4286,46 @@ async function spawnAndWaitApply(
     runSandbox,
   );
 
+  progress.started = true;
   const applyOutput = Promise.all([
     streamLog(runId, "apply", applyProc.stdout),
     streamLog(runId, "apply", applyProc.stderr),
   ]);
-  const [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
+  let applyExit: number;
+  try {
+    [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
+  } catch (error: unknown) {
+    // A timeout/output failure happens after the apply process started and may
+    // therefore have changed real infrastructure. Once the process has been
+    // stopped, salvage whatever state it produced before propagating the
+    // execution error. If persistence fails, capture a durable recovery copy;
+    // if that fails too, progress.captureFailed forces workdir preservation.
+    if (!(await runWasCanceled(runId))) {
+      try {
+        await saveApplyStateVersion(
+          runId,
+          workspaceId,
+          configurationVersionId,
+          createdBy,
+          resolved.version,
+          stateFilePath,
+        );
+      } catch (saveError: unknown) {
+        await writeLog(
+          runId,
+          "apply",
+          `[terrence] Could not record partial state after exceptional apply exit: ${saveError instanceof Error ? saveError.message : String(saveError)}`,
+        ).catch((logError: unknown): void => {
+          logBestEffortFailure("Could not write exceptional apply recovery warning", { runId }, logError);
+        });
+        progress.captureFailed = await tryCaptureInterruptedApplyState(
+          runId,
+          "Could not capture state after exceptional apply persistence failure",
+        );
+      }
+    }
+    throw error;
+  }
 
   if (await runWasCanceled(runId)) {
     const recovery = await handleCanceledApply(runId);
@@ -4321,7 +4357,9 @@ async function spawnAndWaitApply(
         runId,
         "apply",
         `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`,
-      );
+      ).catch((logError: unknown): void => {
+        logBestEffortFailure("Could not write failed apply recovery warning", { runId }, logError);
+      });
       captureFailed = await tryCaptureInterruptedApplyState(
         runId,
         "Could not capture state after partial apply persistence failure",
@@ -4354,6 +4392,7 @@ async function executeApplyProcess(
   workspace: typeof workspaces.$inferSelect,
   run: typeof runs.$inferSelect,
   ctx: ApplyExecutionContext,
+  progress: { captureFailed: boolean; started: boolean },
 ): Promise<ApplyProcessOutcome> {
   if (ctx.resolved !== null && ctx.executionDirectoryExists && ctx.hasTfFiles) {
     if (await runWasCanceled(runId))
@@ -4381,6 +4420,7 @@ async function executeApplyProcess(
       ctx.executionDir,
       envVars,
       applyTimeoutMs,
+      progress,
     );
   }
   if (ctx.isSimulatedAllowed) {
@@ -4426,11 +4466,12 @@ async function runApplySequence(
   workspace: typeof workspaces.$inferSelect,
   org: typeof organizations.$inferSelect | undefined,
   workDir: string,
-  progress: { captureFailed: boolean },
+  progress: { captureFailed: boolean; started: boolean },
 ): Promise<{ success: boolean; canceled: boolean; started: boolean }> {
   const ctx = await prepareApplyExecutionContext(runId, run, workspace, org, workDir);
-  const outcome = await executeApplyProcess(runId, workspace, run, ctx);
+  const outcome = await executeApplyProcess(runId, workspace, run, ctx, progress);
   if (outcome.captureFailed) progress.captureFailed = true;
+  if (outcome.started) progress.started = true;
   if (outcome.kind === "canceled") {
     return { success: false, canceled: true, started: outcome.started };
   }
@@ -4573,16 +4614,18 @@ async function executeApplyImpl(runId: string): Promise<void> {
     // manual recovery instead of deleted by the failed-apply cleanup below.
     let recoveryCaptureFailed = false;
     let recoveryPreservationLogged = false;
-    const progress = { captureFailed: false };
+    const progress = { captureFailed: false, started: false };
 
     try {
       const sequence = await runApplySequence(runId, run, workspace, org, workDir, progress);
       applySuccess = sequence.success;
       applyCanceled = sequence.canceled;
-      applyStarted = sequence.started;
+      applyStarted = sequence.started || progress.started;
       recoveryCaptureFailed = progress.captureFailed;
       recoveryPreservationLogged = sequence.canceled && recoveryCaptureFailed;
     } catch (error: unknown) {
+      applyStarted = applyStarted || progress.started;
+      recoveryCaptureFailed = recoveryCaptureFailed || progress.captureFailed;
       const cancellation = await handleCanceledApplyFailure(runId, storageDir, applyStarted, recoveryCaptureFailed);
       recoveryCaptureFailed = cancellation.captureFailed;
       if (cancellation.canceled) {
