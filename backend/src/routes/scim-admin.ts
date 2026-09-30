@@ -1,9 +1,9 @@
 import { newResourceId } from "../lib/resource-id";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { Elysia } from "elysia";
-import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { db } from "../db";
+import { db, isPostgres } from "../db";
 import {
   organizationMemberships,
   samlSettings,
@@ -18,6 +18,7 @@ import {
   users,
 } from "../db/schema";
 import { pageRequest, pagination, apiError } from "../lib/utils";
+import type { DeepReadonly } from "../lib/types";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -32,6 +33,7 @@ type ScimToken = Readonly<typeof scimTokens.$inferSelect>;
 type MappedTeam = Readonly<{ id: string; orgId: string }>;
 
 const SCIM_SETTINGS_ID = "scim";
+const SCIM_SITE_ROLE_LOCK_KEY = 0x7363696d; // ASCII "scim"
 const DAY_MS = 86_400_000;
 
 function requireAdmin(
@@ -180,6 +182,19 @@ export async function reconcileTeam(team: MappedTeam, groupId: string, transacti
   }
 }
 
+/**
+ * Serialize SCIM site-role mutations and reconciliation across PostgreSQL
+ * replicas. Call this before changing membership, identity, settings, or user
+ * rows in a transaction that will reconcile site roles.
+ *
+ * SQLite transactions are already serialized by the database wrapper.
+ */
+export async function lockScimSiteRoleReconciliation(transaction: unknown): Promise<void> {
+  if (!isPostgres) return;
+  const tx = transaction as { readonly execute: (query: DeepReadonly<SQL>) => Promise<unknown> };
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${SCIM_SITE_ROLE_LOCK_KEY})`);
+}
+
 /** Reconcile the configured SCIM site-admin group without touching manual or SAML grants. */
 async function reconcileScimSiteAdminsOnly(transaction: unknown): Promise<void> {
   const tx = transaction as typeof db;
@@ -273,6 +288,10 @@ async function reconcileScimSiteAuditors(transaction: unknown): Promise<void> {
  * reconciliation hook.
  */
 export async function reconcileScimSiteAdmins(transaction: unknown): Promise<void> {
+  // Acquire before either reconciler snapshots group membership. Callers that
+  // already acquired this transaction lock before mutating SCIM state may
+  // safely acquire it again; it remains held until transaction end.
+  await lockScimSiteRoleReconciliation(transaction);
   await reconcileScimSiteAdminsOnly(transaction);
   await reconcileScimSiteAuditors(transaction);
 }
@@ -332,6 +351,7 @@ async function persistSettingsPatch(
   const adminGroupId = normalizeGroupId(requestedAdminGroup);
   const auditorGroupId = normalizeGroupId(requestedAuditorGroup);
   await db.transaction(async (tx): Promise<void> => {
+    await lockScimSiteRoleReconciliation(tx);
     await tx
       .update(scimSettings)
       .set({
@@ -425,6 +445,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (denied !== undefined) return denied;
     await currentSettings();
     await db.transaction(async (tx): Promise<void> => {
+      await lockScimSiteRoleReconciliation(tx);
       await tx
         .update(scimSettings)
         .set({
