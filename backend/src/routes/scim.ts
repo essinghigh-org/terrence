@@ -20,7 +20,7 @@ import {
 import { and, asc, count, eq, inArray, isNull, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { isUniqueConstraintError } from "../lib/validation";
 import { hashPassword } from "../lib/password-hashing";
-import { reconcileScimSiteAdmins, reconcileTeam } from "./scim-admin";
+import { lockScimSiteRoleReconciliation, reconcileScimSiteAdmins, reconcileTeam } from "./scim-admin";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
 
@@ -258,6 +258,7 @@ async function persistUserPatch(
 ): Promise<{ ok: true } | { failure: ScimPatchFailure }> {
   try {
     await db.transaction(async (tx): Promise<void> => {
+      await lockScimSiteRoleReconciliation(tx);
       await tx
         .update(users)
         .set({
@@ -397,6 +398,7 @@ async function persistGroupPatch(
 ): Promise<{ missingMember: boolean }> {
   let missingMember = false;
   await db.transaction(async (tx): Promise<void> => {
+    await lockScimSiteRoleReconciliation(tx);
     if (state.membersChanged && !(await replaceScimGroupMembers(group.id, state.memberIds, tx))) {
       missingMember = true;
       return;
@@ -814,6 +816,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (!identity) return scimError(set, 404, "User not found");
 
     await db.transaction(async (tx): Promise<void> => {
+      await lockScimSiteRoleReconciliation(tx);
       const groupLinks = await tx.query.scimGroupMemberships.findMany({
         where: eq(scimGroupMemberships.scimUserId, identity.id),
         columns: { groupId: true },
@@ -875,6 +878,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const updatedAt = Date.now();
     try {
       await db.transaction(async (tx): Promise<void> => {
+        await lockScimSiteRoleReconciliation(tx);
         await tx
           .update(users)
           .set({
@@ -1063,6 +1067,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (memberIds === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
     let missingMember = false;
     await db.transaction(async (tx): Promise<void> => {
+      await lockScimSiteRoleReconciliation(tx);
       if (memberIds !== undefined && !(await replaceScimGroupMembers(group.id, memberIds, tx))) {
         missingMember = true;
         return;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { and, eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
-import { db } from "../../src/db";
+import { db, isPostgres } from "../../src/db";
 import {
   apiTokens,
   organizationMemberships,
@@ -19,8 +19,10 @@ import {
   users,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
+import { reconcileScimSiteAdmins } from "../../src/routes/scim-admin";
 
 const DAY_MS = 86_400_000;
+const postgresTest = isPostgres ? test : test.skip;
 const suffix = crypto.randomUUID();
 const adminId = `usr-scim-admin-${suffix}`;
 const ownerId = `usr-scim-owner-${suffix}`;
@@ -508,4 +510,44 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   expect(revokedScimAdmin?.isSiteAdmin).toBeFalse();
   expect(revokedScimAdmin?.scimSiteAdmin).toBeFalse();
   expect(await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, teamTokenId) })).toBeDefined();
+});
+
+postgresTest("serializes site-role reconciliation across PostgreSQL transactions", async () => {
+  let releaseFirst!: () => void;
+  const holdFirst = new Promise<void>((resolve): void => {
+    releaseFirst = resolve;
+  });
+  let markFirstReady!: () => void;
+  const firstReady = new Promise<void>((resolve): void => {
+    markFirstReady = resolve;
+  });
+
+  const first = db.transaction(async (tx): Promise<void> => {
+    await reconcileScimSiteAdmins(tx);
+    markFirstReady();
+    await holdFirst;
+  });
+  await firstReady;
+
+  let markSecondStarted!: () => void;
+  const secondStarted = new Promise<void>((resolve): void => {
+    markSecondStarted = resolve;
+  });
+  let secondFinished = false;
+  const second = db.transaction(async (tx): Promise<void> => {
+    markSecondStarted();
+    await reconcileScimSiteAdmins(tx);
+    secondFinished = true;
+  });
+  await secondStarted;
+
+  try {
+    await Bun.sleep(100);
+    expect(secondFinished).toBeFalse();
+  } finally {
+    releaseFirst();
+  }
+
+  await Promise.all([first, second]);
+  expect(secondFinished).toBeTrue();
 });
