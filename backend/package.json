@@ -31,6 +31,6 @@
     "elysia-rate-limit": "4.6.3",
     "jsonwebtoken": "^9.0.3",
     "ldapts": "^9.2.0",
-    "xml-crypto": "^6.3.1"
+    "xml-crypto": "^6.3.2"
   }
 }
