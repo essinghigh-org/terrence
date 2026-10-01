@@ -444,6 +444,7 @@ export async function heartbeatDurableJob(job: DeepReadonly<DurableJob>, now = D
         eq(durableJobs.id, job.id),
         eq(durableJobs.status, "running"),
         eq(durableJobs.lockToken, job.lockToken ?? ""),
+        gt(durableJobs.leaseExpiresAt, now),
       ),
     )
     .returning({ id: durableJobs.id });

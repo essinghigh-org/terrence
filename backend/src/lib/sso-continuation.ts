@@ -1,4 +1,5 @@
 import { peekOAuthHandshakeState, TERRAFORM_PENDING_AUTH_PREFIX } from "./oauth-handshake";
+import { resolveSsoReturnTarget } from "./return-target";
 
 const TERRAFORM_OAUTH_STATE_COOKIE = "terraform_oauth_state";
 
@@ -19,12 +20,6 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
   return undefined;
 }
 
-function safeReturnTarget(value: unknown): string | undefined {
-  if (typeof value !== "string" || (value !== "/app" && !value.startsWith("/app/"))) return undefined;
-  if (value.startsWith("//") || /[\r\n]/.test(value) || value.includes("/../")) return undefined;
-  return value;
-}
-
 export async function resolveSsoContinuation(
   query: Readonly<Record<string, unknown>>,
   request: RequestInfo,
@@ -42,7 +37,7 @@ export async function resolveSsoContinuation(
   }
 
   if (query["returnTo"] === undefined) return { value: null };
-  const target = safeReturnTarget(query["returnTo"]);
+  const target = resolveSsoReturnTarget(query["returnTo"]);
   return target === undefined
     ? { error: "The sign-in destination is invalid." }
     : { value: { kind: "return", target } };
@@ -54,7 +49,7 @@ export function parseSsoContinuation(value: unknown): SsoContinuation | null {
   if (record["kind"] === "oauth" && typeof record["oauthState"] === "string" && record["oauthState"] !== "") {
     return { kind: "oauth", oauthState: record["oauthState"] };
   }
-  const target = record["kind"] === "return" ? safeReturnTarget(record["target"]) : undefined;
+  const target = record["kind"] === "return" ? resolveSsoReturnTarget(record["target"]) : undefined;
   return target === undefined ? null : { kind: "return", target };
 }
 

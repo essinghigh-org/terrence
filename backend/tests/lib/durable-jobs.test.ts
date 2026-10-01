@@ -65,6 +65,7 @@ describe("durable job leases", () => {
     expect(await heartbeatDurableJob(first, now + 1)).toBe(true);
     expect(await claimDurableJob("worker-b", [kind], now + 2)).toBeUndefined();
 
+    expect(await heartbeatDurableJob(first, now + 31_002)).toBe(false);
     const reclaimed = await claimDurableJob("worker-b", [kind], now + 31_002);
     expect(reclaimed?.id).toBe(first.id);
     expect(await heartbeatDurableJob(first, now + 31_003)).toBe(false);

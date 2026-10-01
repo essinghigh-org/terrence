@@ -219,6 +219,7 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       sample_count: snapshot.eventLoopDelay.sampleCount,
       min_ms: snapshot.eventLoopDelay.minMs,
       mean_ms: snapshot.eventLoopDelay.meanMs,
+      p50_ms: snapshot.eventLoopDelay.p50Ms,
       p95_ms: snapshot.eventLoopDelay.p95Ms,
       max_ms: snapshot.eventLoopDelay.maxMs,
     };
@@ -1668,14 +1669,9 @@ export const healthRoutes = new Elysia({ name: "health" })
   )
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
-      await db.query.users.findFirst();
-      if (isStorageDegraded()) {
-        (set as { status: number }).status = 503;
-        return "not ready: storage degraded";
-      }
-      // Todo 271: surface the applied DB schema version so operators can
-      // verify rollout completeness (e.g. mixed-version fleet check).
-      const { databaseSchemaVersion } = await import("../db");
+      const readiness = await readinessResponse(set, 1);
+      if (readiness instanceof Response) throw new Error("Unexpected plain-text readiness response");
+      if (readiness.status !== "OK") return `not ready: ${readiness.status.toLowerCase()}`;
       const schemaVersion = databaseSchemaVersion();
       return schemaVersion !== null ? `ready (schema ${schemaVersion})` : "ready";
     } catch {

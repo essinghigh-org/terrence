@@ -301,93 +301,98 @@ async function observeCoordinatorTick(): Promise<void> {
   }
 }
 
+async function releaseClaimIfCoordinatorInactive(
+  identity: LeaseIdentity,
+  lease: ControlPlaneLeaseSnapshot,
+  phase: "claim" | "confirmation",
+): Promise<boolean> {
+  if (coordinatorStarted && !coordinatorSuspended) return false;
+  if (lease.acquired) {
+    await releaseControlPlaneLease(identity).catch((error: unknown): void => {
+      log.warn(`Unable to release coordinator lease after ${phase} during suspension`, { error: String(error) });
+    });
+  }
+  return true;
+}
+
+async function applyAcquiredCoordinatorLease(identity: LeaseIdentity, lease: ControlPlaneLeaseSnapshot): Promise<void> {
+  const confirmationStartedAt = performance.now();
+  const databaseNow = await databaseCurrentTimeMs();
+  const remainingMs = conservativeLeaseRemainingMs(lease.expiresAt, databaseNow, confirmationStartedAt);
+  if (await releaseClaimIfCoordinatorInactive(identity, lease, "confirmation")) return;
+
+  if (remainingMs <= 0) {
+    if (coordinatorState.role === "leader") await loseLeadership();
+    coordinatorState = {
+      role: "follower",
+      ownerNodeId: lease.ownerNodeId,
+      fencingEpoch: lease.fencingEpoch,
+      expiresAt: lease.expiresAt,
+      heartbeatAt: lease.heartbeatAt,
+    };
+    log.warn("Control-plane coordinator lease expired before confirmation", {
+      nodeId: identity.nodeId,
+      fencingEpoch: lease.fencingEpoch,
+    });
+    return;
+  }
+
+  const becameLeader = coordinatorState.role !== "leader" || coordinatorState.fencingEpoch !== lease.fencingEpoch;
+  coordinatorState = {
+    role: "leader",
+    ownerNodeId: lease.ownerNodeId,
+    fencingEpoch: lease.fencingEpoch,
+    expiresAt: lease.expiresAt,
+    heartbeatAt: lease.heartbeatAt,
+  };
+  if (becameLeader) leadershipGeneration += 1;
+  armLeadershipWatchdog(remainingMs);
+  if (!becameLeader) return;
+
+  const generation = leadershipGeneration;
+  log.info("Control-plane coordinator lease acquired", {
+    nodeId: identity.nodeId,
+    fencingEpoch: lease.fencingEpoch,
+  });
+  activateLeadership(lease.fencingEpoch, generation);
+}
+
+async function applyFollowerCoordinatorLease(identity: LeaseIdentity, lease: ControlPlaneLeaseSnapshot): Promise<void> {
+  if (coordinatorState.role === "leader") {
+    log.warn("Control-plane coordinator lease lost", {
+      nodeId: identity.nodeId,
+      ownerNodeId: lease.ownerNodeId,
+      fencingEpoch: lease.fencingEpoch,
+    });
+    await loseLeadership();
+  } else {
+    clearLeadershipWatchdog();
+  }
+  coordinatorState = {
+    role: "follower",
+    ownerNodeId: lease.ownerNodeId,
+    fencingEpoch: lease.fencingEpoch,
+    expiresAt: lease.expiresAt,
+    heartbeatAt: lease.heartbeatAt,
+  };
+}
+
 async function coordinatorTick(): Promise<void> {
   if (!coordinatorStarted) return;
   if (coordinatorSuspended) {
     await observeCoordinatorTick();
     return;
   }
-  const identity = {
+  const identity: LeaseIdentity = {
     nodeId: controlPlaneNodeId(),
     instanceId: controlPlaneInstanceId,
   };
   coordinatorElectionInFlight += 1;
   try {
     const lease = await claimControlPlaneLease(identity);
-    if (!coordinatorStarted || coordinatorSuspended) {
-      if (lease.acquired) {
-        await releaseControlPlaneLease(identity).catch((error: unknown): void => {
-          log.warn("Unable to release coordinator lease acquired after suspension", { error: String(error) });
-        });
-      }
-      return;
-    }
-    if (lease.acquired) {
-      // Verify the returned lease against the same authoritative clock after
-      // the claim completes. A stalled network response must not resurrect a
-      // lease that already expired while the process was waiting.
-      const confirmationStartedAt = performance.now();
-      const databaseNow = await databaseCurrentTimeMs();
-      const remainingMs = conservativeLeaseRemainingMs(lease.expiresAt, databaseNow, confirmationStartedAt);
-      if (!coordinatorStarted || coordinatorSuspended) {
-        await releaseControlPlaneLease(identity).catch((error: unknown): void => {
-          log.warn("Unable to release coordinator lease confirmed after suspension", { error: String(error) });
-        });
-        return;
-      }
-      if (remainingMs <= 0) {
-        if (coordinatorState.role === "leader") await loseLeadership();
-        coordinatorState = {
-          role: "follower",
-          ownerNodeId: lease.ownerNodeId,
-          fencingEpoch: lease.fencingEpoch,
-          expiresAt: lease.expiresAt,
-          heartbeatAt: lease.heartbeatAt,
-        };
-        log.warn("Control-plane coordinator lease expired before confirmation", {
-          nodeId: identity.nodeId,
-          fencingEpoch: lease.fencingEpoch,
-        });
-        return;
-      }
-
-      const becameLeader = coordinatorState.role !== "leader" || coordinatorState.fencingEpoch !== lease.fencingEpoch;
-      coordinatorState = {
-        role: "leader",
-        ownerNodeId: lease.ownerNodeId,
-        fencingEpoch: lease.fencingEpoch,
-        expiresAt: lease.expiresAt,
-        heartbeatAt: lease.heartbeatAt,
-      };
-      if (becameLeader) leadershipGeneration += 1;
-      armLeadershipWatchdog(remainingMs);
-      if (becameLeader) {
-        const generation = leadershipGeneration;
-        log.info("Control-plane coordinator lease acquired", {
-          nodeId: identity.nodeId,
-          fencingEpoch: lease.fencingEpoch,
-        });
-        activateLeadership(lease.fencingEpoch, generation);
-      }
-    } else {
-      if (coordinatorState.role === "leader") {
-        log.warn("Control-plane coordinator lease lost", {
-          nodeId: identity.nodeId,
-          ownerNodeId: lease.ownerNodeId,
-          fencingEpoch: lease.fencingEpoch,
-        });
-        await loseLeadership();
-      } else {
-        clearLeadershipWatchdog();
-      }
-      coordinatorState = {
-        role: "follower",
-        ownerNodeId: lease.ownerNodeId,
-        fencingEpoch: lease.fencingEpoch,
-        expiresAt: lease.expiresAt,
-        heartbeatAt: lease.heartbeatAt,
-      };
-    }
+    if (await releaseClaimIfCoordinatorInactive(identity, lease, "claim")) return;
+    if (lease.acquired) await applyAcquiredCoordinatorLease(identity, lease);
+    else await applyFollowerCoordinatorLease(identity, lease);
   } catch (error: unknown) {
     if (coordinatorState.role === "leader") {
       log.error("Control-plane coordinator renewal failed; relinquishing local execution ownership", {

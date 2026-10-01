@@ -694,7 +694,6 @@ describe("SAML SSO flow", () => {
 
       const withoutRole = await validAcs({
         username: localAdminUsername,
-
         email: `${localAdminUsername}@example.com`,
       });
       expect(withoutRole.status).toBe(200);

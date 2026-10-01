@@ -141,6 +141,11 @@ export async function startDistributedEventBus(): Promise<void> {
         scheduleCatchUp();
       },
     );
+    // Do not report the bridge as started until one catch-up has settled.
+    // The onListen callback remains for reconnects; this explicit pass makes
+    // startup deterministic for callers and tests.
+    scheduleCatchUp();
+    await catchUpPromise;
     distributedCatchUpTimer = setInterval(scheduleCatchUp, CONTROL_EVENT_CATCH_UP_INTERVAL_MS);
     distributedCatchUpTimer.unref?.();
   } catch (error: unknown) {

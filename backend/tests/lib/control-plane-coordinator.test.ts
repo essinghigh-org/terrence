@@ -398,30 +398,35 @@ describe("coordinator resignation", () => {
     });
     await locked;
 
-    resumeControlPlaneCoordinator();
-    const electionDeadline = Date.now() + 2_000;
-    while (!controlPlaneCoordinatorElectionInFlight()) {
-      if (Date.now() >= electionDeadline) throw new Error("coordinator election did not enter the in-flight state");
-      await Bun.sleep(10);
+    try {
+      resumeControlPlaneCoordinator();
+      const electionDeadline = Date.now() + 2_000;
+      while (!controlPlaneCoordinatorElectionInFlight()) {
+        if (Date.now() >= electionDeadline) throw new Error("coordinator election did not enter the in-flight state");
+        await Bun.sleep(10);
+      }
+
+      const resignation = resignControlPlaneLease();
+      expect(controlPlaneCoordinatorSuspended()).toBe(true);
+      expect(controlPlaneCoordinatorElectionInFlight()).toBe(true);
+
+      releaseRow();
+      await blocker;
+      await resignation;
+      const settleDeadline = Date.now() + 2_000;
+      while (controlPlaneCoordinatorElectionInFlight()) {
+        if (Date.now() >= settleDeadline) throw new Error("coordinator election did not settle after suspension");
+        await Bun.sleep(10);
+      }
+
+      expect(controlPlaneCoordinatorState().role).not.toBe("leader");
+      const lease = await db.query.controlPlaneLeases.findFirst({
+        where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+      });
+      expect(lease?.expiresAt).toBe(0);
+    } finally {
+      releaseRow();
+      await blocker.catch((): void => undefined);
     }
-
-    const resignation = resignControlPlaneLease();
-    expect(controlPlaneCoordinatorSuspended()).toBe(true);
-    expect(controlPlaneCoordinatorElectionInFlight()).toBe(true);
-
-    releaseRow();
-    await blocker;
-    await resignation;
-    const settleDeadline = Date.now() + 2_000;
-    while (controlPlaneCoordinatorElectionInFlight()) {
-      if (Date.now() >= settleDeadline) throw new Error("coordinator election did not settle after suspension");
-      await Bun.sleep(10);
-    }
-
-    expect(controlPlaneCoordinatorState().role).not.toBe("leader");
-    const lease = await db.query.controlPlaneLeases.findFirst({
-      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
-    });
-    expect(lease?.expiresAt).toBe(0);
   });
 });

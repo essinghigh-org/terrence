@@ -193,6 +193,37 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   expect(grantedScimAdmin?.isSiteAdmin).toBeTrue();
   expect(grantedScimAdmin?.scimSiteAdmin).toBeTrue();
 
+  // A SAML grant must remain independent when SCIM is removed, and SCIM must
+  // be able to add its own provenance to an already SAML-administered user.
+  await db.update(users).set({ ssoSiteAdmin: true }).where(eq(users.id, groupUserId));
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": "" } },
+      })
+    ).status,
+  ).toBe(200);
+  let mixedAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(mixedAdmin?.isSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.ssoSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.scimSiteAdmin).toBeFalse();
+
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": adminGroupId } },
+      })
+    ).status,
+  ).toBe(200);
+  mixedAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(mixedAdmin?.isSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.ssoSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.scimSiteAdmin).toBeTrue();
+
+  // Restore the fixture to SCIM-only provenance for the remaining lifecycle
+  // checks below.
+  await db.update(users).set({ ssoSiteAdmin: false }).where(eq(users.id, groupUserId));
+
   await db.insert(scimGroupMemberships).values({
     id: `scim-auditor-member-${suffix}`,
     groupId: auditorGroupId,

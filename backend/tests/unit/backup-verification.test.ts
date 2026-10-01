@@ -21,6 +21,15 @@ function extractionDirectories(): Promise<string[]> {
   );
 }
 
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error("Expected promise to reject");
+}
+
 import {
   BACKUP_STATUS_FILE,
   createBackupManifestForSource,
@@ -135,7 +144,9 @@ describe("backup verification and restore rehearsal", () => {
     expect(JSON.parse(await readFile(created.path, "utf8"))).toMatchObject({ kind: "terrence-backup" });
     expect(await extractionDirectories()).toEqual(before);
 
-    expect(verifyBackupIntegrity({ sourcePath: archive })).rejects.toMatchObject({ code: "manifest-missing" });
+    expect(await rejectionOf(verifyBackupIntegrity({ sourcePath: archive }))).toMatchObject({
+      code: "manifest-missing",
+    });
     expect(await extractionDirectories()).toEqual(before);
 
     const ambiguousRoot = join(archiveRoot, "ambiguous");
@@ -145,7 +156,7 @@ describe("backup verification and restore rehearsal", () => {
     await writeFile(join(ambiguousRoot, "terrence-backup-manifest.json"), JSON.stringify(created.manifest));
     const ambiguousArchive = join(archiveRoot, "ambiguous.tar");
     await createTar(archiveRoot, ambiguousArchive, ["ambiguous"]);
-    expect(verifyBackupIntegrity({ sourcePath: ambiguousArchive })).rejects.toMatchObject({
+    expect(await rejectionOf(verifyBackupIntegrity({ sourcePath: ambiguousArchive }))).toMatchObject({
       code: "database-ambiguous",
     });
     expect(await extractionDirectories()).toEqual(before);

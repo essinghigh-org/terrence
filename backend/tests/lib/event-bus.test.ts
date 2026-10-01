@@ -1,12 +1,14 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import { inArray } from "drizzle-orm";
 
+const { db, isPostgres, notifyPostgresChannel } = await import("../../src/db");
 const previousHa = process.env["TERRENCE_HA_ENABLED"];
 const previousNodeId = process.env["TERRENCE_NODE_ID"];
-process.env["TERRENCE_HA_ENABLED"] = "true";
-process.env["TERRENCE_NODE_ID"] = "event-replay-test-node";
+if (isPostgres) {
+  process.env["TERRENCE_HA_ENABLED"] = "true";
+  process.env["TERRENCE_NODE_ID"] = "event-replay-test-node";
+}
 
-const { db, isPostgres, notifyPostgresChannel } = await import("../../src/db");
 const { controlEvents } = await import("../../src/db/schema");
 const { startDistributedEventBus, stopDistributedEventBus, subscribe } = await import("../../src/lib/event-bus");
 
@@ -27,6 +29,9 @@ afterEach(async (): Promise<void> => {
   if (testIds.length > 0) {
     await db.delete(controlEvents).where(inArray(controlEvents.id, testIds.splice(0)));
   }
+});
+
+afterAll((): void => {
   if (previousHa === undefined) Reflect.deleteProperty(process.env, "TERRENCE_HA_ENABLED");
   else process.env["TERRENCE_HA_ENABLED"] = previousHa;
   if (previousNodeId === undefined) Reflect.deleteProperty(process.env, "TERRENCE_NODE_ID");
@@ -34,11 +39,8 @@ afterEach(async (): Promise<void> => {
 });
 
 postgresTest("live notifications cannot advance replay past an older missed durable event", async () => {
-  process.env["TERRENCE_HA_ENABLED"] = "true";
-  process.env["TERRENCE_NODE_ID"] = "event-replay-test-node";
   await db.delete(controlEvents);
   await startDistributedEventBus();
-  await Bun.sleep(100);
 
   const topic = `event-replay-${crypto.randomUUID()}`;
   const received: string[] = [];
@@ -51,10 +53,20 @@ postgresTest("live notifications cannot advance replay past an older missed dura
   const newId = crypto.randomUUID();
   testIds.push(oldId, newId);
 
+  let markLiveRead!: () => void;
+  const liveReadFailed = new Promise<void>((resolve): void => {
+    markLiveRead = resolve;
+  });
+  let markCatchUpRead!: () => void;
+  const catchUpReadFailed = new Promise<void>((resolve): void => {
+    markCatchUpRead = resolve;
+  });
   const failLiveRead = spyOn(db.query.controlEvents, "findFirst").mockImplementationOnce((async (): Promise<never> => {
+    markLiveRead();
     throw new Error("synthetic notified-row read failure");
   }) as unknown as typeof db.query.controlEvents.findFirst);
   const failCatchUp = spyOn(db.query.controlEvents, "findMany").mockImplementationOnce((async (): Promise<never> => {
+    markCatchUpRead();
     throw new Error("synthetic replay page failure");
   }) as unknown as typeof db.query.controlEvents.findMany);
 
@@ -68,7 +80,7 @@ postgresTest("live notifications cannot advance replay past an older missed dura
       createdAt: now - 120_000,
     });
     await notifyPostgresChannel(channel, oldId);
-    await Bun.sleep(100);
+    await Promise.all([liveReadFailed, catchUpReadFailed]);
   } finally {
     failLiveRead.mockRestore();
     failCatchUp.mockRestore();

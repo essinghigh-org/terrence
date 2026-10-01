@@ -1,5 +1,3 @@
-import { isString } from "./type-guards";
-
 /**
  * Shared post-auth destination validator (issue #642).
  *
@@ -14,7 +12,7 @@ import { isString } from "./type-guards";
  * The helper below preserves that state without exposing the PKCE request.
  */
 export function resolveReturnTarget(returnTo: unknown): string {
-  if (!isString(returnTo) || (returnTo !== "/app" && !returnTo.startsWith("/app/"))) return "/app";
+  if (typeof returnTo !== "string" || (returnTo !== "/app" && !returnTo.startsWith("/app/"))) return "/app";
   if (returnTo.startsWith("//")) return "/app";
   if (/[\r\n]/.test(returnTo) || returnTo.includes("/../")) return "/app";
   return returnTo;
@@ -25,9 +23,9 @@ export function resolveReturnTarget(returnTo: unknown): string {
  * server-controlled continuation. */
 export function ssoContinuationQuery(oauthState: unknown, returnTo: unknown): string {
   const params = new URLSearchParams();
-  if (isString(oauthState) && oauthState !== "") {
+  if (typeof oauthState === "string" && oauthState !== "") {
     params.set("oauth_state", oauthState);
-  } else if (isString(returnTo) && resolveReturnTarget(returnTo) === returnTo) {
+  } else if (typeof returnTo === "string" && resolveReturnTarget(returnTo) === returnTo) {
     params.set("returnTo", returnTo);
   }
   const encoded = params.toString();

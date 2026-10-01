@@ -69,21 +69,23 @@ describe("organization roles", () => {
       data: { type: "organization-roles", attributes: { permissions: {} } },
     });
     expect(permissionsOnly.status).toBe(200);
-    expect(((await permissionsOnly.json()) as typeof created).data.attributes).toMatchObject({
+    const permissionsOnlyBody = (await permissionsOnly.json()) as typeof created;
+    expect(permissionsOnlyBody.data.attributes).toMatchObject({
       name: "Workspace maintainer",
       description: "Can manage workspaces",
-      permissions: {},
     });
+    expect(permissionsOnlyBody.data.attributes.permissions).toEqual({});
 
     const descriptionOnly = await request("/api/v2/organization-roles/" + created.data.id, "PATCH", {
       data: { type: "organization-roles", attributes: { description: null } },
     });
     expect(descriptionOnly.status).toBe(200);
-    expect(((await descriptionOnly.json()) as typeof created).data.attributes).toMatchObject({
+    const descriptionOnlyBody = (await descriptionOnly.json()) as typeof created;
+    expect(descriptionOnlyBody.data.attributes).toMatchObject({
       name: "Workspace maintainer",
       description: null,
-      permissions: {},
     });
+    expect(descriptionOnlyBody.data.attributes.permissions).toEqual({});
 
     const invalid = await request("/api/v2/organization-roles/" + created.data.id, "PATCH", {
       data: { type: "organization-roles", attributes: { permissions: { "manage-workspaces": "yes" } } },
@@ -94,8 +96,8 @@ describe("organization roles", () => {
     expect(persisted?.attributes).toMatchObject({
       name: "Workspace maintainer",
       description: null,
-      permissions: {},
     });
+    expect(persisted?.attributes.permissions).toEqual({});
     const listed = await request(`/api/v2/organizations/${orgName}/roles`);
     expect(listed.status).toBe(200);
     expect(((await listed.json()) as { data: unknown[] }).data).toHaveLength(1);

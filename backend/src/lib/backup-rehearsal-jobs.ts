@@ -1,6 +1,8 @@
 import { and, asc, eq, gte } from "drizzle-orm";
 import { databaseCurrentTimeMs, db } from "../db";
 import { controlPlaneNodes, durableJobs } from "../db/schema";
+import { databaseConstraint } from "./database-errors";
+import { log } from "./log";
 import { controlPlaneInstanceId, controlPlaneNodeId } from "./ha-config";
 import {
   BackupVerificationError,
@@ -45,6 +47,21 @@ function serializeError(error: unknown): { code?: string; detail: string } {
     : { detail: error instanceof Error ? error.message : String(error) };
 }
 
+function activeRehearsalConflict(error: unknown): boolean {
+  if (databaseConstraint(error) !== "unique") return false;
+  let current = error;
+  const visited = new Set<unknown>();
+  while (current !== null && typeof current === "object" && !visited.has(current) && visited.size < 8) {
+    visited.add(current);
+    const record = current as Readonly<Record<string, unknown>>;
+    const constraint = record["constraint"] ?? record["constraint_name"];
+    if (constraint === "durable_jobs_kind_dedupe_idx") return true;
+    const message = typeof record["message"] === "string" ? record["message"] : "";
+    if (message.includes("durable_jobs.kind") && message.includes("durable_jobs.dedupe_key")) return true;
+    current = record["cause"];
+  }
+  return false;
+}
 function parsePayload(value: Readonly<Record<string, unknown>>): StoredPayload | null {
   if (
     typeof value["ownerNodeId"] !== "string" ||
@@ -158,6 +175,28 @@ async function completeJob(
   await pruneTerminalJobs();
 }
 
+async function persistCompletion(
+  id: string,
+  payload: StoredPayload,
+  status: "done" | "failed",
+  update: DeepReadonly<{ result?: BackupRehearsalReport; error?: { code?: string; detail: string } }>,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await completeJob(id, payload, status, update);
+      return;
+    } catch (error: unknown) {
+      lastError = error;
+    }
+  }
+  log.error("Unable to persist backup rehearsal completion", {
+    jobId: id,
+    status,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
 async function executeJob(id: string, payload: StoredPayload): Promise<void> {
   try {
     const result = await runRestoreRehearsal({
@@ -166,9 +205,9 @@ async function executeJob(id: string, payload: StoredPayload): Promise<void> {
       ...(payload.cliPath === undefined ? {} : { cliPath: payload.cliPath }),
       ...(payload.requireCli === true ? { requireCli: true } : {}),
     });
-    await completeJob(id, payload, "done", { result });
+    await persistCompletion(id, payload, "done", { result });
   } catch (error: unknown) {
-    await completeJob(id, payload, "failed", { error: serializeError(error) });
+    await persistCompletion(id, payload, "failed", { error: serializeError(error) });
   }
 }
 
@@ -207,19 +246,23 @@ export async function startBackupRehearsalJob(
     createdAt: now,
     updatedAt: now,
   };
-  try {
-    await db.insert(durableJobs).values(row);
-  } catch (error: unknown) {
-    const active = await db.query.durableJobs.findFirst({
-      where: and(
-        eq(durableJobs.kind, BACKUP_REHEARSAL_KIND),
-        eq(durableJobs.dedupeKey, ACTIVE_REHEARSAL_KEY),
-        eq(durableJobs.status, "running"),
-      ),
-    });
-    const job = active === undefined ? undefined : publicJob(active);
-    if (job === undefined) throw error;
-    return { created: false, job };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await db.insert(durableJobs).values(row);
+      break;
+    } catch (error: unknown) {
+      if (!activeRehearsalConflict(error)) throw error;
+      const active = await db.query.durableJobs.findFirst({
+        where: and(
+          eq(durableJobs.kind, BACKUP_REHEARSAL_KIND),
+          eq(durableJobs.dedupeKey, ACTIVE_REHEARSAL_KEY),
+          eq(durableJobs.status, "running"),
+        ),
+      });
+      const job = active === undefined ? undefined : publicJob(active);
+      if (job !== undefined) return { created: false, job };
+      if (attempt === 1) throw error;
+    }
   }
   const job = publicJob(row as typeof durableJobs.$inferSelect);
   if (job === undefined) throw new Error("Created backup rehearsal row is invalid");
