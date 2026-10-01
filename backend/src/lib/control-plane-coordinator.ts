@@ -182,6 +182,7 @@ let leadershipWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
 let leadershipValidUntil = 0;
 let coordinatorStarted = false;
 let leadershipGeneration = 0;
+let coordinatorElectionInFlight = 0;
 
 type CoordinatorCallbacks = Readonly<{
   onLeadershipAcquired: (fencingEpoch: number) => void | Promise<void>;
@@ -199,6 +200,10 @@ export function controlPlaneCoordinatorState(): CoordinatorState {
 
 export function isControlPlaneCoordinatorLeader(): boolean {
   return coordinatorState.role === "leader" && performance.now() < leadershipValidUntil;
+}
+
+export function controlPlaneCoordinatorElectionInFlight(): boolean {
+  return coordinatorElectionInFlight > 0;
 }
 
 function clearLeadershipWatchdog(): void {
@@ -306,8 +311,17 @@ async function coordinatorTick(): Promise<void> {
     nodeId: controlPlaneNodeId(),
     instanceId: controlPlaneInstanceId,
   };
+  coordinatorElectionInFlight += 1;
   try {
     const lease = await claimControlPlaneLease(identity);
+    if (!coordinatorStarted || coordinatorSuspended) {
+      if (lease.acquired) {
+        await releaseControlPlaneLease(identity).catch((error: unknown): void => {
+          log.warn("Unable to release coordinator lease acquired after suspension", { error: String(error) });
+        });
+      }
+      return;
+    }
     if (lease.acquired) {
       // Verify the returned lease against the same authoritative clock after
       // the claim completes. A stalled network response must not resurrect a
@@ -315,6 +329,12 @@ async function coordinatorTick(): Promise<void> {
       const confirmationStartedAt = performance.now();
       const databaseNow = await databaseCurrentTimeMs();
       const remainingMs = conservativeLeaseRemainingMs(lease.expiresAt, databaseNow, confirmationStartedAt);
+      if (!coordinatorStarted || coordinatorSuspended) {
+        await releaseControlPlaneLease(identity).catch((error: unknown): void => {
+          log.warn("Unable to release coordinator lease confirmed after suspension", { error: String(error) });
+        });
+        return;
+      }
       if (remainingMs <= 0) {
         if (coordinatorState.role === "leader") await loseLeadership();
         coordinatorState = {
@@ -382,6 +402,7 @@ async function coordinatorTick(): Promise<void> {
       });
     }
   } finally {
+    coordinatorElectionInFlight = Math.max(0, coordinatorElectionInFlight - 1);
     scheduleCoordinatorTick();
   }
 }

@@ -7,6 +7,7 @@ import {
   assertControlPlaneCoordinatorFenceTx,
   CONTROL_PLANE_LEASE_NAME,
   claimControlPlaneLease,
+  controlPlaneCoordinatorElectionInFlight,
   controlPlaneCoordinatorState,
   controlPlaneCoordinatorSuspended,
   releaseControlPlaneLease,
@@ -357,5 +358,70 @@ describe("coordinator resignation", () => {
     expect(
       await db.query.controlPlaneLeases.findFirst({ where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME) }),
     ).toBeUndefined();
+  });
+
+  postgresTest("an election completing after drain suspension releases ownership before the tick settles", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    // Start suspended so initial coordinator startup only observes the lease.
+    expect(await resignControlPlaneLease()).toBe(false);
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    await db.insert(controlPlaneLeases).values({
+      name: CONTROL_PLANE_LEASE_NAME,
+      ownerNodeId: "node-b",
+      ownerInstanceId: "instance-b",
+      fencingEpoch: 1,
+      expiresAt: 0,
+      heartbeatAt: 0,
+    });
+
+    let releaseRow!: () => void;
+    const holdRow = new Promise<void>((resolve): void => {
+      releaseRow = resolve;
+    });
+    let markLocked!: () => void;
+    const locked = new Promise<void>((resolve): void => {
+      markLocked = resolve;
+    });
+    const blocker = db.transaction(async (tx): Promise<void> => {
+      await tx
+        .update(controlPlaneLeases)
+        .set({ heartbeatAt: 1 })
+        .where(eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME));
+      markLocked();
+      await holdRow;
+    });
+    await locked;
+
+    resumeControlPlaneCoordinator();
+    const electionDeadline = Date.now() + 2_000;
+    while (!controlPlaneCoordinatorElectionInFlight()) {
+      if (Date.now() >= electionDeadline) throw new Error("coordinator election did not enter the in-flight state");
+      await Bun.sleep(10);
+    }
+
+    const resignation = resignControlPlaneLease();
+    expect(controlPlaneCoordinatorSuspended()).toBe(true);
+    expect(controlPlaneCoordinatorElectionInFlight()).toBe(true);
+
+    releaseRow();
+    await blocker;
+    await resignation;
+    const settleDeadline = Date.now() + 2_000;
+    while (controlPlaneCoordinatorElectionInFlight()) {
+      if (Date.now() >= settleDeadline) throw new Error("coordinator election did not settle after suspension");
+      await Bun.sleep(10);
+    }
+
+    expect(controlPlaneCoordinatorState().role).not.toBe("leader");
+    const lease = await db.query.controlPlaneLeases.findFirst({
+      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    });
+    expect(lease?.expiresAt).toBe(0);
   });
 });

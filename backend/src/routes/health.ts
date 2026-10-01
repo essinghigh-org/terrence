@@ -419,12 +419,12 @@ function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection[
     .slice(0, 10)
     .map(
       ([fp, count]): string =>
-        `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
+        `terrence_database_slow_fingerprint_samples{fingerprint="${prometheusLabel(fp)}"} ${count}`,
     );
   if (fpLines.length > 0) {
     lines.push(
-      "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences.",
-      "# TYPE terrence_database_slow_fingerprint_total counter",
+      "# HELP terrence_database_slow_fingerprint_samples Normalized slow-query occurrences retained in the bounded diagnostic window.",
+      "# TYPE terrence_database_slow_fingerprint_samples gauge",
       ...fpLines,
     );
   }
@@ -481,10 +481,10 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
     `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
     "# HELP terrence_request_duration_ms Server request latency by bounded user journey.",
     "# TYPE terrence_request_duration_ms gauge",
-    "# HELP terrence_request_duration_samples Requests observed by bounded user journey.",
+    "# HELP terrence_request_duration_samples Requests observed by user journey since process start.",
     "# TYPE terrence_request_duration_samples counter",
     ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
-      `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
+      `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.requests}`,
       ...(stats.p50Ms === null
         ? []
         : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
@@ -533,9 +533,9 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
   if (history.stats.rss.growthPerHour !== null) {
     lines.push(`terrence_process_history_rss_growth_per_hour ${history.stats.rss.growthPerHour}`);
   }
-  if (snapshot.eventLoopDelay.p95Ms !== null) {
+  if (snapshot.eventLoopDelay.p50Ms !== null && snapshot.eventLoopDelay.p95Ms !== null) {
     lines.push(
-      `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
+      `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.p50Ms}`,
       `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
       ...(snapshot.eventLoopDelay.maxMs === null
         ? []

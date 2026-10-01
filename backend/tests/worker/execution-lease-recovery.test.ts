@@ -8,7 +8,7 @@ process.env["TERRENCE_NODE_ID"] = "recovery-node";
 
 const { db } = await import("../../src/db");
 const { organizations, runs, workspaces } = await import("../../src/db/schema");
-const { reconcileExpiredLocalRunExecutions } = await import("../../src/worker");
+const { reconcileExpiredLocalRunExecutions, reconcileInterruptedLocalRuns } = await import("../../src/worker");
 
 const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 10);
 const orgId = `org-execution-recovery-${suffix}`;
@@ -17,13 +17,39 @@ const expiredFetchWs = `ws-expired-fetch-${suffix}`;
 const expiredConfirmedWs = `ws-expired-confirmed-${suffix}`;
 const expiredFinalWs = `ws-expired-final-${suffix}`;
 const liveWs = `ws-live-plan-${suffix}`;
+const clearedFinalWs = `ws-cleared-final-${suffix}`;
+const liveFinalWs = `ws-live-final-${suffix}`;
+const manualWs = `ws-manual-lock-${suffix}`;
+const startupFinalWs = `ws-startup-final-${suffix}`;
 const expiredPlanRun = `run-expired-plan-${suffix}`;
 const expiredFetchRun = `run-expired-fetch-${suffix}`;
 const expiredConfirmedRun = `run-expired-confirmed-${suffix}`;
 const expiredFinalRun = `run-expired-final-${suffix}`;
 const liveRun = `run-live-plan-${suffix}`;
-const workspaceIds = [expiredPlanWs, expiredFetchWs, expiredConfirmedWs, expiredFinalWs, liveWs];
-const runIds = [expiredPlanRun, expiredFetchRun, expiredConfirmedRun, expiredFinalRun, liveRun];
+const clearedFinalRun = `run-cleared-final-${suffix}`;
+const liveFinalRun = `run-live-final-${suffix}`;
+const startupFinalRun = `run-startup-final-${suffix}`;
+const workspaceIds = [
+  expiredPlanWs,
+  expiredFetchWs,
+  expiredConfirmedWs,
+  expiredFinalWs,
+  liveWs,
+  clearedFinalWs,
+  liveFinalWs,
+  manualWs,
+  startupFinalWs,
+];
+const runIds = [
+  expiredPlanRun,
+  expiredFetchRun,
+  expiredConfirmedRun,
+  expiredFinalRun,
+  liveRun,
+  clearedFinalRun,
+  liveFinalRun,
+  startupFinalRun,
+];
 
 function executionWorkspace(id: string, runId: string, expiresAt: number): typeof workspaces.$inferInsert {
   return {
@@ -67,24 +93,65 @@ beforeAll(async (): Promise<void> => {
   const expired = now - 1_000;
   const live = now + 60_000;
   await db.insert(organizations).values({ id: orgId, name: orgId });
-  await db
-    .insert(workspaces)
-    .values([
-      executionWorkspace(expiredPlanWs, expiredPlanRun, expired),
-      executionWorkspace(expiredFetchWs, expiredFetchRun, expired),
-      executionWorkspace(expiredConfirmedWs, expiredConfirmedRun, expired),
-      executionWorkspace(expiredFinalWs, expiredFinalRun, expired),
-      executionWorkspace(liveWs, liveRun, live),
-    ]);
-  await db
-    .insert(runs)
-    .values([
-      executionRun(expiredPlanRun, expiredPlanWs, "planning", "plan", expired),
-      executionRun(expiredFetchRun, expiredFetchWs, "fetching", "plan", expired),
-      executionRun(expiredConfirmedRun, expiredConfirmedWs, "confirmed", "apply", expired),
-      executionRun(expiredFinalRun, expiredFinalWs, "applied", "apply", expired),
-      executionRun(liveRun, liveWs, "planning", "plan", live),
-    ]);
+  await db.insert(workspaces).values([
+    executionWorkspace(expiredPlanWs, expiredPlanRun, expired),
+    executionWorkspace(expiredFetchWs, expiredFetchRun, expired),
+    executionWorkspace(expiredConfirmedWs, expiredConfirmedRun, expired),
+    {
+      ...executionWorkspace(expiredFinalWs, expiredFinalRun, expired),
+      locked: true,
+      lockedReason: "Run expired final is applying",
+      lockOwnerType: "run",
+      lockOwnerId: expiredFinalRun,
+      lockedAt: expired - 30_000,
+    },
+    executionWorkspace(liveWs, liveRun, live),
+    {
+      id: clearedFinalWs,
+      orgId,
+      name: clearedFinalWs,
+      executionMode: "remote",
+      locked: true,
+      lockedReason: "Final unlock failed",
+      lockOwnerType: "run",
+      lockOwnerId: clearedFinalRun,
+      lockedAt: expired,
+    },
+    {
+      ...executionWorkspace(liveFinalWs, liveFinalRun, live),
+      locked: true,
+      lockedReason: "Live terminal executor is finishing",
+      lockOwnerType: "run",
+      lockOwnerId: liveFinalRun,
+      lockedAt: now,
+    },
+    {
+      id: manualWs,
+      orgId,
+      name: manualWs,
+      executionMode: "remote",
+      locked: true,
+      lockedReason: "Operator maintenance",
+      lockOwnerType: "user",
+      lockOwnerId: "operator",
+      lockedAt: now,
+    },
+  ]);
+  await db.insert(runs).values([
+    executionRun(expiredPlanRun, expiredPlanWs, "planning", "plan", expired),
+    executionRun(expiredFetchRun, expiredFetchWs, "fetching", "plan", expired),
+    executionRun(expiredConfirmedRun, expiredConfirmedWs, "confirmed", "apply", expired),
+    executionRun(expiredFinalRun, expiredFinalWs, "applied", "apply", expired),
+    executionRun(liveRun, liveWs, "planning", "plan", live),
+    {
+      id: clearedFinalRun,
+      workspaceId: clearedFinalWs,
+      status: "applied",
+      planOnly: false,
+      createdAt: now,
+    },
+    executionRun(liveFinalRun, liveFinalWs, "applied", "apply", live),
+  ]);
 });
 
 afterAll(async (): Promise<void> => {
@@ -150,6 +217,46 @@ describe("expired local execution recovery", () => {
     });
     expect(recoveredWorkspaces.every((workspace) => workspace.executionRunId === null)).toBe(true);
 
+    const recoveredLocks = await db.query.workspaces.findMany({
+      where: inArray(workspaces.id, [expiredFinalWs, clearedFinalWs, liveFinalWs, manualWs]),
+    });
+    const locksById = new Map(recoveredLocks.map((workspace) => [workspace.id, workspace]));
+    expect(locksById.get(expiredFinalWs)?.locked).toBe(false);
+    expect(locksById.get(expiredFinalWs)?.lockOwnerType).toBeNull();
+    expect(locksById.get(clearedFinalWs)?.locked).toBe(false);
+    expect(locksById.get(clearedFinalWs)?.lockOwnerId).toBeNull();
+    expect(locksById.get(liveFinalWs)?.locked).toBe(true);
+    expect(locksById.get(liveFinalWs)?.lockOwnerId).toBe(liveFinalRun);
+    expect(locksById.get(manualWs)?.locked).toBe(true);
+    expect(locksById.get(manualWs)?.lockOwnerType).toBe("user");
+
     expect(await reconcileExpiredLocalRunExecutions()).toEqual({ requeued: 0, errored: 0, rearmed: 0 });
+  });
+
+  test("startup recovery releases a terminal run lock after execution ownership is already gone", async () => {
+    await db.insert(workspaces).values({
+      id: startupFinalWs,
+      orgId,
+      name: startupFinalWs,
+      executionMode: "remote",
+      locked: true,
+      lockedReason: "Run finished before restart",
+      lockOwnerType: "run",
+      lockOwnerId: startupFinalRun,
+      lockedAt: Date.now() - 1_000,
+    });
+    await db.insert(runs).values({
+      id: startupFinalRun,
+      workspaceId: startupFinalWs,
+      status: "applied",
+      planOnly: false,
+      createdAt: Date.now() - 1_000,
+    });
+
+    await reconcileInterruptedLocalRuns();
+    const recovered = await db.query.workspaces.findFirst({ where: eq(workspaces.id, startupFinalWs) });
+    expect(recovered?.locked).toBe(false);
+    expect(recovered?.lockOwnerType).toBeNull();
+    expect(recovered?.lockOwnerId).toBeNull();
   });
 });

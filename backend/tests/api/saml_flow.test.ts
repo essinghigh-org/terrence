@@ -680,17 +680,165 @@ describe("SAML SSO flow", () => {
       isSiteAdmin: true,
     });
     try {
-      // Email-links to the existing local admin, but ssoSiteAdmin stays false.
+      // Email-links to the existing local admin. Even a matching SAML role
+      // must not claim ownership of a pre-existing manual grant.
       const response = await validAcs({
         username: localAdminUsername,
         email: `${localAdminUsername}@example.com`,
+        siteAdmin: "site-admins",
       });
       expect(response.status).toBe(200);
-      const localAdmin = await db.query.users.findFirst({ where: eq(users.id, localAdminId) });
+      let localAdmin = await db.query.users.findFirst({ where: eq(users.id, localAdminId) });
+      expect(localAdmin?.isSiteAdmin).toBeTrue();
+      expect(localAdmin?.ssoSiteAdmin).toBeFalse();
+
+      const withoutRole = await validAcs({
+        username: localAdminUsername,
+
+        email: `${localAdminUsername}@example.com`,
+      });
+      expect(withoutRole.status).toBe(200);
+      localAdmin = await db.query.users.findFirst({ where: eq(users.id, localAdminId) });
       expect(localAdmin?.isSiteAdmin).toBeTrue();
       expect(localAdmin?.ssoSiteAdmin).toBeFalse();
     } finally {
       await db.delete(users).where(eq(users.id, localAdminId));
+    }
+  });
+
+  test("resumes a signed-out Terraform PKCE login after SAML authentication", async () => {
+    const verifier = "saml-terraform-login-verifier-0123456789-abcdefghijklmnopqrstuvwxyz";
+    const cliState = `saml-cli-state-${suffix}`;
+    const redirectUri = "http://localhost:10000/login";
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const authorization = new URLSearchParams({
+      client_id: "terraform-cli",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      redirect_uri: redirectUri,
+      response_type: "code",
+      state: cliState,
+    });
+    const oauthBegin = await app.handle(
+      new Request(`https://terrence.test/oauth/authorization?${authorization.toString()}`),
+    );
+    expect(oauthBegin.status).toBe(302);
+    const oauthState = cookieValue(oauthBegin, "terraform_oauth_state");
+    expect(oauthState).not.toBe("");
+
+    const samlAuth = await app.handle(
+      new Request(`https://terrence.test/users/saml/auth?oauth_state=${encodeURIComponent(oauthState)}`, {
+        headers: { Cookie: `terraform_oauth_state=${oauthState}` },
+      }),
+    );
+    expect(samlAuth.status).toBe(302);
+    const samlLocation = new URL(samlAuth.headers.get("Location") ?? "");
+    const samlState = cookieValue(samlAuth, "terrence_saml_state");
+    const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(samlLocation.searchParams.get("SAMLRequest") ?? ""))?.[1];
+    if (requestId === undefined || samlState === "") throw new Error("SAML continuation did not issue browser state");
+
+    const assertion = buildSignedSamlResponse({
+      username: `cli-saml-${suffix}`,
+      email: `cli-saml-${suffix}@example.com`,
+      inResponseTo: requestId,
+    });
+    const samlCallback = await app.handle(
+      samlAcsRequest(assertion, undefined, {
+        Cookie: `terrence_saml_state=${samlState}; terraform_oauth_state=${oauthState}`,
+      }),
+    );
+    expect(samlCallback.status).toBe(200);
+    const html = await samlCallback.text();
+    expect(html).toContain(`/oauth/authorization/complete?oauth_state=${oauthState}`);
+
+    const refreshCookie = cookieValue(samlCallback, "terrence_refresh");
+    expect(refreshCookie).not.toBe("");
+    const complete = await app.handle(
+      new Request(`https://terrence.test/oauth/authorization/complete?oauth_state=${encodeURIComponent(oauthState)}`, {
+        headers: {
+          Cookie: `terraform_oauth_state=${oauthState}; terrence_refresh=${refreshCookie}`,
+        },
+      }),
+    );
+    expect(complete.status).toBe(302);
+    const cliCallback = new URL(complete.headers.get("Location") ?? "");
+    expect(cliCallback.origin + cliCallback.pathname).toBe(redirectUri);
+    expect(cliCallback.searchParams.get("state")).toBe(cliState);
+    const code = cliCallback.searchParams.get("code");
+    expect(code).not.toBeNull();
+
+    const exchange = await app.handle(
+      new Request("https://terrence.test/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "terraform-cli",
+          code: code ?? "",
+          redirect_uri: redirectUri,
+          code_verifier: verifier,
+        }).toString(),
+      }),
+    );
+    expect(exchange.status).toBe(200);
+    expect(typeof (await exchange.json()).access_token).toBe("string");
+  });
+
+  test("preserves a validated app deep link through SAML and rejects an untrusted destination", async () => {
+    const deepLink = await app.handle(new Request("https://terrence.test/users/saml/auth?returnTo=%2Fapp%2Faccount"));
+    expect(deepLink.status).toBe(302);
+    const location = new URL(deepLink.headers.get("Location") ?? "");
+    const state = cookieValue(deepLink, "terrence_saml_state");
+    const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
+    if (requestId === undefined || state === "") throw new Error("SAML deep-link flow did not issue browser state");
+    const response = buildSignedSamlResponse({
+      username: `deep-saml-${suffix}`,
+      email: `deep-saml-${suffix}@example.com`,
+      inResponseTo: requestId,
+    });
+    const callback = await app.handle(samlAcsRequest(response, undefined, { Cookie: `terrence_saml_state=${state}` }));
+    expect(await callback.text()).toContain("/app/account");
+
+    const untrusted = await app.handle(
+      new Request("https://terrence.test/users/saml/auth?returnTo=https%3A%2F%2Fevil.example"),
+    );
+    expect(untrusted.status).toBe(400);
+  });
+
+  test("unions SAML and SCIM site-admin provenance so either source can be removed independently", async () => {
+    const mixedId = `usr-saml-scim-admin-${suffix}`;
+    const mixedUsername = `saml-scim-admin-${suffix}`;
+    await db.insert(users).values({
+      id: mixedId,
+      username: mixedUsername,
+      email: `${mixedUsername}@example.com`,
+      passwordHash: "unused",
+      isSiteAdmin: true,
+      scimSiteAdmin: true,
+    });
+    try {
+      const withSamlRole = await validAcs({
+        username: mixedUsername,
+        email: `${mixedUsername}@example.com`,
+        siteAdmin: "site-admins",
+      });
+      expect(withSamlRole.status).toBe(200);
+      let mixed = await db.query.users.findFirst({ where: eq(users.id, mixedId) });
+      expect(mixed?.isSiteAdmin).toBeTrue();
+      expect(mixed?.scimSiteAdmin).toBeTrue();
+      expect(mixed?.ssoSiteAdmin).toBeTrue();
+
+      const withoutSamlRole = await validAcs({
+        username: mixedUsername,
+        email: `${mixedUsername}@example.com`,
+      });
+      expect(withoutSamlRole.status).toBe(200);
+      mixed = await db.query.users.findFirst({ where: eq(users.id, mixedId) });
+      expect(mixed?.isSiteAdmin).toBeTrue();
+      expect(mixed?.scimSiteAdmin).toBeTrue();
+      expect(mixed?.ssoSiteAdmin).toBeFalse();
+    } finally {
+      await db.delete(users).where(eq(users.id, mixedId));
     }
   });
 

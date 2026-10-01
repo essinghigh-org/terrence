@@ -126,7 +126,7 @@ import {
 import { log, safeJsonStringify } from "./lib/log";
 import { extractSafeTarArchive } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
-import { activeDurableJobCount, startDurableJobWorker } from "./lib/durable-jobs";
+import { activeDurableJobCount, startDurableJobWorker, stopDurableJobWorker } from "./lib/durable-jobs";
 import { handleOutboxDeliveryJob, repairOutboxJobs } from "./lib/outbox";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
@@ -7246,6 +7246,7 @@ export function setCoordinatorWorkerRunningForTests(running: boolean): void {
 /** Stop all local execution ownership for process shutdown. */
 export function stopWorkerQueue(): void {
   stopCoordinatorWorkerQueue();
+  stopDurableJobWorker();
   localExecutionLifecycle.stop();
 }
 
@@ -7863,6 +7864,61 @@ async function errorInterruptedAssessments(): Promise<number> {
   return assessmentsErrored;
 }
 
+async function reconcileTerminalRunWorkspaceLocks(databaseNow?: number): Promise<number> {
+  const currentNow = databaseNow ?? (await databaseCurrentTimeMs());
+  const heldLocks = await db.query.workspaces.findMany({
+    where: and(eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "run"), isNotNull(workspaces.lockOwnerId)),
+    columns: { id: true, lockOwnerId: true },
+    limit: 500,
+  });
+  if (heldLocks.length === 0) return 0;
+
+  const ownerIds = [
+    ...new Set(
+      heldLocks.map((workspace): string | null => workspace.lockOwnerId).filter((id): id is string => id !== null),
+    ),
+  ];
+  if (ownerIds.length === 0) return 0;
+  const ownerRuns = await db.query.runs.findMany({
+    where: inArray(runs.id, ownerIds),
+    columns: {
+      id: true,
+      workspaceId: true,
+      status: true,
+      executionOwnerNodeId: true,
+      executionOwnerInstanceId: true,
+      executionLeaseExpiresAt: true,
+    },
+  });
+  const runsById = new Map(ownerRuns.map((run): [string, (typeof ownerRuns)[number]] => [run.id, run]));
+  let released = 0;
+  for (const held of heldLocks) {
+    if (held.lockOwnerId === null) continue;
+    const run = runsById.get(held.lockOwnerId);
+    if (run === undefined || run.workspaceId !== held.id || !isTerminalRunStatus(run.status)) continue;
+    const liveExecution =
+      run.executionOwnerNodeId !== null &&
+      run.executionOwnerInstanceId !== null &&
+      run.executionLeaseExpiresAt !== null &&
+      run.executionLeaseExpiresAt > currentNow;
+    if (liveExecution) continue;
+
+    const updated = await db
+      .update(workspaces)
+      .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null })
+      .where(
+        and(
+          eq(workspaces.id, held.id),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ),
+      )
+      .returning({ id: workspaces.id });
+    released += updated.length;
+  }
+  return released;
+}
 export async function reconcileInterruptedLocalRuns(): Promise<{
   requeued: number;
   errored: number;
@@ -7884,6 +7940,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
 
   const rearmed = await rearmOrphanedApplies();
   const assessmentsErrored = await errorInterruptedAssessments();
+  await reconcileTerminalRunWorkspaceLocks();
 
   return { requeued, errored, assessmentsErrored, rearmed };
 }
@@ -7917,6 +7974,7 @@ export async function reconcileExpiredLocalRunExecutions(): Promise<{
       planOnly: true,
     },
   });
+  await reconcileTerminalRunWorkspaceLocks(databaseNow);
   if (candidates.length === 0) return { requeued: 0, errored: 0, rearmed: 0 };
 
   const workspaceIds = [...new Set(candidates.map((run): string => run.workspaceId))];

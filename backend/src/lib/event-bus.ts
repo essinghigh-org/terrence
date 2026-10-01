@@ -24,7 +24,7 @@ type EventCursor = Readonly<{ createdAt: number; id: string }>;
 let distributedStarted = false;
 let distributedSubscription: { unlisten: () => Promise<void> } | undefined;
 let distributedCatchUpTimer: ReturnType<typeof setInterval> | undefined;
-let lastCursor: EventCursor = { createdAt: 0, id: "" };
+let replayCursor: EventCursor = { createdAt: 0, id: "" };
 let catchUpPromise: Promise<void> = Promise.resolve();
 const seenEventIds = new Set<string>();
 const seenEventOrder: string[] = [];
@@ -63,7 +63,6 @@ function laterCursor(left: EventCursor, right: EventCursor): EventCursor {
 
 function deliverPersistedEvent(row: Readonly<typeof controlEvents.$inferSelect>): void {
   if (!rememberEvent(row.id)) return;
-  lastCursor = laterCursor(lastCursor, { createdAt: row.createdAt, id: row.id });
   if (row.originInstanceId === controlPlaneInstanceId) return;
   dispatchLocal(row.topic, row.payload);
 }
@@ -81,7 +80,7 @@ async function catchUpPersistedEvents(): Promise<void> {
   // mechanism, not durable delivery, and two autocommit inserts can complete
   // out of timestamp/UUID order. The dedupe set makes this lookback cheap for
   // subscribers while ensuring a missed NOTIFY or commit-order tie is recovered.
-  const replayStart = Math.max(0, lastCursor.createdAt - CONTROL_EVENT_REPLAY_LOOKBACK_MS - 1);
+  const replayStart = Math.max(0, replayCursor.createdAt - CONTROL_EVENT_REPLAY_LOOKBACK_MS - 1);
   let cursor: EventCursor = { createdAt: replayStart, id: "" };
   for (;;) {
     const rows = await db.query.controlEvents.findMany({
@@ -97,9 +96,9 @@ async function catchUpPersistedEvents(): Promise<void> {
     const tail = rows.at(-1);
     if (tail === undefined) break;
     cursor = { createdAt: tail.createdAt, id: tail.id };
+    replayCursor = laterCursor(replayCursor, cursor);
     if (rows.length < CATCH_UP_PAGE_SIZE) break;
   }
-  lastCursor = laterCursor(lastCursor, cursor);
 }
 
 function scheduleCatchUp(): void {
@@ -127,7 +126,7 @@ export async function startDistributedEventBus(): Promise<void> {
     // Ignore history from before this process joined the cluster. Anything
     // committed between this read and LISTEN acknowledgement is recovered by
     // the initial onListen catch-up.
-    lastCursor = await newestPersistedCursor();
+    replayCursor = await newestPersistedCursor();
     distributedSubscription = await listenPostgresChannel(
       CONTROL_EVENT_CHANNEL,
       (id): void => {

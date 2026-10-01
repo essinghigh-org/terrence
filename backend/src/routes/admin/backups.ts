@@ -11,25 +11,12 @@ import {
   createBackupManifest,
   createBackupManifestForSource,
   readBackupStatus,
-  runRestoreRehearsal,
   verifyBackupIntegrity,
   type BackupIntegrityReport,
-  type BackupRehearsalReport,
   type BackupSourceOptions,
 } from "../../lib/backup-verification";
+import { getBackupRehearsalJob, startBackupRehearsalJob } from "../../lib/backup-rehearsal-jobs";
 import type { ParamCtx } from "./types";
-
-type BackupJob = Readonly<{
-  id: string;
-  status: "running" | "done" | "failed";
-  startedAt: string;
-  finishedAt?: string;
-  result?: BackupRehearsalReport;
-  error?: { code?: string; detail: string };
-}>;
-
-const rehearsalJobs = new Map<string, BackupJob>();
-const MAX_REHEARSAL_JOBS = 20;
 
 function setStatus(set: ParamCtx["set"], status: number): void {
   (set as { status?: number }).status = status;
@@ -87,53 +74,31 @@ function reportResource(report: BackupIntegrityReport): Record<string, unknown> 
   };
 }
 
-function pruneJobs(): void {
-  while (rehearsalJobs.size > MAX_REHEARSAL_JOBS) {
-    const oldest = [...rehearsalJobs.entries()].sort((a, b) => a[1].startedAt.localeCompare(b[1].startedAt))[0];
-    if (oldest === undefined) return;
-    rehearsalJobs.delete(oldest[0]);
-  }
-}
-
 function serializeError(error: unknown): { code?: string; detail: string } {
   return error instanceof BackupVerificationError
     ? { code: error.code, detail: error.message }
     : { detail: error instanceof Error ? error.message : String(error) };
 }
 
-function startRehearsal(attrs: Readonly<Record<string, unknown>>, set: ParamCtx["set"]): Record<string, unknown> {
+async function startRehearsal(
+  attrs: Readonly<Record<string, unknown>>,
+  set: ParamCtx["set"],
+): Promise<Record<string, unknown>> {
   const source = sourceFromAttributes(attrs);
   if (source === null) return errorBody(set, 422, "backup-path is required");
-  if ([...rehearsalJobs.values()].some((job): boolean => job.status === "running"))
-    return errorBody(set, 409, "A restore rehearsal is already running");
-  const id = crypto.randomUUID();
-  const startedAt = new Date().toISOString();
-  rehearsalJobs.set(id, { id, status: "running", startedAt });
-  pruneJobs();
-  void (async (): Promise<void> => {
-    try {
-      const result = await runRestoreRehearsal({
-        source,
-        id,
-        ...(typeof attrs["cli-path"] === "string" && attrs["cli-path"].trim() !== ""
-          ? { cliPath: attrs["cli-path"] }
-          : {}),
-        ...(attrs["require-cli"] === true ? { requireCli: true } : {}),
-      });
-      rehearsalJobs.set(id, { id, status: "done", startedAt, finishedAt: new Date().toISOString(), result });
-    } catch (error) {
-      rehearsalJobs.set(id, {
-        id,
-        status: "failed",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        error: serializeError(error),
-      });
-    }
-  })();
+  const started = await startBackupRehearsalJob({
+    source,
+    ...(typeof attrs["cli-path"] === "string" && attrs["cli-path"].trim() !== "" ? { cliPath: attrs["cli-path"] } : {}),
+    ...(attrs["require-cli"] === true ? { requireCli: true } : {}),
+  });
+  if (!started.created) return errorBody(set, 409, "A restore rehearsal is already running");
   setStatus(set, 202);
   return {
-    data: { type: "backup-restore-rehearsals", id, attributes: { status: "running", "started-at": startedAt } },
+    data: {
+      type: "backup-restore-rehearsals",
+      id: started.job.id,
+      attributes: { status: started.job.status, "started-at": started.job.startedAt },
+    },
   };
 }
 
@@ -227,29 +192,32 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
       return errorBody(set, 422, serialized.detail, serialized.code);
     }
   })
-  .post("/api/v2/admin/backups/restore-rehearsals", ({ user, body, set }: ParamCtx): unknown => {
+  .post("/api/v2/admin/backups/restore-rehearsals", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
     return startRehearsal(attrsOf(body), set);
   })
-  .post("/api/v2/admin/backups/restore-rehearsal", ({ user, body, set }: ParamCtx): unknown => {
+  .post("/api/v2/admin/backups/restore-rehearsal", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
     return startRehearsal(attrsOf(body), set);
   })
-  .get("/api/v2/admin/backups/restore-rehearsals/:rehearsal_id", ({ user, params, set }: ParamCtx): unknown => {
-    if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
-    const job = rehearsalJobs.get(params["rehearsal_id"] ?? "");
-    if (job === undefined) return errorBody(set, 404, "No such restore rehearsal");
-    return {
-      data: {
-        type: "backup-restore-rehearsals",
-        id: job.id,
-        attributes: {
-          status: job.status,
-          "started-at": job.startedAt,
-          ...(job.finishedAt === undefined ? {} : { "finished-at": job.finishedAt }),
-          ...(job.result === undefined ? {} : { result: job.result }),
-          ...(job.error === undefined ? {} : { error: job.error }),
+  .get(
+    "/api/v2/admin/backups/restore-rehearsals/:rehearsal_id",
+    async ({ user, params, set }: ParamCtx): Promise<unknown> => {
+      if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
+      const job = await getBackupRehearsalJob(params["rehearsal_id"] ?? "");
+      if (job === undefined) return errorBody(set, 404, "No such restore rehearsal");
+      return {
+        data: {
+          type: "backup-restore-rehearsals",
+          id: job.id,
+          attributes: {
+            status: job.status,
+            "started-at": job.startedAt,
+            ...(job.finishedAt === undefined ? {} : { "finished-at": job.finishedAt }),
+            ...(job.result === undefined ? {} : { result: job.result }),
+            ...(job.error === undefined ? {} : { error: job.error }),
+          },
         },
-      },
-    };
-  });
+      };
+    },
+  );

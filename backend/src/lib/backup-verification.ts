@@ -544,7 +544,7 @@ export async function createBackupManifestForSource(
     );
   }
   try {
-    const storage = resolve(source.storagePath ?? root);
+    const storage = await resolveStoragePath(root, source.storagePath);
     const databasePath = await discoverDatabase(
       root,
       source.databasePath ??
@@ -593,7 +593,12 @@ export async function createBackupManifestForSource(
       };
       const manifest = normalizeManifest(body);
       if (options.persist === false) return { manifest, path: null };
-      const directory = resolve(options.outputDirectory ?? join(storage, BACKUP_MANIFEST_DIRECTORY));
+      const directory = resolve(
+        options.outputDirectory ??
+          (temporaryRoot === null
+            ? join(storage, BACKUP_MANIFEST_DIRECTORY)
+            : join(dirname(sourcePath), BACKUP_MANIFEST_DIRECTORY)),
+      );
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const path = join(directory, BACKUP_MANIFEST_FILE);
       await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -827,13 +832,18 @@ async function prepareSource(source: BackupSourceOptions): Promise<PreparedSourc
     root = temporaryRoot;
   }
 
-  const database = await discoverDatabase(root, explicitDatabasePath(source, sourcePath, sourceInfo));
-  const manifest = await discoverManifest(root);
-  const storage = await resolveStoragePath(root, source.storagePath);
-  const cleanup = async (): Promise<void> => {
+  try {
+    const database = await discoverDatabase(root, explicitDatabasePath(source, sourcePath, sourceInfo));
+    const manifest = await discoverManifest(root);
+    const storage = await resolveStoragePath(root, source.storagePath);
+    const cleanup = async (): Promise<void> => {
+      if (temporaryRoot !== null) await rm(temporaryRoot, { recursive: true, force: true });
+    };
+    return { root, storagePath: storage, databasePath: database, manifest, archivePath, cleanup };
+  } catch (error) {
     if (temporaryRoot !== null) await rm(temporaryRoot, { recursive: true, force: true });
-  };
-  return { root, storagePath: storage, databasePath: database, manifest, archivePath, cleanup };
+    throw error;
+  }
 }
 
 function check(status: BackupCheck["status"], name: string, detail?: string): BackupCheck {

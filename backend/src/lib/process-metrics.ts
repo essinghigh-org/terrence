@@ -42,6 +42,7 @@ export type EventLoopDelayStats = Readonly<{
   sampleCount: number;
   minMs: number | null;
   meanMs: number | null;
+  p50Ms: number | null;
   p95Ms: number | null;
   maxMs: number | null;
 }>;
@@ -226,13 +227,14 @@ function journeyLatencySnapshot(): Readonly<Record<PerformanceJourneyLabel, Jour
 function eventLoopDelaySnapshot(): EventLoopDelayStats {
   const histogram = eventLoopHistogram;
   if (histogram === null || histogram.count === 0) {
-    return { sampleCount: 0, minMs: null, meanMs: null, p95Ms: null, maxMs: null };
+    return { sampleCount: 0, minMs: null, meanMs: null, p50Ms: null, p95Ms: null, maxMs: null };
   }
   const toMs = (nanoseconds: number): number => Number((nanoseconds / 1_000_000).toFixed(3));
   return {
     sampleCount: histogram.count,
     minMs: toMs(histogram.min),
     meanMs: toMs(histogram.mean),
+    p50Ms: toMs(histogram.percentile(50)),
     p95Ms: toMs(histogram.percentile(95)),
     maxMs: toMs(histogram.max),
   };

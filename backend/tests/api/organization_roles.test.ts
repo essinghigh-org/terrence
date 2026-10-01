@@ -48,9 +48,54 @@ describe("organization roles", () => {
     });
     expect(create.status).toBe(201);
     const created = (await create.json()) as {
-      data: { id: string; attributes: { permissions: Record<string, boolean> } };
+      data: {
+        id: string;
+        attributes: { name: string; description: string | null; permissions: Record<string, boolean> };
+      };
     };
     expect(created.data.attributes.permissions["manage-workspaces"]).toBe(true);
+
+    const renamed = await request("/api/v2/organization-roles/" + created.data.id, "PATCH", {
+      data: { type: "organization-roles", attributes: { name: "Workspace maintainer" } },
+    });
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as typeof created).data.attributes).toMatchObject({
+      name: "Workspace maintainer",
+      description: "Can manage workspaces",
+      permissions: { "manage-workspaces": true },
+    });
+
+    const permissionsOnly = await request("/api/v2/organization-roles/" + created.data.id, "PATCH", {
+      data: { type: "organization-roles", attributes: { permissions: {} } },
+    });
+    expect(permissionsOnly.status).toBe(200);
+    expect(((await permissionsOnly.json()) as typeof created).data.attributes).toMatchObject({
+      name: "Workspace maintainer",
+      description: "Can manage workspaces",
+      permissions: {},
+    });
+
+    const descriptionOnly = await request("/api/v2/organization-roles/" + created.data.id, "PATCH", {
+      data: { type: "organization-roles", attributes: { description: null } },
+    });
+    expect(descriptionOnly.status).toBe(200);
+    expect(((await descriptionOnly.json()) as typeof created).data.attributes).toMatchObject({
+      name: "Workspace maintainer",
+      description: null,
+      permissions: {},
+    });
+
+    const invalid = await request("/api/v2/organization-roles/" + created.data.id, "PATCH", {
+      data: { type: "organization-roles", attributes: { permissions: { "manage-workspaces": "yes" } } },
+    });
+    expect(invalid.status).toBe(422);
+    const afterInvalid = await request("/api/v2/organizations/" + orgName + "/roles");
+    const persisted = ((await afterInvalid.json()) as { data: (typeof created.data)[] }).data[0];
+    expect(persisted?.attributes).toMatchObject({
+      name: "Workspace maintainer",
+      description: null,
+      permissions: {},
+    });
     const listed = await request(`/api/v2/organizations/${orgName}/roles`);
     expect(listed.status).toBe(200);
     expect(((await listed.json()) as { data: unknown[] }).data).toHaveLength(1);

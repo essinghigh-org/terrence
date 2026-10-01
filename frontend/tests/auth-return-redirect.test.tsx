@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { AuthSessionManager, ProtectedRoute } from "../src/App";
 import { Toaster } from "../src/components/ui/toast";
 import { AUTH_EXPIRED_EVENT, expireAuthSession } from "../src/lib/api";
-import { loginPathWithReturnTo, resolveReturnTarget } from "../src/lib/return-to";
+import { loginPathWithReturnTo, resolveReturnTarget, ssoContinuationQuery } from "../src/lib/return-to";
 import { Login } from "../src/views/Login";
 import { Register } from "../src/views/Register";
 import { isRecord, isString } from "../src/lib/type-guards";
@@ -237,6 +237,13 @@ test("the shared returnTo validator accepts /app paths and rejects the rest (iss
   expect(resolveReturnTarget("/app/../admin")).toBe("/app");
   expect(resolveReturnTarget("/app/account\r\nSet-Cookie: x")).toBe("/app");
   expect(resolveReturnTarget(42)).toBe("/app");
+});
+
+test("SSO buttons preserve Terraform OAuth state or a validated app destination", () => {
+  expect(ssoContinuationQuery("opaque-oauth-state", "/app/account")).toBe("?oauth_state=opaque-oauth-state");
+  expect(ssoContinuationQuery(null, "/app/account?tab=security")).toBe("?returnTo=%2Fapp%2Faccount%3Ftab%3Dsecurity");
+  expect(ssoContinuationQuery(null, "https://evil.example/app")).toBe("");
+  expect(ssoContinuationQuery("", "//evil.example/app")).toBe("");
 });
 
 test("registration restores the preserved destination through the shared validator (issue #642)", async () => {

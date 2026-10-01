@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
@@ -8,6 +8,19 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { createCipheriv, randomBytes } from "node:crypto";
 import * as schema from "../../src/db/schema-sqlite";
 import { storageDir } from "../../src/db/driver";
+
+async function createTar(source: string, archive: string, members: readonly string[]): Promise<void> {
+  const proc = Bun.spawn(["tar", "-cf", archive, "-C", source, ...members], { stdout: "pipe", stderr: "pipe" });
+  const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+  if (exitCode !== 0) throw new Error(stderr || "tar failed");
+}
+
+function extractionDirectories(): Promise<string[]> {
+  return readdir(tmpdir()).then((entries) =>
+    entries.filter((entry) => entry.startsWith("terrence-backup-source-")).sort(),
+  );
+}
+
 import {
   BACKUP_STATUS_FILE,
   createBackupManifestForSource,
@@ -93,6 +106,50 @@ describe("backup verification and restore rehearsal", () => {
     await cp(join(work, "terrence-backup-manifest.json"), join(backupStorage, "terrence-backup-manifest.json"));
     const fileReport = await verifyBackupIntegrity({ sourcePath: backupDatabase });
     expect(fileReport.passed).toBe(true);
+  });
+
+  it("uses the same nested storage layout for manifest creation and verification", async () => {
+    if (work === undefined) throw new Error("backup fixture was not created");
+    const nestedRoot = await mkdtemp(join(tmpdir(), "terrence-backup-nested-"));
+    await cp(join(work, "storage"), join(nestedRoot, "storage"), { recursive: true });
+    const created = await createBackupManifestForSource({ sourcePath: nestedRoot }, { outputDirectory: nestedRoot });
+    expect(created.manifest.database.file).toBe("terrence.db");
+    const report = await verifyBackupIntegrity({ sourcePath: nestedRoot });
+    expect(report.passed).toBe(true);
+    await rm(nestedRoot, { recursive: true, force: true });
+  });
+
+  it("persists archive manifests outside extraction scratch and cleans failed preparation", async () => {
+    if (work === undefined) throw new Error("backup fixture was not created");
+    const archiveRoot = await mkdtemp(join(tmpdir(), "terrence-backup-archive-test-"));
+    const archiveSource = join(archiveRoot, "source");
+    await cp(join(work, "storage"), join(archiveSource, "storage"), { recursive: true });
+    await rm(join(archiveSource, "storage", "terrence-backup-manifest.json"), { force: true });
+    const archive = join(archiveRoot, "backup.tar");
+    await createTar(archiveSource, archive, ["storage"]);
+
+    const before = await extractionDirectories();
+    const created = await createBackupManifestForSource({ sourcePath: archive });
+    expect(created.path).not.toBeNull();
+    if (created.path === null) throw new Error("expected persisted archive manifest");
+    expect(JSON.parse(await readFile(created.path, "utf8"))).toMatchObject({ kind: "terrence-backup" });
+    expect(await extractionDirectories()).toEqual(before);
+
+    expect(verifyBackupIntegrity({ sourcePath: archive })).rejects.toMatchObject({ code: "manifest-missing" });
+    expect(await extractionDirectories()).toEqual(before);
+
+    const ambiguousRoot = join(archiveRoot, "ambiguous");
+    await mkdir(ambiguousRoot, { recursive: true });
+    await writeFile(join(ambiguousRoot, "a.db"), "a");
+    await writeFile(join(ambiguousRoot, "b.db"), "b");
+    await writeFile(join(ambiguousRoot, "terrence-backup-manifest.json"), JSON.stringify(created.manifest));
+    const ambiguousArchive = join(archiveRoot, "ambiguous.tar");
+    await createTar(archiveRoot, ambiguousArchive, ["ambiguous"]);
+    expect(verifyBackupIntegrity({ sourcePath: ambiguousArchive })).rejects.toMatchObject({
+      code: "database-ambiguous",
+    });
+    expect(await extractionDirectories()).toEqual(before);
+    await rm(archiveRoot, { recursive: true, force: true });
   });
 
   it("runs the rehearsal on a disposable copy and records the verified restore date", async () => {
