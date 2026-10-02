@@ -1,5 +1,5 @@
 import { appendSetCookies } from "./sso";
-import { OAUTH_STATE_COOKIE, OAUTH_STATE_TTL_MS, peekPendingAuth } from "../oauth";
+import { OAUTH_STATE_COOKIE, OAUTH_STATE_TTL_MS, peekPendingAuth, readOauthStateCookie } from "../oauth";
 
 /**
  * Validated post-auth continuation carried through an SSO round-trip.
@@ -29,15 +29,25 @@ export function safeReturnTarget(returnTo: unknown): string | null {
   return returnTo;
 }
 
-/** Validate the optional continuation params on the SSO start endpoint. */
+/**
+ * Validate the optional continuation params on the SSO start endpoint.
+ *
+ * `oauth_state` is only honored when this browser already holds the matching
+ * HttpOnly state cookie. Without that binding an attacker could park their own
+ * pending authorization, send a victim an SSO link carrying that state, and
+ * have the victim's successful sign-in complete the attacker's handshake: the
+ * completion route requires the cookie precisely to prevent that.
+ */
 export async function validateSsoContinuation(
   query: Readonly<Record<string, unknown>>,
+  request: Readonly<{ headers: Readonly<{ get: (name: string) => string | null }> }>,
 ): Promise<ContinuationValidation> {
   const rawOauthState = query["oauth_state"];
   const rawReturnTo = query["returnTo"];
   let oauthState: string | null = null;
   if (typeof rawOauthState === "string" && rawOauthState !== "") {
-    const pending = await peekPendingAuth(rawOauthState).catch(() => undefined);
+    if (readOauthStateCookie(request) !== rawOauthState) return { error: "oauth-state-invalid" };
+    const pending = await peekPendingAuth(rawOauthState).catch((): undefined => undefined);
     if (pending === undefined || pending.expiresAt <= Date.now()) {
       return { error: "oauth-state-invalid" };
     }

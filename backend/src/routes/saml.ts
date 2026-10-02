@@ -1387,7 +1387,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       if (rawRelayState !== null && Buffer.byteLength(rawRelayState, "utf8") > 80) {
         return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "RelayState is too large."), 400);
       }
-      const continuation = await validateSsoContinuation(query);
+      const continuation = await validateSsoContinuation(query, request);
       if ("error" in continuation) {
         return ssoHtmlResponse(
           ssoHtmlPage(

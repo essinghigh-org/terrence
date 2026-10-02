@@ -31,8 +31,18 @@ import { sha256File } from "./file-hash";
 
 export const BACKUP_MANIFEST_VERSION = 1;
 export const BACKUP_MANIFEST_FILE = "terrence-backup-manifest.json";
+export const BACKUP_MANIFEST_FILE_EXTENSION = ".terrence-backup-manifest.json";
 export const BACKUP_STATUS_FILE = "backup-verification-status.json";
 export const BACKUP_MANIFEST_DIRECTORY = "backup-manifests";
+
+/**
+ * Sidecar filename for a manifest generated from `sourcePath`. Directory
+ * inputs keep the plain name; archive inputs are prefixed with the archive's
+ * own basename so sibling archives never share one manifest file.
+ */
+export function backupManifestSidecarName(sourcePath: string, isArchive: boolean): string {
+  return isArchive ? `${basename(sourcePath)}${BACKUP_MANIFEST_FILE_EXTENSION}` : BACKUP_MANIFEST_FILE;
+}
 
 const MAX_MANIFEST_FILES = 200_000;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024 * 1024;
@@ -596,10 +606,14 @@ export async function createBackupManifestForSource(
       // Archive inputs are extracted into disposable scratch space: persist the
       // manifest next to the source archive so the returned path survives the
       // operation instead of pointing inside the deleted extraction directory.
+      // The filename carries the archive's own basename, so two archives in one
+      // directory keep separate manifests and verification of the first cannot
+      // pick up the second's sidecar.
       const durableBase = temporaryRoot === null ? storage : dirname(sourcePath);
       const directory = resolve(options.outputDirectory ?? join(durableBase, BACKUP_MANIFEST_DIRECTORY));
+      const fileName = backupManifestSidecarName(sourcePath, temporaryRoot !== null);
       await mkdir(directory, { recursive: true, mode: 0o700 });
-      const path = join(directory, BACKUP_MANIFEST_FILE);
+      const path = join(directory, fileName);
       await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
       return { manifest, path };
     } finally {
@@ -846,7 +860,9 @@ async function prepareSource(source: BackupSourceOptions): Promise<PreparedSourc
     // An archive's manifest is persisted beside it (see
     // createBackupManifestForSource), so verification can use the same file
     // without the operator reconstructing it inside the archive.
-    const sidecars = isArchive ? [join(dirname(sourcePath), BACKUP_MANIFEST_DIRECTORY, BACKUP_MANIFEST_FILE)] : [];
+    const sidecars = isArchive
+      ? [join(dirname(sourcePath), BACKUP_MANIFEST_DIRECTORY, backupManifestSidecarName(sourcePath, true))]
+      : [];
     const manifest = await discoverManifest(root, sidecars);
     const storage = await resolveStoragePath(root, source.storagePath);
     const cleanup = async (): Promise<void> => {

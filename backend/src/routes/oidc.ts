@@ -593,7 +593,7 @@ export const oidcRoutes = new Elysia({ name: "oidc-sso" })
       }
       const loaded = await loadOidcLoginConfig(settings.issuer, settings.pkceMethod);
       if ("failure" in loaded) return loaded.failure;
-      const continuation = await validateSsoContinuation(query);
+      const continuation = await validateSsoContinuation(query, request);
       if ("error" in continuation) {
         return ssoHtmlResponse(
           ssoHtmlPage(

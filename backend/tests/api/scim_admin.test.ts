@@ -576,11 +576,17 @@ test("a manual site-admin grant is not adopted by SCIM and survives group remova
       scimUserId: manualIdentityId,
     });
     const previousSettings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
+    // Upsert rather than UPDATE: with no settings row the update would match
+    // nothing, reconciliation would see no mapped group, and the assertions
+    // below would pass for the wrong reason.
+    await db
+      .insert(scimSettings)
+      .values({ id: "scim", enabled: true, siteAdminGroupScimId: manualAdminGroupId, updatedAt: Date.now() })
+      .onConflictDoUpdate({
+        target: scimSettings.id,
+        set: { enabled: true, siteAdminGroupScimId: manualAdminGroupId, updatedAt: Date.now() },
+      });
     try {
-      await db
-        .update(scimSettings)
-        .set({ enabled: true, siteAdminGroupScimId: manualAdminGroupId, updatedAt: Date.now() })
-        .where(eq(scimSettings.id, "scim"));
       await db.transaction(async (tx): Promise<void> => {
         await reconcileScimSiteAdmins(tx);
       });

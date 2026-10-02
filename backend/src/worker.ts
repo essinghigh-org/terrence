@@ -7863,15 +7863,6 @@ async function errorInterruptedAssessments(): Promise<number> {
   return assessmentsErrored;
 }
 
-/**
- * Release run-owned workspace locks whose owning run already reached a
- * terminal status but whose final unlock was lost (process crash between the
- * terminal commit and the finally-release, or a transient unlock failure
- * followed by normal execution-lease release). Manual locks and locks of
- * non-terminal or still-live runs are preserved; the conditional update
- * matches the exact owning run so a lock acquired after reconciliation is
- * never cleared.
- */
 /** Execution ownership that has not yet expired. */
 function hasLiveExecutionOwnership(
   owner: Readonly<{ executionOwnerNodeId: string | null; executionLeaseExpiresAt: number | null }>,
@@ -7883,6 +7874,15 @@ function hasLiveExecutionOwnership(
   );
 }
 
+/**
+ * Release run-owned workspace locks whose owning run already reached a
+ * terminal status but whose final unlock was lost (process crash between the
+ * terminal commit and the finally-release, or a transient unlock failure
+ * followed by normal execution-lease release). Manual locks and locks of
+ * non-terminal or still-live runs are preserved; the conditional update
+ * matches the exact owning run so a lock acquired after reconciliation is
+ * never cleared.
+ */
 export async function releaseStrandedTerminalRunWorkspaceLocks(): Promise<number> {
   const databaseNow = await databaseCurrentTimeMs().catch((): number => Date.now());
   const locked = await db.query.workspaces.findMany({
@@ -7924,6 +7924,9 @@ export async function releaseStrandedTerminalRunWorkspaceLocks(): Promise<number
     if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) continue;
     if (hasLiveExecutionOwnership(workspace, databaseNow)) continue;
     if (run !== undefined && hasLiveExecutionOwnership(run, databaseNow)) continue;
+    // The lease state is re-checked in the WHERE clause as well as in memory:
+    // another node could take workspace execution ownership between the read
+    // and this write, and clearing its lock would block its own executor.
     const updated = await db
       .update(workspaces)
       .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
@@ -7933,6 +7936,10 @@ export async function releaseStrandedTerminalRunWorkspaceLocks(): Promise<number
           eq(workspaces.locked, true),
           eq(workspaces.lockOwnerType, "run"),
           eq(workspaces.lockOwnerId, ownerRunId),
+          or(
+            isNull(workspaces.executionOwnerNodeId),
+            and(isNotNull(workspaces.executionLeaseExpiresAt), lte(workspaces.executionLeaseExpiresAt, databaseNow)),
+          ),
         ),
       )
       .returning({ id: workspaces.id });

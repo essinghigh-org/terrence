@@ -107,8 +107,13 @@ describe("OIDC SSO flow", () => {
     callbackMethod: "GET" | "POST" = "GET",
     authQuery = "",
   ): Promise<{ response: Response; state: string }> {
+    // A CLI continuation is only accepted when this browser already holds the
+    // matching state cookie, so the start request carries it.
+    const oauthState = /oauth_state=([^&]+)/.exec(authQuery)?.[1];
     const authResponse = await app.handle(
-      new Request(`http://terrence.test/users/oidc/auth${authQuery === "" ? "" : `?${authQuery}`}`),
+      new Request(`http://terrence.test/users/oidc/auth${authQuery === "" ? "" : `?${authQuery}`}`, {
+        headers: oauthState === undefined ? {} : { Cookie: `terraform_oauth_state=${decodeURIComponent(oauthState)}` },
+      }),
     );
     expect(authResponse.status).toBe(302);
     // The auth response sets the state cookie that binds this browser to the
@@ -371,10 +376,41 @@ describe("OIDC SSO flow", () => {
     expect(await evilReturn.text()).toContain("not allowed");
 
     const staleState = await app.handle(
-      new Request(`http://terrence.test/users/oidc/auth?oauth_state=${encodeURIComponent(`expired-${suffix}`)}`),
+      new Request(`http://terrence.test/users/oidc/auth?oauth_state=${encodeURIComponent(`expired-${suffix}`)}`, {
+        headers: { Cookie: `terraform_oauth_state=expired-${suffix}` },
+      }),
     );
     expect(staleState.status).toBe(400);
     expect(await staleState.text()).toContain("expired");
+  });
+
+  test("rejects an OAuth continuation this browser does not hold", async () => {
+    // CSRF regression: a pending authorization belongs to the browser that
+    // started it. A link carrying someone else's state must be refused instead
+    // of binding that state's cookie to the victim's sign-in.
+    const authz = await app.handle(
+      new Request(
+        "http://terrence.test/oauth/authorization?response_type=code&client_id=terraform-cli" +
+          `&code_challenge=${OAUTH_CODE_CHALLENGE}&code_challenge_method=S256` +
+          "&redirect_uri=http://localhost:10000/login&state=st-attacker",
+      ),
+    );
+    const attackerState = new URL(authz.headers.get("Location") ?? "", "http://terrence.test").searchParams.get(
+      "oauth_state",
+    );
+    expect(attackerState).not.toBeNull();
+
+    const withoutCookie = await app.handle(
+      new Request(`http://terrence.test/users/oidc/auth?oauth_state=${encodeURIComponent(attackerState ?? "")}`),
+    );
+    expect(withoutCookie.status).toBe(400);
+
+    const mismatchedCookie = await app.handle(
+      new Request(`http://terrence.test/users/oidc/auth?oauth_state=${encodeURIComponent(attackerState ?? "")}`, {
+        headers: { Cookie: "terraform_oauth_state=some-other-state" },
+      }),
+    );
+    expect(mismatchedCookie.status).toBe(400);
   });
 
   test("links an existing local account by matching email", async () => {

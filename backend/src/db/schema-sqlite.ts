@@ -1459,8 +1459,12 @@ export const backupRehearsalJobs = sqliteTable(
       .$defaultFn(() => Date.now()),
   },
   (table) => [
-    uniqueIndex("backup_rehearsal_jobs_one_running").on(table.status).where(sql`${table.status} = 'running'`),
-    index("backup_rehearsal_jobs_started_idx").on(table.startedAt),
+    // Deliberately not a unique index: this table ships in one migration, so
+    // no previous release can already hold rows, and adding a unique index is
+    // a contraction the rolling-upgrade checker rightly rejects. Admission is
+    // serialized by a transaction-scoped advisory lock instead, which needs no
+    // expand step and behaves identically on SQLite (single writer).
+    index("backup_rehearsal_jobs_status_started_idx").on(table.status, table.startedAt),
   ],
 );
 

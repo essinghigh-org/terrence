@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b078f623-103a-42c3-9775-1b9bc52facbd",
+  "id": "b3909cd2-d5f6-4a20-b5a3-5cbd8649149a",
   "prevId": "887a4820-8cc6-48e2-97bb-4a08b2ebce7f",
   "tables": {
     "action_invocations": {
@@ -2219,17 +2219,10 @@
         }
       },
       "indexes": {
-        "backup_rehearsal_jobs_one_running": {
-          "name": "backup_rehearsal_jobs_one_running",
+        "backup_rehearsal_jobs_status_started_idx": {
+          "name": "backup_rehearsal_jobs_status_started_idx",
           "columns": [
-            "status"
-          ],
-          "isUnique": true,
-          "where": "\"backup_rehearsal_jobs\".\"status\" = 'running'"
-        },
-        "backup_rehearsal_jobs_started_idx": {
-          "name": "backup_rehearsal_jobs_started_idx",
-          "columns": [
+            "status",
             "started_at"
           ],
           "isUnique": false

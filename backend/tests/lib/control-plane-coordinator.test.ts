@@ -9,6 +9,7 @@ import {
   claimControlPlaneLease,
   controlPlaneCoordinatorState,
   controlPlaneCoordinatorSuspended,
+  controlPlaneElectionInFlight,
   releaseControlPlaneLease,
   resignControlPlaneLease,
   resumeControlPlaneCoordinator,
@@ -359,6 +360,59 @@ describe("coordinator resignation", () => {
       await db.query.controlPlaneLeases.findFirst({ where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME) }),
     ).toBeUndefined();
   });
+
+  test("overlapping elections are all tracked until each has settled", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+
+    // Two independently gated claims so tick A and tick B settle separately:
+    // B is released first while A is still waiting on the database.
+    const enteredResolvers: (() => void)[] = [];
+    const gateResolvers: (() => void)[] = [];
+    const enteredFirst = new Promise<void>((resolve): void => {
+      enteredResolvers[0] = resolve;
+    });
+    const enteredSecond = new Promise<void>((resolve): void => {
+      enteredResolvers[1] = resolve;
+    });
+    const gateFirst = new Promise<void>((resolve): void => {
+      gateResolvers[0] = resolve;
+    });
+    const gateSecond = new Promise<void>((resolve): void => {
+      gateResolvers[1] = resolve;
+    });
+    let call = 0;
+    setClaimControlPlaneLeaseForTests(async (identity) => {
+      const mine = call;
+      call += 1;
+      enteredResolvers[mine]?.();
+      await (mine === 0 ? gateFirst : gateSecond);
+      return claimControlPlaneLease(identity);
+    });
+    try {
+      const tickA = runControlPlaneCoordinatorTickForTests();
+      await enteredFirst;
+      const tickB = runControlPlaneCoordinatorTickForTests();
+      await enteredSecond;
+      expect(controlPlaneElectionInFlight()).toBe(true);
+
+      // B settles first; A is still outstanding, so an election is in flight.
+      gateResolvers[1]?.();
+      await tickB;
+      expect(controlPlaneElectionInFlight()).toBe(true);
+
+      gateResolvers[0]?.();
+      await tickA;
+      expect(controlPlaneElectionInFlight()).toBe(false);
+    } finally {
+      setClaimControlPlaneLeaseForTests(null);
+    }
+  }, 20_000);
 
   test("a delayed claim cannot reacquire ownership after resignation or shutdown, and resume recovers", async () => {
     process.env["TERRENCE_HA_ENABLED"] = "true";

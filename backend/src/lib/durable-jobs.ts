@@ -66,18 +66,30 @@ type EnqueueDurableJobOptions = Readonly<{
  */
 const leaseMs = (): number => integerSetting("TERRENCE_DURABLE_LEASE_MS");
 
-/** Renewal cadence, clamped to half the TTL so one transient database error
- * never exhausts the lease on its own. */
+/**
+ * Renewal cadence, always strictly below half the TTL. One transient database
+ * error must never exhaust the lease on its own, and the interval must stay
+ * under the TTL even at the smallest accepted lease: a cadence at or above the
+ * TTL would let the lease-loss watchdog fire before the first renewal.
+ */
 const renewMs = (): number =>
-  Math.min(integerSetting("TERRENCE_DURABLE_RENEW_MS"), Math.max(300, Math.floor(leaseMs() / 2)));
+  Math.max(1, Math.min(integerSetting("TERRENCE_DURABLE_RENEW_MS"), Math.floor(leaseMs() / 2) - 1));
 const POLL_MS = 500;
 /** Attempts before a durable job dead-letters (todo 186); shared with the webhook delivery mirror. */
 export const DURABLE_MAX_ATTEMPTS = 3;
 let workerRunning = false;
+/** Bumped on start and stop so a lane from a stopped generation always exits. */
+let workerGeneration = 0;
 /** Durable-job handlers and claims that still block node drain completion. */
 let activeDurableJobs = 0;
 let activeDurableClaims = 0;
 const NO_EXISTING_DURABLE_JOB = Symbol("no-existing-durable-job");
+
+/** Test seam: the resolved lease/renewal windows. The renewal cadence is a
+ * derived invariant (it must precede the watchdog), not a private constant. */
+export function readDurableJobLeaseWindowsForTests(): Readonly<{ leaseMs: number; renewMs: number }> {
+  return { leaseMs: leaseMs(), renewMs: renewMs() };
+}
 
 export function activeDurableJobCount(): number {
   return activeDurableJobs + activeDurableClaims;
@@ -300,6 +312,30 @@ async function requeueExpiredJobs(now: number): Promise<void> {
     .where(and(eq(durableJobs.status, "running"), lt(durableJobs.leaseExpiresAt, now)));
 }
 
+/**
+ * Serializes the select-and-claim step within this process.
+ *
+ * The resource budget is only authoritative if the decision sees the claims
+ * made by its peers. With concurrent dispatch lanes, two lanes could otherwise
+ * read the same running set, each pass the budget check alone, and together
+ * overshoot a global, class, organization, or byte limit. Serializing only
+ * this step keeps handler execution concurrent; cross-process HA relies on the
+ * per-job compare-and-set plus the shared limits themselves.
+ */
+let claimChain: Promise<unknown> = Promise.resolve();
+
+async function serializedClaim(
+  workerId: string,
+  kinds: readonly DurableJobKind[],
+  now: number,
+): Promise<DurableJob | undefined> {
+  const next = claimChain.then(
+    async (): Promise<DurableJob | undefined> => await claimDurableJob(workerId, kinds, now),
+  );
+  claimChain = next.catch((): undefined => undefined);
+  return next;
+}
+
 export async function claimDurableJob(
   workerId: string,
   kinds: readonly DurableJobKind[],
@@ -317,7 +353,9 @@ export async function claimDurableJob(
   // capacity. The per-job compare-and-set update remains the fencing authority.
   const PAGE_SIZE = 256;
   const MAX_PAGES = 4;
-  for (let page = 0; page < MAX_PAGES; page++) {
+  const MAX_CAS_RETRIES = 4;
+  let casRetries = 0;
+  for (let page = 0; page < MAX_PAGES; ) {
     const candidateRows = await db.query.durableJobs.findMany({
       where: and(
         inArray(durableJobs.kind, [...kinds]),
@@ -355,10 +393,15 @@ export async function claimDurableJob(
         .where(and(eq(durableJobs.id, candidate.id), eq(durableJobs.status, "queued"), lte(durableJobs.runAfter, now)))
         .returning();
       if (updated[0] !== undefined) return updated[0];
-      // Lost a compare-and-set race: retry selection from this window.
+      // A peer worker (or another lane) won this row. Retry the same window so
+      // its still-eligible neighbours are not skipped; bounded so a busy queue
+      // cannot spin here.
+      if (casRetries >= MAX_CAS_RETRIES) return undefined;
+      casRetries += 1;
       continue;
     }
     if (candidateRows.length < PAGE_SIZE) return undefined;
+    page += 1;
   }
   return undefined;
 }
@@ -629,12 +672,16 @@ async function runDurableJobLane(
   workerId: string,
   kinds: readonly DurableJobKind[],
   handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>,
+  generation: number,
 ): Promise<void> {
   // Load the worker module only when the durable worker is actually enabled.
   // Keeping this edge lazy avoids importing the execution sandbox while
   // standalone helpers (including agent authentication) use this module.
   const { workerQueueDraining } = await import("../worker");
-  while (workerRunning) {
+  // The generation guard means a lane from a stopped worker generation exits
+  // even if a restart has already flipped `workerRunning` back to true;
+  // otherwise two generations' lanes would run at once.
+  while (workerRunning && generation === workerGeneration) {
     if (workerQueueDraining()) {
       await sleep(POLL_MS);
       continue;
@@ -642,7 +689,9 @@ async function runDurableJobLane(
     activeDurableClaims += 1;
     let job: DurableJob | undefined;
     try {
-      job = await claimDurableJob(workerId, kinds);
+      // Serialized with the other lanes so each budget check observes their
+      // claims; handler execution stays concurrent.
+      job = await serializedClaim(workerId, kinds, Date.now());
     } catch (error: unknown) {
       log.error("Durable job poll failed", { error: String(error) });
     } finally {
@@ -666,10 +715,11 @@ async function runDurableJobLane(
 export function startDurableJobWorker(handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>): void {
   if (envFlag("TERRENCE_DISABLE_WORKER") || workerRunning) return;
   workerRunning = true;
+  const generation = ++workerGeneration;
   const kinds = Object.keys(handlers) as DurableJobKind[];
   for (let lane = 0; lane < DURABLE_WORKER_LANES; lane++) {
     const workerId = `durable-${process.pid}-${lane}-${crypto.randomUUID()}`;
-    void runDurableJobLane(workerId, kinds, handlers).catch((error: unknown): void => {
+    void runDurableJobLane(workerId, kinds, handlers, generation).catch((error: unknown): void => {
       log.error("Durable job lane stopped unexpectedly", { lane, error: String(error) });
     });
   }
@@ -679,4 +729,5 @@ export function startDurableJobWorker(handlers: Readonly<Partial<Record<DurableJ
  * return (or their lease expires and another worker reclaims the job). */
 export function stopDurableJobWorker(): void {
   workerRunning = false;
+  workerGeneration += 1;
 }

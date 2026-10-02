@@ -182,7 +182,9 @@ type OAuthQueryCtx = Readonly<{
 }>;
 
 /** Read the opaque OAuth handshake state from the HttpOnly cookie. */
-function readOauthStateCookie(request: RequestInfo | undefined): string | undefined {
+export function readOauthStateCookie(
+  request: Readonly<{ headers: Readonly<{ get: (name: string) => string | null }> }> | undefined,
+): string | undefined {
   const header = request?.headers.get("cookie");
   if (header === null || header === undefined) return undefined;
   for (const part of header.split(";")) {

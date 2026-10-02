@@ -5,10 +5,11 @@
 // or cutover endpoint: replacing the active database requires an operator's
 // shutdown, reconciliation, and separate confirmation plan.
 import { Elysia } from "elysia";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, sql, type SQL } from "drizzle-orm";
 import { authPlugin } from "../../auth";
-import { db } from "../../db";
+import { db, isPostgres } from "../../db";
 import { backupRehearsalJobs } from "../../db/schema";
+import { log } from "../../lib/log";
 import {
   BackupVerificationError,
   createBackupManifest,
@@ -32,9 +33,12 @@ type BackupJob = Readonly<{
 }>;
 
 /** A running rehearsal whose owner must have disappeared is reaped instead of
- * blocking admission forever. Rehearsals bind to their local CLI for the
- * duration, so an hour is generous. */
+ * blocking admission forever. Measured from the last liveness refresh, so this
+ * bounds how long an abandoned row blocks admission, not how long a rehearsal
+ * may legitimately run. */
 const MAX_REHEARSAL_RUNTIME_MS = 60 * 60 * 1000;
+/** Liveness refresh cadence for a rehearsal this process owns. */
+const REHEARSAL_HEARTBEAT_MS = 60 * 1000;
 
 function setStatus(set: ParamCtx["set"], status: number): void {
   (set as { status?: number }).status = status;
@@ -92,14 +96,34 @@ function reportResource(report: BackupIntegrityReport): Record<string, unknown> 
   };
 }
 
-/** Mark abandoned running rehearsals (owner process died) as interrupted. Runs
- * cross-replica because every replica applies the same deterministic rule. */
+/**
+ * Mark abandoned running rehearsals (owner process died) as interrupted.
+ *
+ * Staleness is measured from `updatedAt`, which the owning task refreshes on a
+ * heartbeat, so a long rehearsal that is still making progress is never reaped
+ * and a second one is never admitted alongside it. Runs cross-replica because
+ * every replica applies the same deterministic rule.
+ */
 async function reapStaleRehearsals(): Promise<void> {
-  const cutoff = Date.now() - MAX_REHEARSAL_RUNTIME_MS;
+  const now = Date.now();
+  const cutoff = now - MAX_REHEARSAL_RUNTIME_MS;
   await db
     .update(backupRehearsalJobs)
-    .set({ status: "interrupted", finishedAt: Date.now(), updatedAt: Date.now() })
-    .where(and(eq(backupRehearsalJobs.status, "running"), lt(backupRehearsalJobs.startedAt, cutoff)));
+    .set({ status: "interrupted", finishedAt: now, updatedAt: now })
+    .where(and(eq(backupRehearsalJobs.status, "running"), lt(backupRehearsalJobs.updatedAt, cutoff)));
+}
+
+/** Refresh `updatedAt` so an active rehearsal is never mistaken for an
+ * abandoned one. Best-effort: the outcome write below is fenced on
+ * `status = 'running'`, so a missed heartbeat cannot corrupt the result. */
+async function heartbeatRehearsal(id: string): Promise<void> {
+  await db
+    .update(backupRehearsalJobs)
+    .set({ updatedAt: Date.now() })
+    .where(and(eq(backupRehearsalJobs.id, id), eq(backupRehearsalJobs.status, "running")))
+    .catch((error: unknown): void => {
+      log.error("Unable to refresh backup rehearsal heartbeat", { id, error: String(error) });
+    });
 }
 
 function rowToJob(row: typeof backupRehearsalJobs.$inferSelect): BackupJob {
@@ -124,6 +148,8 @@ async function persistRehearsalOutcome(
     | { status: "failed"; error: { code?: string; detail: string } },
 ): Promise<void> {
   const now = Date.now();
+  // Fenced on the running state: a rehearsal that was reaped as interrupted
+  // must not later overwrite its own status with a terminal outcome.
   await db
     .update(backupRehearsalJobs)
     .set(
@@ -131,7 +157,7 @@ async function persistRehearsalOutcome(
         ? { status: "done", result: outcome.result, finishedAt: now, updatedAt: now }
         : { status: "failed", error: outcome.error, finishedAt: now, updatedAt: now },
     )
-    .where(eq(backupRehearsalJobs.id, id));
+    .where(and(eq(backupRehearsalJobs.id, id), eq(backupRehearsalJobs.status, "running")));
 }
 
 function serializeError(error: unknown): { code?: string; detail: string } {
@@ -140,23 +166,65 @@ function serializeError(error: unknown): { code?: string; detail: string } {
     : { detail: error instanceof Error ? error.message : String(error) };
 }
 
+/**
+ * Reserve the single running-rehearsal slot.
+ *
+ * The rehearsal table ships in one migration, so no unique partial index is
+ * needed to protect existing rows, and adding one would be a contraction the
+ * rolling-upgrade window forbids. Admission is instead serialized by a
+ * transaction-scoped advisory lock, then re-checked inside that transaction:
+ * exactly one replica inserts the running row. SQLite is single-process and
+ * already serialized by the database wrapper.
+ */
+const REHEARSAL_ADMISSION_LOCK_KEY = 0x72656873; // ASCII "rehs"
+
+/** Take the transaction-scoped advisory lock that serializes admission. */
+async function lockRehearsalAdmission(tx: unknown): Promise<void> {
+  if (!isPostgres) return;
+  await (tx as { readonly execute: (query: SQL) => Promise<unknown> }).execute(
+    sql`SELECT pg_advisory_xact_lock(${REHEARSAL_ADMISSION_LOCK_KEY})`,
+  );
+}
+
+async function admitRehearsal(id: string, startedAt: number): Promise<boolean> {
+  return db.transaction(async (tx): Promise<boolean> => {
+    // Serialize across replicas, then reap and re-check inside the lock: a
+    // stale row from a dead owner must not still block admission, and a
+    // rehearsal that starts while it is being reaped must still be admitted
+    // exactly once.
+    await lockRehearsalAdmission(tx);
+    const cutoff = startedAt - MAX_REHEARSAL_RUNTIME_MS;
+    await tx
+      .update(backupRehearsalJobs)
+      .set({ status: "interrupted", finishedAt: startedAt, updatedAt: startedAt })
+      .where(and(eq(backupRehearsalJobs.status, "running"), lt(backupRehearsalJobs.updatedAt, cutoff)));
+    const running = await tx.query.backupRehearsalJobs.findFirst({
+      where: eq(backupRehearsalJobs.status, "running"),
+      columns: { id: true },
+    });
+    if (running !== undefined) return false;
+    await tx.insert(backupRehearsalJobs).values({ id, status: "running", startedAt });
+    return true;
+  });
+}
+
 async function startRehearsal(
   attrs: Readonly<Record<string, unknown>>,
   set: ParamCtx["set"],
 ): Promise<Record<string, unknown>> {
   const source = sourceFromAttributes(attrs);
   if (source === null) return errorBody(set, 422, "backup-path is required");
-  await reapStaleRehearsals().catch((): void => undefined);
   const id = crypto.randomUUID();
   const startedAt = Date.now();
-  // The partial unique index on status='running' fences concurrent insertion
-  // across replicas: only one rehearsal can enter the running state.
-  try {
-    await db.insert(backupRehearsalJobs).values({ id, status: "running", startedAt });
-  } catch {
+  if (!(await admitRehearsal(id, startedAt))) {
     return errorBody(set, 409, "A restore rehearsal is already running");
   }
   void (async (): Promise<void> => {
+    // Keep the row's liveness current for as long as this task owns it.
+    const heartbeat = setInterval((): void => {
+      void heartbeatRehearsal(id);
+    }, REHEARSAL_HEARTBEAT_MS);
+    heartbeat.unref?.();
     try {
       const result = await runRestoreRehearsal({
         source,
@@ -170,9 +238,11 @@ async function startRehearsal(
     } catch (error) {
       await persistRehearsalOutcome(id, { status: "failed", error: serializeError(error) }).catch(
         (dbError: unknown): void => {
-          console.error("Failed to persist rehearsal failure", dbError);
+          log.error("Unable to persist backup rehearsal failure", { id, error: String(dbError) });
         },
       );
+    } finally {
+      clearInterval(heartbeat);
     }
   })();
   setStatus(set, 202);

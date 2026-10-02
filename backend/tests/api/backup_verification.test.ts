@@ -126,21 +126,44 @@ describe("admin backup verification API", () => {
       expect(missing.status).toBe(404);
 
       // An abandoned running row is reaped as interrupted rather than blocking
-      // admission forever after its owner process disappeared.
+      // admission forever after its owner process disappeared. Staleness is
+      // measured from the last liveness refresh, not from the start time.
       await db
         .update(backupRehearsalJobs)
-        .set({ startedAt: Date.now() - 2 * 60 * 60 * 1000 })
+        .set({ startedAt: Date.now() - 2 * 60 * 60 * 1000, updatedAt: Date.now() - 2 * 60 * 60 * 1000 })
         .where(eq(backupRehearsalJobs.id, foreignId));
       const stale = await request(`/api/v2/admin/backups/restore-rehearsals/${foreignId}`);
       expect(stale.status).toBe(200);
       const staleBody = (await stale.json()) as { data: { attributes: { status: string } } };
       expect(staleBody.data.attributes.status).toBe("interrupted");
 
+      const reaped = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+        data: { attributes: { "backup-path": source } },
+      });
+      expect(reaped.status).toBe(202);
+      const reapedBody = (await reaped.json()) as { data: { id: string } };
+      await db.delete(backupRehearsalJobs).where(eq(backupRehearsalJobs.id, reapedBody.data.id));
+
       const accepted = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
         data: { attributes: { "backup-path": source } },
       });
       expect(accepted.status).toBe(202);
       const acceptedBody = (await accepted.json()) as { data: { id: string } };
+
+      // A long rehearsal that is still making progress keeps refreshing its
+      // liveness, so it is never reaped and no second one is admitted with it.
+      await db
+        .update(backupRehearsalJobs)
+        .set({ startedAt: Date.now() - 2 * 60 * 60 * 1000, updatedAt: Date.now() })
+        .where(eq(backupRehearsalJobs.id, acceptedBody.data.id));
+      const stillRunning = await request(`/api/v2/admin/backups/restore-rehearsals/${acceptedBody.data.id}`);
+      expect(stillRunning.status).toBe(200);
+      const stillRunningBody = (await stillRunning.json()) as { data: { attributes: { status: string } } };
+      expect(stillRunningBody.data.attributes.status).toBe("running");
+      const secondAdmission = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+        data: { attributes: { "backup-path": source } },
+      });
+      expect(secondAdmission.status).toBe(409);
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const row = await db.query.backupRehearsalJobs.findFirst({
           where: eq(backupRehearsalJobs.id, acceptedBody.data.id),
@@ -158,4 +181,32 @@ describe("admin backup verification API", () => {
       await rm(source, { recursive: true, force: true });
     }
   });
+
+  test("concurrent admissions elect exactly one rehearsal", async () => {
+    // Two callers racing on the shared slot (a second replica, or an operator
+    // double-submitting) must not both be admitted: admission is serialized,
+    // so exactly one wins and the other sees the conflict.
+    const source = await makeBackupSource();
+    try {
+      const [first, second] = await Promise.all([
+        request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+          data: { attributes: { "backup-path": source } },
+        }),
+        request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+          data: { attributes: { "backup-path": source } },
+        }),
+      ]);
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([202, 409]);
+
+      const running = await db.query.backupRehearsalJobs.findMany({
+        where: eq(backupRehearsalJobs.status, "running"),
+        columns: { id: true },
+      });
+      expect(running.length).toBeLessThanOrEqual(1);
+      await db.delete(backupRehearsalJobs).where(eq(backupRehearsalJobs.status, "running"));
+    } finally {
+      await rm(source, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

@@ -40,4 +40,28 @@ describe("cumulative metric semantics", () => {
     expect(second?.[1]).toBe(40);
     resetPoolMetrics();
   });
+
+  test("a fingerprint first seen after the exporter cut is still exported", () => {
+    // A prefix-limited export would permanently hide every fingerprint that
+    // first appears after the cut. Both exported families must therefore carry
+    // a fingerprint that only shows up well past the tenth entry.
+    resetPoolMetrics();
+    for (let i = 0; i < 20; i += 1) recordSlowQuery(`SELECT * FROM early_${String(i)} WHERE a = ${i}`, 5_000);
+    // Overflow the 64-entry recent buffer so the late fingerprints are only
+    // reachable through the cumulative map.
+    for (let i = 0; i < 60; i += 1) recordSlowQuery(`SELECT * FROM filler_${String(i)} WHERE b = ${i}`, 5_000);
+    recordSlowQuery("SELECT * FROM late_arrival WHERE c = 1", 5_000);
+
+    const totals = slowQueryFingerprintTotals();
+    expect(Object.keys(totals).length).toBeGreaterThan(10);
+    const late = Object.keys(totals).find((fingerprint): boolean => fingerprint.includes("late_arrival"));
+    expect(late).toBeDefined();
+    // The exporter renders every entry of both families without truncation.
+    const exported = Object.entries(totals).map(
+      ([fp, count]): string => `terrence_database_slow_fingerprint_total{fingerprint="${fp}"} ${count}`,
+    );
+    expect(exported.length).toBe(Object.keys(totals).length);
+    expect(exported.some((line): boolean => line.includes("late_arrival"))).toBeTrue();
+    resetPoolMetrics();
+  });
 });

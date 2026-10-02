@@ -78,6 +78,30 @@ describe("backup source layout", () => {
     expect(report.passed).toBe(true);
   });
 
+  it("keeps sibling archives in one directory on separate manifests", async () => {
+    const work = await makeWork("terrence-backup-siblings-");
+    const staging = join(work, "staging");
+    await seedBackupStorage(join(staging, "storage"));
+    const first = join(work, "backup-one.tar.gz");
+    const second = join(work, "backup-two.tar.gz");
+    await archive(staging, first);
+
+    const firstManifest = await createBackupManifestForSource({ sourcePath: first });
+    expect(firstManifest.path).not.toBeNull();
+
+    // Change the source and manifest a second archive beside the first: it must
+    // not overwrite the first one's sidecar, or verification of the first would
+    // resolve the second's manifest and report digest mismatches.
+    await writeFile(join(staging, "storage", "extra.bin"), "changed contents", { mode: 0o600 });
+    await archive(staging, second);
+    const secondManifest = await createBackupManifestForSource({ sourcePath: second });
+    expect(secondManifest.path).not.toBe(firstManifest.path);
+
+    const firstReport = await verifyBackupIntegrity({ sourcePath: first });
+    expect(firstReport.checks.filter((check) => check.status === "fail")).toEqual([]);
+    expect(firstReport.passed).toBe(true);
+  });
+
   it("removes the extraction directory when source preparation fails", async () => {
     const work = await makeWork("terrence-backup-no-manifest-");
     const staging = join(work, "staging");

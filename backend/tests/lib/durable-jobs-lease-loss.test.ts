@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 
 // Short lease windows make the fencing path deterministic: the watchdog must
@@ -9,9 +9,21 @@ process.env["TERRENCE_DURABLE_RENEW_MS"] = "150";
 
 const { db } = await import("../../src/db");
 const { durableJobs } = await import("../../src/db/schema");
-const { enqueueDurableJob, startDurableJobWorker, stopDurableJobWorker } = await import("../../src/lib/durable-jobs");
+const { enqueueDurableJob, readDurableJobLeaseWindowsForTests, startDurableJobWorker, stopDurableJobWorker } =
+  await import("../../src/lib/durable-jobs");
 
 const previousDisableWorker = process.env["TERRENCE_DISABLE_WORKER"];
+const suiteLease = process.env["TERRENCE_DURABLE_LEASE_MS"];
+const suiteRenew = process.env["TERRENCE_DURABLE_RENEW_MS"];
+
+// leaseMs()/renewMs() read the environment per use, so these short windows
+// would otherwise apply to every later file in the same Bun process.
+afterAll((): void => {
+  if (suiteLease === undefined) Reflect.deleteProperty(process.env, "TERRENCE_DURABLE_LEASE_MS");
+  else process.env["TERRENCE_DURABLE_LEASE_MS"] = suiteLease;
+  if (suiteRenew === undefined) Reflect.deleteProperty(process.env, "TERRENCE_DURABLE_RENEW_MS");
+  else process.env["TERRENCE_DURABLE_RENEW_MS"] = suiteRenew;
+});
 
 const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -87,4 +99,29 @@ describe("durable job lease-loss fencing", () => {
     expect(row?.lockToken).toBe("newer-token");
     expect(row?.status).toBe("queued");
   }, 20_000);
+});
+
+describe("durable lease window invariants", () => {
+  test("the renewal cadence always precedes the lease-loss watchdog", async () => {
+    const previousLease = process.env["TERRENCE_DURABLE_LEASE_MS"];
+    const previousRenew = process.env["TERRENCE_DURABLE_RENEW_MS"];
+    try {
+      // Smallest accepted lease through the production default: a cadence at
+      // or above the TTL would let the watchdog fire before the first renewal.
+      for (const lease of [300, 301, 400, 599, 600, 1_000, 30_000]) {
+        for (const renew of [100, 150, 10_000]) {
+          process.env["TERRENCE_DURABLE_LEASE_MS"] = String(lease);
+          process.env["TERRENCE_DURABLE_RENEW_MS"] = String(renew);
+          const windows = readDurableJobLeaseWindowsForTests();
+          expect(windows.renewMs).toBeGreaterThan(0);
+          expect(windows.renewMs).toBeLessThan(windows.leaseMs);
+        }
+      }
+    } finally {
+      if (previousLease === undefined) Reflect.deleteProperty(process.env, "TERRENCE_DURABLE_LEASE_MS");
+      else process.env["TERRENCE_DURABLE_LEASE_MS"] = previousLease;
+      if (previousRenew === undefined) Reflect.deleteProperty(process.env, "TERRENCE_DURABLE_RENEW_MS");
+      else process.env["TERRENCE_DURABLE_RENEW_MS"] = previousRenew;
+    }
+  });
 });

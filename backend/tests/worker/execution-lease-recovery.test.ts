@@ -158,8 +158,10 @@ describe("expired local execution recovery", () => {
     const strandedWs = `ws-stranded-${suffix2}`;
     const manualWs = `ws-manual-${suffix2}`;
     const liveLockWs = `ws-livelock-${suffix2}`;
+    const claimedWs = `ws-claimed-${suffix2}`;
     const terminalRun = `run-terminal-${suffix2}`;
     const runningRun = `run-still-live-${suffix2}`;
+    const claimedRun = `run-claimed-${suffix2}`;
     const now = Date.now();
     try {
       await db.insert(workspaces).values([
@@ -229,17 +231,45 @@ describe("expired local execution recovery", () => {
       expect(manual?.locked).toBe(true);
       expect(manual?.lockOwnerType).toBe("manual");
 
+      // A terminal run's lock whose *workspace* still carries live execution
+      // ownership is preserved: clearing it would block the current executor.
+      const claimedWs = `ws-claimed-${suffix2}`;
+      const claimedRun = `run-claimed-${suffix2}`;
+      await db.insert(workspaces).values({
+        id: claimedWs,
+        orgId,
+        name: claimedWs,
+        executionMode: "remote",
+        locked: true,
+        lockOwnerType: "run",
+        lockOwnerId: claimedRun,
+        executionOwnerNodeId: "other-node",
+        executionOwnerInstanceId: "other-instance",
+        executionLeaseExpiresAt: now + 60_000,
+      });
+      await db.insert(runs).values({
+        id: claimedRun,
+        workspaceId: claimedWs,
+        status: "applied",
+        planOnly: false,
+        createdAt: now,
+      });
+      await reconcileExpiredLocalRunExecutions();
+      const claimed = await db.query.workspaces.findFirst({ where: eq(workspaces.id, claimedWs) });
+      expect(claimed?.locked).toBe(true);
+      expect(claimed?.lockOwnerId).toBe(claimedRun);
+
       const live = await db.query.workspaces.findFirst({ where: eq(workspaces.id, liveLockWs) });
       expect(live?.locked).toBe(true);
       expect(live?.lockOwnerId).toBe(runningRun);
     } finally {
       await db
         .delete(runs)
-        .where(inArray(runs.id, [terminalRun, runningRun]))
+        .where(inArray(runs.id, [terminalRun, runningRun, claimedRun]))
         .catch((): void => undefined);
       await db
         .delete(workspaces)
-        .where(inArray(workspaces.id, [strandedWs, manualWs, liveLockWs]))
+        .where(inArray(workspaces.id, [strandedWs, manualWs, liveLockWs, claimedWs]))
         .catch((): void => undefined);
     }
   });

@@ -467,10 +467,7 @@ export const backupRehearsalJobs = pgTable(
       .notNull()
       .$defaultFn(() => sqliteSchema["backupRehearsalJobs"]["updatedAt"].defaultFn!()),
   },
-  (table) => [
-    uniqueIndex("backup_rehearsal_jobs_one_running").on(table["status"]).where(sql`${table["status"]} = 'running'`),
-    index("backup_rehearsal_jobs_started_idx").on(table["startedAt"]),
-  ],
+  (table) => [index("backup_rehearsal_jobs_status_started_idx").on(table["status"], table["startedAt"])],
 );
 pgSchema["backupRehearsalJobs"] = backupRehearsalJobs;
 

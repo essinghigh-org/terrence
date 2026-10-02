@@ -8,5 +8,4 @@ CREATE TABLE "backup_rehearsal_jobs" (
 	"updated_at" bigint NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX "backup_rehearsal_jobs_one_running" ON "backup_rehearsal_jobs" USING btree ("status") WHERE "backup_rehearsal_jobs"."status" = 'running';--> statement-breakpoint
-CREATE INDEX "backup_rehearsal_jobs_started_idx" ON "backup_rehearsal_jobs" USING btree ("started_at");
+CREATE INDEX "backup_rehearsal_jobs_status_started_idx" ON "backup_rehearsal_jobs" USING btree ("status","started_at");

@@ -1,5 +1,5 @@
 {
-  "id": "c86766a6-8501-44d4-b52c-5ce500b114e6",
+  "id": "6ee8608d-0f54-4b4c-be9d-aeab6e71bf27",
   "prevId": "c4b28d36-8ae2-4924-b1cc-4b2ac379490d",
   "version": "7",
   "dialect": "postgresql",
@@ -2338,25 +2338,15 @@
         }
       },
       "indexes": {
-        "backup_rehearsal_jobs_one_running": {
-          "name": "backup_rehearsal_jobs_one_running",
+        "backup_rehearsal_jobs_status_started_idx": {
+          "name": "backup_rehearsal_jobs_status_started_idx",
           "columns": [
             {
               "expression": "status",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"backup_rehearsal_jobs\".\"status\" = 'running'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "backup_rehearsal_jobs_started_idx": {
-          "name": "backup_rehearsal_jobs_started_idx",
-          "columns": [
+            },
             {
               "expression": "started_at",
               "isExpression": false,

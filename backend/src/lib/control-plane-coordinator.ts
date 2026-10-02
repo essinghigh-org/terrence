@@ -188,12 +188,15 @@ let leadershipGeneration = 0;
  * generation so a delayed election cannot reacquire ownership.
  */
 let lifecycleGeneration = 0;
-let inFlightTick: Promise<void> | null = null;
+/** Every coordinator tick currently waiting on a claim. */
+const inFlightTicks = new Set<Promise<void>>();
 /** Test seam: lets tests inject a deferred claim to simulate a slow election. */
 let claimControlPlaneLeaseImpl: typeof claimControlPlaneLease | null = null;
 
+/** True while any election could still establish ownership. Drain completion
+ * waits on this so it cannot persist DRAINED with a claim outstanding. */
 export function controlPlaneElectionInFlight(): boolean {
-  return inFlightTick !== null;
+  return inFlightTicks.size > 0;
 }
 
 export function setClaimControlPlaneLeaseForTests(impl: typeof claimControlPlaneLease | null): void {
@@ -204,17 +207,21 @@ async function startCoordinatorTick(): Promise<void> {
   const tick = coordinatorTick().catch((error: unknown): void => {
     log.warn("Control-plane coordinator tick failed", { error: String(error) });
   });
-  inFlightTick = tick;
+  // Ticks can overlap (a resignation wake-up racing the renewal timer), so
+  // every pending tick is tracked: a single tracked promise would report "idle"
+  // and let drain/resign proceed while an older claim was still outstanding.
+  inFlightTicks.add(tick);
   void tick.finally((): void => {
-    if (inFlightTick === tick) inFlightTick = null;
+    inFlightTicks.delete(tick);
   });
   return tick;
 }
 
-/** Wait for any in-flight election to settle after its generation changed. */
+/** Wait for every in-flight election to settle. */
 async function awaitInFlightTick(): Promise<void> {
-  const pending = inFlightTick;
-  if (pending !== null) await pending.catch((): void => undefined);
+  while (inFlightTicks.size > 0) {
+    await Promise.allSettled([...inFlightTicks]);
+  }
 }
 
 type CoordinatorCallbacks = Readonly<{

@@ -232,12 +232,17 @@ async function reconcileScimSiteAdminsOnly(transaction: unknown): Promise<void> 
   if (desiredUserIds.size === 0) return;
   const liveUsers = await tx.query.users.findMany({
     where: and(inArray(users.id, [...desiredUserIds]), isNull(users.deletedAt)),
-    columns: { id: true, isSiteAdmin: true, scimSiteAdmin: true },
+    columns: { id: true, isSiteAdmin: true, ssoSiteAdmin: true, scimSiteAdmin: true },
   });
   for (const user of liveUsers) {
-    // An existing manual or SAML grant remains manual/SAML. SCIM should not
-    // claim ownership of it merely because the user joins the mapped group.
-    if (user.isSiteAdmin === true && user.scimSiteAdmin !== true) continue;
+    // A manual grant stays manual: SCIM must not claim ownership of it merely
+    // because the user joins the mapped group. A SAML grant is different — the
+    // account holds two independent grants, so both provenance flags must be
+    // recorded. Otherwise SAML removing its grant would recompute effective
+    // admin from scimSiteAdmin=false and drop access the SCIM group still
+    // confers.
+    const manualOnly = user.isSiteAdmin === true && user.ssoSiteAdmin !== true && user.scimSiteAdmin !== true;
+    if (manualOnly) continue;
     await tx.update(users).set({ scimSiteAdmin: true, isSiteAdmin: true }).where(eq(users.id, user.id));
   }
 }

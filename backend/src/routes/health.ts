@@ -219,6 +219,9 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       sample_count: snapshot.eventLoopDelay.sampleCount,
       min_ms: snapshot.eventLoopDelay.minMs,
       mean_ms: snapshot.eventLoopDelay.meanMs,
+      // The median is what the Prometheus exporter labels quantile="0.5";
+      // JSON clients need the same value to avoid reading the mean as a p50.
+      p50_ms: snapshot.eventLoopDelay.p50Ms,
       p95_ms: snapshot.eventLoopDelay.p95Ms,
       max_ms: snapshot.eventLoopDelay.maxMs,
     };
@@ -413,15 +416,16 @@ function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection[
       `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
     );
   }
+  // Cumulative fingerprint counts are already cardinality-bounded (the
+  // collector caps distinct fingerprints), so all of them are exported rather
+  // than a prefix: truncating would permanently hide every fingerprint that
+  // first appeared after the cut, including ones that later become dominant.
   const fpsTotals =
     (instance.database as unknown as { slowFingerprintTotals?: Readonly<Record<string, number>> })
       .slowFingerprintTotals ?? {};
-  const fpLines = Object.entries(fpsTotals)
-    .slice(0, 10)
-    .map(
-      ([fp, count]): string =>
-        `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
-    );
+  const fpLines = Object.entries(fpsTotals).map(
+    ([fp, count]): string => `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
+  );
   if (fpLines.length > 0) {
     lines.push(
       "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences since boot.",
@@ -431,12 +435,12 @@ function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection[
   }
   const fpsRetained =
     (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
-  const fpRetainedLines = Object.entries(fpsRetained)
-    .slice(0, 10)
-    .map(
-      ([fp, count]): string =>
-        `terrence_database_slow_fingerprint_retained{fingerprint="${prometheusLabel(fp)}"} ${count}`,
-    );
+  // Bounded by the same 64-entry recent buffer, so exporting all of it costs
+  // at most 64 series.
+  const fpRetainedLines = Object.entries(fpsRetained).map(
+    ([fp, count]): string =>
+      `terrence_database_slow_fingerprint_retained{fingerprint="${prometheusLabel(fp)}"} ${count}`,
+  );
   if (fpRetainedLines.length > 0) {
     lines.push(
       "# HELP terrence_database_slow_fingerprint_retained Normalized slow-query fingerprint occurrences in the bounded recent buffer.",
@@ -889,14 +893,35 @@ export async function claimControlPlaneNodeIdentity(now?: number): Promise<void>
   throw new Error(`TERRENCE_NODE_ID "${nodeId}" is already registered by another live control-plane instance`);
 }
 
+/** Deadline for the auxiliary /readyz reads, so a stalled node-registry or
+ * compatibility query cannot leave the probe pending: health checkers poll this
+ * endpoint on short intervals. */
+const READYZ_AUXILIARY_PROBE_TIMEOUT_MS = 2_000;
+/** Budget for the /readyz database probe, which dominates the response time. */
+const READYZ_DATABASE_PROBE_TIMEOUT_SECONDS = 5;
+
 async function probeNodeIdentityReadiness(): Promise<ReadinessStatus> {
   if (!haEnabled()) return "OK";
   try {
-    const row = await db.query.controlPlaneNodes.findFirst({
-      where: eq(controlPlaneNodes.id, readinessNodeId()),
-      columns: { instanceId: true },
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const row = await Promise.race([
+      db.query.controlPlaneNodes.findFirst({
+        where: eq(controlPlaneNodes.id, readinessNodeId()),
+        columns: { instanceId: true },
+      }),
+      new Promise<undefined>((resolve): void => {
+        timer = setTimeout((): void => {
+          resolve(undefined);
+        }, READYZ_AUXILIARY_PROBE_TIMEOUT_MS);
+      }),
+    ]).finally((): void => {
+      if (timer !== undefined) clearTimeout(timer);
     });
-    return row?.instanceId === controlPlaneInstanceId ? "OK" : "ERROR";
+    // A timeout cannot prove the node ID is free, so treat it as an error:
+    // readiness must fail closed rather than advertise a node whose ownership
+    // is unverified.
+    if (row === undefined) return "ERROR";
+    return row.instanceId === controlPlaneInstanceId ? "OK" : "ERROR";
   } catch (error: unknown) {
     // A failed read cannot prove that another process owns this node ID. The
     // database readiness check reports the underlying failure separately, and
@@ -1115,7 +1140,23 @@ function readinessPlainText(
 async function probeClusterCompatibilityReadiness(database: ReadinessStatus): Promise<ReadinessStatus> {
   if (!haEnabled() || database !== "OK") return "OK";
   try {
-    const compatibility = await evaluateLiveClusterCompatibility();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const compatibility = await Promise.race([
+      evaluateLiveClusterCompatibility(),
+      new Promise<undefined>((resolve): void => {
+        timer = setTimeout((): void => {
+          resolve(undefined);
+        }, READYZ_AUXILIARY_PROBE_TIMEOUT_MS);
+      }),
+    ]).finally((): void => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+    // An unverified fleet is not a verified one: fail closed rather than
+    // advertising compatibility that was never established.
+    if (compatibility === undefined) {
+      log.error("Live cluster version compatibility check timed out");
+      return "ERROR";
+    }
     if (!compatibility.compatible) {
       log.error("Live cluster version compatibility check failed", { summary: compatibility.summary });
       return "ERROR";
@@ -1695,8 +1736,11 @@ export const healthRoutes = new Elysia({ name: "health" })
     try {
       // Share the same readiness decision as the structured endpoint so a
       // drained/maintenance/incompatible node does not advertise readiness
-      // through the container health check.
-      const database = await probeDatabaseReadiness(5);
+      // through the container health check. The whole probe runs under one
+      // deadline: health checkers poll this endpoint on short intervals, so a
+      // stalled node-registry or compatibility read must not leave the request
+      // pending indefinitely (the database probe has its own inner timeout).
+      const database = await probeDatabaseReadiness(READYZ_DATABASE_PROBE_TIMEOUT_SECONDS);
       const disk = isStorageDegraded() ? "ERROR" : "OK";
       const sandbox = probeSandboxReadiness();
       const nodeIdentity = database === "OK" ? await probeNodeIdentityReadiness() : "ERROR";
@@ -1711,10 +1755,13 @@ export const healthRoutes = new Elysia({ name: "health" })
         set,
       );
       if (resolved.status === "OK") {
-        // Todo 271: surface the applied DB schema version so operators can
-        // verify rollout completeness (e.g. mixed-version fleet check).
+        // Todo 271: surface the DB schema target so operators can verify
+        // rollout completeness (e.g. a mixed-version fleet check). This is the
+        // version bundled with this build, not the applied one; the applied
+        // state lives in the `__drizzle_migrations` history and is reported by
+        // the structured readiness endpoint.
         const schemaVersion = databaseSchemaVersion();
-        return schemaVersion !== null ? `ready (schema ${schemaVersion})` : "ready";
+        return schemaVersion !== null ? `ready (bundled schema ${schemaVersion})` : "ready";
       }
       (set as { status: number }).status = 503;
       return resolved.status === "DRAINING" ? "not ready: draining" : "not ready";

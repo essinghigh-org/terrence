@@ -12,10 +12,15 @@ import {
   organizationMemberships,
   organizations,
   samlSettings,
+  scimGroupMemberships,
+  scimGroups,
+  scimSettings,
+  scimUserIdentities,
   teamMemberships,
   teams,
   users,
 } from "../../src/db/schema";
+import { reconcileScimSiteAdmins } from "../../src/routes/scim-admin";
 import {
   ACS_URL,
   ATTR_EMAIL,
@@ -79,9 +84,16 @@ describe("SAML SSO flow", () => {
     const params: string[] = [];
     if (relayState !== undefined) params.push(`RelayState=${encodeURIComponent(relayState)}`);
     if (continuationQuery !== "") params.push(continuationQuery);
+    // A CLI continuation is only accepted when this browser already holds the
+    // matching state cookie, so the start request carries it.
+    const oauthState = /oauth_state=([^&]+)/.exec(continuationQuery)?.[1];
+    const startHeaders: Record<string, string> = {
+      ...authHeaders,
+      ...(oauthState === undefined ? {} : { Cookie: `terraform_oauth_state=${decodeURIComponent(oauthState)}` }),
+    };
     const auth = await app.handle(
       new Request(`https://terrence.test/users/saml/auth${params.length === 0 ? "" : `?${params.join("&")}`}`, {
-        headers: authHeaders,
+        headers: startHeaders,
       }),
     );
     const location = new URL(auth.headers.get("Location") ?? "");
@@ -391,10 +403,44 @@ describe("SAML SSO flow", () => {
 
   test("rejects a stale OAuth continuation", async () => {
     const rejected = await app.handle(
-      new Request(`https://terrence.test/users/saml/auth?oauth_state=${encodeURIComponent(`expired-${suffix}`)}`),
+      new Request(`https://terrence.test/users/saml/auth?oauth_state=${encodeURIComponent(`expired-${suffix}`)}`, {
+        headers: { Cookie: `terraform_oauth_state=expired-${suffix}` },
+      }),
     );
     expect(rejected.status).toBe(400);
     expect(await rejected.text()).toContain("expired");
+  });
+
+  test("rejects an OAuth continuation this browser does not hold", async () => {
+    // CSRF regression: an attacker parks their own pending authorization and
+    // sends a victim an SSO link carrying it. Without the matching HttpOnly
+    // state cookie the continuation must be refused, so the victim's sign-in
+    // cannot complete the attacker's handshake.
+    const authz = await app.handle(
+      new Request(
+        "https://terrence.test/oauth/authorization?response_type=code&client_id=terraform-cli" +
+          `&code_challenge=${OAUTH_CODE_CHALLENGE}&code_challenge_method=S256` +
+          "&redirect_uri=http://localhost:10000/login&state=st-attacker",
+      ),
+    );
+    const attackerState = new URL(authz.headers.get("Location") ?? "", "https://terrence.test").searchParams.get(
+      "oauth_state",
+    );
+    expect(attackerState).not.toBeNull();
+
+    // No cookie for this state (a browser that never started the handshake).
+    const withoutCookie = await app.handle(
+      new Request(`https://terrence.test/users/saml/auth?oauth_state=${encodeURIComponent(attackerState ?? "")}`),
+    );
+    expect(withoutCookie.status).toBe(400);
+
+    // A cookie for a different state is equally refused.
+    const mismatchedCookie = await app.handle(
+      new Request(`https://terrence.test/users/saml/auth?oauth_state=${encodeURIComponent(attackerState ?? "")}`, {
+        headers: { Cookie: "terraform_oauth_state=some-other-state" },
+      }),
+    );
+    expect(mismatchedCookie.status).toBe(400);
   });
 
   test("rejects a replayed assertion", async () => {
@@ -799,6 +845,63 @@ describe("SAML SSO flow", () => {
     const final = await db.query.users.findFirst({ where: eq(users.username, account) });
     expect(final?.isSiteAdmin).toBeFalse();
     expect(final?.ssoSiteAdmin).toBeFalse();
+  });
+
+  test("a SAML admin joining the mapped SCIM group keeps the SCIM grant recorded", async () => {
+    const account = `saml-first-${suffix}`;
+    // SAML grants admin, then the account also joins the mapped SCIM group.
+    await validAcs({ username: account, email: `${account}@example.com`, siteAdmin: "site-admins" });
+    const samlAdmin = await db.query.users.findFirst({ where: eq(users.username, account) });
+    expect(samlAdmin?.ssoSiteAdmin).toBeTrue();
+    const groupUserId = samlAdmin?.id ?? "";
+    const groupId = `scim-group-saml-admin-${suffix}`;
+    const identityId = `scim-user-saml-${suffix}`;
+    try {
+      await db.insert(scimGroups).values({ id: groupId, name: `Terrence Admins S ${suffix}` });
+      await db.insert(scimUserIdentities).values({ id: identityId, userId: groupUserId, username: account });
+      await db
+        .insert(scimGroupMemberships)
+        .values({ id: `scim-member-saml-${suffix}`, groupId, scimUserId: identityId });
+
+      const previous = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
+      await db
+        .insert(scimSettings)
+        .values({
+          id: "scim",
+          enabled: true,
+          siteAdminGroupScimId: groupId,
+          updatedAt: Date.now(),
+        })
+        .onConflictDoUpdate({
+          target: scimSettings.id,
+          set: { enabled: true, siteAdminGroupScimId: groupId, updatedAt: Date.now() },
+        });
+      await db.transaction(async (tx): Promise<void> => {
+        await reconcileScimSiteAdmins(tx);
+      });
+
+      // Both provenance flags must be recorded: the account holds two
+      // independent grants.
+      const overlap = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+      expect(overlap?.ssoSiteAdmin).toBeTrue();
+      expect(overlap?.scimSiteAdmin).toBeTrue();
+
+      if (previous !== undefined) {
+        await db
+          .update(scimSettings)
+          .set({
+            enabled: previous.enabled,
+            siteAdminGroupScimId: previous.siteAdminGroupScimId,
+            updatedAt: Date.now(),
+          })
+          .where(eq(scimSettings.id, "scim"));
+      }
+    } finally {
+      await db.delete(scimGroupMemberships).where(eq(scimGroupMemberships.id, `scim-member-saml-${suffix}`));
+      await db.delete(scimUserIdentities).where(eq(scimUserIdentities.id, identityId));
+      await db.delete(scimGroups).where(eq(scimGroups.id, groupId));
+      await db.delete(users).where(eq(users.username, account));
+    }
   });
 
   test("keeps a locally-granted site admin despite a SAML login without the attribute", async () => {
