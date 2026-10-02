@@ -14,13 +14,20 @@ import {
   teamScimGroupMappings,
   notificationConfigurations,
 } from "../db/schema";
-import { eq, and, count, inArray, asc, desc, or, sql } from "drizzle-orm";
+import { eq, and, count, inArray, asc, desc, or, sql, isNull, isNotNull } from "drizzle-orm";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import type { TtlPolicyResolution } from "../lib/token-ttl-policy";
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+
+// Tokens issued by the singular endpoint before the legacy discriminator was
+// introduced have legacy=false from the column default, but—unlike every
+// modern team token—have no expiry. Keep recognizing those upgraded rows as
+// legacy credentials so rotation and revocation cannot leave them usable.
+const legacyTeamTokenWhere = or(eq(apiTokens.legacy, true), isNull(apiTokens.expiresAt));
+const modernTeamTokenWhere = and(eq(apiTokens.legacy, false), isNotNull(apiTokens.expiresAt));
 
 import {
   auditLog,
@@ -1431,7 +1438,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
         // Replace only the legacy token; modern plural tokens must survive.
-        await t.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)));
+        await t.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), legacyTeamTokenWhere));
         await t.insert(apiTokens).values({
           id,
           token: tokenHash,
@@ -1464,7 +1471,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const tok = await db.query.apiTokens.findFirst({
-        where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)),
+        where: and(eq(apiTokens.teamId, teamId), legacyTeamTokenWhere),
       });
       if (tok === undefined) {
         (set as { status: number }).status = 404;
@@ -1496,14 +1503,14 @@ export const teamRoutes = new Elysia({ name: "teams" })
       }
       const deleted = await db
         .delete(apiTokens)
-        .where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)))
+        .where(and(eq(apiTokens.teamId, teamId), legacyTeamTokenWhere))
         .returning({ id: apiTokens.id });
-      const deletedId = deleted[0]?.id;
-      if (deletedId !== undefined)
-        await auditLog("delete", "team-authentication-token", deletedId, user?.id ?? null, team.orgId, {
+      for (const deletedToken of deleted) {
+        await auditLog("delete", "team-authentication-token", deletedToken.id, user?.id ?? null, team.orgId, {
           teamId,
           legacy: true,
         });
+      }
       (set as { status: number }).status = 204;
       return {};
     },
@@ -1550,7 +1557,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const expiresAt = policyResolution.kind === "ok" ? policyResolution.expiresAt : null;
       // TFE parity: descriptions must be unique among a team's modern tokens.
       const duplicate = await db.query.apiTokens.findFirst({
-        where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false), eq(apiTokens.description, description)),
+        where: and(eq(apiTokens.teamId, teamId), modernTeamTokenWhere, eq(apiTokens.description, description)),
         columns: { id: true },
       });
       if (duplicate !== undefined) {
@@ -1590,7 +1597,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       // Modern tokens only: the legacy credential is exposed via the singular
       // endpoint. Deterministic newest-first order (TFE parity).
       const tokenList = await db.query.apiTokens.findMany({
-        where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false)),
+        where: and(eq(apiTokens.teamId, teamId), modernTeamTokenWhere),
         orderBy: [desc(apiTokens.createdAt), desc(apiTokens.id)],
       });
       return {
@@ -1628,7 +1635,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       // Removing a modern token must never disturb the legacy credential.
       const deleted = await db
         .delete(apiTokens)
-        .where(and(eq(apiTokens.id, tokenId), eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false)))
+        .where(and(eq(apiTokens.id, tokenId), eq(apiTokens.teamId, teamId), modernTeamTokenWhere))
         .returning({ id: apiTokens.id });
       if (deleted.length > 0)
         await auditLog("delete", "team-authentication-token", tokenId, user?.id ?? null, team.orgId, { teamId });

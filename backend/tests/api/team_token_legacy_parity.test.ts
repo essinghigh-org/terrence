@@ -111,9 +111,25 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     ).length > 0;
 
   it("rotating the legacy token leaves all modern tokens intact", async () => {
+    // Simulate a credential minted by the singular endpoint before the
+    // discriminator existed. The upgrade default incorrectly labels it
+    // legacy=false, but its lack of an expiry distinguishes it from modern
+    // plural-endpoint credentials.
+    const upgradedLegacySecret = `pre-upgrade-team-token-${suffix}`;
+    await db.insert(apiTokens).values({
+      id: `pre-upgrade-${suffix}`,
+      token: hashAuthenticationToken(upgradedLegacySecret),
+      teamId,
+      orgId,
+      description: "Pre-upgrade team token",
+      legacy: false,
+      expiresAt: null,
+    });
+
     expect(await countTeamTokens(true)).toBe(1);
-    expect(await countTeamTokens(false)).toBe(3);
+    expect(await countTeamTokens(false)).toBe(4);
     expect(await legacyHashExists(legacySecret)).toBe(true);
+    expect(await legacyHashExists(upgradedLegacySecret)).toBe(true);
 
     const rotateRes = await request(`/api/v2/teams/${teamId}/authentication-token`, "POST");
     expect(rotateRes.status).toBe(201);
@@ -126,6 +142,7 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     expect(await countTeamTokens(false)).toBe(3);
     expect(await countTeamTokens(true)).toBe(1);
     expect(await legacyHashExists(legacySecret)).toBe(false);
+    expect(await legacyHashExists(upgradedLegacySecret)).toBe(false);
     expect(await legacyHashExists(rotateBody.data.attributes.token)).toBe(true);
 
     // The singular GET returns only the (new) legacy credential.
@@ -193,11 +210,23 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     const futureBody = (await future.json()) as { data: { attributes: { "expired-at": string } } };
     expect(futureBody.data.attributes["expired-at"]).toBe(futureExpiry.toISOString());
 
+    const upgradedLegacySecret = `pre-upgrade-delete-${suffix}`;
+    await db.insert(apiTokens).values({
+      id: `pre-upgrade-delete-${suffix}`,
+      token: hashAuthenticationToken(upgradedLegacySecret),
+      teamId,
+      orgId,
+      description: "Pre-upgrade team token for deletion",
+      legacy: false,
+      expiresAt: null,
+    });
+
     // Singular DELETE removes only the legacy token.
     const delLegacy = await request(`/api/v2/teams/${teamId}/authentication-token`, "DELETE");
     expect(delLegacy.status).toBe(204);
     expect(await countTeamTokens(true)).toBe(0);
     expect(await countTeamTokens(false)).toBe(3);
+    expect(await legacyHashExists(upgradedLegacySecret)).toBe(false);
 
     // Singular GET 404s once no legacy token exists; modern list unaffected.
     const getMissing = await request(`/api/v2/teams/${teamId}/authentication-token`);

@@ -296,7 +296,7 @@ async function revokeTeamApiToken(
   // Team tokens: generic delete requires manage-teams on the token's org;
   // the legacy credential can only be removed via the singular endpoint
   // (todo 46).
-  if (token === undefined || token.teamId === null || token.legacy !== false) return false;
+  if (token === undefined || token.teamId === null || token.legacy !== false || token.expiresAt === null) return false;
   const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
   if (
     team === undefined ||
