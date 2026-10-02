@@ -9,9 +9,11 @@ description: SQLite and PostgreSQL backends, migrations, and the migration wizar
 
 ## Supported deployment topology
 
-Run exactly **one active Terrence control-plane process**, with either SQLite or PostgreSQL. The process owns the scheduler, local workers, cancellation state and in-memory event delivery. PostgreSQL does not supply leader election or make multiple control-plane replicas safe. Remote agents add execution capacity; they do not replace this ownership model.
+The default deployment runs exactly **one active Terrence control-plane process**, with either SQLite or PostgreSQL. That process owns the scheduler, local workers, cancellation state and in-memory event delivery. Remote agents add execution capacity; they do not replace this ownership model.
 
-Keep the database, artifact storage and encryption/token secrets together in the backup and restore procedure. For failover, stop or fence the old control plane before starting its replacement with the restored database, storage and secrets. Do not use a rolling deployment with overlapping instances, including during database migration. Follow the [upgrade and rollback procedure](upgrading.md) and [operations guide](operations.md).
+Multiple active control-plane replicas are a separate, explicitly enabled mode. Set `TERRENCE_HA_ENABLED=true` with PostgreSQL and the shared storage, secrets and unique `TERRENCE_NODE_ID` values described in the [high availability guide](high-availability.md); PostgreSQL then elects one replica as coordinator. PostgreSQL alone does not enable HA, and SQLite remains single-process.
+
+Keep the database, artifact storage and encryption/token secrets together in the backup and restore procedure. For failover, stop or fence the old control plane before starting its replacement with the restored database, storage and secrets, unless you are running the supported HA topology and following its rollout procedure. In the default single-process deployment, do not use a rolling deployment with overlapping instances, including during database migration. Follow the [upgrade and rollback procedure](upgrading.md) and [operations guide](operations.md).
 
 Terrence supports two database backends. The backend is selected by `DATABASE_URL`.
 

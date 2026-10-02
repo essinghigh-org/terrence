@@ -40,19 +40,51 @@ const resource = (role: typeof organizationRoles.$inferSelect): Record<string, u
 const input = (
   body: unknown,
 ): { name: string; description: string | null; permissions: Record<string, boolean> } | null => {
-  const data = object(object(body)["data"]);
-  const attrs = object(data["attributes"]);
+  const attrs = object(object(object(body)["data"])["attributes"]);
   if (typeof attrs["name"] !== "string" || attrs["name"].trim() === "") return null;
-  const raw = object(attrs["permissions"]);
-  const permissions: Record<string, boolean> = {};
-  for (const [key, value] of Object.entries(raw))
-    if (typeof value !== "boolean") return null;
-    else permissions[key] = value;
+  // Permissions are optional on create and default to no grants.
+  const permissions = "permissions" in attrs ? booleanMap(attrs["permissions"]) : {};
+  if (permissions === null) return null;
   return {
     name: attrs["name"].trim(),
     description: typeof attrs["description"] === "string" ? attrs["description"].trim() || null : null,
     permissions,
   };
+};
+/** Boolean permission map, or undefined when the value is not a plain object. */
+const booleanMap = (value: unknown): Record<string, boolean> | null => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const permissions: Record<string, boolean> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry !== "boolean") return null;
+    permissions[key] = entry;
+  }
+  return permissions;
+};
+type RolePatch = { name?: string; description?: string | null; permissions?: Record<string, boolean> };
+
+/**
+ * Partial-update input. Omitted attributes are left untouched, so a rename
+ * cannot silently revoke the role's grants; an explicitly empty map or null
+ * description clears them.
+ */
+const patchInput = (body: unknown): RolePatch | null => {
+  const attrs = object(object(object(body)["data"])["attributes"]);
+  const patch: RolePatch = {};
+  if ("name" in attrs) {
+    if (typeof attrs["name"] !== "string" || attrs["name"].trim() === "") return null;
+    patch.name = attrs["name"].trim();
+  }
+  if ("description" in attrs) {
+    if (attrs["description"] !== null && typeof attrs["description"] !== "string") return null;
+    patch.description = typeof attrs["description"] === "string" ? attrs["description"].trim() || null : null;
+  }
+  if ("permissions" in attrs) {
+    const permissions = booleanMap(attrs["permissions"]);
+    if (permissions === null) return null;
+    patch.permissions = permissions;
+  }
+  return Object.keys(patch).length === 0 ? null : patch;
 };
 
 export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
@@ -103,8 +135,8 @@ export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
         !(await checkOrganizationPermission(role.orgId, user?.id, orgId, teamId, "manage-organization-access"))
       )
         return error(set, 404, "Role not found");
-      const parsed = input(body);
-      if (parsed === null) return error(set, 422, "name and boolean permissions are required");
+      const parsed = patchInput(body);
+      if (parsed === null) return error(set, 422, "valid name, description, or boolean permissions are required");
       const updated = { ...role, ...parsed, updatedAt: Date.now() };
       await db
         .update(organizationRoles)

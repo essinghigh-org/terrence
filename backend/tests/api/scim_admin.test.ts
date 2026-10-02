@@ -551,3 +551,72 @@ postgresTest("serializes site-role reconciliation across PostgreSQL transactions
   await Promise.all([first, second]);
   expect(secondFinished).toBeTrue();
 });
+
+test("a manual site-admin grant is not adopted by SCIM and survives group removal", async () => {
+  const manualAdminId = `usr-scim-manual-admin-${suffix}`;
+  const manualAdminGroupId = `scim-group-manual-admin-${suffix}`;
+  const manualIdentityId = `scim-user-manual-${suffix}`;
+  const manualMembershipId = `scim-group-member-manual-${suffix}`;
+  await db.insert(users).values({
+    id: manualAdminId,
+    username: manualAdminId,
+    passwordHash: "unused",
+    isSiteAdmin: true,
+  });
+  try {
+    await db.insert(scimGroups).values({ id: manualAdminGroupId, name: `Terrence Admins Manual ${suffix}` });
+    await db.insert(scimUserIdentities).values({
+      id: manualIdentityId,
+      userId: manualAdminId,
+      username: manualAdminId,
+    });
+    await db.insert(scimGroupMemberships).values({
+      id: manualMembershipId,
+      groupId: manualAdminGroupId,
+      scimUserId: manualIdentityId,
+    });
+    const previousSettings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
+    try {
+      await db
+        .update(scimSettings)
+        .set({ enabled: true, siteAdminGroupScimId: manualAdminGroupId, updatedAt: Date.now() })
+        .where(eq(scimSettings.id, "scim"));
+      await db.transaction(async (tx): Promise<void> => {
+        await reconcileScimSiteAdmins(tx);
+      });
+
+      const adopted = await db.query.users.findFirst({ where: eq(users.id, manualAdminId) });
+      expect(adopted?.isSiteAdmin).toBeTrue();
+      // The manual grant must not be claimed by SCIM.
+      expect(adopted?.scimSiteAdmin).toBeFalse();
+
+      // The user later leaves the group and SCIM is effectively disabled for
+      // them; the manual grant must survive either way.
+      await db.delete(scimGroupMemberships).where(eq(scimGroupMemberships.id, manualMembershipId));
+      await db.transaction(async (tx): Promise<void> => {
+        await reconcileScimSiteAdmins(tx);
+      });
+      const afterRemoval = await db.query.users.findFirst({ where: eq(users.id, manualAdminId) });
+      expect(afterRemoval?.isSiteAdmin).toBeTrue();
+      expect(afterRemoval?.scimSiteAdmin).toBeFalse();
+    } finally {
+      if (previousSettings !== undefined) {
+        await db
+          .update(scimSettings)
+          .set({
+            enabled: previousSettings.enabled,
+            siteAdminGroupScimId: previousSettings.siteAdminGroupScimId,
+            updatedAt: Date.now(),
+          })
+          .where(eq(scimSettings.id, "scim"));
+      }
+      await db.delete(scimUserIdentities).where(eq(scimUserIdentities.userId, manualAdminId));
+      await db.delete(users).where(eq(users.id, manualAdminId));
+    }
+  } finally {
+    await db.delete(scimGroupMemberships).where(eq(scimGroupMemberships.id, manualMembershipId));
+    await db.delete(scimUserIdentities).where(eq(scimUserIdentities.id, manualIdentityId));
+    await db.delete(scimGroups).where(eq(scimGroups.id, manualAdminGroupId));
+    await db.delete(users).where(eq(users.id, manualAdminId));
+  }
+});

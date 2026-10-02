@@ -182,6 +182,40 @@ let leadershipWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
 let leadershipValidUntil = 0;
 let coordinatorStarted = false;
 let leadershipGeneration = 0;
+/**
+ * Monotonic lifecycle fence. Every awaited claim path records the generation
+ * at entry; drain/stop/resume invalidate any claim that belongs to a stale
+ * generation so a delayed election cannot reacquire ownership.
+ */
+let lifecycleGeneration = 0;
+let inFlightTick: Promise<void> | null = null;
+/** Test seam: lets tests inject a deferred claim to simulate a slow election. */
+let claimControlPlaneLeaseImpl: typeof claimControlPlaneLease | null = null;
+
+export function controlPlaneElectionInFlight(): boolean {
+  return inFlightTick !== null;
+}
+
+export function setClaimControlPlaneLeaseForTests(impl: typeof claimControlPlaneLease | null): void {
+  claimControlPlaneLeaseImpl = impl;
+}
+
+async function startCoordinatorTick(): Promise<void> {
+  const tick = coordinatorTick().catch((error: unknown): void => {
+    log.warn("Control-plane coordinator tick failed", { error: String(error) });
+  });
+  inFlightTick = tick;
+  void tick.finally((): void => {
+    if (inFlightTick === tick) inFlightTick = null;
+  });
+  return tick;
+}
+
+/** Wait for any in-flight election to settle after its generation changed. */
+async function awaitInFlightTick(): Promise<void> {
+  const pending = inFlightTick;
+  if (pending !== null) await pending.catch((): void => undefined);
+}
 
 type CoordinatorCallbacks = Readonly<{
   onLeadershipAcquired: (fencingEpoch: number) => void | Promise<void>;
@@ -267,7 +301,7 @@ function activateLeadership(fencingEpoch: number, generation: number): void {
 function scheduleCoordinatorTick(): void {
   if (!coordinatorStarted) return;
   coordinatorTimer = setTimeout((): void => {
-    void coordinatorTick();
+    void startCoordinatorTick();
   }, CONTROL_PLANE_LEASE_RENEW_MS);
   coordinatorTimer.unref?.();
 }
@@ -276,6 +310,7 @@ function scheduleCoordinatorTick(): void {
  * operations surfaces still report an accurate coordinator during a drain. */
 async function observeCoordinatorTick(): Promise<void> {
   try {
+    if (coordinatorState.role === "leader") await loseLeadership();
     const current = await db.query.controlPlaneLeases.findFirst({
       where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
     });
@@ -296,6 +331,59 @@ async function observeCoordinatorTick(): Promise<void> {
   }
 }
 
+const followerState = (lease?: ControlPlaneLeaseSnapshot): CoordinatorState => ({
+  role: "follower",
+  ownerNodeId: lease?.ownerNodeId ?? null,
+  fencingEpoch: lease?.fencingEpoch ?? null,
+  expiresAt: lease?.expiresAt ?? null,
+  heartbeatAt: lease?.heartbeatAt ?? null,
+});
+
+/** Install leader state for a freshly acquired lease, or relinquish it. */
+async function applyAcquiredLease(
+  identity: LeaseIdentity,
+  lease: ControlPlaneLeaseSnapshot,
+  generation: number,
+): Promise<void> {
+  // Verify the returned lease against the same authoritative clock after the
+  // claim completes. A stalled network response must not resurrect a lease
+  // that already expired while the process was waiting.
+  const confirmationStartedAt = performance.now();
+  const databaseNow = await databaseCurrentTimeMs();
+  if (!coordinatorStarted || coordinatorSuspended || generation !== lifecycleGeneration) {
+    // A drain/stop/resume transition completed while the election was still
+    // waiting on the database. This claim belongs to a stale generation: never
+    // install leader state from it, and relinquish it so the successor can
+    // claim immediately.
+    await releaseControlPlaneLease(identity).catch((): void => undefined);
+    if (coordinatorState.role === "leader") await loseLeadership();
+    coordinatorState = followerState();
+    return;
+  }
+  const remainingMs = conservativeLeaseRemainingMs(lease.expiresAt, databaseNow, confirmationStartedAt);
+  if (remainingMs <= 0) {
+    if (coordinatorState.role === "leader") await loseLeadership();
+    coordinatorState = followerState(lease);
+    log.warn("Control-plane coordinator lease expired before confirmation", {
+      nodeId: identity.nodeId,
+      fencingEpoch: lease.fencingEpoch,
+    });
+    return;
+  }
+
+  const becameLeader = coordinatorState.role !== "leader" || coordinatorState.fencingEpoch !== lease.fencingEpoch;
+  coordinatorState = { ...followerState(lease), role: "leader" };
+  if (becameLeader) leadershipGeneration += 1;
+  armLeadershipWatchdog(remainingMs);
+  if (!becameLeader) return;
+  const leaderGeneration = leadershipGeneration;
+  log.info("Control-plane coordinator lease acquired", {
+    nodeId: identity.nodeId,
+    fencingEpoch: lease.fencingEpoch,
+  });
+  activateLeadership(lease.fencingEpoch, leaderGeneration);
+}
+
 async function coordinatorTick(): Promise<void> {
   if (!coordinatorStarted) return;
   if (coordinatorSuspended) {
@@ -306,49 +394,11 @@ async function coordinatorTick(): Promise<void> {
     nodeId: controlPlaneNodeId(),
     instanceId: controlPlaneInstanceId,
   };
+  const generation = lifecycleGeneration;
   try {
-    const lease = await claimControlPlaneLease(identity);
+    const lease = await (claimControlPlaneLeaseImpl ?? claimControlPlaneLease)(identity);
     if (lease.acquired) {
-      // Verify the returned lease against the same authoritative clock after
-      // the claim completes. A stalled network response must not resurrect a
-      // lease that already expired while the process was waiting.
-      const confirmationStartedAt = performance.now();
-      const databaseNow = await databaseCurrentTimeMs();
-      const remainingMs = conservativeLeaseRemainingMs(lease.expiresAt, databaseNow, confirmationStartedAt);
-      if (remainingMs <= 0) {
-        if (coordinatorState.role === "leader") await loseLeadership();
-        coordinatorState = {
-          role: "follower",
-          ownerNodeId: lease.ownerNodeId,
-          fencingEpoch: lease.fencingEpoch,
-          expiresAt: lease.expiresAt,
-          heartbeatAt: lease.heartbeatAt,
-        };
-        log.warn("Control-plane coordinator lease expired before confirmation", {
-          nodeId: identity.nodeId,
-          fencingEpoch: lease.fencingEpoch,
-        });
-        return;
-      }
-
-      const becameLeader = coordinatorState.role !== "leader" || coordinatorState.fencingEpoch !== lease.fencingEpoch;
-      coordinatorState = {
-        role: "leader",
-        ownerNodeId: lease.ownerNodeId,
-        fencingEpoch: lease.fencingEpoch,
-        expiresAt: lease.expiresAt,
-        heartbeatAt: lease.heartbeatAt,
-      };
-      if (becameLeader) leadershipGeneration += 1;
-      armLeadershipWatchdog(remainingMs);
-      if (becameLeader) {
-        const generation = leadershipGeneration;
-        log.info("Control-plane coordinator lease acquired", {
-          nodeId: identity.nodeId,
-          fencingEpoch: lease.fencingEpoch,
-        });
-        activateLeadership(lease.fencingEpoch, generation);
-      }
+      await applyAcquiredLease(identity, lease, generation);
     } else {
       if (coordinatorState.role === "leader") {
         log.warn("Control-plane coordinator lease lost", {
@@ -360,13 +410,7 @@ async function coordinatorTick(): Promise<void> {
       } else {
         clearLeadershipWatchdog();
       }
-      coordinatorState = {
-        role: "follower",
-        ownerNodeId: lease.ownerNodeId,
-        fencingEpoch: lease.fencingEpoch,
-        expiresAt: lease.expiresAt,
-        heartbeatAt: lease.heartbeatAt,
-      };
+      coordinatorState = followerState(lease);
     }
   } catch (error: unknown) {
     if (coordinatorState.role === "leader") {
@@ -390,7 +434,7 @@ async function coordinatorTick(): Promise<void> {
 export async function runControlPlaneCoordinatorTickForTests(): Promise<void> {
   if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
   coordinatorTimer = undefined;
-  await coordinatorTick();
+  await startCoordinatorTick();
 }
 
 export function controlPlaneCoordinatorSuspended(): boolean {
@@ -405,7 +449,12 @@ export function controlPlaneCoordinatorSuspended(): boolean {
 export async function resignControlPlaneLease(): Promise<boolean> {
   const alreadySuspended = coordinatorSuspended;
   coordinatorSuspended = true;
+  lifecycleGeneration += 1;
   if (!haEnabled()) return false;
+  // Wait for a claim already waiting on the database: it must not install
+  // leader state after resignation, and its stale claim must be released
+  // before the successor is expected to contend.
+  await awaitInFlightTick();
 
   const epoch = coordinatorState.fencingEpoch;
   const wasLeader = coordinatorState.role === "leader";
@@ -443,10 +492,11 @@ export async function resignControlPlaneLease(): Promise<boolean> {
 export function resumeControlPlaneCoordinator(): void {
   if (!coordinatorSuspended) return;
   coordinatorSuspended = false;
+  lifecycleGeneration += 1;
   if (!coordinatorStarted) return;
   if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
   coordinatorTimer = undefined;
-  void coordinatorTick();
+  void startCoordinatorTick();
 }
 
 function handleResignationEvent(payload: Readonly<Record<string, unknown>>): void {
@@ -455,7 +505,7 @@ function handleResignationEvent(payload: Readonly<Record<string, unknown>>): voi
   if (coordinatorState.role === "leader") return;
   if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
   coordinatorTimer = undefined;
-  void coordinatorTick();
+  void startCoordinatorTick();
 }
 
 export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbacks): Promise<void> {
@@ -478,6 +528,7 @@ export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbac
   if (coordinatorStarted) return;
   coordinatorCallbacks = callbacks;
   coordinatorStarted = true;
+  lifecycleGeneration += 1;
   // Preserve a suspension requested before election startup (for example a
   // node that boots already draining). A fresh process starts unsuspended by
   // module initialization; stopControlPlaneCoordinator resets it on shutdown.
@@ -489,7 +540,7 @@ export async function startControlPlaneCoordinator(callbacks: CoordinatorCallbac
     expiresAt: null,
     heartbeatAt: null,
   };
-  await coordinatorTick();
+  await startCoordinatorTick();
 }
 
 export async function stopControlPlaneCoordinator(): Promise<void> {
@@ -498,8 +549,11 @@ export async function stopControlPlaneCoordinator(): Promise<void> {
   coordinatorSuspended = false;
   if (!coordinatorStarted) return;
   coordinatorStarted = false;
+  lifecycleGeneration += 1;
   if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
   coordinatorTimer = undefined;
+  // A delayed election must not be able to reacquire ownership after shutdown.
+  await awaitInFlightTick();
   const wasLeader = coordinatorState.role === "leader";
   if (wasLeader) await loseLeadership();
   else clearLeadershipWatchdog();

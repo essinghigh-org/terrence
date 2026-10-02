@@ -519,8 +519,19 @@ describe("instance metrics", () => {
     expect(body).toContain("# TYPE terrence_process_rss_bytes gauge");
     expect(body).toMatch(/terrence_process_rss_bytes \d+/);
     expect(body).toMatch(/terrence_requests_total \d+/);
-    expect(body).toMatch(/terrence_request_duration_samples\{journey="workspace-list"\} \d+/);
+    expect(body).toMatch(/terrence_request_duration_retained_samples\{journey="workspace-list"\} \d+/);
+    expect(body).toMatch(/terrence_request_journey_requests_total\{journey="workspace-list"\} \d+/);
     expect(body).toMatch(/terrence_event_loop_delay_samples \d+/);
+    // Counters must be declared as counters; retained-sample occupancy is a
+    // gauge so eviction is not mistaken for a counter reset.
+    expect(body).toContain("# TYPE terrence_request_journey_requests_total counter");
+    expect(body).toContain("# TYPE terrence_request_duration_retained_samples gauge");
+    expect(body).toContain("# TYPE terrence_event_loop_delay_mean_ms gauge");
+    // Slow-query families are only emitted once a query crosses the threshold;
+    // when present, the cumulative counter must not carry rolling-buffer counts.
+    if (body.includes("terrence_database_slow_fingerprint_total{")) {
+      expect(body).toContain("# TYPE terrence_database_slow_fingerprint_total counter");
+    }
     expect(body).not.toMatch(/workspace_id|resource_address/);
     expect(body).toMatch(/terrence_worker_polls_total \d+/);
     // SQLite-only bloat metric: health.ts only emits the value line when

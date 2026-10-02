@@ -1,6 +1,7 @@
 import { newResourceId } from "./resource-id";
 import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
 import { envFlag } from "./env";
+import { integerSetting } from "./runtime-config";
 import { db } from "../db";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
@@ -55,7 +56,20 @@ type EnqueueDurableJobOptions = Readonly<{
   budget?: DurableJobBudgetOptions;
 }>;
 
-const LEASE_MS = 30_000;
+/**
+ * Durable lease TTL. Bounds how long another worker must wait before it may
+ * reclaim an abandoned job, and how long a handler may keep running after its
+ * ownership can no longer be proved (issue #946).
+ *
+ * Read per use rather than cached at import so an operator (or an isolated
+ * worker-level test) can shorten the window without reloading the module.
+ */
+const leaseMs = (): number => integerSetting("TERRENCE_DURABLE_LEASE_MS");
+
+/** Renewal cadence, clamped to half the TTL so one transient database error
+ * never exhausts the lease on its own. */
+const renewMs = (): number =>
+  Math.min(integerSetting("TERRENCE_DURABLE_RENEW_MS"), Math.max(300, Math.floor(leaseMs() / 2)));
 const POLL_MS = 500;
 /** Attempts before a durable job dead-letters (todo 186); shared with the webhook delivery mirror. */
 export const DURABLE_MAX_ATTEMPTS = 3;
@@ -293,51 +307,60 @@ export async function claimDurableJob(
 ): Promise<DurableJob | undefined> {
   if (kinds.length === 0) return undefined;
   await requeueExpiredJobs(now);
-  // Read a bounded candidate window and apply the same policy used by
-  // admission. The limit prevents a noisy queue from turning every poll into
-  // an unbounded JSON scan; the row-level update below remains the fencing
-  // authority when another worker wins the race.
-  const [candidateRows, runningRows] = await Promise.all([
-    db.query.durableJobs.findMany({
+  const runningRows = await db.query.durableJobs.findMany({
+    where: eq(durableJobs.status, "running"),
+    columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
+  });
+  // Scan bounded candidate windows. Budget selection can reject the whole oldest
+  // window (class/org/byte limits), so an empty selection for one window must
+  // not hide later eligible work — including critical jobs owed reserved
+  // capacity. The per-job compare-and-set update remains the fencing authority.
+  const PAGE_SIZE = 256;
+  const MAX_PAGES = 4;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const candidateRows = await db.query.durableJobs.findMany({
       where: and(
         inArray(durableJobs.kind, [...kinds]),
         eq(durableJobs.status, "queued"),
         lte(durableJobs.runAfter, now),
       ),
       orderBy: [asc(durableJobs.runAfter), asc(durableJobs.createdAt)],
-      limit: 256,
-    }),
-    db.query.durableJobs.findMany({
-      where: eq(durableJobs.status, "running"),
-      columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
-    }),
-  ]);
-  const selected = selectResourceBudgetJob(
-    parseResourceBudgetConfig(),
-    {
-      queued: candidateRows.map(resourceBudgetJobFromDurable),
-      running: runningRows.map(resourceBudgetJobFromDurable),
-    },
-    now,
-  );
-  const candidate = selected === undefined ? undefined : candidateRows.find((row): boolean => row.id === selected.id);
-  if (candidate === undefined) return undefined;
-  const lockToken = crypto.randomUUID();
-  const updated = await db
-    .update(durableJobs)
-    .set({
-      status: "running",
-      attempts: candidate.attempts + 1,
-      lockedBy: workerId,
-      lockToken,
-      leaseExpiresAt: now + LEASE_MS,
-      heartbeatAt: now,
-      updatedAt: now,
-      lastError: null,
-    })
-    .where(and(eq(durableJobs.id, candidate.id), eq(durableJobs.status, "queued"), lte(durableJobs.runAfter, now)))
-    .returning();
-  return updated[0];
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+    });
+    if (candidateRows.length === 0) return undefined;
+    const selected = selectResourceBudgetJob(
+      parseResourceBudgetConfig(),
+      {
+        queued: candidateRows.map(resourceBudgetJobFromDurable),
+        running: runningRows.map(resourceBudgetJobFromDurable),
+      },
+      now,
+    );
+    const candidate = selected === undefined ? undefined : candidateRows.find((row): boolean => row.id === selected.id);
+    if (candidate !== undefined) {
+      const lockToken = crypto.randomUUID();
+      const updated = await db
+        .update(durableJobs)
+        .set({
+          status: "running",
+          attempts: candidate.attempts + 1,
+          lockedBy: workerId,
+          lockToken,
+          leaseExpiresAt: now + leaseMs(),
+          heartbeatAt: now,
+          updatedAt: now,
+          lastError: null,
+        })
+        .where(and(eq(durableJobs.id, candidate.id), eq(durableJobs.status, "queued"), lte(durableJobs.runAfter, now)))
+        .returning();
+      if (updated[0] !== undefined) return updated[0];
+      // Lost a compare-and-set race: retry selection from this window.
+      continue;
+    }
+    if (candidateRows.length < PAGE_SIZE) return undefined;
+  }
+  return undefined;
 }
 
 /** Aggregate queue diagnostics for site-admin metrics and the admin API. */
@@ -404,7 +427,7 @@ export async function heartbeatDurableJob(job: DeepReadonly<DurableJob>, now = D
   const updated = await db
     .update(durableJobs)
     .set({
-      leaseExpiresAt: now + LEASE_MS,
+      leaseExpiresAt: now + leaseMs(),
       heartbeatAt: now,
       updatedAt: now,
     })
@@ -493,31 +516,55 @@ async function runJob(
 ): Promise<void> {
   const operation = createOperationContext();
   let heartbeatFailures = 0;
+  let lastConfirmedLeaseAt = Date.now();
   activeDurableJobs += 1;
+  const fenceLeaseLost = (): void => {
+    if (!operation.signal.aborted) operation.cancel("lease-lost", new Error("Durable job lease was lost"));
+  };
   const heartbeatTimer = setInterval((): void => {
+    // Lease-expiry watchdog: if no renewal has confirmed ownership within the
+    // last lease window (including a hung renewal promise), fence the handler.
+    if (Date.now() - lastConfirmedLeaseAt >= leaseMs()) {
+      log.warn("Durable job lease could not be confirmed within its TTL, aborting handler", { jobId: job.id });
+      fenceLeaseLost();
+      clearInterval(heartbeatTimer);
+      return;
+    }
     void heartbeatDurableJob(job)
       .then((ok): void => {
-        if (!ok) {
+        if (operation.signal.aborted) return; // never revive a fenced operation
+        if (ok) {
+          lastConfirmedLeaseAt = Date.now();
+          heartbeatFailures = 0;
+        } else {
           heartbeatFailures += 1;
-          operation.cancel("lease-lost", new Error("Durable job lease was lost"));
-        } else heartbeatFailures = 0;
+          fenceLeaseLost();
+        }
         if (heartbeatFailures >= 3) {
           log.warn("Durable job heartbeat repeatedly failed, stopping heartbeat", { jobId: job.id });
           clearInterval(heartbeatTimer);
         }
       })
       .catch((error: unknown): void => {
+        if (operation.signal.aborted) return;
         heartbeatFailures += 1;
         log.warn("Durable job heartbeat failed", { jobId: job.id, error: String(error), failures: heartbeatFailures });
-        if (heartbeatFailures >= 3) clearInterval(heartbeatTimer);
+        if (heartbeatFailures >= 3) {
+          // Repeated renewal errors outlive the lease: ownership can no
+          // longer be proved, so fence the handler instead of only stopping
+          // the timer.
+          fenceLeaseLost();
+          clearInterval(heartbeatTimer);
+        }
       });
-  }, LEASE_MS / 3);
+  }, renewMs());
   try {
     await handler(job, {
       signal: operation.signal,
       heartbeat: async (): Promise<boolean> => {
         const owned = await heartbeatDurableJob(job);
-        if (!owned) operation.cancel("lease-lost", new Error("Durable job lease was lost"));
+        if (owned) lastConfirmedLeaseAt = Date.now();
+        else fenceLeaseLost();
         return owned;
       },
       canceled: async (): Promise<boolean> => {
@@ -565,54 +612,71 @@ async function runJob(
   }
 }
 
-export function startDurableJobWorker(handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>): void {
-  if (envFlag("TERRENCE_DISABLE_WORKER") || workerRunning) return;
-  workerRunning = true;
-  const workerId = `durable-${process.pid}-${crypto.randomUUID()}`;
-  const kinds = Object.keys(handlers) as DurableJobKind[];
-  const schedulePoll = (): void => {
-    const timer = setTimeout((): void => {
-      void poll();
-    }, jitteredPollDelay(POLL_MS));
+/** Concurrent dispatch lanes. The resource budget remains the authority on how
+ * many jobs may actually run; lanes only stop a single slow handler from
+ * monopolising the process's only poll loop (issue #931). */
+const DURABLE_WORKER_LANES = 8;
+
+const sleep = async (ms: number): Promise<void> => {
+  await new Promise<void>((resolve): void => {
+    const timer = setTimeout(resolve, ms);
     timer.unref?.();
-  };
-  const poll = async (): Promise<void> => {
-    // Load the worker module only when the durable worker is actually enabled.
-    // Keeping this edge lazy avoids importing the execution sandbox while
-    // standalone helpers (including agent authentication) use this module.
-    const { workerQueueDraining } = await import("../worker");
+  });
+};
+
+/** Run one dispatch lane until the worker is stopped. */
+async function runDurableJobLane(
+  workerId: string,
+  kinds: readonly DurableJobKind[],
+  handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>,
+): Promise<void> {
+  // Load the worker module only when the durable worker is actually enabled.
+  // Keeping this edge lazy avoids importing the execution sandbox while
+  // standalone helpers (including agent authentication) use this module.
+  const { workerQueueDraining } = await import("../worker");
+  while (workerRunning) {
     if (workerQueueDraining()) {
-      schedulePoll();
-      return;
+      await sleep(POLL_MS);
+      continue;
     }
-    let claimCounted = false;
+    activeDurableClaims += 1;
+    let job: DurableJob | undefined;
     try {
-      activeDurableClaims += 1;
-      claimCounted = true;
-      const job = await claimDurableJob(workerId, kinds);
-      if (job === undefined) {
-        activeDurableClaims -= 1;
-        claimCounted = false;
-      } else {
-        const handler = handlers[job.kind as DurableJobKind];
-        if (handler === undefined) {
-          await finishDurableJob(job, "failed", `No handler registered for ${job.kind}`);
-          activeDurableClaims -= 1;
-          claimCounted = false;
-        } else {
-          // runJob increments activeDurableJobs synchronously before its first
-          // await, so there is no zero-activity gap between claim and handler.
-          activeDurableClaims -= 1;
-          claimCounted = false;
-          await runJob(job, handler);
-        }
-      }
+      job = await claimDurableJob(workerId, kinds);
     } catch (error: unknown) {
       log.error("Durable job poll failed", { error: String(error) });
     } finally {
-      if (claimCounted) activeDurableClaims -= 1;
-      schedulePoll();
+      activeDurableClaims -= 1;
     }
-  };
-  void poll();
+    if (job === undefined) {
+      await sleep(jitteredPollDelay(POLL_MS));
+      continue;
+    }
+    const handler = handlers[job.kind as DurableJobKind];
+    if (handler === undefined) {
+      await finishDurableJob(job, "failed", `No handler registered for ${job.kind}`);
+      continue;
+    }
+    // runJob increments activeDurableJobs synchronously before its first
+    // await, so there is no zero-activity gap between claim and handler.
+    await runJob(job, handler);
+  }
+}
+
+export function startDurableJobWorker(handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>): void {
+  if (envFlag("TERRENCE_DISABLE_WORKER") || workerRunning) return;
+  workerRunning = true;
+  const kinds = Object.keys(handlers) as DurableJobKind[];
+  for (let lane = 0; lane < DURABLE_WORKER_LANES; lane++) {
+    const workerId = `durable-${process.pid}-${lane}-${crypto.randomUUID()}`;
+    void runDurableJobLane(workerId, kinds, handlers).catch((error: unknown): void => {
+      log.error("Durable job lane stopped unexpectedly", { lane, error: String(error) });
+    });
+  }
+}
+
+/** Stop every dispatch lane. In-flight handlers keep their leases until they
+ * return (or their lease expires and another worker reclaims the job). */
+export function stopDurableJobWorker(): void {
+  workerRunning = false;
 }

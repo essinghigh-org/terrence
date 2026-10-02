@@ -134,6 +134,11 @@ export const auditLogs: typeof sqliteSchema.auditLogs =
     ? sqliteSchema.auditLogs
     : (pgTables[dbNameOf(sqliteSchema.auditLogs)] as unknown as typeof sqliteSchema.auditLogs);
 
+export const backupRehearsalJobs: typeof sqliteSchema.backupRehearsalJobs =
+  pgTables === null
+    ? sqliteSchema.backupRehearsalJobs
+    : (pgTables[dbNameOf(sqliteSchema.backupRehearsalJobs)] as unknown as typeof sqliteSchema.backupRehearsalJobs);
+
 export const cidrRangeListAgentPools: typeof sqliteSchema.cidrRangeListAgentPools =
   pgTables === null
     ? sqliteSchema.cidrRangeListAgentPools

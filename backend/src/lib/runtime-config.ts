@@ -48,6 +48,12 @@ export const integerConfiguration = {
   PORT: { default: 3000, min: 1, max: 65535 },
   SYSTEM_API_PORT: { default: 8443, min: 1, max: 65535 },
   TERRENCE_DRAIN_GRACE_MS: { default: 6000, min: 0, max: 25000 },
+  // Durable-job lease TTL and renewal interval. The TTL also bounds how long a
+  // durable handler may keep running once its ownership can no longer be
+  // proved: renewals that stop (or keep failing) cancel the handler with
+  // lease-loss instead of leaving it running unowned.
+  TERRENCE_DURABLE_LEASE_MS: { default: 30000, min: 300, max: 3600000 },
+  TERRENCE_DURABLE_RENEW_MS: { default: 10000, min: 100, max: 3600000 },
   TERRENCE_RUN_CONCURRENCY: { default: 5, min: 1, max: 1024 },
   HEALTH_ASSESSMENT_CONCURRENCY: { default: 2, min: 1, max: 1024 },
   HEALTH_ASSESSMENT_INTERVAL_MS: { default: 86_400_000, min: 1, max: timerMaximum },

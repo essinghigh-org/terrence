@@ -463,6 +463,13 @@
       "when": 1790038764819,
       "tag": "0065_purple_sabretooth",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790962305041,
+      "tag": "0066_silly_xorn",
+      "breakpoints": true
     }
   ]
 }

@@ -301,6 +301,9 @@ export function resetPoolMetrics(): void {
   queriesExhausted = 0;
   samples.length = 0;
   slowQueries.length = 0;
+  for (const key of Object.keys(slowFingerprintCumulative)) {
+    Reflect.deleteProperty(slowFingerprintCumulative, key);
+  }
   sqliteWriteContention = 0;
   for (const state of Object.values(budgetStates)) {
     for (const waiter of state.queued) {
@@ -352,12 +355,20 @@ const SLOW_THRESHOLD_MS = integerSetting("TERRENCE_DB_SLOW_QUERY_MS");
 
 const slowQueries: SlowQuery[] = [];
 const MAX_SLOW = 64;
+// Cumulative, bounded-cardinality fingerprint counts. Unlike the bounded
+// slowQueries buffer, this only ever increases, so it is safe to export as a
+// Prometheus counter (ordinary eviction must not look like a process reset).
+const MAX_FINGERPRINTS = 256;
+const slowFingerprintCumulative: Record<string, number> = {};
 
 export function recordSlowQuery(sqlText: string, durationMs: number): void {
   if (durationMs < SLOW_THRESHOLD_MS) return;
   const fp = fingerprintQuery(sqlText);
   slowQueries.push({ at: Date.now(), durationMs, fingerprint: fp });
   if (slowQueries.length > MAX_SLOW) slowQueries.splice(0, slowQueries.length - MAX_SLOW);
+  const existing = slowFingerprintCumulative[fp];
+  if (existing !== undefined) slowFingerprintCumulative[fp] = existing + 1;
+  else if (Object.keys(slowFingerprintCumulative).length < MAX_FINGERPRINTS) slowFingerprintCumulative[fp] = 1;
   // Also emit to stderr at debug so an operator tailing logs sees the hit
   // without scraping /metrics; bounded to one line.
   console.warn(`[terrence] slow query ${durationMs.toFixed(0)}ms fingerprint=${JSON.stringify(fp)}`);
@@ -367,6 +378,10 @@ export function slowQueryFingerprints(): Readonly<Record<string, number>> {
   const counts: Record<string, number> = {};
   for (const sq of slowQueries) counts[sq.fingerprint] = (counts[sq.fingerprint] ?? 0) + 1;
   return counts;
+}
+
+export function slowQueryFingerprintTotals(): Readonly<Record<string, number>> {
+  return { ...slowFingerprintCumulative };
 }
 
 export function slowQueriesSnapshot(): readonly SlowQuery[] {

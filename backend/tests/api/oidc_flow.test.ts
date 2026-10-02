@@ -35,6 +35,8 @@ function signJwt(
 
 describe("OIDC SSO flow", () => {
   const suffix = crypto.randomUUID();
+  // Valid PKCE S256 pair used to park a pending Terraform CLI authorization.
+  const OAUTH_CODE_CHALLENGE = "Dp9vmwEa1tgqNwqxEUYnh-u6ZyVojZJx8h9f6xhE18A";
   const adminId = `usr-oidc-admin-${suffix}`;
   const localUserId = `usr-oidc-local-${suffix}`;
   const adminToken = `oidc-admin-token-${suffix}`;
@@ -101,8 +103,13 @@ describe("OIDC SSO flow", () => {
   const baseUrl = (): string => `http://127.0.0.1:${server?.port ?? 0}`;
 
   /** Drive one full browser SSO sequence: /oidc/auth -> IdP authorize -> SP callback. */
-  async function completeFlow(callbackMethod: "GET" | "POST" = "GET"): Promise<{ response: Response; state: string }> {
-    const authResponse = await app.handle(new Request("http://terrence.test/users/oidc/auth"));
+  async function completeFlow(
+    callbackMethod: "GET" | "POST" = "GET",
+    authQuery = "",
+  ): Promise<{ response: Response; state: string }> {
+    const authResponse = await app.handle(
+      new Request(`http://terrence.test/users/oidc/auth${authQuery === "" ? "" : `?${authQuery}`}`),
+    );
     expect(authResponse.status).toBe(302);
     // The auth response sets the state cookie that binds this browser to the
     // flow; the callback must present it (same-origin browser behavior).
@@ -308,6 +315,66 @@ describe("OIDC SSO flow", () => {
       }),
     );
     expect(refreshResponse.status).toBe(200);
+  });
+
+  test("completes a pending terraform login OAuth handshake instead of landing on /app", async () => {
+    mockSubject = `oidc-sub-continuation-${suffix}`;
+    mockUsername = `oidc-continuation-${suffix}`;
+    mockEmail = `oidc-continuation-${suffix}@example.com`;
+
+    // A signed-out `terraform login` parks a pending authorization first.
+    const authz = await app.handle(
+      new Request(
+        "http://terrence.test/oauth/authorization?response_type=code&client_id=terraform-cli" +
+          `&code_challenge=${OAUTH_CODE_CHALLENGE}&code_challenge_method=S256` +
+          "&redirect_uri=http://localhost:10000/login&state=st-oidc-continuation",
+      ),
+    );
+    expect(authz.status).toBe(302);
+    const pendingState = new URL(authz.headers.get("Location") ?? "", "http://terrence.test").searchParams.get(
+      "oauth_state",
+    );
+    if (pendingState === null) throw new Error("pending OAuth state was not returned");
+
+    const { response } = await completeFlow("GET", `oauth_state=${encodeURIComponent(pendingState)}`);
+    expect(response.status).toBe(302);
+    const resumed = new URL(response.headers.get("Location") ?? "", "http://terrence.test");
+    expect(resumed.pathname).toBe("/oauth/authorization/complete");
+    expect(resumed.searchParams.get("oauth_state")).toBe(pendingState);
+    // The state cookie must be re-issued: the cross-site callback cannot carry
+    // the original SameSite=Lax cookie.
+    expect(cookieValue(response, "terraform_oauth_state")).toBe(pendingState);
+
+    const complete = await app.handle(
+      new Request(`http://terrence.test/oauth/authorization/complete?oauth_state=${encodeURIComponent(pendingState)}`, {
+        headers: {
+          Cookie: `terraform_oauth_state=${pendingState}; terrence_refresh=${cookieValue(response, "terrence_refresh")}`,
+        },
+      }),
+    );
+    expect(complete.status).toBe(302);
+    const cliCallback = new URL(complete.headers.get("Location") ?? "");
+    expect(cliCallback.host).toBe("localhost:10000");
+    expect(cliCallback.searchParams.get("code")).not.toBeNull();
+    expect(cliCallback.searchParams.get("state")).toBe("st-oidc-continuation");
+  });
+
+  test("preserves a validated returnTo destination and rejects untrusted continuations", async () => {
+    const { response } = await completeFlow("GET", `returnTo=${encodeURIComponent("/app/settings")}`);
+    expect(response.status).toBe(302);
+    expect(new URL(response.headers.get("Location") ?? "", "http://terrence.test").pathname).toBe("/app/settings");
+
+    const evilReturn = await app.handle(
+      new Request(`http://terrence.test/users/oidc/auth?returnTo=${encodeURIComponent("https://evil.example")}`),
+    );
+    expect(evilReturn.status).toBe(400);
+    expect(await evilReturn.text()).toContain("not allowed");
+
+    const staleState = await app.handle(
+      new Request(`http://terrence.test/users/oidc/auth?oauth_state=${encodeURIComponent(`expired-${suffix}`)}`),
+    );
+    expect(staleState.status).toBe(400);
+    expect(await staleState.text()).toContain("expired");
   });
 
   test("links an existing local account by matching email", async () => {

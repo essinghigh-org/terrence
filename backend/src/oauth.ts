@@ -13,7 +13,9 @@ const CLIENT_ID = "terraform-cli";
 const MIN_PORT = 10000;
 const MAX_PORT = 10010;
 const CODE_TTL_MS = 5 * 60 * 1000;
-const OAUTH_STATE_COOKIE = "terraform_oauth_state";
+export const OAUTH_STATE_COOKIE = "terraform_oauth_state";
+/** Lifetime of the browser state cookie that authorizes handshake completion. */
+export const OAUTH_STATE_TTL_MS = CODE_TTL_MS;
 
 type AuthorizationRequest = Readonly<{
   clientId: string;
@@ -49,7 +51,7 @@ async function putPendingAuth(id: string, value: Readonly<StoredPendingAuth>): P
 async function takePendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
   return takeOAuthHandshakeState<StoredPendingAuth>(PENDING_AUTH_PREFIX + id);
 }
-async function peekPendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
+export async function peekPendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
   const row = await peekOAuthHandshakeState(PENDING_AUTH_PREFIX + id);
   return row?.payload as StoredPendingAuth | undefined;
 }

@@ -139,6 +139,8 @@ const PARTIAL_INDEX_WHERE: Readonly<Record<string, (table: Readonly<Record<strin
   projects_org_default_idx: (table): SQL => sql`${table["isDefault"]} = true`,
   // eslint-disable-next-line @typescript-eslint/naming-convention -- key is the index name by necessity (looked up by cfg.name)
   organization_invitations_org_email_pending_idx: (table): SQL => sql`${table["status"]} = 'pending'`,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- key is the index name by necessity (looked up by cfg.name)
+  backup_rehearsal_jobs_one_running: (table): SQL => sql`${table["status"]} = 'running'`,
 };
 
 function tableName(table: DeepReadonly<SqliteTable>): string {

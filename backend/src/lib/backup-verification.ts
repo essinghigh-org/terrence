@@ -544,7 +544,7 @@ export async function createBackupManifestForSource(
     );
   }
   try {
-    const storage = resolve(source.storagePath ?? root);
+    const storage = await resolveStoragePath(root, source.storagePath);
     const databasePath = await discoverDatabase(
       root,
       source.databasePath ??
@@ -593,7 +593,11 @@ export async function createBackupManifestForSource(
       };
       const manifest = normalizeManifest(body);
       if (options.persist === false) return { manifest, path: null };
-      const directory = resolve(options.outputDirectory ?? join(storage, BACKUP_MANIFEST_DIRECTORY));
+      // Archive inputs are extracted into disposable scratch space: persist the
+      // manifest next to the source archive so the returned path survives the
+      // operation instead of pointing inside the deleted extraction directory.
+      const durableBase = temporaryRoot === null ? storage : dirname(sourcePath);
+      const directory = resolve(options.outputDirectory ?? join(durableBase, BACKUP_MANIFEST_DIRECTORY));
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const path = join(directory, BACKUP_MANIFEST_FILE);
       await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -731,8 +735,17 @@ async function findFile(root: string, names: readonly string[]): Promise<string 
   return null;
 }
 
-async function discoverManifest(root: string): Promise<BackupManifest> {
-  const manifestPath = await findFile(root, [BACKUP_MANIFEST_FILE, "manifest.json"]);
+async function discoverManifest(root: string, sidecarPaths: readonly string[] = []): Promise<BackupManifest> {
+  // A manifest generated from an archive is persisted beside that archive, so
+  // the sidecar is consulted before searching the extracted tree.
+  let manifestPath: string | null = null;
+  for (const candidate of sidecarPaths) {
+    if (await pathExists(candidate)) {
+      manifestPath = candidate;
+      break;
+    }
+  }
+  manifestPath ??= await findFile(root, [BACKUP_MANIFEST_FILE, "manifest.json"]);
   if (manifestPath === null)
     throw new BackupVerificationError("manifest-missing", `Backup does not contain ${BACKUP_MANIFEST_FILE}`);
   let parsed: unknown;
@@ -822,18 +835,31 @@ async function prepareSource(source: BackupSourceOptions): Promise<PreparedSourc
   let root = sourceInfo.isDirectory() ? sourcePath : dirname(sourcePath);
   let archivePath: string | null = null;
   let temporaryRoot: string | null = null;
-  if (!sourceInfo.isDirectory() && sourceInfo.isFile() && sourceLooksLikeArchive(sourcePath)) {
+  const isArchive = !sourceInfo.isDirectory() && sourceInfo.isFile() && sourceLooksLikeArchive(sourcePath);
+  if (isArchive) {
     ({ archivePath, temporaryRoot } = await unpackArchiveSource(sourcePath));
     root = temporaryRoot;
   }
 
-  const database = await discoverDatabase(root, explicitDatabasePath(source, sourcePath, sourceInfo));
-  const manifest = await discoverManifest(root);
-  const storage = await resolveStoragePath(root, source.storagePath);
-  const cleanup = async (): Promise<void> => {
-    if (temporaryRoot !== null) await rm(temporaryRoot, { recursive: true, force: true });
-  };
-  return { root, storagePath: storage, databasePath: database, manifest, archivePath, cleanup };
+  try {
+    const database = await discoverDatabase(root, explicitDatabasePath(source, sourcePath, sourceInfo));
+    // An archive's manifest is persisted beside it (see
+    // createBackupManifestForSource), so verification can use the same file
+    // without the operator reconstructing it inside the archive.
+    const sidecars = isArchive ? [join(dirname(sourcePath), BACKUP_MANIFEST_DIRECTORY, BACKUP_MANIFEST_FILE)] : [];
+    const manifest = await discoverManifest(root, sidecars);
+    const storage = await resolveStoragePath(root, source.storagePath);
+    const cleanup = async (): Promise<void> => {
+      if (temporaryRoot !== null) await rm(temporaryRoot, { recursive: true, force: true });
+    };
+    return { root, storagePath: storage, databasePath: database, manifest, archivePath, cleanup };
+  } catch (error) {
+    // prepareSource owns the extraction scratch space until it successfully
+    // transfers ownership to the caller (cleanup). Manifest parsing, database
+    // discovery and storage-resolution failures must not leak it.
+    if (temporaryRoot !== null) await rm(temporaryRoot, { recursive: true, force: true }).catch((): void => undefined);
+    throw error;
+  }
 }
 
 function check(status: BackupCheck["status"], name: string, detail?: string): BackupCheck {

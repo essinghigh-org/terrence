@@ -10,6 +10,7 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { databaseCurrentTimeMs, db } from "../db";
 import { controlPlaneNodes } from "../db/schema";
 import {
+  controlPlaneElectionInFlight,
   controlPlaneCoordinatorSuspended,
   isControlPlaneCoordinatorLeader,
   resignControlPlaneLease,
@@ -117,7 +118,8 @@ function drainComplete(): boolean {
     activity.activeAssessments === 0 &&
     activity.activeDurableJobs === 0 &&
     !isControlPlaneCoordinatorLeader() &&
-    controlPlaneCoordinatorSuspended()
+    controlPlaneCoordinatorSuspended() &&
+    !controlPlaneElectionInFlight()
   );
 }
 

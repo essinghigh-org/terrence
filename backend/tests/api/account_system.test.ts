@@ -4,6 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizationMemberships, organizations, systemApiTokens, users } from "../../src/db/schema";
 import { hashSystemApiToken } from "../../src/lib/system-api";
+import { beginLocalNodeDrain, resetNodeDrainStateForTests } from "../../src/lib/node-drain";
 
 describe("account and system compatibility", () => {
   const username = `account-${crypto.randomUUID()}`;
@@ -114,6 +115,18 @@ describe("account and system compatibility", () => {
     expect(await ping.text()).toBe("pong");
 
     expect((await app.handle(new Request("http://localhost/healthz"))).status).toBe(200);
+    expect((await app.handle(new Request("http://localhost/readyz"))).status).toBe(200);
+
+    // Regression: the public probe (used by the container health check) must
+    // stop advertising readiness while the node is draining, matching the
+    // structured readiness endpoint.
+    await beginLocalNodeDrain({ requestedBy: "test", reason: "regression" });
+    try {
+      expect((await app.handle(new Request("http://localhost/readyz"))).status).toBe(503);
+      expect((await app.handle(new Request("http://localhost/healthz"))).status).toBe(200);
+    } finally {
+      resetNodeDrainStateForTests();
+    }
     expect((await app.handle(new Request("http://localhost/readyz"))).status).toBe(200);
 
     const preflight = await app.handle(

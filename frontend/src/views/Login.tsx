@@ -148,13 +148,26 @@ function SsoButtons({
   showLocalForm,
   samlEnabled,
   oidcEnabled,
+  oauthState,
+  returnTo,
 }: Readonly<{
   ssoEnabled: boolean;
   showLocalForm: boolean;
   samlEnabled: boolean;
   oidcEnabled: boolean;
+  oauthState: string | null;
+  returnTo: string | null;
 }>): React.JSX.Element | null {
   if (!ssoEnabled) return null;
+  // Preserve the pending CLI OAuth handshake or deep-link destination through
+  // the SSO round-trip instead of always landing on /app after sign-in.
+  const ssoAuthHref = (base: string): string => {
+    const params = new URLSearchParams();
+    if (oauthState !== null && oauthState !== "") params.set("oauth_state", oauthState);
+    if (returnTo !== null && returnTo !== "") params.set("returnTo", returnTo);
+    const qs = params.toString();
+    return qs === "" ? base : `${base}?${qs}`;
+  };
   return (
     <div className="flex w-full flex-col gap-2 border-t pt-3">
       <p className="text-xs text-muted-foreground">
@@ -166,7 +179,7 @@ function SsoButtons({
           variant="outline"
           className="w-full"
           onClick={(): void => {
-            window.location.href = "/users/saml/auth";
+            window.location.href = ssoAuthHref("/users/saml/auth");
           }}
         >
           Sign in with SAML SSO
@@ -178,7 +191,7 @@ function SsoButtons({
           variant="outline"
           className="w-full"
           onClick={(): void => {
-            window.location.href = "/users/oidc/auth";
+            window.location.href = ssoAuthHref("/users/oidc/auth");
           }}
         >
           Sign in with OpenID Connect
@@ -409,6 +422,8 @@ export function Login(): React.JSX.Element {
                 showLocalForm={showLocalForm}
                 samlEnabled={samlEnabled}
                 oidcEnabled={oidcEnabled}
+                oauthState={oauthState}
+                returnTo={returnTo}
               />
             )}
             {(showLocalForm || mfaChallengeToken !== null) && (

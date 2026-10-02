@@ -7863,6 +7863,85 @@ async function errorInterruptedAssessments(): Promise<number> {
   return assessmentsErrored;
 }
 
+/**
+ * Release run-owned workspace locks whose owning run already reached a
+ * terminal status but whose final unlock was lost (process crash between the
+ * terminal commit and the finally-release, or a transient unlock failure
+ * followed by normal execution-lease release). Manual locks and locks of
+ * non-terminal or still-live runs are preserved; the conditional update
+ * matches the exact owning run so a lock acquired after reconciliation is
+ * never cleared.
+ */
+/** Execution ownership that has not yet expired. */
+function hasLiveExecutionOwnership(
+  owner: Readonly<{ executionOwnerNodeId: string | null; executionLeaseExpiresAt: number | null }>,
+  databaseNow: number,
+): boolean {
+  return (
+    owner.executionOwnerNodeId !== null &&
+    (owner.executionLeaseExpiresAt === null || owner.executionLeaseExpiresAt > databaseNow)
+  );
+}
+
+export async function releaseStrandedTerminalRunWorkspaceLocks(): Promise<number> {
+  const databaseNow = await databaseCurrentTimeMs().catch((): number => Date.now());
+  const locked = await db.query.workspaces.findMany({
+    where: and(eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "run")),
+    columns: {
+      id: true,
+      lockOwnerId: true,
+      executionOwnerNodeId: true,
+      executionLeaseExpiresAt: true,
+    },
+  });
+  if (locked.length === 0) return 0;
+  const ownerIds = [
+    ...new Set(
+      locked
+        .map((workspace): string | null => workspace.lockOwnerId)
+        .filter((value): value is string => typeof value === "string" && value !== ""),
+    ),
+  ];
+  const owningRuns =
+    ownerIds.length === 0
+      ? []
+      : await db.query.runs.findMany({
+          where: inArray(runs.id, ownerIds),
+          columns: {
+            id: true,
+            status: true,
+            executionOwnerNodeId: true,
+            executionLeaseExpiresAt: true,
+          },
+        });
+  const byId = new Map(owningRuns.map((run): [string, (typeof owningRuns)[number]] => [run.id, run]));
+  let released = 0;
+  for (const workspace of locked) {
+    const ownerRunId = workspace.lockOwnerId;
+    if (typeof ownerRunId !== "string" || ownerRunId === "") continue;
+    const run = byId.get(ownerRunId);
+    // A missing run row is releasable too: the owning run no longer exists.
+    if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) continue;
+    if (hasLiveExecutionOwnership(workspace, databaseNow)) continue;
+    if (run !== undefined && hasLiveExecutionOwnership(run, databaseNow)) continue;
+    const updated = await db
+      .update(workspaces)
+      .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
+      .where(
+        and(
+          eq(workspaces.id, workspace.id),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "run"),
+          eq(workspaces.lockOwnerId, ownerRunId),
+        ),
+      )
+      .returning({ id: workspaces.id });
+    if (updated.length > 0) released += 1;
+  }
+  if (released > 0) log.info("Released stranded run-owned workspace locks", { released });
+  return released;
+}
+
 export async function reconcileInterruptedLocalRuns(): Promise<{
   requeued: number;
   errored: number;
@@ -7884,6 +7963,9 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
 
   const rearmed = await rearmOrphanedApplies();
   const assessmentsErrored = await errorInterruptedAssessments();
+  await releaseStrandedTerminalRunWorkspaceLocks().catch((error: unknown): void => {
+    logBestEffortFailure("Could not release stranded terminal-run workspace locks", {}, error);
+  });
 
   return { requeued, errored, assessmentsErrored, rearmed };
 }
@@ -7901,6 +7983,11 @@ export async function reconcileExpiredLocalRunExecutions(): Promise<{
 }> {
   const databaseNow = await databaseCurrentTimeMs();
   const interruptedStatuses = [...REQUEUE_AFTER_RESTART, ...ERROR_AFTER_RESTART];
+  const sweepStrandedLocks = async (): Promise<void> => {
+    await releaseStrandedTerminalRunWorkspaceLocks().catch((error: unknown): void => {
+      logBestEffortFailure("Could not release stranded terminal-run workspace locks", {}, error);
+    });
+  };
   const candidates = await db.query.runs.findMany({
     where: and(
       isNotNull(runs.executionOwnerNodeId),
@@ -7917,7 +8004,10 @@ export async function reconcileExpiredLocalRunExecutions(): Promise<{
       planOnly: true,
     },
   });
-  if (candidates.length === 0) return { requeued: 0, errored: 0, rearmed: 0 };
+  if (candidates.length === 0) {
+    await sweepStrandedLocks();
+    return { requeued: 0, errored: 0, rearmed: 0 };
+  }
 
   const workspaceIds = [...new Set(candidates.map((run): string => run.workspaceId))];
   const agentWorkspaceIds = new Set(
@@ -7954,6 +8044,7 @@ export async function reconcileExpiredLocalRunExecutions(): Promise<{
     // that exact old generation so diagnostics do not accumulate stale owners.
     await clearExpiredRunExecutionLease(run.id, databaseNow);
   }
+  await sweepStrandedLocks();
   return { requeued, errored, rearmed };
 }
 

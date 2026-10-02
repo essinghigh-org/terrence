@@ -13,6 +13,7 @@ import {
   resignControlPlaneLease,
   resumeControlPlaneCoordinator,
   runControlPlaneCoordinatorTickForTests,
+  setClaimControlPlaneLeaseForTests,
   startControlPlaneCoordinator,
   StaleControlPlaneCoordinatorFenceError,
   stopControlPlaneCoordinator,
@@ -357,5 +358,89 @@ describe("coordinator resignation", () => {
     expect(
       await db.query.controlPlaneLeases.findFirst({ where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME) }),
     ).toBeUndefined();
+  });
+
+  test("a delayed claim cannot reacquire ownership after resignation or shutdown, and resume recovers", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+
+    let activated = 0;
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => {
+        activated += 1;
+      },
+      onLeadershipLost: handleControlPlaneLeadershipLost,
+    });
+    expect(controlPlaneCoordinatorState().role).toBe("leader");
+
+    // Block the next election: the claim enters, then waits on a test gate.
+    let releaseGate: () => void = (): void => undefined;
+    let entered: () => void = (): void => undefined;
+    const enteredPromise = new Promise<void>((resolve): void => {
+      entered = resolve;
+    });
+    const gatePromise = new Promise<void>((resolve): void => {
+      releaseGate = resolve;
+    });
+    setClaimControlPlaneLeaseForTests(async (identity) => {
+      entered();
+      await gatePromise;
+      return claimControlPlaneLease(identity);
+    });
+    try {
+      const tickPromise = runControlPlaneCoordinatorTickForTests();
+      await enteredPromise;
+
+      // Resign while the election is still waiting on the database.
+      const resignPromise = resignControlPlaneLease();
+      releaseGate();
+      await resignPromise;
+      await tickPromise;
+
+      // The delayed claim must not install leader state or reactivate work.
+      expect(controlPlaneCoordinatorState().role).not.toBe("leader");
+      expect(activated).toBe(1);
+      const afterResign = await db.query.controlPlaneLeases.findFirst({
+        where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+      });
+      expect(afterResign?.expiresAt ?? 0).toBe(0);
+
+      setClaimControlPlaneLeaseForTests(null);
+      // A subsequent resume re-enters election normally.
+      resumeControlPlaneCoordinator();
+      for (let attempt = 0; attempt < 40 && controlPlaneCoordinatorState().role !== "leader"; attempt += 1) {
+        await new Promise<void>((resolve): void => {
+          setTimeout(resolve, 25);
+        });
+      }
+      expect(controlPlaneCoordinatorState().role).toBe("leader");
+      expect(activated).toBe(2);
+
+      // Same delayed claim during shutdown: no late leadership.
+      let enteredStop: () => void = (): void => undefined;
+      const enteredStopPromise = new Promise<void>((resolve): void => {
+        enteredStop = resolve;
+      });
+      let released: () => void = (): void => undefined;
+      const releasedPromise = new Promise<void>((resolve): void => {
+        released = resolve;
+      });
+      setClaimControlPlaneLeaseForTests(async (identity) => {
+        enteredStop();
+        await releasedPromise;
+        return claimControlPlaneLease(identity);
+      });
+      const stopTick = runControlPlaneCoordinatorTickForTests();
+      await enteredStopPromise;
+      const stopPromise = stopControlPlaneCoordinator();
+      released();
+      await stopPromise;
+      await stopTick;
+      expect(controlPlaneCoordinatorState().role).not.toBe("leader");
+      expect(activated).toBe(2);
+    } finally {
+      setClaimControlPlaneLeaseForTests(null);
+    }
   });
 });

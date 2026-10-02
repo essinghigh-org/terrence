@@ -85,6 +85,8 @@ RATE_LIMIT_ fail startup. Unrelated process variables remain available.
 | TERRENCE_DISABLE_RESTART | false | true, false, 1, or 0 | yes |
 | TERRENCE_DISABLE_WORKER | false | true, false, 1, or 0 | yes |
 | TERRENCE_DRAIN_GRACE_MS | 6000 | Integer 0–25000 | yes |
+| TERRENCE_DURABLE_LEASE_MS | 30000 | Integer 300–3600000 | yes |
+| TERRENCE_DURABLE_RENEW_MS | 10000 | Integer 100–3600000 | yes |
 | TERRENCE_ENABLE_LOCAL_SIGNUP | false | true, false, 1, or 0 | yes |
 | TERRENCE_EXECUTOR_BACKEND | landlock | string | yes |
 | TERRENCE_EXPLAIN_TIMEOUT_MS | 60000 | Integer 1–2147483647 | yes |

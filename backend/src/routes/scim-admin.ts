@@ -232,9 +232,12 @@ async function reconcileScimSiteAdminsOnly(transaction: unknown): Promise<void> 
   if (desiredUserIds.size === 0) return;
   const liveUsers = await tx.query.users.findMany({
     where: and(inArray(users.id, [...desiredUserIds]), isNull(users.deletedAt)),
-    columns: { id: true },
+    columns: { id: true, isSiteAdmin: true, scimSiteAdmin: true },
   });
   for (const user of liveUsers) {
+    // An existing manual or SAML grant remains manual/SAML. SCIM should not
+    // claim ownership of it merely because the user joins the mapped group.
+    if (user.isSiteAdmin === true && user.scimSiteAdmin !== true) continue;
     await tx.update(users).set({ scimSiteAdmin: true, isSiteAdmin: true }).where(eq(users.id, user.id));
   }
 }

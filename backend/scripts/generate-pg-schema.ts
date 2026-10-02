@@ -164,6 +164,11 @@ const PARTIAL_INDEX_OVERRIDES: Readonly<Record<string, (props: Map<string, strin
     if (prop === undefined) throw new Error("organization_invitations_org_email_pending_idx column missing");
     return `sql\`\${${codeProperty("table", prop)}} = 'pending'\``;
   },
+  backup_rehearsal_jobs_one_running: (props): string => {
+    const prop = props.get("status");
+    if (prop === undefined) throw new Error("backup_rehearsal_jobs_one_running column missing");
+    return `sql\`\${${codeProperty("table", prop)}} = 'running'\``;
+  },
 };
 
 function renderExtras(table: Table, props: Map<string, string>): string[] {

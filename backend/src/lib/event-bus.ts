@@ -24,7 +24,13 @@ type EventCursor = Readonly<{ createdAt: number; id: string }>;
 let distributedStarted = false;
 let distributedSubscription: { unlisten: () => Promise<void> } | undefined;
 let distributedCatchUpTimer: ReturnType<typeof setInterval> | undefined;
+/** High-water mark of dispatched rows. Never used to start replay: a live
+ * notification may arrive without its predecessors being scanned. */
 let lastCursor: EventCursor = { createdAt: 0, id: "" };
+/** Cursor of successfully scanned history. Attempts on concurrency-safe pages
+ * advance it only after the whole page, so a failure never acknowledges
+ * unscanned rows. */
+let scannedCursor: EventCursor = { createdAt: 0, id: "" };
 let catchUpPromise: Promise<void> = Promise.resolve();
 const seenEventIds = new Set<string>();
 const seenEventOrder: string[] = [];
@@ -76,12 +82,21 @@ async function newestPersistedCursor(): Promise<EventCursor> {
   return newest ?? { createdAt: 0, id: "" };
 }
 
+/**
+ * Replay persisted control events to subscribers.
+ *
+ * Re-reads a bounded recent window: PostgreSQL notifications are a wake-up
+ * mechanism, not durable delivery, and two autocommit inserts can complete out
+ * of timestamp/UUID order. The dedupe set makes the lookback cheap for
+ * subscribers while recovering any missed NOTIFY or commit-order tie.
+ *
+ * Replay starts from the last *successfully scanned* cursor, never from the
+ * newest live delivery: an isolated live notification must not acknowledge
+ * predecessors this receiver never saw. A page is acknowledged only after every
+ * row in it was considered, so a mid-page failure never loses unscanned rows.
+ */
 async function catchUpPersistedEvents(): Promise<void> {
-  // Re-read a bounded recent window. PostgreSQL notifications are a wake-up
-  // mechanism, not durable delivery, and two autocommit inserts can complete
-  // out of timestamp/UUID order. The dedupe set makes this lookback cheap for
-  // subscribers while ensuring a missed NOTIFY or commit-order tie is recovered.
-  const replayStart = Math.max(0, lastCursor.createdAt - CONTROL_EVENT_REPLAY_LOOKBACK_MS - 1);
+  const replayStart = Math.max(0, scannedCursor.createdAt - CONTROL_EVENT_REPLAY_LOOKBACK_MS - 1);
   let cursor: EventCursor = { createdAt: replayStart, id: "" };
   for (;;) {
     const rows = await db.query.controlEvents.findMany({
@@ -97,9 +112,32 @@ async function catchUpPersistedEvents(): Promise<void> {
     const tail = rows.at(-1);
     if (tail === undefined) break;
     cursor = { createdAt: tail.createdAt, id: tail.id };
+    scannedCursor = laterCursor(scannedCursor, cursor);
     if (rows.length < CATCH_UP_PAGE_SIZE) break;
   }
   lastCursor = laterCursor(lastCursor, cursor);
+}
+
+/** Test seam: reset replay state between isolated delivery scenarios. */
+export function resetControlEventReplayForTests(now = Date.now()): void {
+  lastCursor = { createdAt: now, id: "" };
+  scannedCursor = lastCursor;
+  seenEventIds.clear();
+  seenEventOrder.length = 0;
+}
+
+/**
+ * Deliver one persisted row as if it arrived over the live notification path.
+ * Live delivery advances only the dispatched high-water mark; it must not
+ * acknowledge unscanned history.
+ */
+export async function receiveNotifiedControlEventForTests(id: string): Promise<void> {
+  await receiveNotifiedEvent(id);
+}
+
+/** Run one catch-up pass (LISTEN acknowledgement or failure recovery). */
+export async function catchUpControlEventsForTests(): Promise<void> {
+  await catchUpPersistedEvents();
 }
 
 function scheduleCatchUp(): void {
@@ -128,6 +166,7 @@ export async function startDistributedEventBus(): Promise<void> {
     // committed between this read and LISTEN acknowledgement is recovered by
     // the initial onListen catch-up.
     lastCursor = await newestPersistedCursor();
+    scannedCursor = lastCursor;
     distributedSubscription = await listenPostgresChannel(
       CONTROL_EVENT_CHANNEL,
       (id): void => {

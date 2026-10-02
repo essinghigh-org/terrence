@@ -484,6 +484,13 @@
       "when": 1790039470813,
       "tag": "0068_overrated_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "6",
+      "when": 1790962304281,
+      "tag": "0069_neat_magma",
+      "breakpoints": true
     }
   ]
 }

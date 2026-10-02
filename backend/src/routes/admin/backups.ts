@@ -5,7 +5,10 @@
 // or cutover endpoint: replacing the active database requires an operator's
 // shutdown, reconciliation, and separate confirmation plan.
 import { Elysia } from "elysia";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { authPlugin } from "../../auth";
+import { db } from "../../db";
+import { backupRehearsalJobs } from "../../db/schema";
 import {
   BackupVerificationError,
   createBackupManifest,
@@ -21,15 +24,17 @@ import type { ParamCtx } from "./types";
 
 type BackupJob = Readonly<{
   id: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "interrupted";
   startedAt: string;
   finishedAt?: string;
   result?: BackupRehearsalReport;
   error?: { code?: string; detail: string };
 }>;
 
-const rehearsalJobs = new Map<string, BackupJob>();
-const MAX_REHEARSAL_JOBS = 20;
+/** A running rehearsal whose owner must have disappeared is reaped instead of
+ * blocking admission forever. Rehearsals bind to their local CLI for the
+ * duration, so an hour is generous. */
+const MAX_REHEARSAL_RUNTIME_MS = 60 * 60 * 1000;
 
 function setStatus(set: ParamCtx["set"], status: number): void {
   (set as { status?: number }).status = status;
@@ -87,12 +92,46 @@ function reportResource(report: BackupIntegrityReport): Record<string, unknown> 
   };
 }
 
-function pruneJobs(): void {
-  while (rehearsalJobs.size > MAX_REHEARSAL_JOBS) {
-    const oldest = [...rehearsalJobs.entries()].sort((a, b) => a[1].startedAt.localeCompare(b[1].startedAt))[0];
-    if (oldest === undefined) return;
-    rehearsalJobs.delete(oldest[0]);
-  }
+/** Mark abandoned running rehearsals (owner process died) as interrupted. Runs
+ * cross-replica because every replica applies the same deterministic rule. */
+async function reapStaleRehearsals(): Promise<void> {
+  const cutoff = Date.now() - MAX_REHEARSAL_RUNTIME_MS;
+  await db
+    .update(backupRehearsalJobs)
+    .set({ status: "interrupted", finishedAt: Date.now(), updatedAt: Date.now() })
+    .where(and(eq(backupRehearsalJobs.status, "running"), lt(backupRehearsalJobs.startedAt, cutoff)));
+}
+
+function rowToJob(row: typeof backupRehearsalJobs.$inferSelect): BackupJob {
+  return {
+    id: row.id,
+    status: row.status as BackupJob["status"],
+    startedAt: new Date(row.startedAt).toISOString(),
+    ...(row.finishedAt === null || row.finishedAt === undefined
+      ? {}
+      : { finishedAt: new Date(row.finishedAt).toISOString() }),
+    ...(row.result === null || row.result === undefined
+      ? {}
+      : { result: row.result as unknown as BackupRehearsalReport }),
+    ...(row.error === null || row.error === undefined ? {} : { error: row.error }),
+  };
+}
+
+async function persistRehearsalOutcome(
+  id: string,
+  outcome:
+    | { status: "done"; result: BackupRehearsalReport }
+    | { status: "failed"; error: { code?: string; detail: string } },
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .update(backupRehearsalJobs)
+    .set(
+      outcome.status === "done"
+        ? { status: "done", result: outcome.result, finishedAt: now, updatedAt: now }
+        : { status: "failed", error: outcome.error, finishedAt: now, updatedAt: now },
+    )
+    .where(eq(backupRehearsalJobs.id, id));
 }
 
 function serializeError(error: unknown): { code?: string; detail: string } {
@@ -101,15 +140,22 @@ function serializeError(error: unknown): { code?: string; detail: string } {
     : { detail: error instanceof Error ? error.message : String(error) };
 }
 
-function startRehearsal(attrs: Readonly<Record<string, unknown>>, set: ParamCtx["set"]): Record<string, unknown> {
+async function startRehearsal(
+  attrs: Readonly<Record<string, unknown>>,
+  set: ParamCtx["set"],
+): Promise<Record<string, unknown>> {
   const source = sourceFromAttributes(attrs);
   if (source === null) return errorBody(set, 422, "backup-path is required");
-  if ([...rehearsalJobs.values()].some((job): boolean => job.status === "running"))
-    return errorBody(set, 409, "A restore rehearsal is already running");
+  await reapStaleRehearsals().catch((): void => undefined);
   const id = crypto.randomUUID();
-  const startedAt = new Date().toISOString();
-  rehearsalJobs.set(id, { id, status: "running", startedAt });
-  pruneJobs();
+  const startedAt = Date.now();
+  // The partial unique index on status='running' fences concurrent insertion
+  // across replicas: only one rehearsal can enter the running state.
+  try {
+    await db.insert(backupRehearsalJobs).values({ id, status: "running", startedAt });
+  } catch {
+    return errorBody(set, 409, "A restore rehearsal is already running");
+  }
   void (async (): Promise<void> => {
     try {
       const result = await runRestoreRehearsal({
@@ -120,20 +166,22 @@ function startRehearsal(attrs: Readonly<Record<string, unknown>>, set: ParamCtx[
           : {}),
         ...(attrs["require-cli"] === true ? { requireCli: true } : {}),
       });
-      rehearsalJobs.set(id, { id, status: "done", startedAt, finishedAt: new Date().toISOString(), result });
+      await persistRehearsalOutcome(id, { status: "done", result });
     } catch (error) {
-      rehearsalJobs.set(id, {
-        id,
-        status: "failed",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        error: serializeError(error),
-      });
+      await persistRehearsalOutcome(id, { status: "failed", error: serializeError(error) }).catch(
+        (dbError: unknown): void => {
+          console.error("Failed to persist rehearsal failure", dbError);
+        },
+      );
     }
   })();
   setStatus(set, 202);
   return {
-    data: { type: "backup-restore-rehearsals", id, attributes: { status: "running", "started-at": startedAt } },
+    data: {
+      type: "backup-restore-rehearsals",
+      id,
+      attributes: { status: "running", "started-at": new Date(startedAt).toISOString() },
+    },
   };
 }
 
@@ -227,29 +275,37 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
       return errorBody(set, 422, serialized.detail, serialized.code);
     }
   })
-  .post("/api/v2/admin/backups/restore-rehearsals", ({ user, body, set }: ParamCtx): unknown => {
+  .post("/api/v2/admin/backups/restore-rehearsals", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
     return startRehearsal(attrsOf(body), set);
   })
-  .post("/api/v2/admin/backups/restore-rehearsal", ({ user, body, set }: ParamCtx): unknown => {
+  .post("/api/v2/admin/backups/restore-rehearsal", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
     return startRehearsal(attrsOf(body), set);
   })
-  .get("/api/v2/admin/backups/restore-rehearsals/:rehearsal_id", ({ user, params, set }: ParamCtx): unknown => {
-    if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
-    const job = rehearsalJobs.get(params["rehearsal_id"] ?? "");
-    if (job === undefined) return errorBody(set, 404, "No such restore rehearsal");
-    return {
-      data: {
-        type: "backup-restore-rehearsals",
-        id: job.id,
-        attributes: {
-          status: job.status,
-          "started-at": job.startedAt,
-          ...(job.finishedAt === undefined ? {} : { "finished-at": job.finishedAt }),
-          ...(job.result === undefined ? {} : { result: job.result }),
-          ...(job.error === undefined ? {} : { error: job.error }),
+  .get(
+    "/api/v2/admin/backups/restore-rehearsals/:rehearsal_id",
+    async ({ user, params, set }: ParamCtx): Promise<unknown> => {
+      if (!requireAdmin(user, set)) return errorBody(set, 404, "Not Found");
+      await reapStaleRehearsals().catch((): void => undefined);
+      const row = await db.query.backupRehearsalJobs.findFirst({
+        where: eq(backupRehearsalJobs.id, params["rehearsal_id"] ?? ""),
+        orderBy: [desc(backupRehearsalJobs.startedAt)],
+      });
+      if (row === undefined) return errorBody(set, 404, "No such restore rehearsal");
+      const job = rowToJob(row);
+      return {
+        data: {
+          type: "backup-restore-rehearsals",
+          id: job.id,
+          attributes: {
+            status: job.status,
+            "started-at": job.startedAt,
+            ...(job.finishedAt === undefined ? {} : { "finished-at": job.finishedAt }),
+            ...(job.result === undefined ? {} : { result: job.result }),
+            ...(job.error === undefined ? {} : { error: job.error }),
+          },
         },
-      },
-    };
-  });
+      };
+    },
+  );

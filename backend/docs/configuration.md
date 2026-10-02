@@ -64,6 +64,8 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 |---|---|---|
 | `TERRENCE_DISABLE_WORKER` | off | When `1`, this process runs without scheduler or durable-job workers. In HA mode it remains API-ready but coordinator-ineligible; other worker-enabled replicas may still process work. |
 | `TERRENCE_WORKER_POLL_MS` | `1500` | Run queue poll interval. Values must be at least 100 ms. |
+| `TERRENCE_DURABLE_LEASE_MS` | `30000` | Durable-job lease TTL. Also bounds how long a durable handler keeps running once its ownership can no longer be proved: a handler whose renewals stop, or keep failing, is cancelled with lease-loss and cannot publish a result for a job another worker has since reclaimed. |
+| `TERRENCE_DURABLE_RENEW_MS` | `10000` | Durable-job lease renewal interval. Clamped to half of `TERRENCE_DURABLE_LEASE_MS`. |
 | `TERRENCE_AUTO_DESTROY_POLL_MS` | `30000` | Auto-destroy scan interval. Minimum 5000 ms. |
 | `TERRENCE_ASSESSMENT_POLL_MS` | `60000` | Assessment discovery interval. Minimum 5000 ms. |
 | `TERRENCE_DRAIN_GRACE_MS` | `6000` | Shutdown drain wait for in-flight executions. Maximum 25000. |

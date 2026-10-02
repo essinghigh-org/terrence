@@ -452,6 +452,28 @@ export const auditLogs = pgTable(
 );
 pgSchema["auditLogs"] = auditLogs;
 
+export const backupRehearsalJobs = pgTable(
+  "backup_rehearsal_jobs",
+  {
+    id: text("id").notNull().primaryKey(),
+    status: text("status").notNull().default("running"),
+    startedAt: bigint("started_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema["backupRehearsalJobs"]["startedAt"].defaultFn!()),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+    result: jsonb("result").default(null),
+    error: jsonb("error").default(null),
+    updatedAt: bigint("updated_at", { mode: "number" })
+      .notNull()
+      .$defaultFn(() => sqliteSchema["backupRehearsalJobs"]["updatedAt"].defaultFn!()),
+  },
+  (table) => [
+    uniqueIndex("backup_rehearsal_jobs_one_running").on(table["status"]).where(sql`${table["status"]} = 'running'`),
+    index("backup_rehearsal_jobs_started_idx").on(table["startedAt"]),
+  ],
+);
+pgSchema["backupRehearsalJobs"] = backupRehearsalJobs;
+
 export const cidrRangeListAgentPools = pgTable(
   "cidr_range_list_agent_pools",
   {
@@ -2304,9 +2326,6 @@ export const scimSettings = pgTable("scim_settings", {
   siteAdminGroupScimId: text("site_admin_group_scim_id").references(() => pgSchema["scimGroups"]!["id"], {
     onDelete: "set null",
   }),
-  // Keep this nullable column unconstrained during the rolling-upgrade
-  // expansion. The FK can be added in a later contract migration once the
-  // previous release is outside the supported skew window.
   siteAuditorGroupScimId: text("site_auditor_group_scim_id"),
   updatedAt: bigint("updated_at", { mode: "number" })
     .notNull()

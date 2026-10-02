@@ -39,6 +39,7 @@ export const apiTokens = pg[dbNameOf(sqliteSchema.apiTokens)];
 export const assessmentCheckResults = pg[dbNameOf(sqliteSchema.assessmentCheckResults)];
 export const assessmentResults = pg[dbNameOf(sqliteSchema.assessmentResults)];
 export const auditLogs = pg[dbNameOf(sqliteSchema.auditLogs)];
+export const backupRehearsalJobs = pg[dbNameOf(sqliteSchema.backupRehearsalJobs)];
 export const cidrRangeListAgentPools = pg[dbNameOf(sqliteSchema.cidrRangeListAgentPools)];
 export const cidrRangeLists = pg[dbNameOf(sqliteSchema.cidrRangeLists)];
 export const cidrRanges = pg[dbNameOf(sqliteSchema.cidrRanges)];

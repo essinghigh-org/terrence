@@ -22,6 +22,12 @@ import {
 import { claimSsoChallenge, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
 import { secureRequest } from "../lib/secure-request";
+import {
+  continuationFromChallenge,
+  continuationResponse,
+  validateSsoContinuation,
+  type SsoContinuation,
+} from "../lib/post-auth-continuation";
 import { isUserLoginBlocked } from "./accounts";
 import { browserSessionUser, revokeBrowserSession } from "./accounts";
 
@@ -1024,7 +1030,7 @@ async function assertSamlChallengeBinding(args: {
   relayState: string | null;
   inResponseTo: string;
   assertionId: string;
-}): Promise<{ issuedTokenResponse: boolean }> {
+}): Promise<{ issuedTokenResponse: boolean; continuation: SsoContinuation }> {
   if (cookieValue(args.request, SAML_STATE_COOKIE) !== args.inResponseTo) {
     throw new SamlAuthError(400, "SAML response does not match the browser that started this sign-in.");
   }
@@ -1050,7 +1056,7 @@ async function assertSamlChallengeBinding(args: {
   ) {
     throw new SamlAuthError(400, "SAML assertion has already been used.");
   }
-  return { issuedTokenResponse };
+  return { issuedTokenResponse, continuation: continuationFromChallenge(authnChallenge) };
 }
 
 async function resolveSamlIdentity(args: {
@@ -1166,15 +1172,24 @@ async function syncSamlAccountState(args: {
     args.settings.attrSiteAdmin !== "" &&
     args.settings.siteAdminRole !== ""
   ) {
-    const noLongerSiteAdmin = user.isSiteAdmin && !args.siteAdminMatches;
-    if (args.siteAdminMatches && !user.isSiteAdmin) {
+    if (args.siteAdminMatches) {
+      // Record the SAML grant even when the account already holds admin
+      // through another source, so removing the SAML entitlement later can
+      // tell which grants remain.
+      if (user.ssoSiteAdmin !== true) {
+        await auditLog("sso-site-admin", "saml", user.id, user.id, null, {
+          username: user.username,
+          role: args.settings.siteAdminRole,
+        });
+      }
       await db.update(users).set({ isSiteAdmin: true, ssoSiteAdmin: true }).where(eq(users.id, user.id));
-      await auditLog("sso-site-admin", "saml", user.id, user.id, null, {
-        username: user.username,
-        role: args.settings.siteAdminRole,
-      });
-    } else if (noLongerSiteAdmin && user.ssoSiteAdmin) {
-      await db.update(users).set({ isSiteAdmin: false, ssoSiteAdmin: false }).where(eq(users.id, user.id));
+    } else if (!args.siteAdminMatches && user.ssoSiteAdmin) {
+      // SAML grant lost: revoke only SAML's grant; SCIM or manual grants
+      // keep the account an administrator.
+      await db
+        .update(users)
+        .set({ ssoSiteAdmin: false, isSiteAdmin: user.scimSiteAdmin === true })
+        .where(eq(users.id, user.id));
       await auditLog("sso-site-admin-revoked", "saml", user.id, user.id, null, {
         username: user.username,
         role: args.settings.siteAdminRole,
@@ -1198,6 +1213,7 @@ async function completeSamlLogin(args: {
   user: Awaited<ReturnType<typeof syncSamlAccountState>>;
   settings: SamlRow;
   issuedTokenResponse: boolean;
+  continuation?: SsoContinuation;
   set: SetObj;
   request: RequestInfo;
   server?: unknown;
@@ -1240,6 +1256,18 @@ async function completeSamlLogin(args: {
     appendSetCookies(response, args.set.headers["Set-Cookie"]);
     clearSamlStateCookie(args.request, response, args.server);
     return response;
+  }
+  // Resume the validated continuation that survived the round-trip: a pending
+  // CLI OAuth handshake, a validated deep-link destination, or the default app
+  // landing for ordinary sign-in.
+  const resumed = continuationResponse(
+    args.continuation ?? { oauthState: null, returnTo: null },
+    args.set,
+    secureRequest(args.request, args.server),
+  );
+  if (resumed !== null) {
+    clearSamlStateCookie(args.request, resumed, args.server);
+    return resumed;
   }
   return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
 }
@@ -1359,6 +1387,18 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       if (rawRelayState !== null && Buffer.byteLength(rawRelayState, "utf8") > 80) {
         return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "RelayState is too large."), 400);
       }
+      const continuation = await validateSsoContinuation(query);
+      if ("error" in continuation) {
+        return ssoHtmlResponse(
+          ssoHtmlPage(
+            "SAML SSO",
+            continuation.error === "oauth-state-invalid"
+              ? "The login request expired. Please run 'terraform login' again."
+              : "The requested destination is not allowed.",
+          ),
+          400,
+        );
+      }
       const relayState = rawRelayState;
       await storeSsoChallenge(
         SAML_AUTHN_CHALLENGE_KIND,
@@ -1366,6 +1406,8 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         {
           relayState,
           tokenResponse: wantsToken(request, relayState),
+          oauthState: continuation.continuation.oauthState,
+          returnTo: continuation.continuation.returnTo,
         },
         Date.now() + PENDING_AUTHNREQUEST_TTL_MS,
       );
@@ -1453,7 +1495,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
         assertSamlIssuer(assertionElement, settings);
         const { nameIdText, inResponseTo } = resolveBearerSubject({ assertionElement, assertionConsumerService, now });
-        const { issuedTokenResponse } = await assertSamlChallengeBinding({
+        const { issuedTokenResponse, continuation } = await assertSamlChallengeBinding({
           request,
           relayState,
           inResponseTo,
@@ -1474,7 +1516,15 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
           attrGroupsConfigured: identity.attrGroupsConfigured,
           groups: identity.groups,
         });
-        return await completeSamlLogin({ user: activeUser, settings, issuedTokenResponse, set, request, server });
+        return await completeSamlLogin({
+          user: activeUser,
+          settings,
+          issuedTokenResponse,
+          continuation,
+          set,
+          request,
+          server,
+        });
       } catch (error: unknown) {
         if (error instanceof SamlAuthError) return reject(error.message, error.status);
         throw error;

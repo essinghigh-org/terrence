@@ -35,6 +35,9 @@ import {
   type SamlResponseOptions,
 } from "./saml_helpers";
 
+// Valid PKCE S256 challenge used to park a pending Terraform CLI authorization.
+const OAUTH_CODE_CHALLENGE = "Dp9vmwEa1tgqNwqxEUYnh-u6ZyVojZJx8h9f6xhE18A";
+
 describe("SAML SSO flow", () => {
   const suffix = crypto.randomUUID();
   const adminId = `usr-samlflow-admin-${suffix}`;
@@ -71,14 +74,15 @@ describe("SAML SSO flow", () => {
     relayState?: string,
     authHeaders: Record<string, string> = {},
     acsHeaders: Record<string, string> = authHeaders,
+    continuationQuery = "",
   ): Promise<Response> => {
+    const params: string[] = [];
+    if (relayState !== undefined) params.push(`RelayState=${encodeURIComponent(relayState)}`);
+    if (continuationQuery !== "") params.push(continuationQuery);
     const auth = await app.handle(
-      new Request(
-        `https://terrence.test/users/saml/auth${relayState === undefined ? "" : `?RelayState=${encodeURIComponent(relayState)}`}`,
-        {
-          headers: authHeaders,
-        },
-      ),
+      new Request(`https://terrence.test/users/saml/auth${params.length === 0 ? "" : `?${params.join("&")}`}`, {
+        headers: authHeaders,
+      }),
     );
     const location = new URL(auth.headers.get("Location") ?? "");
     const state = cookieValue(auth, "terrence_saml_state");
@@ -312,6 +316,85 @@ describe("SAML SSO flow", () => {
     expect(refreshResponse.status).toBe(200);
     const session = (await refreshResponse.json()) as { data: { attributes: { token: string } } };
     expect(session.data.attributes.token).toMatch(/^user-/);
+  });
+
+  test("completes a pending terraform login OAuth handshake instead of landing on /app", async () => {
+    // A signed-out `terraform login` first parks a pending authorization.
+    const authz = await app.handle(
+      new Request(
+        "https://terrence.test/oauth/authorization?response_type=code&client_id=terraform-cli" +
+          `&code_challenge=${OAUTH_CODE_CHALLENGE}&code_challenge_method=S256` +
+          "&redirect_uri=http://localhost:10000/login&state=st-saml-continuation",
+      ),
+    );
+    expect(authz.status).toBe(302);
+    const pendingState = new URL(authz.headers.get("Location") ?? "", "https://terrence.test").searchParams.get(
+      "oauth_state",
+    );
+    if (pendingState === null) throw new Error("pending OAuth state was not returned");
+
+    const username = `saml-continuation-${suffix}`;
+    const response = await validAcs(
+      { username, email: `${username}@example.com` },
+      undefined,
+      {},
+      {},
+      `oauth_state=${encodeURIComponent(pendingState)}`,
+    );
+    expect(response.status).toBe(302);
+    const resumed = new URL(response.headers.get("Location") ?? "", "https://terrence.test");
+    expect(resumed.pathname).toBe("/oauth/authorization/complete");
+    expect(resumed.searchParams.get("oauth_state")).toBe(pendingState);
+    // The state cookie must be re-issued: the IdP POST that returned the
+    // browser cannot carry the original SameSite=Lax cookie.
+    expect(cookieValue(response, "terraform_oauth_state")).toBe(pendingState);
+
+    // Following the continuation with the issued session returns the
+    // authorization result to the initiating CLI.
+    const complete = await app.handle(
+      new Request(
+        `https://terrence.test/oauth/authorization/complete?oauth_state=${encodeURIComponent(pendingState)}`,
+        {
+          headers: {
+            Cookie: `terraform_oauth_state=${pendingState}; terrence_refresh=${cookieValue(response, "terrence_refresh")}`,
+          },
+        },
+      ),
+    );
+    expect(complete.status).toBe(302);
+    const cliCallback = new URL(complete.headers.get("Location") ?? "");
+    expect(cliCallback.host).toBe("localhost:10000");
+    expect(cliCallback.searchParams.get("code")).not.toBeNull();
+    expect(cliCallback.searchParams.get("state")).toBe("st-saml-continuation");
+  });
+
+  test("preserves a validated returnTo destination and rejects untrusted ones", async () => {
+    const username = `saml-returnto-${suffix}`;
+    const resumed = await validAcs(
+      { username, email: `${username}@example.com` },
+      undefined,
+      {},
+      {},
+      `returnTo=${encodeURIComponent("/app/workspaces/ws-1")}`,
+    );
+    expect(resumed.status).toBe(302);
+    expect(new URL(resumed.headers.get("Location") ?? "", "https://terrence.test").pathname).toBe(
+      "/app/workspaces/ws-1",
+    );
+
+    const rejected = await app.handle(
+      new Request(`https://terrence.test/users/saml/auth?returnTo=${encodeURIComponent("https://evil.example/steal")}`),
+    );
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).toContain("not allowed");
+  });
+
+  test("rejects a stale OAuth continuation", async () => {
+    const rejected = await app.handle(
+      new Request(`https://terrence.test/users/saml/auth?oauth_state=${encodeURIComponent(`expired-${suffix}`)}`),
+    );
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).toContain("expired");
   });
 
   test("rejects a replayed assertion", async () => {
@@ -667,6 +750,55 @@ describe("SAML SSO flow", () => {
     admin = await db.query.users.findFirst({ where: eq(users.username, adminUsername) });
     expect(admin?.isSiteAdmin).toBeFalse();
     expect(admin?.ssoSiteAdmin).toBeFalse();
+  });
+
+  test("removing the SAML entitlement preserves a SCIM-granted site admin", async () => {
+    const account = `mixed-${suffix}`;
+    await validAcs({ username: account, email: `${account}@example.com`, siteAdmin: "site-admins" });
+    const accountRow = await db.query.users.findFirst({ where: eq(users.username, account) });
+    expect(accountRow?.isSiteAdmin).toBeTrue();
+    expect(accountRow?.ssoSiteAdmin).toBeTrue();
+
+    // SCIM also grants the account admin through the same directory lifecycle.
+    await db.update(users).set({ scimSiteAdmin: true, isSiteAdmin: true }).where(eq(users.id, accountRow!.id));
+
+    // SAML stops matching: only SAML's grant is revoked; SCIM keeps admin.
+    const second = await validAcs({ username: account, email: `${account}@example.com` });
+    expect(second.status).toBe(200);
+    const afterSaml = await db.query.users.findFirst({ where: eq(users.username, account) });
+    expect(afterSaml?.isSiteAdmin).toBeTrue();
+    expect(afterSaml?.ssoSiteAdmin).toBeFalse();
+    expect(afterSaml?.scimSiteAdmin).toBeTrue();
+
+    await db.delete(users).where(eq(users.username, account));
+  });
+
+  test("a matching SAML entitlement is recorded over an existing SCIM grant", async () => {
+    const account = `mixed-order-${suffix}`;
+    // SCIM grants admin first.
+    await validAcs({ username: account, email: `${account}@example.com` });
+    await db.update(users).set({ scimSiteAdmin: true, isSiteAdmin: true }).where(eq(users.username, account));
+
+    const promoted = await validAcs({ username: account, email: `${account}@example.com`, siteAdmin: "site-admins" });
+    expect(promoted.status).toBe(200);
+    const overlap = await db.query.users.findFirst({ where: eq(users.username, account) });
+    expect(overlap?.ssoSiteAdmin).toBeTrue();
+    expect(overlap?.scimSiteAdmin).toBeTrue();
+
+    // SCIM removal keeps the SAML grant.
+    await db
+      .update(users)
+      .set({ scimSiteAdmin: false, isSiteAdmin: overlap?.ssoSiteAdmin === true })
+      .where(eq(users.username, account));
+    const postScim = await db.query.users.findFirst({ where: eq(users.username, account) });
+    expect(postScim?.isSiteAdmin).toBeTrue();
+    expect(postScim?.ssoSiteAdmin).toBeTrue();
+
+    const demoted = await validAcs({ username: account, email: `${account}@example.com` });
+    expect(demoted.status).toBe(200);
+    const final = await db.query.users.findFirst({ where: eq(users.username, account) });
+    expect(final?.isSiteAdmin).toBeFalse();
+    expect(final?.ssoSiteAdmin).toBeFalse();
   });
 
   test("keeps a locally-granted site admin despite a SAML login without the attribute", async () => {

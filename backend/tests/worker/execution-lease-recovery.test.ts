@@ -152,4 +152,95 @@ describe("expired local execution recovery", () => {
 
     expect(await reconcileExpiredLocalRunExecutions()).toEqual({ requeued: 0, errored: 0, rearmed: 0 });
   });
+
+  test("releases stranded run-owned locks on terminal runs without touching manual or live locks", async () => {
+    const suffix2 = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+    const strandedWs = `ws-stranded-${suffix2}`;
+    const manualWs = `ws-manual-${suffix2}`;
+    const liveLockWs = `ws-livelock-${suffix2}`;
+    const terminalRun = `run-terminal-${suffix2}`;
+    const runningRun = `run-still-live-${suffix2}`;
+    const now = Date.now();
+    try {
+      await db.insert(workspaces).values([
+        {
+          id: strandedWs,
+          orgId,
+          name: strandedWs,
+          executionMode: "remote",
+          locked: true,
+          lockedReason: `Run ${terminalRun} is applying`,
+          lockOwnerType: "run",
+          lockOwnerId: terminalRun,
+        },
+        {
+          id: manualWs,
+          orgId,
+          name: manualWs,
+          executionMode: "remote",
+          locked: true,
+          lockedReason: "maintenance",
+          lockOwnerType: "manual",
+          lockOwnerId: "operator",
+        },
+        {
+          id: liveLockWs,
+          orgId,
+          name: liveLockWs,
+          executionMode: "remote",
+          locked: true,
+          lockedReason: `Run ${runningRun} is applying`,
+          lockOwnerType: "run",
+          lockOwnerId: runningRun,
+          executionOwnerNodeId: "live-node",
+          executionLeaseExpiresAt: now + 60_000,
+        },
+      ]);
+      await db.insert(runs).values([
+        {
+          id: terminalRun,
+          workspaceId: strandedWs,
+          status: "applied",
+          planOnly: false,
+          executionOwnerNodeId: null,
+          executionLeaseExpiresAt: null,
+          createdAt: now,
+        },
+        {
+          id: runningRun,
+          workspaceId: liveLockWs,
+          status: "applying",
+          planOnly: false,
+          executionOwnerNodeId: "live-node",
+          executionOwnerInstanceId: "live-instance",
+          executionLeaseExpiresAt: now + 60_000,
+          createdAt: now,
+        },
+      ]);
+
+      await reconcileExpiredLocalRunExecutions();
+
+      const stranded = await db.query.workspaces.findFirst({ where: eq(workspaces.id, strandedWs) });
+      expect(stranded?.locked).toBe(false);
+      expect(stranded?.lockOwnerType).toBeNull();
+      expect(stranded?.lockOwnerId).toBeNull();
+
+      const manual = await db.query.workspaces.findFirst({ where: eq(workspaces.id, manualWs) });
+      expect(manual?.locked).toBe(true);
+      expect(manual?.lockOwnerType).toBe("manual");
+
+      const live = await db.query.workspaces.findFirst({ where: eq(workspaces.id, liveLockWs) });
+      expect(live?.locked).toBe(true);
+      expect(live?.lockOwnerId).toBe(runningRun);
+    } finally {
+      await db
+        .delete(runs)
+        .where(inArray(runs.id, [terminalRun, runningRun]))
+        .catch((): void => undefined);
+      await db
+        .delete(workspaces)
+        .where(inArray(workspaces.id, [strandedWs, manualWs, liveLockWs]))
+        .catch((): void => undefined);
+    }
+  });
 });

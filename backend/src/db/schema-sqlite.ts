@@ -1440,6 +1440,30 @@ export const durableJobs = sqliteTable(
   ],
 );
 
+/** Shared restore-rehearsal evidence. One running rehearsal deployment-wide;
+ * status is polled across replicas, so rows are persisted rather than kept in
+ * process memory. A stale running row is reaped to "interrupted". */
+export const backupRehearsalJobs = sqliteTable(
+  "backup_rehearsal_jobs",
+  {
+    id: text("id").primaryKey(),
+    status: text("status").notNull().default("running"),
+    startedAt: integer("started_at")
+      .notNull()
+      .$defaultFn(() => Date.now()),
+    finishedAt: integer("finished_at"),
+    result: text("result", { mode: "json" }).$type<Record<string, unknown> | null>().default(null),
+    error: text("error", { mode: "json" }).$type<{ code?: string; detail: string } | null>().default(null),
+    updatedAt: integer("updated_at")
+      .notNull()
+      .$defaultFn(() => Date.now()),
+  },
+  (table) => [
+    uniqueIndex("backup_rehearsal_jobs_one_running").on(table.status).where(sql`${table.status} = 'running'`),
+    index("backup_rehearsal_jobs_started_idx").on(table.startedAt),
+  ],
+);
+
 /**
  * Transactional records for side effects that must survive the process which
  * committed the domain change. The matching durable job carries the lease and

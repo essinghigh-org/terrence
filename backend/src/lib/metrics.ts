@@ -20,7 +20,7 @@ import { db } from "../db";
 import { agentJobs, agentPools, agents, organizations, runs, users, workspaces } from "../db/schema";
 import { and, count, eq, inArray, min, type SQL } from "drizzle-orm";
 import { databaseMetrics, databasePoolMetrics } from "../db";
-import { slowQueriesSnapshot, slowQueryFingerprints } from "./db-pool-metrics";
+import { slowQueriesSnapshot, slowQueryFingerprints, slowQueryFingerprintTotals } from "./db-pool-metrics";
 import type { DbPoolMetrics, SlowQuery } from "./db-pool-metrics";
 import { configuredHeartbeatTimeoutMs } from "./agent-jobs";
 import { checkOrganizationPermission, workspaceIdsForPermission } from "./utils";
@@ -71,6 +71,7 @@ export type MetricsCollection = Readonly<{
       pool: DbPoolMetrics;
       slowQueries: readonly SlowQuery[];
       slowFingerprints: Readonly<Record<string, number>>;
+      slowFingerprintTotals: Readonly<Record<string, number>>;
     }>;
     /** VCS webhook delivery queue state (todo 192-194). */
     webhookQueue: WebhookQueueMetrics;
@@ -212,6 +213,7 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
       pool: databasePoolMetrics(),
       slowQueries: slowQueriesSnapshot().slice(0, 10),
       slowFingerprints: slowQueryFingerprints(),
+      slowFingerprintTotals: slowQueryFingerprintTotals(),
     },
     webhookQueue,
     outboxQueue,

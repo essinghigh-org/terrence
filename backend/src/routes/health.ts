@@ -413,9 +413,10 @@ function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection[
       `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
     );
   }
-  const fps =
-    (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
-  const fpLines = Object.entries(fps)
+  const fpsTotals =
+    (instance.database as unknown as { slowFingerprintTotals?: Readonly<Record<string, number>> })
+      .slowFingerprintTotals ?? {};
+  const fpLines = Object.entries(fpsTotals)
     .slice(0, 10)
     .map(
       ([fp, count]): string =>
@@ -423,9 +424,24 @@ function pushPoolLines(lines: string[], instance: NonNullable<MetricsCollection[
     );
   if (fpLines.length > 0) {
     lines.push(
-      "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences.",
+      "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences since boot.",
       "# TYPE terrence_database_slow_fingerprint_total counter",
       ...fpLines,
+    );
+  }
+  const fpsRetained =
+    (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
+  const fpRetainedLines = Object.entries(fpsRetained)
+    .slice(0, 10)
+    .map(
+      ([fp, count]): string =>
+        `terrence_database_slow_fingerprint_retained{fingerprint="${prometheusLabel(fp)}"} ${count}`,
+    );
+  if (fpRetainedLines.length > 0) {
+    lines.push(
+      "# HELP terrence_database_slow_fingerprint_retained Normalized slow-query fingerprint occurrences in the bounded recent buffer.",
+      "# TYPE terrence_database_slow_fingerprint_retained gauge",
+      ...fpRetainedLines,
     );
   }
 }
@@ -481,10 +497,10 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
     `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
     "# HELP terrence_request_duration_ms Server request latency by bounded user journey.",
     "# TYPE terrence_request_duration_ms gauge",
-    "# HELP terrence_request_duration_samples Requests observed by bounded user journey.",
-    "# TYPE terrence_request_duration_samples counter",
+    "# HELP terrence_request_journey_requests_total Requests observed since boot by bounded user journey.",
+    "# TYPE terrence_request_journey_requests_total counter",
     ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
-      `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
+      `terrence_request_journey_requests_total{journey="${prometheusLabel(journey)}"} ${stats.requests}`,
       ...(stats.p50Ms === null
         ? []
         : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
@@ -495,8 +511,16 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
         ? []
         : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
     ]),
+    "# HELP terrence_request_duration_retained_samples Request-latency samples retained (bounded window) by journey.",
+    "# TYPE terrence_request_duration_retained_samples gauge",
+    ...Object.entries(snapshot.journeys).map(
+      ([journey, stats]): string =>
+        `terrence_request_duration_retained_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
+    ),
     "# HELP terrence_event_loop_delay_ms Event-loop delay from the bounded runtime histogram.",
     "# TYPE terrence_event_loop_delay_ms gauge",
+    "# HELP terrence_event_loop_delay_mean_ms Arithmetic mean event-loop delay.",
+    "# TYPE terrence_event_loop_delay_mean_ms gauge",
     "# HELP terrence_event_loop_delay_samples Event-loop histogram samples.",
     "# TYPE terrence_event_loop_delay_samples gauge",
     `terrence_event_loop_delay_samples ${snapshot.eventLoopDelay.sampleCount}`,
@@ -535,11 +559,12 @@ function pushProcessLines(lines: string[], process: NonNullable<MetricsCollectio
   }
   if (snapshot.eventLoopDelay.p95Ms !== null) {
     lines.push(
-      `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
+      `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.p50Ms ?? snapshot.eventLoopDelay.p95Ms}`,
       `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
       ...(snapshot.eventLoopDelay.maxMs === null
         ? []
         : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
+      `terrence_event_loop_delay_mean_ms ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
     );
   }
   for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
@@ -1668,16 +1693,31 @@ export const healthRoutes = new Elysia({ name: "health" })
   )
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
-      await db.query.users.findFirst();
-      if (isStorageDegraded()) {
-        (set as { status: number }).status = 503;
-        return "not ready: storage degraded";
+      // Share the same readiness decision as the structured endpoint so a
+      // drained/maintenance/incompatible node does not advertise readiness
+      // through the container health check.
+      const database = await probeDatabaseReadiness(5);
+      const disk = isStorageDegraded() ? "ERROR" : "OK";
+      const sandbox = probeSandboxReadiness();
+      const nodeIdentity = database === "OK" ? await probeNodeIdentityReadiness() : "ERROR";
+      const compatibility = await probeClusterCompatibilityReadiness(database);
+      const resolved = resolveReadinessStatus(
+        database,
+        disk,
+        sandbox.sandboxAbiStatus,
+        sandbox.netPolicyStatus,
+        nodeIdentity,
+        compatibility,
+        set,
+      );
+      if (resolved.status === "OK") {
+        // Todo 271: surface the applied DB schema version so operators can
+        // verify rollout completeness (e.g. mixed-version fleet check).
+        const schemaVersion = databaseSchemaVersion();
+        return schemaVersion !== null ? `ready (schema ${schemaVersion})` : "ready";
       }
-      // Todo 271: surface the applied DB schema version so operators can
-      // verify rollout completeness (e.g. mixed-version fleet check).
-      const { databaseSchemaVersion } = await import("../db");
-      const schemaVersion = databaseSchemaVersion();
-      return schemaVersion !== null ? `ready (schema ${schemaVersion})` : "ready";
+      (set as { status: number }).status = 503;
+      return resolved.status === "DRAINING" ? "not ready: draining" : "not ready";
     } catch {
       (set as { status: number }).status = 503;
       return "not ready";

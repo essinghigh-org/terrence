@@ -60,4 +60,57 @@ describe("organization roles", () => {
     expect(assigned.status).toBe(200);
     expect(((await assigned.json()) as { data: unknown[] }).data).toHaveLength(1);
   });
+  it("preserves omitted fields during PATCH", async () => {
+    const create = await request(`/api/v2/organizations/${orgName}/roles`, "POST", {
+      data: {
+        type: "organization-roles",
+        attributes: {
+          name: "Patchable",
+          description: "keep me",
+          permissions: { "manage-workspaces": true },
+        },
+      },
+    });
+    expect(create.status).toBe(201);
+    const created = (await create.json()) as { data: { id: string; attributes: { name: string } } };
+    const id = created.data.id;
+
+    const rename = await request(`/api/v2/organization-roles/${id}`, "PATCH", {
+      data: { type: "organization-roles", attributes: { name: "Renamed" } },
+    });
+    expect(rename.status).toBe(200);
+    const renamed = (await rename.json()) as {
+      data: { attributes: { name: string; description: string | null; permissions: Record<string, boolean> } };
+    };
+    expect(renamed.data.attributes.name).toBe("Renamed");
+    expect(renamed.data.attributes.description).toBe("keep me");
+    expect(renamed.data.attributes.permissions["manage-workspaces"]).toBe(true);
+
+    const permissionsOnly = await request(`/api/v2/organization-roles/${id}`, "PATCH", {
+      data: { type: "organization-roles", attributes: { permissions: {} } },
+    });
+    expect(permissionsOnly.status).toBe(200);
+    const cleared = (await permissionsOnly.json()) as {
+      data: { attributes: { name: string; description: string | null; permissions: Record<string, boolean> } };
+    };
+    expect(cleared.data.attributes.name).toBe("Renamed");
+    expect(cleared.data.attributes.description).toBe("keep me");
+    expect(cleared.data.attributes.permissions).toEqual({});
+
+    const descriptionOnly = await request(`/api/v2/organization-roles/${id}`, "PATCH", {
+      data: { type: "organization-roles", attributes: { description: null } },
+    });
+    expect(descriptionOnly.status).toBe(200);
+    const nulled = (await descriptionOnly.json()) as {
+      data: { attributes: { name: string; description: string | null; permissions: Record<string, boolean> } };
+    };
+    expect(nulled.data.attributes.name).toBe("Renamed");
+    expect(nulled.data.attributes.description).toBeNull();
+    expect(nulled.data.attributes.permissions).toEqual({});
+
+    const invalid = await request(`/api/v2/organization-roles/${id}`, "PATCH", {
+      data: { type: "organization-roles", attributes: { permissions: { "manage-workspaces": "yes" } } },
+    });
+    expect(invalid.status).toBe(422);
+  });
 });
