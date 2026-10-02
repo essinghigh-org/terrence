@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, organizationMemberships, organizations, users } from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, teamMemberships, teams, users } from "../../src/db/schema";
 
 /**
  * PATCH /api/v2/organization-memberships/:id — the activation path for
@@ -21,6 +21,10 @@ describe("organization membership PATCH", () => {
   const memberId = `usr-mempatch-member-${suffix}`;
   const memberToken = `token-mempatch-member-${suffix}`;
   const memberMemId = `orgmem-mempatch-member-${suffix}`;
+  const managerId = `usr-mempatch-manager-${suffix}`;
+  const managerToken = `token-mempatch-manager-${suffix}`;
+  const managerMemId = `orgmem-mempatch-manager-${suffix}`;
+  const managerTeamId = `team-mempatch-manager-${suffix}`;
 
   const request = (path: string, method: string, token: string, body?: unknown): Promise<Response> =>
     app.handle(
@@ -38,22 +42,42 @@ describe("organization membership PATCH", () => {
     await db.insert(users).values([
       { id: ownerId, username: ownerId, passwordHash: "unused" },
       { id: memberId, username: memberId, passwordHash: "$disabled$unused", isProvisional: true },
+      { id: managerId, username: managerId, passwordHash: "unused" },
     ]);
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values([
       { id: ownerMemId, userId: ownerId, orgId, role: "owner" },
       // The exact shape the old invite form produced: existing user stuck invited.
       { id: memberMemId, userId: memberId, orgId, role: "member", status: "invited" },
+      { id: managerMemId, userId: managerId, orgId, role: "member" },
     ]);
+    await db
+      .insert(teams)
+      .values({
+        id: managerTeamId,
+        orgId,
+        name: `membership-managers-${suffix}`,
+        organizationAccess: { "manage-membership": true },
+      });
+    await db
+      .insert(teamMemberships)
+      .values({ id: `teammem-mempatch-manager-${suffix}`, teamId: managerTeamId, userId: managerId });
     await db.insert(apiTokens).values([
       { id: `token-row-o-${suffix}`, token: createHash("sha256").update(ownerToken).digest("hex"), userId: ownerId },
       { id: `token-row-m-${suffix}`, token: createHash("sha256").update(memberToken).digest("hex"), userId: memberId },
+      {
+        id: `token-row-manager-${suffix}`,
+        token: createHash("sha256").update(managerToken).digest("hex"),
+        userId: managerId,
+      },
     ]);
   });
 
   afterAll(async () => {
-    await db.delete(apiTokens).where(inArray(apiTokens.id, [`token-row-o-${suffix}`, `token-row-m-${suffix}`]));
-    await db.delete(users).where(inArray(users.id, [ownerId, memberId]));
+    await db
+      .delete(apiTokens)
+      .where(inArray(apiTokens.id, [`token-row-o-${suffix}`, `token-row-m-${suffix}`, `token-row-manager-${suffix}`]));
+    await db.delete(users).where(inArray(users.id, [ownerId, memberId, managerId]));
     await db.delete(organizations).where(eq(organizations.id, orgId));
   });
 
@@ -132,5 +156,21 @@ describe("organization membership PATCH", () => {
       data: { type: "organization-memberships", attributes: { role: "owner" } },
     });
     expect(outsiderRes.status).toBe(404);
+  });
+
+  it("prevents delegated membership managers from assigning the owner role", async () => {
+    const statusUpdate = await request(`/api/v2/organization-memberships/${memberMemId}`, "PATCH", managerToken, {
+      data: { type: "organization-memberships", attributes: { status: "invited" } },
+    });
+    expect(statusUpdate.status).toBe(200);
+
+    const promote = await request(`/api/v2/organization-memberships/${managerMemId}`, "PATCH", managerToken, {
+      data: { type: "organization-memberships", attributes: { role: "owner" } },
+    });
+    expect(promote.status).toBe(404);
+    const managerMembership = await db.query.organizationMemberships.findFirst({
+      where: eq(organizationMemberships.id, managerMemId),
+    });
+    expect(managerMembership?.role).toBe("member");
   });
 });
