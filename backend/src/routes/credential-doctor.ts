@@ -49,19 +49,6 @@ function dataAttributes(body: unknown): Record<string, unknown> {
   return typeof attrs === "object" && attrs !== null && !Array.isArray(attrs) ? (attrs as Record<string, unknown>) : {};
 }
 
-function safeSubject(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length === 0 || value.length > 512) return undefined;
-  // Provider subject values are identifiers. Reject control characters before
-  // they can enter a JWT claim or an audit/UI response.
-  if (
-    !/^[\x21-\x7e]+$/.test(value) ||
-    /^Bearer\s+/i.test(value) ||
-    /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)
-  )
-    return undefined;
-  return value;
-}
-
 function safeClaims(token: string): Record<string, unknown> {
   const decoded = jwt.decode(token);
   if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return {};
@@ -203,17 +190,17 @@ function parseDoctorInput(
     };
   const agentPoolId = typeof agentPoolValue === "string" && agentPoolValue.trim() !== "" ? agentPoolValue.trim() : null;
   const subjectValue = attrs["subject"];
-  if (subjectValue !== undefined && subjectValue !== null && safeSubject(subjectValue) === undefined)
+  const subject = `organization:${orgName}:credential-doctor`;
+  if (subjectValue !== undefined && subjectValue !== null && subjectValue !== subject)
     return {
       ok: false,
       response: apiError(
         set,
         422,
         "Unprocessable Entity",
-        "subject must be a printable identifier of at most 512 characters",
+        "subject must match the credential doctor identity for this organization",
       ),
     };
-  const subject = safeSubject(subjectValue) ?? `organization:${orgName}:credential-doctor`;
   return { ok: true, input: { agentPoolId, subject } };
 }
 
