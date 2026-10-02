@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rm, rename } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, mkdir, open, rm, rename } from "node:fs/promises";
 import { join } from "node:path";
 
 /** Maximum amount of process output retained in orchestration diagnostics. */
@@ -203,15 +204,18 @@ export async function writeProcessOutputFile(target: string, parts: readonly Pro
         if (part !== "") await writer.write(part);
         continue;
       }
-      const reader = Bun.file(part.path).stream().getReader();
+      // Spool paths may have been visible to the sandboxed child. Open the
+      // captured inode atomically rather than following a substituted link.
+      const source = await open(part.path, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
+        const buffer = new Uint8Array(64 * 1024);
         while (true) {
-          const next = await reader.read();
-          if (next.done) break;
-          await writer.write(next.value);
+          const { bytesRead } = await source.read(buffer);
+          if (bytesRead === 0) break;
+          await writer.write(buffer.subarray(0, bytesRead));
         }
       } finally {
-        reader.releaseLock();
+        await source.close();
       }
     }
     await writer.end();
