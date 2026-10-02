@@ -63,7 +63,6 @@ import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
 import {
   FINAL_RUN_STATUSES,
   WORKSPACE_BLOCKING_RUN_STATUSES,
-  apiURL,
   signedApiURL,
   decodeStatePayload,
 } from "./lib/utils";
@@ -1996,7 +1995,6 @@ async function buildRunTaskPayload(
   orgName: string,
   stage: RunTaskStage,
   run: typeof runs.$inferSelect | undefined,
-  taskAccessToken: string,
   enforcementLevel: string,
   resultId: string,
   timeoutMs: number,
@@ -2005,7 +2003,12 @@ async function buildRunTaskPayload(
   const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
   const callbackPath = `/api/v2/task-results/${resultId}/callback`;
   const callbackUrl = signedApiURL({ url: callbackBase }, callbackPath, "PATCH", Math.ceil(timeoutMs / 1000) + 60);
-  const planJsonApiUrl = apiURL({ url: callbackBase }, `/api/v2/plans/plan-${runId}/json-output`);
+  const planJsonApiUrl = signedApiURL(
+    { url: callbackBase },
+    `/api/v2/plans/plan-${runId}/json-output`,
+    "GET",
+    Math.ceil(timeoutMs / 1000) + 60,
+  );
   const payload = JSON.stringify({
     payload_version: 1,
     stage,
@@ -2013,7 +2016,6 @@ async function buildRunTaskPayload(
     configuration_version_id: run?.configurationVersionId ?? null,
     is_speculative: run?.planOnly === true,
     organization_name: orgName,
-    access_token: taskAccessToken,
     plan_json_api_url: planJsonApiUrl,
     run_created_at: new Date(run?.createdAt ?? Date.now()).toISOString(),
     run_id: runId,
@@ -2169,7 +2171,6 @@ async function executeSingleRunTask(
   orgName: string,
   stage: RunTaskStage,
   run: typeof runs.$inferSelect | undefined,
-  taskAccessToken: string,
   timeoutMs: number,
   entry: PendingRunTaskEntry,
   entryList: readonly PendingRunTaskEntry[],
@@ -2199,7 +2200,6 @@ async function executeSingleRunTask(
     orgName,
     stage,
     run,
-    taskAccessToken,
     enforcementLevel,
     resultId,
     timeoutMs,
@@ -2234,7 +2234,6 @@ async function executeRunTasks(
   if (executions.size === 0) return true;
 
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
   let proceed = true;
   const timeoutMs = integerSetting("RUN_TASK_TIMEOUT_MS");
 
@@ -2247,7 +2246,6 @@ async function executeRunTasks(
       orgName,
       stage,
       run,
-      taskAccessToken,
       timeoutMs,
       entry,
       entryList,

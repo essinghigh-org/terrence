@@ -70,7 +70,7 @@ import { auditLogValues } from "../lib/audit-trail";
 import { decryptSecret } from "../lib/secrets";
 import { effectiveWorkspaceVariables, type EffectiveVariable } from "../lib/effective-variables";
 import { buildRunProvenanceCapsule, canonicalJson, sha256Hex, type CapsuleInput } from "../lib/run-provenance";
-import { issueRunLogCapability, findLogCapability, signedApiURL } from "../lib/capabilities";
+import { issueRunLogCapability, findLogCapability, signedApiURL, validSignedApiURL } from "../lib/capabilities";
 import { authorizedRunCapability, authorizedStateAccess } from "../lib/authorized-resources";
 import { pageRequest, pagination, cursorPagination } from "../lib/pagination";
 import type { RequestWithUrl } from "../lib/types";
@@ -4029,7 +4029,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   // --- Plan JSON Output ---
   .get(
     "/api/v2/plans/:plan_id/json-output",
-    async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+    async ({ params, user, orgId, teamId, run: runContext, request, set }: ParamCtx): Promise<unknown> => {
       const planId = params["plan_id"] ?? "";
       const runId = planId.replace(/^plan-/, "");
       const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
@@ -4037,7 +4037,10 @@ export const runRoutes = new Elysia({ name: "runs" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const ws = await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
+      const path = `/api/v2/plans/${planId}/json-output`;
+      const ws = validSignedApiURL(request, path, "GET")
+        ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) })
+        : await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
       if (ws === undefined) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
