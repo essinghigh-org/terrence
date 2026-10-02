@@ -18,6 +18,7 @@ import {
 import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
 import { hashSystemApiToken } from "../../src/lib/system-api";
+import { recordSlowQuery, resetPoolMetrics, slowQueryFingerprintTotals } from "../../src/lib/db-pool-metrics";
 
 // Token-authenticated /metrics (kanban 9.14): a dedicated System API token
 // sees instance-wide metrics; ordinary legacy and fine-grained tokens see only
@@ -534,6 +535,33 @@ describe("instance metrics", () => {
     }
     expect(body).not.toMatch(/workspace_id|resource_address/);
     expect(body).toMatch(/terrence_worker_polls_total \d+/);
+
+    // The cumulative fingerprint exporter must not truncate to a prefix: a
+    // fingerprint that first appears after an arbitrary cut would otherwise be
+    // hidden forever, even after it becomes the dominant slow query. Asserted
+    // against the real scrape, with more distinct fingerprints than any
+    // plausible cut-off.
+    resetPoolMetrics();
+    try {
+      for (let i = 0; i < 24; i += 1) recordSlowQuery(`SELECT * FROM early_${String(i)} WHERE a = ${i}`, 5_000);
+      recordSlowQuery("SELECT * FROM late_arrival WHERE c = 1", 5_000);
+      const totals = slowQueryFingerprintTotals();
+      expect(Object.keys(totals).length).toBeGreaterThan(10);
+
+      const scraped = await fetch(`${baseUrl}metrics?format=prometheus`, { headers: auth(monitoringToken) });
+      expect(scraped.status).toBe(200);
+      const fingerprintBody = await scraped.text();
+      const emitted = [
+        ...fingerprintBody.matchAll(/terrence_database_slow_fingerprint_total\{fingerprint="([^"]*)"\} (\d+)/g),
+      ];
+      expect(emitted.length).toBe(Object.keys(totals).length);
+      for (const [fingerprint, count] of Object.entries(totals)) {
+        const line = emitted.find((match): boolean => match[1] === fingerprint);
+        expect(line?.[2]).toBe(String(count));
+      }
+    } finally {
+      resetPoolMetrics();
+    }
     // SQLite-only bloat metric: health.ts only emits the value line when
     // freelistBytes !== null (null on postgres). Require the value on
     // sqlite and require its absence on postgres so a missing sqlite
