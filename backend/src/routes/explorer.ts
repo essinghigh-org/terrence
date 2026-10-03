@@ -569,9 +569,16 @@ async function createBulkActionRecords(
   };
 }
 
+function savedViewData(body: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const rawData = (body as Record<string, unknown>)["data"];
+  return rawData !== null && typeof rawData === "object" && !Array.isArray(rawData)
+    ? (rawData as Record<string, unknown>)
+    : undefined;
+}
+
 function parseSavedViewCreate(body: unknown, set: SetObj): { name: string; query: ExplorerQuery } | { error: unknown } {
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
+  const data = savedViewData(body);
   if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
     (set as { status: number }).status = 422;
     return { error: error("422", "Unprocessable Entity", "Invalid type") };
@@ -594,8 +601,7 @@ function parseSavedViewUpdate(
   defaultQueryType: string,
   set: SetObj,
 ): { name: string; query: ExplorerQuery } | { error: unknown } {
-  const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const data = payload["data"] as Record<string, unknown> | undefined;
+  const data = savedViewData(body);
   const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
   const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? defaultQueryType);
   if (name === "" || query === undefined) {

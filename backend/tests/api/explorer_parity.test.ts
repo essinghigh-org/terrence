@@ -102,4 +102,18 @@ describe("Explorer API (the reference format Parity)", () => {
     );
     expect(invalid.status).toBe(422);
   });
+
+  test("returns validation errors for non-object saved-view data", async () => {
+    for (const data of [null, [], "view", 1]) {
+      const response = await app.handle(
+        new Request(`http://localhost/api/v2/organizations/${orgName}/explorer/views`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/vnd.api+json" },
+          body: JSON.stringify({ data }),
+        }),
+      );
+      expect(response.status).toBe(422);
+      expect((await response.json()).errors[0].detail).toContain("required");
+    }
+  });
 });
