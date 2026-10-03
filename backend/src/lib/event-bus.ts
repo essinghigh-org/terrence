@@ -22,6 +22,7 @@ const CONTROL_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 type EventCursor = Readonly<{ createdAt: number; id: string }>;
 let distributedStarted = false;
+let distributedGeneration = 0;
 let distributedSubscription: { unlisten: () => Promise<void> } | undefined;
 let distributedCatchUpTimer: ReturnType<typeof setInterval> | undefined;
 let replayCursor: EventCursor = { createdAt: 0, id: "" };
@@ -75,7 +76,7 @@ async function newestPersistedCursor(): Promise<EventCursor> {
   return newest ?? { createdAt: 0, id: "" };
 }
 
-async function catchUpPersistedEvents(): Promise<void> {
+async function catchUpPersistedEvents(generation: number): Promise<void> {
   // Re-read a bounded recent window. PostgreSQL notifications are a wake-up
   // mechanism, not durable delivery, and two autocommit inserts can complete
   // out of timestamp/UUID order. The dedupe set makes this lookback cheap for
@@ -83,6 +84,7 @@ async function catchUpPersistedEvents(): Promise<void> {
   const replayStart = Math.max(0, replayCursor.createdAt - CONTROL_EVENT_REPLAY_LOOKBACK_MS - 1);
   let cursor: EventCursor = { createdAt: replayStart, id: "" };
   for (;;) {
+    if (!distributedStarted || generation !== distributedGeneration) return;
     const rows = await db.query.controlEvents.findMany({
       where: or(
         gt(controlEvents.createdAt, cursor.createdAt),
@@ -91,6 +93,7 @@ async function catchUpPersistedEvents(): Promise<void> {
       orderBy: [asc(controlEvents.createdAt), asc(controlEvents.id)],
       limit: CATCH_UP_PAGE_SIZE,
     });
+    if (!distributedStarted || generation !== distributedGeneration) return;
     if (rows.length === 0) break;
     for (const row of rows) deliverPersistedEvent(row);
     const tail = rows.at(-1);
@@ -101,10 +104,13 @@ async function catchUpPersistedEvents(): Promise<void> {
   }
 }
 
-function scheduleCatchUp(): void {
+function scheduleCatchUp(generation = distributedGeneration): void {
+  if (!distributedStarted || generation !== distributedGeneration) return;
   catchUpPromise = catchUpPromise
     .catch((): void => undefined)
-    .then(catchUpPersistedEvents)
+    .then(async (): Promise<void> => {
+      if (distributedStarted && generation === distributedGeneration) await catchUpPersistedEvents(generation);
+    })
     .catch((error: unknown): void => {
       log.error("Distributed event catch-up failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -112,8 +118,9 @@ function scheduleCatchUp(): void {
     });
 }
 
-async function receiveNotifiedEvent(id: string): Promise<void> {
+async function receiveNotifiedEvent(id: string, generation: number): Promise<void> {
   const row = await db.query.controlEvents.findFirst({ where: eq(controlEvents.id, id) });
+  if (!distributedStarted || generation !== distributedGeneration) return;
   if (row === undefined) throw new Error("Notified control event was not readable");
   deliverPersistedEvent(row);
 }
@@ -122,40 +129,54 @@ async function receiveNotifiedEvent(id: string): Promise<void> {
 export async function startDistributedEventBus(): Promise<void> {
   if (!haEnabled() || !isPostgres || distributedStarted) return;
   distributedStarted = true;
+  const generation = ++distributedGeneration;
+  const active = (): boolean => distributedStarted && generation === distributedGeneration;
   try {
     // Ignore history from before this process joined the cluster. Anything
     // committed between this read and LISTEN acknowledgement is recovered by
     // the initial onListen catch-up.
-    replayCursor = await newestPersistedCursor();
-    distributedSubscription = await listenPostgresChannel(
+    const cursor = await newestPersistedCursor();
+    if (!active()) return;
+    replayCursor = cursor;
+    const subscription = await listenPostgresChannel(
       CONTROL_EVENT_CHANNEL,
       (id): void => {
-        void receiveNotifiedEvent(id).catch((error: unknown): void => {
+        if (!active()) return;
+        void receiveNotifiedEvent(id, generation).catch((error: unknown): void => {
           log.warn("Unable to load notified control event; scheduling durable catch-up", {
             error: error instanceof Error ? error.message : String(error),
           });
-          scheduleCatchUp();
+          scheduleCatchUp(generation);
         });
       },
       (): void => {
-        scheduleCatchUp();
+        scheduleCatchUp(generation);
       },
     );
+    if (!active()) {
+      await subscription.unlisten();
+      return;
+    }
+    distributedSubscription = subscription;
     // Do not report the bridge as started until one catch-up has settled.
     // The onListen callback remains for reconnects; this explicit pass makes
     // startup deterministic for callers and tests.
-    scheduleCatchUp();
+    scheduleCatchUp(generation);
     await catchUpPromise;
-    distributedCatchUpTimer = setInterval(scheduleCatchUp, CONTROL_EVENT_CATCH_UP_INTERVAL_MS);
+    if (!active()) return;
+    distributedCatchUpTimer = setInterval((): void => {
+      scheduleCatchUp(generation);
+    }, CONTROL_EVENT_CATCH_UP_INTERVAL_MS);
     distributedCatchUpTimer.unref?.();
   } catch (error: unknown) {
-    distributedStarted = false;
+    if (active()) await stopDistributedEventBus();
     throw error;
   }
 }
 
 export async function stopDistributedEventBus(): Promise<void> {
   distributedStarted = false;
+  distributedGeneration += 1;
   if (distributedCatchUpTimer !== undefined) clearInterval(distributedCatchUpTimer);
   distributedCatchUpTimer = undefined;
   const subscription = distributedSubscription;

@@ -87,7 +87,7 @@ describe("control-plane coordinator leases", () => {
       expiresAt: 1_261,
     });
 
-    expect(await releaseControlPlaneLease(identityB, 1_170)).toBe(true);
+    expect(await releaseControlPlaneLease(identityB, takeover.fencingEpoch, 1_170)).toBe(true);
     const reacquired = await claimControlPlaneLease(identityA, 1_171, 100);
     expect(reacquired).toMatchObject({
       acquired: true,
@@ -115,7 +115,7 @@ describe("control-plane coordinator leases", () => {
     await claimControlPlaneLease(identityA, 10_000, 100);
     const takeover = await claimControlPlaneLease(identityB, 10_101, 100);
     expect(takeover.acquired).toBe(true);
-    expect(await releaseControlPlaneLease(identityA, 10_102)).toBe(false);
+    expect(await releaseControlPlaneLease(identityA, 1, 10_102)).toBe(false);
 
     const current = await db.query.controlPlaneLeases.findFirst({
       where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
@@ -125,6 +125,20 @@ describe("control-plane coordinator leases", () => {
       ownerInstanceId: "instance-b",
       fencingEpoch: 2,
     });
+  });
+
+  test("does not let an older claim release a newer epoch owned by the same instance", async () => {
+    const first = await claimControlPlaneLease(identityA, 10_000, 100);
+    expect(await releaseControlPlaneLease(identityA, first.fencingEpoch, 10_050)).toBe(true);
+    const resumed = await claimControlPlaneLease(identityA, 10_051, 100);
+    expect(resumed.fencingEpoch).toBe(first.fencingEpoch + 1);
+
+    expect(await releaseControlPlaneLease(identityA, first.fencingEpoch, 10_052)).toBe(false);
+    const current = await db.query.controlPlaneLeases.findFirst({
+      where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+    });
+    expect(current).toMatchObject({ fencingEpoch: resumed.fencingEpoch, expiresAt: resumed.expiresAt });
+    expect(await releaseControlPlaneLease(identityA, resumed.fencingEpoch, 10_053)).toBe(true);
   });
 
   test("stops scheduler and assessment work without revoking an independently leased run", async () => {
@@ -187,6 +201,47 @@ describe("control-plane coordinator leases", () => {
     // while coordinator-owned assessments are fenced immediately.
     expect(runKillCalls).toBe(0);
     expect(assessmentKillCalls).toBe(1);
+  });
+
+  test("shutdown cannot release a newer same-instance epoch while its leadership callback settles", async () => {
+    process.env["TERRENCE_HA_ENABLED"] = "true";
+    process.env["TERRENCE_DISABLE_WORKER"] = "false";
+    process.env["TERRENCE_NODE_ID"] = "node-a";
+    let entered!: () => void;
+    const blocked = new Promise<void>((resolve): void => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const released = new Promise<void>((resolve): void => {
+      resume = resolve;
+    });
+    await startControlPlaneCoordinator({
+      onLeadershipAcquired: (): void => undefined,
+      onLeadershipLost: async (): Promise<void> => {
+        entered();
+        await released;
+      },
+    });
+    const first = controlPlaneCoordinatorState();
+    if (first.expiresAt === null) throw new Error("expected coordinator lease");
+    const stopping = stopControlPlaneCoordinator();
+    await blocked;
+    try {
+      const resumed = await claimControlPlaneLease(
+        { nodeId: "node-a", instanceId: controlPlaneInstanceId },
+        first.expiresAt + 1,
+      );
+      expect(resumed.fencingEpoch).toBe((first.fencingEpoch ?? 0) + 1);
+      resume();
+      await stopping;
+      const current = await db.query.controlPlaneLeases.findFirst({
+        where: eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
+      });
+      expect(current).toMatchObject({ fencingEpoch: resumed.fencingEpoch, expiresAt: resumed.expiresAt });
+    } finally {
+      resume();
+      await stopping;
+    }
   });
 
   postgresTest("transactional coordinator fence rejects a stale epoch", async () => {

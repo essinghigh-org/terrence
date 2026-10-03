@@ -141,7 +141,11 @@ export async function claimControlPlaneLease(
 }
 
 /** Expire, rather than delete, so the next owner increments the epoch. */
-export async function releaseControlPlaneLease(identity: LeaseIdentity, now?: number): Promise<boolean> {
+export async function releaseControlPlaneLease(
+  identity: LeaseIdentity,
+  fencingEpoch: number,
+  now?: number,
+): Promise<boolean> {
   const currentNow = now ?? (await databaseCurrentTimeMs());
   const released = await db
     .update(controlPlaneLeases)
@@ -150,6 +154,7 @@ export async function releaseControlPlaneLease(identity: LeaseIdentity, now?: nu
       and(
         eq(controlPlaneLeases.name, CONTROL_PLANE_LEASE_NAME),
         eq(controlPlaneLeases.ownerInstanceId, identity.instanceId),
+        eq(controlPlaneLeases.fencingEpoch, fencingEpoch),
       ),
     )
     .returning({ name: controlPlaneLeases.name });
@@ -261,10 +266,10 @@ function activateLeadership(fencingEpoch: number, generation: number): void {
     log.error("Control-plane coordinator activation failed", { fencingEpoch, error: String(error) });
     if (coordinatorStarted && generation === leadershipGeneration && coordinatorState.role === "leader") {
       await loseLeadership();
-      await releaseControlPlaneLease({
-        nodeId: controlPlaneNodeId(),
-        instanceId: controlPlaneInstanceId,
-      }).catch((): void => undefined);
+      await releaseControlPlaneLease(
+        { nodeId: controlPlaneNodeId(), instanceId: controlPlaneInstanceId },
+        fencingEpoch,
+      ).catch((): void => undefined);
     }
   });
 }
@@ -308,7 +313,7 @@ async function releaseClaimIfCoordinatorInactive(
 ): Promise<boolean> {
   if (coordinatorStarted && !coordinatorSuspended) return false;
   if (lease.acquired) {
-    await releaseControlPlaneLease(identity).catch((error: unknown): void => {
+    await releaseControlPlaneLease(identity, lease.fencingEpoch).catch((error: unknown): void => {
       log.warn(`Unable to release coordinator lease after ${phase} during suspension`, { error: String(error) });
     });
   }
@@ -527,14 +532,17 @@ export async function stopControlPlaneCoordinator(): Promise<void> {
   if (coordinatorTimer !== undefined) clearTimeout(coordinatorTimer);
   coordinatorTimer = undefined;
   const wasLeader = coordinatorState.role === "leader";
+  const fencingEpoch = coordinatorState.fencingEpoch;
   if (wasLeader) await loseLeadership();
   else clearLeadershipWatchdog();
-  await releaseControlPlaneLease({
-    nodeId: controlPlaneNodeId(),
-    instanceId: controlPlaneInstanceId,
-  }).catch((error: unknown): void => {
-    log.warn("Unable to release control-plane coordinator lease during shutdown", { error: String(error) });
-  });
+  if (fencingEpoch !== null) {
+    await releaseControlPlaneLease(
+      { nodeId: controlPlaneNodeId(), instanceId: controlPlaneInstanceId },
+      fencingEpoch,
+    ).catch((error: unknown): void => {
+      log.warn("Unable to release control-plane coordinator lease during shutdown", { error: String(error) });
+    });
+  }
   coordinatorCallbacks = undefined;
   coordinatorState = haEnabled()
     ? {

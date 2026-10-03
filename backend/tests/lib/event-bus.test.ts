@@ -38,6 +38,90 @@ afterAll((): void => {
   else process.env["TERRENCE_NODE_ID"] = previousNodeId;
 });
 
+for (const phase of ["cursor", "catch-up"] as const) {
+  postgresTest(`shutdown during startup ${phase} prevents a late replay timer and permits restart`, async () => {
+    let entered!: () => void;
+    const blocked = new Promise<void>((resolve): void => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const released = new Promise<void>((resolve): void => {
+      resume = resolve;
+    });
+    const method = phase === "cursor" ? "findFirst" : "findMany";
+    const pausedRead = spyOn(db.query.controlEvents, method).mockImplementationOnce((async () => {
+      entered();
+      await released;
+      return phase === "cursor" ? undefined : [];
+    }) as unknown as typeof db.query.controlEvents.findFirst & typeof db.query.controlEvents.findMany);
+    const intervals = spyOn(globalThis, "setInterval");
+    try {
+      const starting = startDistributedEventBus();
+      await blocked;
+      const stopping = stopDistributedEventBus();
+      resume();
+      await Promise.all([starting, stopping]);
+      expect(intervals.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(0);
+
+      pausedRead.mockRestore();
+      await startDistributedEventBus();
+      expect(intervals.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(1);
+      await stopDistributedEventBus();
+    } finally {
+      resume();
+      pausedRead.mockRestore();
+      intervals.mockRestore();
+    }
+  });
+}
+
+postgresTest("a notification read completing after shutdown cannot dispatch to local listeners", async () => {
+  await startDistributedEventBus();
+  const id = crypto.randomUUID();
+  const topic = `event-shutdown-${id}`;
+  testIds.push(id);
+  const received: unknown[] = [];
+  const unsubscribe = subscribe(topic, (payload): void => {
+    received.push(payload["marker"]);
+  });
+  await db.insert(controlEvents).values({
+    id,
+    originNodeId: "remote-node",
+    originInstanceId: "remote-instance",
+    topic,
+    payload: { marker: "late" },
+    createdAt: Date.now(),
+  });
+
+  let entered!: () => void;
+  const blocked = new Promise<void>((resolve): void => {
+    entered = resolve;
+  });
+  let resume!: () => void;
+  const released = new Promise<void>((resolve): void => {
+    resume = resolve;
+  });
+  const findFirst = db.query.controlEvents.findFirst.bind(db.query.controlEvents);
+  const pausedRead = spyOn(db.query.controlEvents, "findFirst").mockImplementationOnce((async (...args) => {
+    const row = await findFirst(...args);
+    entered();
+    await released;
+    return row;
+  }) as typeof db.query.controlEvents.findFirst);
+  try {
+    await notifyPostgresChannel(channel, id);
+    await blocked;
+    await stopDistributedEventBus();
+    resume();
+    await Bun.sleep(30);
+    expect(received).toEqual([]);
+  } finally {
+    resume();
+    pausedRead.mockRestore();
+    unsubscribe();
+  }
+});
+
 postgresTest("live notifications cannot advance replay past an older missed durable event", async () => {
   await db.delete(controlEvents);
   await startDistributedEventBus();
