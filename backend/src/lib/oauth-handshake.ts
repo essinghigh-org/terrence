@@ -43,12 +43,13 @@ export async function putOAuthHandshakeState(
   id: string,
   expiresAt: number,
   payload: Readonly<OAuthHandshakePayload>,
+  connection: Readonly<Pick<typeof db, "insert">> = db,
 ): Promise<void> {
   const storedPayload: OAuthHandshakePayload = { ...payload };
   if (typeof storedPayload["requestTokenSecret"] === "string") {
     storedPayload["requestTokenSecret"] = await encryptSecret(storedPayload["requestTokenSecret"], { force: true });
   }
-  await db
+  await connection
     .insert(oauthHandshakeStates)
     .values({ id, expiresAt, payload: storedPayload })
     .onConflictDoUpdate({ target: oauthHandshakeStates.id, set: { expiresAt, payload: storedPayload } });
@@ -62,8 +63,9 @@ export async function putOAuthHandshakeState(
 export async function takeOAuthHandshakeState<T extends OAuthHandshakePayload>(
   id: string,
   now = Date.now(),
+  connection: Readonly<Pick<typeof db, "delete">> = db,
 ): Promise<T | undefined> {
-  const [row] = await db
+  const [row] = await connection
     .delete(oauthHandshakeStates)
     .where(and(eq(oauthHandshakeStates.id, id), gt(oauthHandshakeStates.expiresAt, now)))
     .returning({ payload: oauthHandshakeStates.payload });

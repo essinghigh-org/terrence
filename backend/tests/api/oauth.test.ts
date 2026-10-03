@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, users } from "../../src/db/schema";
+import { revokeUserOAuthAuthorizationCodes } from "../../src/lib/oauth-handshake";
 import { oauthPlugin, verifyPkceVerifier } from "../../src/oauth";
 
 const userId = crypto.randomUUID();
@@ -58,7 +59,7 @@ async function browserRefreshCookie(): Promise<string> {
 /** Drive the full OAuth handshake: GET redirects to /login and stashes state
  *  in an HttpOnly cookie; a browser session (terrence_refresh) then completes
  *  it via /oauth/authorization/complete. */
-async function fullHandshake() {
+async function fullHandshake(beforeComplete?: () => void) {
   const params = await authorizationParameters();
   const begin = await oauthApp.handle(
     new Request(`http://localhost/oauth/authorization?${new URLSearchParams(params)}`),
@@ -70,6 +71,7 @@ async function fullHandshake() {
   // Establish a browser session the way the SPA login would (no MFA here).
   const refreshCookie = await browserRefreshCookie();
   const cookies = `terraform_oauth_state=${oauthState}; ${refreshCookie}`;
+  beforeComplete?.();
 
   const complete = await oauthApp.handle(
     new Request(`http://localhost/oauth/authorization/complete?oauth_state=${oauthState}`, {
@@ -224,6 +226,93 @@ describe("Terraform login OAuth", () => {
     const replay = await tokenRequest();
     expect(replay.status).toBe(400);
     expect(await replay.json()).toEqual({ error: "invalid_grant" });
+  });
+
+  it("does not approve a session whose credentials changed before the code transaction", async () => {
+    const current = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    const asyncDb = db as unknown as {
+      transaction: (callback: (tx: typeof db) => Promise<unknown>, options?: unknown) => Promise<unknown>;
+    };
+    const originalTransaction = asyncDb.transaction.bind(db);
+    let changed = false;
+    let restore = (): void => undefined;
+    try {
+      const { complete } = await fullHandshake(() => {
+        const approval = spyOn(asyncDb, "transaction").mockImplementation(async (callback, ...options) => {
+          if (!changed) {
+            changed = true;
+            await originalTransaction(async (tx) => {
+              await tx
+                .update(users)
+                .set({ passwordHash: "changed-credential-fixture", mustChangePassword: false })
+                .where(eq(users.id, userId));
+              await revokeUserOAuthAuthorizationCodes(tx, userId);
+            });
+          }
+          return originalTransaction(callback, ...options);
+        });
+        restore = (): void => {
+          approval.mockRestore();
+        };
+      });
+      expect(changed).toBeTrue();
+      expect(complete.status).toBe(401);
+      expect(complete.headers.get("Location")).toBeNull();
+    } finally {
+      restore();
+      if (current !== undefined)
+        await db.update(users).set({ passwordHash: current.passwordHash }).where(eq(users.id, userId));
+    }
+  });
+
+  it("retires a pending authorization when credentials change before the issuance transaction", async () => {
+    const { complete } = await fullHandshake();
+    const code = new URL(complete.headers.get("Location")!).searchParams.get("code")!;
+    const current = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    const before = await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, userId) });
+    const asyncDb = db as unknown as {
+      transaction: (callback: (tx: typeof db) => Promise<unknown>, options?: unknown) => Promise<unknown>;
+    };
+    const originalTransaction = asyncDb.transaction.bind(db);
+    let changed = false;
+    const issuance = spyOn(asyncDb, "transaction").mockImplementation(async (callback, ...options) => {
+      if (!changed) {
+        changed = true;
+        await originalTransaction(async (tx) => {
+          await tx
+            .update(users)
+            .set({ passwordHash: "retired-credential-fixture", mustChangePassword: false })
+            .where(eq(users.id, userId));
+          await revokeUserOAuthAuthorizationCodes(tx, userId);
+        });
+      }
+      return originalTransaction(callback, ...options);
+    });
+    try {
+      const response = await oauthApp.handle(
+        new Request("http://localhost/oauth/token", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${btoa("terraform-cli:")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            code,
+            code_verifier: verifier,
+            grant_type: "authorization_code",
+            redirect_uri: "http://localhost:10000/login",
+          }),
+        }),
+      );
+      expect(changed).toBeTrue();
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid_grant" });
+      expect((await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, userId) })).length).toBe(before.length);
+    } finally {
+      issuance.mockRestore();
+      if (current !== undefined)
+        await db.update(users).set({ passwordHash: current.passwordHash }).where(eq(users.id, userId));
+    }
   });
 
   it("does not exchange an authorization code for a blocked account", async () => {

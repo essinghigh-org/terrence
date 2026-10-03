@@ -1,7 +1,7 @@
 import { integerSetting } from "./lib/runtime-config";
 import { Elysia } from "elysia";
 import { timingSafeEqual } from "node:crypto";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { generateAuthenticationToken, hashAuthenticationToken } from "./lib/token-service";
@@ -57,11 +57,22 @@ async function peekPendingAuth(id: string): Promise<StoredPendingAuth | undefine
   const row = await peekOAuthHandshakeState(PENDING_AUTH_PREFIX + id);
   return row?.payload as StoredPendingAuth | undefined;
 }
-async function putAuthCode(id: string, value: Readonly<StoredAuthCode>): Promise<void> {
-  await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value);
+async function putAuthCode(
+  id: string,
+  value: Readonly<StoredAuthCode>,
+  connection: Readonly<Pick<typeof db, "insert">>,
+): Promise<void> {
+  await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value, connection);
 }
-async function takeAuthCode(id: string): Promise<StoredAuthCode | undefined> {
-  return takeOAuthHandshakeState<StoredAuthCode>(AUTH_CODE_PREFIX + id);
+async function takeAuthCode(
+  id: string,
+  connection: Readonly<Pick<typeof db, "delete">>,
+): Promise<StoredAuthCode | undefined> {
+  return takeOAuthHandshakeState<StoredAuthCode>(AUTH_CODE_PREFIX + id, Date.now(), connection);
+}
+async function peekAuthCode(id: string): Promise<StoredAuthCode | undefined> {
+  const row = await peekOAuthHandshakeState(AUTH_CODE_PREFIX + id);
+  return row?.payload as StoredAuthCode | undefined;
 }
 // Lightweight prune of expired heap entries is now handled by the periodic GC
 // on the table; approveForUser still no-ops quickly without a DB round-trip.
@@ -198,15 +209,36 @@ function readOauthStateCookie(request: RequestInfo | undefined): string | undefi
  * Issue a PKCE authorization code for `userId` and redirect Terraform's local
  * callback.
  */
-async function approveForUser(authorization: Readonly<AuthorizationRequest>, userId: string): Promise<Response> {
+async function approveForUser(
+  authorization: Readonly<AuthorizationRequest>,
+  user: Readonly<Pick<typeof users.$inferSelect, "id" | "passwordHash">>,
+): Promise<Response> {
   const now = Date.now();
   const code = crypto.randomUUID();
-  await putAuthCode(code, {
-    codeChallenge: authorization.codeChallenge,
-    expiresAt: now + CODE_TTL_MS,
-    redirectUri: authorization.redirectUri,
-    userId,
+  const approved = await db.transaction(async (tx): Promise<boolean> => {
+    // A session authenticated before credential rotation cannot create a
+    // new code after that rotation has already retired pending grants.
+    const [locked] = await tx
+      .update(users)
+      .set({ passwordHash: users.passwordHash })
+      .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
+      .returning({ id: users.id });
+    if (locked === undefined) return false;
+    const current = await tx.query.users.findFirst({ where: eq(users.id, user.id) });
+    if (current === undefined || isUserLoginBlocked(current) || current.mustChangePassword) return false;
+    await putAuthCode(
+      code,
+      {
+        codeChallenge: authorization.codeChallenge,
+        expiresAt: now + CODE_TTL_MS,
+        redirectUri: authorization.redirectUri,
+        userId: user.id,
+      },
+      tx,
+    );
+    return true;
   });
+  if (!approved) return plainError("Authorization session changed. Please run 'terraform login' again.", 401);
 
   const redirect = new URL(authorization.redirectUri);
   redirect.searchParams.set("code", code);
@@ -256,7 +288,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       });
       const mfaEnforced = mfa?.enabled === true;
       if (!mfaEnforced || details.session.mfaVerified) {
-        return await approveForUser(authorization, details.user.id);
+        return await approveForUser(authorization, details.user);
       }
     }
 
@@ -323,7 +355,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     if (pending === undefined) {
       return plainError("OAuth authorization expired. Please run 'terraform login' again.");
     }
-    return await approveForUser(pending.authorization, details.user.id);
+    return await approveForUser(pending.authorization, details.user);
   })
   .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
     if (field(body, "grant_type") !== "authorization_code" || tokenClientId(body, request) !== CLIENT_ID) {
@@ -331,32 +363,26 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     const code = field(body, "code");
-    const entry = await takeAuthCode(code);
+    const entry = await peekAuthCode(code);
     if (entry === undefined) return oauthError(set, "invalid_grant");
 
     const verifier = field(body, "code_verifier");
-    if (
-      entry.expiresAt <= Date.now() ||
-      field(body, "redirect_uri") !== entry.redirectUri ||
-      !(await verifyPkceVerifier(verifier, entry.codeChallenge))
-    ) {
-      return oauthError(set, "invalid_grant");
-    }
+    const validGrant =
+      entry.expiresAt > Date.now() &&
+      field(body, "redirect_uri") === entry.redirectUri &&
+      (await verifyPkceVerifier(verifier, entry.codeChallenge));
 
     const accessToken = generateAuthenticationToken("user");
     const expiresAt = Date.now() + integerSetting("CLI_TOKEN_TTL_MS");
 
     const issued = await db.transaction(async (tx): Promise<boolean> => {
-      const currentUser = await tx.query.users.findFirst({ where: eq(users.id, entry.userId) });
-      if (currentUser === undefined || isUserLoginBlocked(currentUser) || currentUser.mustChangePassword) return false;
-
-      // Acquire a row lock on PostgreSQL and a serialized write slot on
-      // SQLite without overwriting a suspension committed by another request.
-      await tx
-        .update(users)
-        .set({ isSuspended: false })
-        .where(and(eq(users.id, currentUser.id), or(eq(users.isSuspended, false), isNull(users.isSuspended))));
-      const eligibleUser = await tx.query.users.findFirst({ where: eq(users.id, currentUser.id) });
+      // Password changes take this same user row before deleting codes and
+      // tokens. Take the lock before consuming the code so either the grant
+      // completes first and is revoked, or the changed credentials retire it.
+      await tx.update(users).set({ passwordHash: users.passwordHash }).where(eq(users.id, entry.userId));
+      const consumed = await takeAuthCode(code, tx);
+      if (consumed?.userId !== entry.userId || !validGrant) return false;
+      const eligibleUser = await tx.query.users.findFirst({ where: eq(users.id, consumed.userId) });
       if (eligibleUser === undefined || isUserLoginBlocked(eligibleUser) || eligibleUser.mustChangePassword)
         return false;
 
