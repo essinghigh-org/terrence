@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, mkdtemp, readdir, rm } from "node:fs/promises";
+import { readFile, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -65,5 +65,21 @@ describe("process output capture", () => {
     child.kill("SIGKILL");
     await child.exited;
     expect(await readdir(directory)).toEqual([]);
+  });
+
+  test("does not follow substituted spool symlinks", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "terrence-process-output-symlink-"));
+    temporaryDirectories.push(directory);
+    const secretPath = join(directory, "secret");
+    const spoolPath = join(directory, "captured.stdout");
+    const artifactPath = join(directory, "combined.log");
+    await writeFile(secretPath, "control-plane-secret");
+    await symlink(secretPath, spoolPath);
+
+    const failure = await writeProcessOutputFile(artifactPath, [{ path: spoolPath }]).catch(
+      (error: unknown): unknown => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(await Bun.file(artifactPath).exists()).toBe(false);
   });
 });
