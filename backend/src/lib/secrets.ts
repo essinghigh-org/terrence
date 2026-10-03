@@ -10,6 +10,9 @@ const KEY_FILE_NAME = ".encryption-key";
 const SALT_FILE_NAME = ".encryption-salt";
 const KEY_LENGTH = 32;
 const SALT_LENGTH = 16;
+// Read compatibility for installations predating per-installation salt files.
+// New ciphertext always uses the installation salt and current KDF options.
+const LEGACY_KDF_SALT = "terrence:secrets:v1";
 
 type PasswordKdfOptions = Readonly<{ ["N"]: number; r: number; p: number; maxmem: number }>;
 
@@ -36,6 +39,9 @@ let cachedKey: Buffer | undefined;
 let cachedStorageDir: string | undefined;
 let cachedLegacyPasswordKey: Buffer | undefined;
 let cachedLegacyPasswordKeyStorageDir: string | undefined;
+let cachedLegacyPasswordKeyPassword: string | undefined;
+let cachedLegacyStaticKey: Buffer | undefined;
+let cachedLegacyStaticPassword: string | undefined;
 // In-flight guard for the cold file-key load. Under test setups (and any burst
 // of first-time encryptSecret calls) several callers can hit a missing key file
 // concurrently; without a shared promise each one races the filesystem and the
@@ -241,16 +247,43 @@ async function loadEncryptionKey(): Promise<Buffer> {
 
 async function loadLegacyPasswordKey(): Promise<Buffer> {
   const currentStorageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
-  if (cachedLegacyPasswordKey !== undefined && cachedLegacyPasswordKeyStorageDir === currentStorageDir) {
-    return cachedLegacyPasswordKey;
-  }
   const password = deploymentSecret("ENCRYPTION_PASSWORD");
   if (password === undefined || password === "") {
     throw new Error("Legacy password-derived key requested without ENCRYPTION_PASSWORD");
   }
+  if (
+    cachedLegacyPasswordKey !== undefined &&
+    cachedLegacyPasswordKeyStorageDir === currentStorageDir &&
+    cachedLegacyPasswordKeyPassword === password
+  ) {
+    return cachedLegacyPasswordKey;
+  }
   cachedLegacyPasswordKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH, LEGACY_PASSWORD_KDF_OPTIONS);
   cachedLegacyPasswordKeyStorageDir = currentStorageDir;
+  cachedLegacyPasswordKeyPassword = password;
   return cachedLegacyPasswordKey;
+}
+
+function loadLegacyPasswordKeySync(resolvedDir: string, password: string): Buffer {
+  if (
+    cachedLegacyPasswordKey !== undefined &&
+    cachedLegacyPasswordKeyStorageDir === resolvedDir &&
+    cachedLegacyPasswordKeyPassword === password
+  ) {
+    return cachedLegacyPasswordKey;
+  }
+  cachedLegacyPasswordKey = loadPasswordDerivedKeySync(resolvedDir, password, LEGACY_PASSWORD_KDF_OPTIONS);
+  cachedLegacyPasswordKeyStorageDir = resolvedDir;
+  cachedLegacyPasswordKeyPassword = password;
+  return cachedLegacyPasswordKey;
+}
+
+function loadLegacyStaticKey(password: string): Buffer {
+  if (cachedLegacyStaticKey === undefined || cachedLegacyStaticPassword !== password) {
+    cachedLegacyStaticKey = scryptSync(password, LEGACY_KDF_SALT, KEY_LENGTH, LEGACY_PASSWORD_KDF_OPTIONS);
+    cachedLegacyStaticPassword = password;
+  }
+  return cachedLegacyStaticKey;
 }
 
 export function isEncryptedSecret(value: string): boolean {
@@ -299,6 +332,9 @@ export async function decryptSecret(value: string): Promise<string> {
     if (password === undefined || password === "") throw primaryError;
     try {
       return decrypt(await loadLegacyPasswordKey());
+    } catch {}
+    try {
+      return decrypt(loadLegacyStaticKey(password));
     } catch {
       throw primaryError;
     }
@@ -336,14 +372,16 @@ export function decryptSecretSync(value: string, storageDir: string): string {
   };
 
   const resolvedDir = resolve(storageDir);
-  const primaryKey = loadEncryptionKeySync(resolvedDir);
   try {
-    return decrypt(primaryKey);
+    return decrypt(loadEncryptionKeySync(resolvedDir));
   } catch (primaryError) {
     const password = deploymentSecret("ENCRYPTION_PASSWORD");
     if (password === undefined || password === "") throw primaryError;
     try {
-      return decrypt(loadPasswordDerivedKeySync(resolvedDir, password, LEGACY_PASSWORD_KDF_OPTIONS));
+      return decrypt(loadLegacyPasswordKeySync(resolvedDir, password));
+    } catch {}
+    try {
+      return decrypt(loadLegacyStaticKey(password));
     } catch {
       throw primaryError;
     }

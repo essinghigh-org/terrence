@@ -38,6 +38,7 @@ import { hashPassword, verifyAndUpgradePassword } from "../lib/password-hashing"
 import { resolveClientIp } from "../lib/client-ip";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
 import { clearLoginFailures, isLoginLocked, recordFailedLogin } from "../lib/login-lockout";
+import { revokeUserOAuthAuthorizationCodes } from "../lib/oauth-handshake";
 import { secureRequest } from "../lib/secure-request";
 import { normalizeEmail, normalizeUsername } from "../lib/identity";
 
@@ -226,7 +227,7 @@ export async function browserSessionDetails(request: RequestInfo | undefined): P
     )
       continue;
     const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
-    if (user === undefined || isUserLoginBlocked(user)) continue;
+    if (user === undefined || isUserLoginBlocked(user) || user.mustChangePassword === true) continue;
     return { user, session: current };
   }
   return null;
@@ -1301,7 +1302,17 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return withRefreshRotationLock(async (): Promise<unknown> => {
       const seen = new Map<string, typeof refreshSessions.$inferSelect>();
       const now = Date.now();
-      let liveFamilyId: string | null = null;
+      // Read every candidate before issuing anything: a live cookie must not
+      // hide a reused token from an independent family, regardless of order.
+      for (const presentedToken of candidates) await loadRefreshCandidate(seen, presentedToken);
+      const active = [...seen.values()].filter((row): boolean => row.revokedAt === null && row.expiresAt > now);
+      let liveFamilyId = active.find((row): boolean => row.rotatedAt === null)?.familyId ?? null;
+      for (const current of active) {
+        if (current.rotatedAt === null || current.familyId === liveFamilyId) continue;
+        if ((await resolveGraceSuccessor(current.rotatedAtMs, current.successorHash, now)) !== null) continue;
+        await revokeRefreshFamily(current.familyId, current.userId, now);
+        return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
+      }
       for (const presentedToken of candidates) {
         const loaded = await loadRefreshCandidate(seen, presentedToken);
         if ("stale" in loaded) continue;
@@ -1564,6 +1575,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         .update(refreshSessions)
         .set({ revokedAt: Date.now() })
         .where(and(eq(refreshSessions.userId, user.id), isNull(refreshSessions.revokedAt)));
+      await revokeUserOAuthAuthorizationCodes(t, user.id);
     });
     return { data: userResource({ ...user, mustChangePassword: false }) };
   })
@@ -1646,7 +1658,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     if (token !== undefined && token !== "") {
       const session = await refreshSessionForToken(token);
       if (session !== undefined) {
-        await db.update(refreshSessions).set({ mfaVerified: true }).where(eq(refreshSessions.id, session.id));
+        await db
+          .update(refreshSessions)
+          .set({ mfaVerified: true })
+          .where(
+            and(
+              eq(refreshSessions.id, session.id),
+              eq(refreshSessions.userId, user.id),
+              isNull(refreshSessions.rotatedAt),
+              isNull(refreshSessions.revokedAt),
+              gt(refreshSessions.expiresAt, Date.now()),
+            ),
+          );
       }
     }
     return { data: { type: "mfa", attributes: { enabled: true } } };

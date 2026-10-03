@@ -46,7 +46,7 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
         // as `locks` / `durable_jobs`.
         const { db } = await import("../db");
         const rows = await (
-          db as unknown as { execute: (q: unknown) => Promise<readonly { count: number }[]> }
+          db as unknown as { execute: (q: unknown) => Promise<readonly { count: number | string }[]> }
         ).execute(sql`
           INSERT INTO rate_limit_buckets (bucket, window_start, count)
           VALUES (${bucket}, ${windowStart}, 1)
@@ -57,7 +57,8 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
               THEN rate_limit_buckets.window_start ELSE ${windowStart} END
           RETURNING count
         `);
-        const count = rows[0]?.count ?? 1;
+        // PostgreSQL's bigint counter is returned as text by the SQL driver.
+        const count = Number(rows[0]?.count ?? 1);
         return { count, nextReset, start: windowStart };
       } catch {
         // DB unavailable: fail open (allow the request) rather than hard-failing
@@ -72,7 +73,9 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
           try {
             const { db: db2 } = await import("../db");
             await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
-              sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`,
+              sql`DELETE FROM rate_limit_buckets
+                  WHERE left(bucket, ${bucketPrefix.length + 1}) = ${`${bucketPrefix}:`}
+                    AND window_start < ${staleBefore}`,
             );
           } catch {}
         }
