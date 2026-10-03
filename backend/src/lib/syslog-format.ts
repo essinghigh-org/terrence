@@ -331,7 +331,7 @@ function rfc5424SyslogMessage(entry: SyslogEntryInput, header: string): string {
     flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);
   }
   const sd = `[terrence@${ENTERPRISE_ID}${params
-    .map(([key, value]): string => ` ${key}="${sdEscape(value)}"`)
+    .map(([key, value]): string => ` ${paramSafeKey(key)}="${sdEscape(value)}"`)
     .join("")}]`;
   return `${header} ${sd} ${entry.message}`;
 }

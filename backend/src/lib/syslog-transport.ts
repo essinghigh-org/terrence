@@ -22,14 +22,7 @@ const MAX_UDP_PAYLOAD_BYTES = 1024;
 type SyslogUrlFields = Readonly<Pick<URL, "username" | "password" | "pathname" | "search" | "hash" | "port">>;
 
 function isValidSyslogUrl(url: SyslogUrlFields): boolean {
-  return (
-    url.username === "" &&
-    url.password === "" &&
-    url.pathname === "/" &&
-    url.search === "" &&
-    url.hash === "" &&
-    url.port !== ""
-  );
+  return url.username === "" && url.password === "" && url.pathname === "/" && url.search === "" && url.hash === "";
 }
 
 function parseSyslogScheme(value: string): { scheme: SyslogTransport; rest: string } | null {
@@ -45,8 +38,8 @@ function parseSyslogHost(url: Readonly<Pick<URL, "hostname" | "port">>): { host:
   return { host, isIpv6 };
 }
 
-function parseSyslogPort(url: Readonly<Pick<URL, "hostname" | "port">>): number | null {
-  const port = Number.parseInt(url.port, 10);
+function parseSyslogPort(raw: string | undefined): number | null {
+  const port = Number.parseInt(raw ?? "", 10);
   return Number.isFinite(port) && port >= 1 && port <= 65_535 ? port : null;
 }
 
@@ -65,7 +58,9 @@ export function parseSyslogTarget(raw: string | undefined): SyslogTarget | null 
   if (!isValidSyslogUrl(url)) return null;
   const host = parseSyslogHost(url);
   if (host === null) return null;
-  const port = parseSyslogPort(url);
+  // HTTP URL parsing validates the host, but removes an explicit default
+  // port of 80. Read the configured port independently so none is implied.
+  const port = parseSyslogPort(/:(\d+)\/?$/.exec(scheme.rest)?.[1]);
   if (port === null) return null;
   return {
     transport: scheme.scheme,
