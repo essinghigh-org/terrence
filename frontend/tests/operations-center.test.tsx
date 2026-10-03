@@ -86,6 +86,10 @@ test("backup verification only starts after the user confirms a source copy", as
   });
   expect(writes).toHaveLength(0);
   fireEvent.input(view.getByLabelText("Backup path"), { target: { value: "/backups/copy" } });
+  const postgresUrl = "postgresql://operator:fixture-password@restore/terrence_rehearsal";
+  const targetInput = view.getByLabelText(/Isolated PostgreSQL target URL/);
+  expect(targetInput.getAttribute("type")).toBe("password");
+  fireEvent.input(targetInput, { target: { value: postgresUrl } });
   fireEvent.click(view.getByRole("button", { name: "Verify integrity" }));
   expect(writes).toHaveLength(0);
   const confirm = view.getByRole("button", { name: "Continue" });
@@ -98,6 +102,7 @@ test("backup verification only starts after the user confirms a source copy", as
   expect(writes).toHaveLength(1);
   expect(writes[0]?.url).toBe("/api/v2/admin/backups/integrity-checks");
   expect(writes[0]?.body.data.attributes["backup-path"]).toBe("/backups/copy");
+  expect(writes[0]?.body.data.attributes["postgres-target-url"]).toBe(postgresUrl);
 });
 
 test("webhook delivery paging and retries use fixed application endpoints", async () => {

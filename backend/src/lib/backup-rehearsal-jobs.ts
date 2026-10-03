@@ -11,6 +11,7 @@ import {
   type BackupSourceOptions,
 } from "./backup-verification";
 import type { DeepReadonly } from "./types";
+import { decryptSecret, encryptSecret } from "./secrets";
 
 const BACKUP_REHEARSAL_KIND = "backup-rehearsal";
 const ACTIVE_REHEARSAL_KEY = "active";
@@ -33,13 +34,20 @@ type StoredPayload = DeepReadonly<{
   ownerNodeId: string;
   ownerInstanceId: string;
   startedAt: string;
-  source: BackupSourceOptions;
+  source: Omit<BackupSourceOptions, "postgresTargetUrl">;
+  postgresTargetUrlEncrypted?: string;
   cliPath?: string;
   requireCli?: boolean;
   finishedAt?: string;
   result?: BackupRehearsalReport;
   error?: { code?: string; detail: string };
 }>;
+
+function terminalPayload(payload: StoredPayload): Omit<StoredPayload, "postgresTargetUrlEncrypted"> {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([key]): boolean => key !== "postgresTargetUrlEncrypted"),
+  ) as Omit<StoredPayload, "postgresTargetUrlEncrypted">;
+}
 
 function serializeError(error: unknown): { code?: string; detail: string } {
   return error instanceof BackupVerificationError
@@ -134,7 +142,7 @@ export async function reconcileInterruptedBackupRehearsals(): Promise<void> {
         status: "interrupted",
         dedupeKey: null,
         lastError: error.detail,
-        payload: { ...payload, finishedAt, error },
+        payload: { ...terminalPayload(payload), finishedAt, error },
         updatedAt: databaseNow,
       })
       .where(
@@ -160,7 +168,7 @@ async function completeJob(
     .set({
       status,
       dedupeKey: null,
-      payload: { ...payload, finishedAt, ...update },
+      payload: { ...terminalPayload(payload), finishedAt, ...update },
       lastError: update.error?.detail ?? null,
       updatedAt: Date.now(),
     })
@@ -199,8 +207,12 @@ async function persistCompletion(
 
 async function executeJob(id: string, payload: StoredPayload): Promise<void> {
   try {
+    const postgresTargetUrl =
+      payload.postgresTargetUrlEncrypted === undefined
+        ? undefined
+        : await decryptSecret(payload.postgresTargetUrlEncrypted);
     const result = await runRestoreRehearsal({
-      source: payload.source,
+      source: { ...payload.source, ...(postgresTargetUrl === undefined ? {} : { postgresTargetUrl }) },
       id,
       ...(payload.cliPath === undefined ? {} : { cliPath: payload.cliPath }),
       ...(payload.requireCli === true ? { requireCli: true } : {}),
@@ -221,11 +233,13 @@ export async function startBackupRehearsalJob(
   await reconcileInterruptedBackupRehearsals();
   const id = crypto.randomUUID();
   const now = Date.now();
+  const { postgresTargetUrl, ...source } = input.source;
   const payload: StoredPayload = {
     ownerNodeId: controlPlaneNodeId(),
     ownerInstanceId: controlPlaneInstanceId,
     startedAt: new Date(now).toISOString(),
-    source: input.source,
+    source,
+    ...(postgresTargetUrl === undefined ? {} : { postgresTargetUrlEncrypted: await encryptSecret(postgresTargetUrl) }),
     ...(input.cliPath === undefined ? {} : { cliPath: input.cliPath }),
     ...(input.requireCli === true ? { requireCli: true } : {}),
   };

@@ -5,6 +5,7 @@ import { db } from "../../src/db";
 import { apiTokens, controlPlaneNodes, durableJobs, users } from "../../src/db/schema";
 import { BACKUP_REHEARSAL_RECORD_KIND } from "../../src/lib/backup-rehearsal-jobs";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 describe("admin backup verification API", () => {
   const suffix = crypto.randomUUID();
@@ -75,6 +76,42 @@ describe("admin backup verification API", () => {
       data: { attributes: {} },
     });
     expect(response.status).toBe(422);
+  });
+
+  test("encrypts PostgreSQL target credentials in durable jobs and omits them from polling", async () => {
+    const target = "postgresql://fixture:backup-fixture-password@localhost:1/restored_backup";
+    const response = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+      data: { attributes: { "backup-path": "/definitely/missing/credentials-fixture", "postgres-target-url": target } },
+    });
+    expect(response.status).toBe(202);
+    const created = await response.json();
+    const row = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, created.data.id) });
+    expect(row).toBeDefined();
+    expect(JSON.stringify(row?.payload)).not.toContain("backup-fixture-password");
+    const encrypted = row?.payload["postgresTargetUrlEncrypted"];
+    if (row?.status === "running") {
+      expect(typeof encrypted).toBe("string");
+      if (typeof encrypted !== "string") throw new Error("Expected encrypted target URL");
+      expect(isEncryptedSecret(encrypted)).toBe(true);
+      expect(await decryptSecret(encrypted)).toBe(target);
+    } else {
+      expect(encrypted).toBeUndefined();
+    }
+    let terminal = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const polled = await request(`/api/v2/admin/backups/restore-rehearsals/${created.data.id}`);
+      expect(polled.status).toBe(200);
+      const body = await polled.json();
+      expect(JSON.stringify(body)).not.toContain("backup-fixture-password");
+      if (body.data.attributes.status === "failed") {
+        terminal = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(terminal).toBe(true);
+    const finished = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, created.data.id) });
+    expect(finished?.payload["postgresTargetUrlEncrypted"]).toBeUndefined();
   });
 
   test("shares rehearsal status and singleton admission across replicas, then exposes owner interruption", async () => {

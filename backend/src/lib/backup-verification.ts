@@ -6,10 +6,10 @@
 // table: the evidence must remain readable while the database is unavailable
 // during a restore.
 //
-// Rehearsals never open the configured application database.  They copy or
-// extract the operator-supplied backup into a private temporary directory,
-// run all checks against that copy, and remove it before returning.  There is
-// deliberately no restore or cutover operation here.
+// SQLite rehearsals copy the operator backup into private scratch storage.
+// PostgreSQL verification uses a read-only snapshot of an operator-restored
+// database with a distinct name; only an identity query touches the active
+// database. There is no restore or cutover operation here.
 
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
@@ -87,6 +87,7 @@ export type BackupStatus = Readonly<{
   lastVerifiedRestoreAt: string | null;
   lastVerifiedManifestSha256: string | null;
   lastRehearsalId: string | null;
+  lastVerifiedDatabaseDriver: DriverName | null;
 }>;
 
 export type BackupCheck = Readonly<{
@@ -109,6 +110,7 @@ export type BackupRehearsalReport = Readonly<{
   finishedAt: string;
   checks: readonly BackupCheck[];
   lastVerifiedRestoreAt: string | null;
+  databaseDriver: DriverName;
 }>;
 
 export type BackupSourceOptions = Readonly<{
@@ -118,6 +120,8 @@ export type BackupSourceOptions = Readonly<{
   storagePath?: string;
   /** Optional explicit SQLite database file when it is separate. */
   databasePath?: string;
+  /** Already restored, distinctly named PostgreSQL database. Verification is read-only. */
+  postgresTargetUrl?: string;
 }>;
 
 export type CreateManifestOptions = Readonly<{
@@ -443,6 +447,262 @@ async function schemaDigestForSqlite(database: Readonly<Database>): Promise<stri
   return sha256Text(canonicalJson(rows));
 }
 
+type PostgresColumn = Readonly<Record<"table_name" | "column_name" | "data_type" | "is_nullable", string>>;
+
+function postgresRequiredTables(
+  columns: readonly PostgresColumn[],
+  expectedTables?: Readonly<Record<string, number>>,
+): readonly string[] {
+  const names = new Set(columns.map((column): string => column.table_name));
+  const tables =
+    expectedTables === undefined
+      ? [...new Set(schemaTables().map((table): string => table.name))]
+      : Object.keys(expectedTables);
+  if (tables.length === 0 || tables.length > 1000 || tables.some((name): boolean => !names.has(name))) {
+    throw new BackupVerificationError(
+      "schema-incompatible",
+      "The restored PostgreSQL database is missing required manifest tables",
+    );
+  }
+  return tables;
+}
+
+type PostgresBackupSnapshot = Readonly<{
+  schemaSha256: string;
+  tables: Readonly<Record<string, number>>;
+  encryptedRecords: Readonly<Record<string, number>>;
+  encryptedSamples: readonly string[];
+  artifactPaths: readonly string[];
+  migrationHashes: readonly string[];
+}>;
+
+/** Fail before connecting when the URL names the active database. Check the
+ * server-reported identity too, so a pooler cannot alias that database. */
+async function postgresTargetIdentity(targetUrl: string): Promise<string | null> {
+  let target: URL;
+  try {
+    target = new URL(targetUrl);
+    if (
+      !["postgres:", "postgresql:"].includes(target.protocol) ||
+      target.hostname === "" ||
+      !/^\/[^/]+$/.test(target.pathname) ||
+      target.hash !== ""
+    )
+      throw new Error("Invalid target");
+    decodeURIComponent(target.pathname.slice(1));
+  } catch {
+    throw new BackupVerificationError(
+      "postgres-target-invalid",
+      "Supply a PostgreSQL URL with an explicit database name",
+    );
+  }
+  if (!isPostgres) return null;
+  let rows: readonly { name: string }[];
+  try {
+    rows = await rawQueryAll<{ name: string }>(sql`SELECT current_database() AS name`);
+  } catch {
+    throw new BackupVerificationError("postgres-target-identity", "Unable to establish the active database identity");
+  }
+  const liveName = rows[0]?.name;
+  if (typeof liveName !== "string")
+    throw new BackupVerificationError("postgres-target-identity", "Unable to establish the active database identity");
+  if (decodeURIComponent(target.pathname.slice(1)) === liveName) {
+    throw new BackupVerificationError(
+      "postgres-target-live",
+      "The restored PostgreSQL target must have a different database name from the active application database",
+    );
+  }
+  return liveName;
+}
+
+async function readPostgresSnapshot(
+  targetUrl: string,
+  expectedTables?: Readonly<Record<string, number>>,
+): Promise<PostgresBackupSnapshot> {
+  const liveName = await postgresTargetIdentity(targetUrl);
+  let client: Bun.SQL | undefined;
+  try {
+    client = new Bun.SQL(targetUrl, { max: 1, connectionTimeout: 10, idleTimeout: 5 });
+    return await client.begin(
+      "isolation level repeatable read, read only",
+      async (transaction): Promise<PostgresBackupSnapshot> => {
+        await transaction.unsafe("SET LOCAL statement_timeout = '20s'");
+        await transaction.unsafe("SET LOCAL lock_timeout = '2s'");
+        const identity = await transaction.unsafe<{ name: string }[]>("SELECT current_database() AS name");
+        if (liveName !== null && identity[0]?.name === liveName) {
+          throw new BackupVerificationError(
+            "postgres-target-live",
+            "The restored PostgreSQL target resolves to the active database",
+          );
+        }
+        const columns = await transaction.unsafe<PostgresColumn[]>(
+          "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = current_schema() ORDER BY table_name, ordinal_position",
+        );
+        const available = new Set(columns.map((column): string => `${column.table_name}.${column.column_name}`));
+        const tables = postgresRequiredTables(columns, expectedTables);
+        const countQuery = tables
+          .map(
+            (table): string =>
+              `SELECT ${quoteLiteral(table)} AS "tableName", COUNT(*) AS "rowCount" FROM ${quoteIdentifier(table)}`,
+          )
+          .join(" UNION ALL ");
+        const counts = await transaction.unsafe<{ tableName: string; rowCount: number | bigint }[]>(countQuery);
+        const encryptedRecords: Record<string, number> = {};
+        const encryptedSamples: string[] = [];
+        for (const { table, column } of ENCRYPTED_COLUMN_CANDIDATES) {
+          if (!available.has(`${table}.${column}`)) continue;
+          const encryptedCount = await transaction.unsafe<{ count: number | bigint }[]>(
+            `SELECT COUNT(*) AS "count" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} LIKE 'enc:v1:%'`,
+          );
+          const count = Number(encryptedCount[0]?.count ?? 0);
+          if (count === 0) continue;
+          encryptedRecords[`${table}.${column}`] = count;
+          const samples = await transaction.unsafe<{ value: string }[]>(
+            `SELECT ${quoteIdentifier(column)} AS "value" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} LIKE 'enc:v1:%' LIMIT ${String(MAX_ENCRYPTED_SAMPLES_PER_COLUMN)}`,
+          );
+          encryptedSamples.push(...samples.map((sample): string => sample.value));
+        }
+        const artifactPaths: string[] = [];
+        for (const table of [
+          "configuration_versions",
+          "policy_set_versions",
+          "registry_module_versions",
+          "module_test_configuration_versions",
+        ]) {
+          if (!available.has(`${table}.archive_path`)) continue;
+          const paths = await transaction.unsafe<{ path: string }[]>(
+            `SELECT archive_path AS "path" FROM ${quoteIdentifier(table)} WHERE archive_path IS NOT NULL LIMIT ${String(MAX_MANIFEST_FILES + 1)}`,
+          );
+          if (paths.length > MAX_MANIFEST_FILES)
+            throw new BackupVerificationError(
+              "database-too-large",
+              "The restored PostgreSQL database contains too many artifact references",
+            );
+          artifactPaths.push(...paths.map((path): string => path.path));
+        }
+        const migrationRows = await transaction.unsafe<{ hash: string }[]>(
+          "SELECT hash FROM drizzle.__drizzle_migrations ORDER BY id",
+        );
+        return {
+          schemaSha256: sha256Text(canonicalJson(columns)),
+          tables: Object.fromEntries(counts.map((row): [string, number] => [row.tableName, Number(row.rowCount)])),
+          encryptedRecords,
+          encryptedSamples,
+          artifactPaths,
+          migrationHashes: migrationRows.map((row): string => row.hash),
+        };
+      },
+    );
+  } catch (error: unknown) {
+    if (error instanceof BackupVerificationError) throw error;
+    // Driver errors may embed connection credentials. Keep them out of jobs,
+    // API responses and persisted recovery evidence.
+    throw new BackupVerificationError(
+      "postgres-target-unavailable",
+      "Unable to inspect the restored PostgreSQL database and its migration history",
+    );
+  } finally {
+    await client?.close().catch((): undefined => undefined);
+  }
+}
+
+async function postgresMigrationCheck(snapshot: PostgresBackupSnapshot, version: string | null): Promise<BackupCheck> {
+  const folder = join(import.meta.dir, "../../drizzle/pg");
+  const journal = JSON.parse(await readFile(join(folder, "meta/_journal.json"), "utf8")) as {
+    entries: readonly { tag: string }[];
+  };
+  const hashes = await Promise.all(
+    journal.entries.map(
+      async (entry): Promise<string> => sha256Text(await readFile(join(folder, `${entry.tag}.sql`), "utf8")),
+    ),
+  );
+  const expectedIndex = journal.entries.findIndex(
+    (entry, index): boolean => entry.tag === version || hashes[index] === version,
+  );
+  const actual = snapshot.migrationHashes;
+  if (
+    expectedIndex < 0 ||
+    actual.length !== expectedIndex + 1 ||
+    actual.some((hash, index): boolean => hash !== hashes[index])
+  ) {
+    return check(
+      "fail",
+      "schema-migration",
+      "PostgreSQL migration history does not match the manifest and bundled migrations",
+    );
+  }
+  return check(
+    expectedIndex === hashes.length - 1 ? "pass" : "warning",
+    "schema-migration",
+    expectedIndex === hashes.length - 1
+      ? "Restored PostgreSQL migration history matches the bundled schema; no migrations were executed"
+      : "Restored PostgreSQL migration history matches an earlier bundled schema; rehearse the upgrade separately before cutover",
+  );
+}
+
+async function verifyPostgresDatabase(
+  targetUrl: string,
+  storagePath: string,
+  manifest: BackupManifest,
+  decrypt: boolean,
+): Promise<readonly BackupCheck[]> {
+  try {
+    const snapshot = await readPostgresSnapshot(targetUrl, manifest.database.tables);
+    const mismatch = Object.entries(manifest.database.tables).filter(
+      ([name, count]): boolean => snapshot.tables[name] !== count,
+    );
+    const encryptedMismatch = Object.entries(manifest.encryptedRecords).some(
+      ([key, count]): boolean => snapshot.encryptedRecords[key] !== count,
+    );
+    const missing = snapshot.artifactPaths.filter(
+      (path): boolean => resolveArtifactPath(path, storagePath, manifest) === null,
+    ).length;
+    const checks: BackupCheck[] = [
+      check("pass", "database-integrity", "Restored PostgreSQL database inspected in a read-only snapshot"),
+      check(
+        snapshot.schemaSha256 === manifest.database.schemaSha256 ? "pass" : "fail",
+        "schema",
+        "PostgreSQL schema digest compared with the manifest",
+      ),
+      check(
+        mismatch.length === 0 ? "pass" : "fail",
+        "table-counts",
+        `${mismatch.length} PostgreSQL table count mismatch(es)`,
+      ),
+      check(
+        encryptedMismatch ? "fail" : "pass",
+        "encrypted-counts",
+        "Encrypted-record counts compared with the manifest",
+      ),
+      check(missing === 0 ? "pass" : "fail", "artifact-references", `${missing} referenced artifact(s) are missing`),
+      await postgresMigrationCheck(snapshot, manifest.database.schemaVersion),
+    ];
+    if (decrypt) {
+      try {
+        for (const sample of snapshot.encryptedSamples) decryptSecretSync(sample, storagePath);
+        checks.push(
+          check(
+            "pass",
+            "encrypted-records",
+            `${snapshot.encryptedSamples.length} selected encrypted record(s) decrypted`,
+          ),
+        );
+      } catch {
+        checks.push(
+          check("fail", "encrypted-records", "The backup key material could not decrypt a selected encrypted record"),
+        );
+      }
+    }
+    return checks;
+  } catch (error: unknown) {
+    return [
+      error instanceof BackupVerificationError
+        ? check("fail", error.code, error.message)
+        : check("fail", "database-integrity", "Unable to verify the restored PostgreSQL database"),
+    ];
+  }
+}
+
 function relativeDatabaseFile(storagePath: string, databasePath: string): string | null {
   const path = relative(storagePath, databasePath).split(sep).join("/");
   return path === "" || path.startsWith("../") || path === ".." ? null : path;
@@ -499,6 +759,58 @@ export async function createBackupManifest(
   return { manifest, path };
 }
 
+async function createPostgresManifestForSource(
+  storage: string,
+  targetUrl: string,
+  directory: string,
+  persist: boolean,
+): Promise<Readonly<{ manifest: BackupManifest; path: string | null }>> {
+  const snapshot = await readPostgresSnapshot(targetUrl);
+  if (snapshot.migrationHashes.length === 0)
+    throw new BackupVerificationError(
+      "schema-migration",
+      "The restored PostgreSQL database has no applied migration history",
+    );
+  const version = snapshot.migrationHashes.at(-1) ?? null;
+  const migration = await postgresMigrationCheck(snapshot, version);
+  if (migration.status === "fail")
+    throw new BackupVerificationError("schema-migration", migration.detail ?? "Unrecognized migration history");
+  const files = await collectFiles(storage);
+  const manifest = normalizeManifest({
+    kind: "terrence-backup",
+    version: BACKUP_MANIFEST_VERSION,
+    createdAt: new Date().toISOString(),
+    consistency: "operator-quiesced",
+    database: {
+      driver: "postgres",
+      file: null,
+      sha256: null,
+      schemaVersion: version,
+      schemaSha256: snapshot.schemaSha256,
+      tables: snapshot.tables,
+    },
+    storage: {
+      fileCount: files.length,
+      totalBytes: files.reduce((sum, file): number => sum + file.sizeBytes, 0),
+      files,
+    },
+    encryptedRecords: snapshot.encryptedRecords,
+    keys: {
+      encryptionKey: await keyIdentifier(storage, KEY_FILES.encryptionKey),
+      encryptionSalt: await keyIdentifier(storage, KEY_FILES.encryptionSalt),
+      tokenHashSecret: await keyIdentifier(storage, KEY_FILES.tokenHashSecret),
+      signedUrlSecret: await keyIdentifier(storage, KEY_FILES.signedUrlSecret),
+      passwordConfigured:
+        typeof process.env["ENCRYPTION_PASSWORD"] === "string" && process.env["ENCRYPTION_PASSWORD"] !== "",
+    },
+  });
+  if (!persist) return { manifest, path: null };
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, BACKUP_MANIFEST_FILE);
+  await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  return { manifest, path };
+}
+
 /** Build a manifest from a stopped/quiesced SQLite backup directory.  This is
  * separate from createBackupManifest(), which describes the active instance
  * and uses one database read snapshot. */
@@ -545,6 +857,23 @@ export async function createBackupManifestForSource(
   }
   try {
     const storage = await resolveStoragePath(root, source.storagePath);
+    if (source.postgresTargetUrl !== undefined) {
+      if (source.databasePath !== undefined)
+        throw new BackupVerificationError(
+          "database-input",
+          "Supply either a SQLite file or a restored PostgreSQL target",
+        );
+      const directory = resolve(
+        options.outputDirectory ??
+          join(temporaryRoot === null ? storage : dirname(sourcePath), BACKUP_MANIFEST_DIRECTORY),
+      );
+      return await createPostgresManifestForSource(
+        storage,
+        source.postgresTargetUrl,
+        directory,
+        options.persist !== false,
+      );
+    }
     const databasePath = await discoverDatabase(
       root,
       source.databasePath ??
@@ -621,9 +950,18 @@ export async function readBackupStatus(storagePath: string = defaultStoragePath(
       lastVerifiedManifestSha256:
         typeof parsed.lastVerifiedManifestSha256 === "string" ? parsed.lastVerifiedManifestSha256 : null,
       lastRehearsalId: typeof parsed.lastRehearsalId === "string" ? parsed.lastRehearsalId : null,
+      lastVerifiedDatabaseDriver:
+        parsed.lastVerifiedDatabaseDriver === "sqlite" || parsed.lastVerifiedDatabaseDriver === "postgres"
+          ? parsed.lastVerifiedDatabaseDriver
+          : null,
     };
   } catch {
-    return { lastVerifiedRestoreAt: null, lastVerifiedManifestSha256: null, lastRehearsalId: null };
+    return {
+      lastVerifiedRestoreAt: null,
+      lastVerifiedManifestSha256: null,
+      lastRehearsalId: null,
+      lastVerifiedDatabaseDriver: null,
+    };
   }
 }
 
@@ -636,6 +974,7 @@ async function recordSuccessfulRestore(
     lastVerifiedRestoreAt: new Date().toISOString(),
     lastVerifiedManifestSha256: manifest.manifestSha256,
     lastRehearsalId: rehearsalId,
+    lastVerifiedDatabaseDriver: manifest.database.driver,
   };
   const path = join(resolve(storagePath), BACKUP_STATUS_FILE);
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
@@ -1138,26 +1477,25 @@ async function verifySqliteDatabase(
   return checks;
 }
 
-async function verifyPrepared(prepared: PreparedSource, decrypt: boolean): Promise<BackupIntegrityReport> {
+async function verifyPrepared(
+  prepared: PreparedSource,
+  decrypt: boolean,
+  postgresTargetUrl?: string,
+): Promise<BackupIntegrityReport> {
   const checks: BackupCheck[] = [];
   const manifest = prepared.manifest;
   if (manifest.database.driver !== "sqlite") {
-    checks.push(
-      check(
-        "warning",
-        "database-driver",
-        "PostgreSQL manifests require an operator-provided isolated PostgreSQL target for full rehearsal",
-      ),
-    );
-    checks.push(
-      prepared.databasePath === null
-        ? check("fail", "database-input", "No isolated PostgreSQL database dump or target was supplied")
-        : check(
-            "fail",
-            "database-input",
-            "This rehearsal endpoint accepts SQLite copies only; PostgreSQL restore must be provisioned separately",
-          ),
-    );
+    if (postgresTargetUrl === undefined)
+      checks.push(
+        check(
+          "fail",
+          "database-input",
+          "Supply postgres-target-url for an operator-restored isolated PostgreSQL database",
+        ),
+      );
+    else checks.push(...(await verifyPostgresDatabase(postgresTargetUrl, prepared.storagePath, manifest, decrypt)));
+  } else if (postgresTargetUrl !== undefined) {
+    checks.push(check("fail", "database-driver", "A PostgreSQL target cannot verify a SQLite manifest"));
   } else if (prepared.databasePath === null) {
     checks.push(check("fail", "database-input", "Backup does not contain a SQLite database file"));
   } else {
@@ -1185,7 +1523,7 @@ async function verifyPrepared(prepared: PreparedSource, decrypt: boolean): Promi
 export async function verifyBackupIntegrity(source: BackupSourceOptions): Promise<BackupIntegrityReport> {
   const prepared = await prepareSource(source);
   try {
-    return await verifyPrepared(prepared, true);
+    return await verifyPrepared(prepared, true, source.postgresTargetUrl);
   } finally {
     await prepared.cleanup();
   }
@@ -1314,6 +1652,7 @@ export async function runRestoreRehearsal(options: RestoreRehearsalOptions): Pro
         cleanup: copied.cleanup,
       },
       true,
+      options.source.postgresTargetUrl,
     );
     const checks: BackupCheck[] = [...report.checks];
     if (copied.databasePath !== null && prepared.manifest.database.driver === "sqlite") {
@@ -1326,7 +1665,15 @@ export async function runRestoreRehearsal(options: RestoreRehearsalOptions): Pro
       const status = await recordSuccessfulRestore(defaultStoragePath(), prepared.manifest, id);
       lastVerifiedRestoreAt = status.lastVerifiedRestoreAt;
     }
-    return { id, passed, startedAt, finishedAt: new Date().toISOString(), checks, lastVerifiedRestoreAt };
+    return {
+      id,
+      passed,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      checks,
+      lastVerifiedRestoreAt,
+      databaseDriver: prepared.manifest.database.driver,
+    };
   } finally {
     if (copied !== null) await copied.cleanup();
     await prepared.cleanup();
