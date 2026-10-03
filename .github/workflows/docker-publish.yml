@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
           ref: ${{ github.sha }}
 
       - name: Set up Bun
@@ -119,7 +119,15 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          if git rev-parse HEAD^ >/dev/null 2>&1; then args+=(--base-ref HEAD^); fi
+          previous_release=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            previous_release="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          fi
+          if [[ -n "$previous_release" ]]; then
+            args+=(--base-ref "$previous_release")
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            args+=(--base-ref HEAD^)
+          fi
           bun scripts/supply-chain-manifest.ts \
             --output dependency-manifest.json \
             --sbom-output dependency-sbom.spdx.json \
@@ -159,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "Stable image: `ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}@${{ steps.build.outputs.digest }}`"
+            printf 'Stable image: `%s`\n' "ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}@${{ steps.build.outputs.digest }}"
             echo
             echo "The attached build manifest records the validated commit, image digest, migration digests, and redacted CLI/provider evidence."
             echo "Dependency manifest, SPDX SBOM, change summary, and expiring exception register are attached to the release."
