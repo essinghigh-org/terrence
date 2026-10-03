@@ -1,16 +1,17 @@
 import { newResourceId } from "./resource-id";
-import { count, eq } from "drizzle-orm";
+import { and, count, eq, isNull } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { db } from "../db";
 import { storageDir } from "../db/driver";
-import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
+import { apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, users } from "../db/schema";
 import { auditLog } from "./utils";
 import { envFlag } from "./env";
 import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 import { lockFirstUserElection } from "../db/first-user";
 import { hashPassword } from "./password-hashing";
+import { revokeUserOAuthAuthorizationCodes } from "./oauth-handshake";
 
 function consumeAdminPassword(): string | null {
   const password = process.env["ADMIN_PASSWORD"];
@@ -137,10 +138,16 @@ export async function resetAdminPassword(): Promise<"reset" | "disabled"> {
   validateBootstrapPassword(password, username);
   const target = await db.query.users.findFirst({ where: eq(users.username, username) });
   if (target === undefined || target.isSiteAdmin !== true) return "disabled";
-  await db
-    .update(users)
-    .set({ passwordHash: await hashPassword(password), mustChangePassword: true })
-    .where(eq(users.id, target.id));
+  const passwordHash = await hashPassword(password);
+  await db.transaction(async (tx): Promise<void> => {
+    await tx.update(users).set({ passwordHash, mustChangePassword: true }).where(eq(users.id, target.id));
+    await tx.delete(apiTokens).where(eq(apiTokens.userId, target.id));
+    await tx
+      .update(refreshSessions)
+      .set({ revokedAt: Date.now() })
+      .where(and(eq(refreshSessions.userId, target.id), isNull(refreshSessions.revokedAt)));
+    await revokeUserOAuthAuthorizationCodes(tx, target.id);
+  });
   writeResetMarker(marker);
   delete process.env["ADMIN_PASSWORD"];
   await auditLog("update", "users", target.id, target.id, null, { username, source: "ADMIN_PASSWORD_RESET" });

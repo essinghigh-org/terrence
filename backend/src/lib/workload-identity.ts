@@ -131,16 +131,26 @@ async function generateKeyRow(): Promise<KeyRow> {
 async function publishKey(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- row flows into the drizzle insert values by design
   row: KeyRow,
-  _fencingToken: number,
+  fencingToken: number,
   retireActive: boolean,
 ): Promise<KeyRow> {
-  // Lease is already held via acquireKeyLeadership's in-process tail +
-  // DB fencingToken. The old pre-transaction lease check raced with
-  // parallel test files sharing the same Postgres DB (each file gets its
-  // own DB, but the lease table is global). Removing it: the caller's
-  // fencingToken proves they won the lease, and the DB lease still guards
-  // cross-process races.
   await db.transaction(async (tx): Promise<void> => {
+    // The conditional write locks the lease row until publication commits.
+    // A claim made before key generation is insufficient if leadership expired.
+    const now = Date.now();
+    const owned = await tx
+      .update(workloadIdentityLeases)
+      .set({ updatedAt: now })
+      .where(
+        and(
+          eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
+          eq(workloadIdentityLeases.owner, WORKLOAD_IDENTITY_OWNER),
+          eq(workloadIdentityLeases.fencingToken, fencingToken),
+          gt(workloadIdentityLeases.leaseExpiresAt, now),
+        ),
+      )
+      .returning({ id: workloadIdentityLeases.id });
+    if (owned.length === 0) throw new Error("Lost workload identity signing-key leadership");
     if (retireActive) {
       await tx
         .update(workloadIdentityKeys)

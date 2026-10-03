@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
 import { app, fixedWindowContext } from "../../src/app";
 import { COMPATIBILITY_VERSION } from "../../src/lib/constants";
-import { db } from "../../src/db";
+import { db, isPostgres } from "../../src/db";
+import { distributedFixedWindowContext } from "../../src/lib/distributed-rate-limit";
 import { apiTokens, users } from "../../src/db/schema";
 
 type SeededUser = Readonly<{
@@ -68,6 +69,20 @@ afterAll(async () => {
 });
 
 describe("rate limiting", () => {
+  (isPostgres ? it : it.skip)("prunes only its own distributed limiter namespace", async () => {
+    const prefix = `rate-fixture-${crypto.randomUUID()}`;
+    const longWindow = distributedFixedWindowContext(`${prefix}-long`);
+    const shortWindow = distributedFixedWindowContext(`${prefix}-short`);
+    const windowStart = 1_700_000_000_000 - (1_700_000_000_000 % 60_000);
+    try {
+      expect((await longWindow.increment("client", 60_000, windowStart)).count).toBe(1);
+      expect((await shortWindow.increment("client", 1_000, windowStart + 20_000)).count).toBe(1);
+      expect((await longWindow.increment("client", 60_000, windowStart + 20_000)).count).toBe(2);
+    } finally {
+      await longWindow.kill();
+      await shortWindow.kill();
+    }
+  });
   it("keeps local counts isolated when one context receives mixed durations", async () => {
     const context = fixedWindowContext();
     const requestTime = 1_700_000_000_000;
