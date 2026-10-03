@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   decodeStatePayload,
+  encryptStatePayload,
   isUniqueConstraintError,
   parseStatePayload,
   parseTerraformStatePayload,
@@ -14,6 +15,18 @@ describe("state payload helpers", () => {
   it("decodes a base64 JSON payload after the plain JSON parse fails", () => {
     const encoded = Buffer.from(JSON.stringify({ serial: 3 })).toString("base64");
     expect(decodeStatePayload(encoded)).toBe('{"serial":3}');
+  });
+
+  it("decodes encrypted JSON and legacy base64 JSON through the same state contract", async () => {
+    const state = '{"version":4,"serial":3,"lineage":"state-fixture","resources":[]}';
+    for (const payload of [state, Buffer.from(state).toString("base64")]) {
+      const encrypted = await encryptStatePayload(payload);
+      expect(decodeStatePayload(encrypted)).toBe(state);
+      expect(parseStatePayload(encrypted)).toMatchObject({ serial: 3, lineage: "state-fixture" });
+    }
+    const invalid = await encryptStatePayload("invalid-state");
+    expect(() => decodeStatePayload(invalid)).toThrow();
+    expect(parseStatePayload(invalid)).toBeNull();
   });
 
   it("keeps an undecodable payload unchanged", () => {

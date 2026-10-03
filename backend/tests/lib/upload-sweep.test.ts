@@ -97,7 +97,9 @@ describe("sweepUploadTemps", (): void => {
 
     // Genuine exports: a complete database is kept, a truncated one is not.
     const genuine = new Database(join(exportsDir, "valid.db"), { create: true });
-    genuine.exec("CREATE TABLE t(x); INSERT INTO t VALUES (1);");
+    genuine.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES (1); PRAGMA wal_checkpoint(TRUNCATE);",
+    );
     genuine.close();
     const genuineBytes = await readFile(join(exportsDir, "valid.db"));
     await writeFile(partialExport, genuineBytes.subarray(0, 100));
@@ -140,6 +142,7 @@ describe("sweepUploadTemps", (): void => {
       orphanModuleArchive,
       partialExport,
       garbageExport,
+      validExport,
       activeStateUpload,
       activeCvTemp,
       uploadTempLeasePath(activeStateUpload),

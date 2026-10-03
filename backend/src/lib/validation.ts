@@ -586,21 +586,18 @@ export function tokenExpiry(value: unknown): number | null {
 
 export function decodeStatePayload(state: unknown): string {
   if (typeof state !== "string") return JSON.stringify(state);
-  if (isEncryptedSecret(state)) {
-    const plaintext = decryptStatePayload(state);
-    JSON.parse(plaintext);
-    return plaintext;
-  }
-  const plaintext = state;
+  const encrypted = isEncryptedSecret(state);
+  const plaintext = encrypted ? decryptStatePayload(state) : state;
   try {
     JSON.parse(plaintext);
     return plaintext;
-  } catch {
+  } catch (error) {
     try {
       const decoded = Buffer.from(plaintext, "base64").toString("utf8");
       JSON.parse(decoded);
       return decoded;
     } catch {
+      if (encrypted) throw error;
       return plaintext;
     }
   }

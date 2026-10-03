@@ -9,9 +9,11 @@ description: SQLite and PostgreSQL backends, migrations, and the migration wizar
 
 ## Supported deployment topology
 
-Run exactly **one active Terrence control-plane process**, with either SQLite or PostgreSQL. The process owns the scheduler, local workers, cancellation state and in-memory event delivery. PostgreSQL does not supply leader election or make multiple control-plane replicas safe. Remote agents add execution capacity; they do not replace this ownership model.
+Standalone deployments run exactly **one active Terrence control-plane process**, with either SQLite or PostgreSQL. SQLite remains single-process only. PostgreSQL alone does not enable high availability.
 
-Keep the database, artifact storage and encryption/token secrets together in the backup and restore procedure. For failover, stop or fence the old control plane before starting its replacement with the restored database, storage and secrets. Do not use a rolling deployment with overlapping instances, including during database migration. Follow the [upgrade and rollback procedure](upgrading.md) and [operations guide](operations.md).
+With `TERRENCE_HA_ENABLED=true`, Terrence supports multiple active PostgreSQL-backed API/control-plane replicas and elects a scheduler coordinator through database leases. Each replica must use shared artifact storage and encryption/token/signed-URL secrets, a common public URL, and a unique explicit node ID. Follow the [HA prerequisites and topology](high-availability.md) before adding replicas; remote agents add execution capacity to either deployment model.
+
+Keep the database, artifact storage and encryption/token secrets together in the backup and restore procedure. Standalone failover must stop or fence the old control plane before starting its replacement. HA failover and rolling upgrades use the [coordinator and node-drain procedures](high-availability.md), within the supported application and protocol version window; PostgreSQL replicas serialize migration work. A restore/cutover must fence every old replica before using the restored database, storage and secrets. Follow the [upgrade and recovery procedure](upgrading.md) and [operations guide](operations.md).
 
 Terrence supports two database backends. The backend is selected by `DATABASE_URL`.
 
