@@ -44,9 +44,9 @@ type StoredPayload = DeepReadonly<{
 }>;
 
 function terminalPayload(payload: StoredPayload): Omit<StoredPayload, "postgresTargetUrlEncrypted"> {
-  const { postgresTargetUrlEncrypted, ...retained } = payload;
-  void postgresTargetUrlEncrypted;
-  return retained;
+  return Object.fromEntries(
+    Object.entries(payload).filter(([key]): boolean => key !== "postgresTargetUrlEncrypted"),
+  ) as Omit<StoredPayload, "postgresTargetUrlEncrypted">;
 }
 
 function serializeError(error: unknown): { code?: string; detail: string } {

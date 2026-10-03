@@ -523,73 +523,76 @@ async function readPostgresSnapshot(
   let client: Bun.SQL | undefined;
   try {
     client = new Bun.SQL(targetUrl, { max: 1, connectionTimeout: 10, idleTimeout: 5 });
-    return await client.begin("isolation level repeatable read, read only", async (transaction): Promise<PostgresBackupSnapshot> => {
-      await transaction.unsafe("SET LOCAL statement_timeout = '20s'");
-      await transaction.unsafe("SET LOCAL lock_timeout = '2s'");
-      const identity = await transaction.unsafe<{ name: string }[]>("SELECT current_database() AS name");
-      if (liveName !== null && identity[0]?.name === liveName) {
-        throw new BackupVerificationError(
-          "postgres-target-live",
-          "The restored PostgreSQL target resolves to the active database",
-        );
-      }
-      const columns = await transaction.unsafe<PostgresColumn[]>(
-        "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = current_schema() ORDER BY table_name, ordinal_position",
-      );
-      const available = new Set(columns.map((column): string => `${column.table_name}.${column.column_name}`));
-      const tables = postgresRequiredTables(columns, expectedTables);
-      const countQuery = tables
-        .map(
-          (table): string =>
-            `SELECT ${quoteLiteral(table)} AS "tableName", COUNT(*) AS "rowCount" FROM ${quoteIdentifier(table)}`,
-        )
-        .join(" UNION ALL ");
-      const counts = await transaction.unsafe<{ tableName: string; rowCount: number | bigint }[]>(countQuery);
-      const encryptedRecords: Record<string, number> = {};
-      const encryptedSamples: string[] = [];
-      for (const { table, column } of ENCRYPTED_COLUMN_CANDIDATES) {
-        if (!available.has(`${table}.${column}`)) continue;
-        const encryptedCount = await transaction.unsafe<{ count: number | bigint }[]>(
-          `SELECT COUNT(*) AS "count" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} LIKE 'enc:v1:%'`,
-        );
-        const count = Number(encryptedCount[0]?.count ?? 0);
-        if (count === 0) continue;
-        encryptedRecords[`${table}.${column}`] = count;
-        const samples = await transaction.unsafe<{ value: string }[]>(
-          `SELECT ${quoteIdentifier(column)} AS "value" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} LIKE 'enc:v1:%' LIMIT ${String(MAX_ENCRYPTED_SAMPLES_PER_COLUMN)}`,
-        );
-        encryptedSamples.push(...samples.map((sample): string => sample.value));
-      }
-      const artifactPaths: string[] = [];
-      for (const table of [
-        "configuration_versions",
-        "policy_set_versions",
-        "registry_module_versions",
-        "module_test_configuration_versions",
-      ]) {
-        if (!available.has(`${table}.archive_path`)) continue;
-        const paths = await transaction.unsafe<{ path: string }[]>(
-          `SELECT archive_path AS "path" FROM ${quoteIdentifier(table)} WHERE archive_path IS NOT NULL LIMIT ${String(MAX_MANIFEST_FILES + 1)}`,
-        );
-        if (paths.length > MAX_MANIFEST_FILES)
+    return await client.begin(
+      "isolation level repeatable read, read only",
+      async (transaction): Promise<PostgresBackupSnapshot> => {
+        await transaction.unsafe("SET LOCAL statement_timeout = '20s'");
+        await transaction.unsafe("SET LOCAL lock_timeout = '2s'");
+        const identity = await transaction.unsafe<{ name: string }[]>("SELECT current_database() AS name");
+        if (liveName !== null && identity[0]?.name === liveName) {
           throw new BackupVerificationError(
-            "database-too-large",
-            "The restored PostgreSQL database contains too many artifact references",
+            "postgres-target-live",
+            "The restored PostgreSQL target resolves to the active database",
           );
-        artifactPaths.push(...paths.map((path): string => path.path));
-      }
-      const migrationRows = await transaction.unsafe<{ hash: string }[]>(
-        "SELECT hash FROM drizzle.__drizzle_migrations ORDER BY id",
-      );
-      return {
-        schemaSha256: sha256Text(canonicalJson(columns)),
-        tables: Object.fromEntries(counts.map((row): [string, number] => [row.tableName, Number(row.rowCount)])),
-        encryptedRecords,
-        encryptedSamples,
-        artifactPaths,
-        migrationHashes: migrationRows.map((row): string => row.hash),
-      };
-    });
+        }
+        const columns = await transaction.unsafe<PostgresColumn[]>(
+          "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = current_schema() ORDER BY table_name, ordinal_position",
+        );
+        const available = new Set(columns.map((column): string => `${column.table_name}.${column.column_name}`));
+        const tables = postgresRequiredTables(columns, expectedTables);
+        const countQuery = tables
+          .map(
+            (table): string =>
+              `SELECT ${quoteLiteral(table)} AS "tableName", COUNT(*) AS "rowCount" FROM ${quoteIdentifier(table)}`,
+          )
+          .join(" UNION ALL ");
+        const counts = await transaction.unsafe<{ tableName: string; rowCount: number | bigint }[]>(countQuery);
+        const encryptedRecords: Record<string, number> = {};
+        const encryptedSamples: string[] = [];
+        for (const { table, column } of ENCRYPTED_COLUMN_CANDIDATES) {
+          if (!available.has(`${table}.${column}`)) continue;
+          const encryptedCount = await transaction.unsafe<{ count: number | bigint }[]>(
+            `SELECT COUNT(*) AS "count" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} LIKE 'enc:v1:%'`,
+          );
+          const count = Number(encryptedCount[0]?.count ?? 0);
+          if (count === 0) continue;
+          encryptedRecords[`${table}.${column}`] = count;
+          const samples = await transaction.unsafe<{ value: string }[]>(
+            `SELECT ${quoteIdentifier(column)} AS "value" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} LIKE 'enc:v1:%' LIMIT ${String(MAX_ENCRYPTED_SAMPLES_PER_COLUMN)}`,
+          );
+          encryptedSamples.push(...samples.map((sample): string => sample.value));
+        }
+        const artifactPaths: string[] = [];
+        for (const table of [
+          "configuration_versions",
+          "policy_set_versions",
+          "registry_module_versions",
+          "module_test_configuration_versions",
+        ]) {
+          if (!available.has(`${table}.archive_path`)) continue;
+          const paths = await transaction.unsafe<{ path: string }[]>(
+            `SELECT archive_path AS "path" FROM ${quoteIdentifier(table)} WHERE archive_path IS NOT NULL LIMIT ${String(MAX_MANIFEST_FILES + 1)}`,
+          );
+          if (paths.length > MAX_MANIFEST_FILES)
+            throw new BackupVerificationError(
+              "database-too-large",
+              "The restored PostgreSQL database contains too many artifact references",
+            );
+          artifactPaths.push(...paths.map((path): string => path.path));
+        }
+        const migrationRows = await transaction.unsafe<{ hash: string }[]>(
+          "SELECT hash FROM drizzle.__drizzle_migrations ORDER BY id",
+        );
+        return {
+          schemaSha256: sha256Text(canonicalJson(columns)),
+          tables: Object.fromEntries(counts.map((row): [string, number] => [row.tableName, Number(row.rowCount)])),
+          encryptedRecords,
+          encryptedSamples,
+          artifactPaths,
+          migrationHashes: migrationRows.map((row): string => row.hash),
+        };
+      },
+    );
   } catch (error: unknown) {
     if (error instanceof BackupVerificationError) throw error;
     // Driver errors may embed connection credentials. Keep them out of jobs,
