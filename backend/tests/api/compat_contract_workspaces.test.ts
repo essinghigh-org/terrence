@@ -165,7 +165,12 @@ describe("remote-workflow workspaces contract", () => {
       }),
       404,
     );
-    const enabled = await expectSuccessResponse(await patch(byId, { "hyok-enabled": true }), 200, "workspaces");
+    const [settingsResponse, enabledResponse] = await Promise.all([
+      patch(byName, { "global-remote-state": true }),
+      patch(byId, { "hyok-enabled": true }),
+    ]);
+    expect(settingsResponse.status).toBe(200);
+    const enabled = await expectSuccessResponse(enabledResponse, 200, "workspaces");
     expect(enabled.attributes["hyok-enabled"]).toBe(true);
     const responses = await Promise.all([
       patch(byName, { description: "retained enablement" }),
@@ -179,6 +184,7 @@ describe("remote-workflow workspaces contract", () => {
     }
     const persisted = await db.query.workspaces.findFirst({ where: eq(workspaces.id, created.id) });
     expect(persisted?.hyokEnabled).toBe(true);
+    expect(persisted?.globalRemoteState).toBe(true);
     expect(persisted?.description).not.toBe("must not save");
   });
 

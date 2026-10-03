@@ -3575,14 +3575,56 @@ async function lockedWorkspaceResource(
   );
 }
 
+async function persistHyokOnlyUpdate(
+  attributes: Readonly<Record<string, unknown>>,
+  relationships: Readonly<Record<string, unknown>>,
+  workspaceId: string,
+): Promise<{ saved: typeof workspaces.$inferSelect } | { error: string } | null> {
+  const hyokEnabled = attributes["hyok-enabled"];
+  if (
+    typeof hyokEnabled !== "boolean" ||
+    Object.keys(attributes).length !== 1 ||
+    Object.keys(relationships).length !== 0
+  )
+    return null;
+  // The provider manages enablement separately from workspace settings.
+  // Write only its column so a concurrent settings PATCH keeps its values.
+  const [saved] = await db
+    .update(workspaces)
+    .set({ hyokEnabled })
+    .where(and(eq(workspaces.id, workspaceId), hyokEnabled ? undefined : eq(workspaces.hyokEnabled, false)))
+    .returning();
+  return saved === undefined ? { error: "HYOK enablement cannot be disabled" } : { saved };
+}
+
+type WorkspaceUpdatePrincipal = Readonly<{
+  userId: string | undefined;
+  principalOrgId: string | null;
+  teamId: string | null;
+}>;
+
+async function workspaceUpdateResultResponse(
+  result: DeepReadonly<{ saved: typeof workspaces.$inferSelect } | { error: string }>,
+  defaultIacBinary: string | null | undefined,
+  principal: WorkspaceUpdatePrincipal,
+  set: SetObj,
+  orgName?: string | null,
+): Promise<unknown> {
+  if ("error" in result) return failWorkspaceUpdate(set, 422, result.error);
+  return {
+    data: await workspaceResource(
+      result.saved,
+      defaultIacBinary,
+      await resourcePermissions(result.saved, principal.userId, principal.principalOrgId, principal.teamId),
+      workspaceOrgOption(orgName),
+    ),
+  };
+}
+
 async function updateWorkspaceResponse(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   defaultIacBinary: string | null | undefined,
-  principal: Readonly<{
-    userId: string | undefined;
-    principalOrgId: string | null;
-    teamId: string | null;
-  }>,
+  principal: WorkspaceUpdatePrincipal,
   body: unknown,
   set: SetObj,
   orgName?: string | null,
@@ -3599,6 +3641,9 @@ async function updateWorkspaceResponse(
     name: parsed.name,
   });
   if (scalarsError !== null) return failWorkspaceUpdate(set, 422, scalarsError);
+
+  const hyokOnly = await persistHyokOnlyUpdate(attributes, parsed.rels, workspace.id);
+  if (hyokOnly !== null) return workspaceUpdateResultResponse(hyokOnly, defaultIacBinary, principal, set, orgName);
 
   const workingDir = await resolveUpdateWorkingDirectory(attributes, workspace);
   if ("error" in workingDir) return failWorkspaceUpdate(set, 422, workingDir.error);
@@ -3684,14 +3729,5 @@ async function updateWorkspaceResponse(
     workspaceId: workspace.id,
     rejectsEnabledHyok: attributes["hyok-enabled"] === false,
   });
-  if ("error" in persisted) return failWorkspaceUpdate(set, 422, persisted.error);
-  const saved = persisted.saved;
-  return {
-    data: await workspaceResource(
-      saved,
-      defaultIacBinary,
-      await resourcePermissions(saved, principal.userId, principal.principalOrgId, principal.teamId),
-      workspaceOrgOption(orgName),
-    ),
-  };
+  return workspaceUpdateResultResponse(persisted, defaultIacBinary, principal, set, orgName);
 }
