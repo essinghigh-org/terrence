@@ -17,7 +17,7 @@ import {
   teams,
   users,
 } from "../db/schema";
-import { and, asc, count, eq, inArray, isNull, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, isNull, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { isUniqueConstraintError } from "../lib/validation";
 import { hashPassword } from "../lib/password-hashing";
 import { lockScimSiteRoleReconciliation, reconcileScimSiteAdmins, reconcileTeam } from "./scim-admin";
@@ -554,6 +554,39 @@ async function replaceScimGroupMembers(
             .from(scimUserIdentities)
             .where(inArray(scimUserIdentities.id, [...ids]));
     if (identities.length !== ids.length) return false;
+
+    // Memberships synchronized before provenance tracking was introduced have
+    // a NULL source. Adopt the rows created by the mapping before replacing the
+    // group's membership links, while leaving older manual grants untouched.
+    const legacyIdentities = await tx.query.scimUserIdentities.findMany({
+      where: inArray(
+        scimUserIdentities.id,
+        (
+          await tx.query.scimGroupMemberships.findMany({
+            where: eq(scimGroupMemberships.groupId, groupId),
+          })
+        ).map((membership): string => membership.scimUserId),
+      ),
+    });
+    const legacyUserIds = legacyIdentities.map((identity): string => identity.userId);
+    if (legacyUserIds.length > 0) {
+      const mappings = await tx.query.teamScimGroupMappings.findMany({
+        where: eq(teamScimGroupMappings.scimGroupId, groupId),
+      });
+      for (const mapping of mappings) {
+        await tx
+          .update(teamMemberships)
+          .set({ ssoSource: "scim" })
+          .where(
+            and(
+              eq(teamMemberships.teamId, mapping.teamId),
+              inArray(teamMemberships.userId, legacyUserIds),
+              isNull(teamMemberships.ssoSource),
+              gte(teamMemberships.createdAt, mapping.updatedAt),
+            ),
+          );
+      }
+    }
     await tx.delete(scimGroupMemberships).where(eq(scimGroupMemberships.groupId, groupId));
     if (ids.length > 0) {
       await tx.insert(scimGroupMemberships).values(
