@@ -333,3 +333,37 @@ test("serves assessment summaries, check results, and admin-only artifacts", asy
   expect(result["logContentType"]).toContain("text/plain");
   expect(result["anonymousStatus"]).toBe(404);
 });
+
+test("assessment execution enforces workspace, project and organization isolation policies", async () => {
+  const result = await runScript(`
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, projects, workspaces, assessmentResults } = await import("./src/db/schema.ts");
+    const { pollAssessmentQueue } = await import("./src/worker.ts");
+    await db.insert(organizations).values([
+      { id: "permitted", name: "permitted" },
+      { id: "isolated", name: "isolated", requireHardIsolation: true },
+    ]);
+    await db.insert(projects).values({ id: "agent-project", orgId: "permitted", name: "agent-project", allowedExecutionModes: "agent" });
+    await db.insert(workspaces).values([
+      { id: "untrusted", name: "untrusted", orgId: "permitted", assessmentsEnabled: true, trustedExecution: false },
+      { id: "project-policy", name: "project-policy", orgId: "permitted", projectId: "agent-project", assessmentsEnabled: true },
+      { id: "org-policy", name: "org-policy", orgId: "isolated", assessmentsEnabled: true },
+    ]);
+    for (const workspaceId of ["untrusted", "project-policy", "org-policy"]) {
+      await db.insert(assessmentResults).values({ id: workspaceId + "-assessment", workspaceId, status: "pending" });
+      await pollAssessmentQueue();
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (!(await db.query.assessmentResults.findMany()).some(row => row.status === "running" || row.status === "pending")) break;
+        await Bun.sleep(10);
+      }
+    }
+    const rows = await db.query.assessmentResults.findMany({ orderBy: (row, { asc }) => [asc(row.workspaceId)] });
+    console.log(JSON.stringify({ statuses: rows.map(row => row.status), errors: rows.map(row => row.errorMessage) }));
+  `);
+  expect(result["statuses"]).toEqual(["errored", "errored", "errored"]);
+  expect(result["errors"]).toEqual([
+    expect.stringContaining("Organization requires hard isolation"),
+    expect.stringContaining("Project restricts execution"),
+    expect.stringContaining("Workspace is marked untrusted"),
+  ]);
+});

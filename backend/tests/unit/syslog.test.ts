@@ -28,6 +28,17 @@ describe("syslog target parsing", (): void => {
     });
   });
 
+  it("preserves explicit port 80 for both transports and address families", (): void => {
+    for (const transport of ["udp", "tcp"] as const) {
+      expect(parseSyslogTarget(`${transport}://collector.example.com:80`)).toEqual({
+        transport,
+        host: "collector.example.com",
+        port: 80,
+      });
+      expect(parseSyslogTarget(`${transport}://[::1]:80/`)).toEqual({ transport, host: "::1", port: 80, family: 6 });
+    }
+  });
+
   it("parses bracketed IPv6 targets and rejects unsafe URL forms", (): void => {
     expect(parseSyslogTarget("udp://[2001:db8::10]:514")).toEqual({
       transport: "udp",
@@ -210,6 +221,17 @@ describe("RFC 5424 formatting", (): void => {
     );
     expect(line).toContain('[terrence@65024 requestId="req-1" http.method="GET" http.status="200"]');
     expect(line.endsWith(" request completed")).toBeTrue();
+  });
+
+  it("sanitizes and bounds the complete flattened parameter name", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, meta: { nested: { 'quoted"field': "one", "spaced field": "two", ["x".repeat(40)]: "three" } } },
+      IDENTITY,
+    );
+    expect(line).toContain(' nested.quoted_field="one"');
+    expect(line).toContain(' nested.spaced_field="two"');
+    expect(line).toContain(` ${`nested.${"x".repeat(40)}`.slice(0, 32)}="three"`);
+    expect(line).not.toContain('quoted"field');
   });
 
   it("resolves the syslog format defensively", (): void => {

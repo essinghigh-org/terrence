@@ -344,6 +344,12 @@ describe("Stack deployment worker", () => {
       },
     ]);
     await runStackDeploymentJob(job(runId), context);
+    const firstPoll = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, stepId) });
+    const startedAt = firstPoll?.payload["plan-started-at"];
+    expect(typeof startedAt).toBe("number");
+    await runStackDeploymentJob(job(runId), context);
+    const secondPoll = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, stepId) });
+    expect(secondPoll?.payload["plan-started-at"]).toBe(startedAt);
     const claimed = await claimStackAgentJob((await db.query.agents.findFirst({ where: eq(agents.id, agentId) }))!);
     expect(claimed?.job.phase).toBe("plan");
     expect(claimed?.job.fencingToken).toBeGreaterThan(0);
@@ -367,6 +373,18 @@ describe("Stack deployment worker", () => {
     expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe(
       "completed",
     );
+    await db
+      .update(stackRecords)
+      .set({
+        status: "running",
+        payload: { ...secondPoll!.payload, "plan-started-at": Date.now() - 86_400_001 },
+        updatedAt: Date.now(),
+      })
+      .where(eq(stackRecords.id, stepId));
+    await runStackDeploymentJob(job(runId), context);
+    const expired = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, stepId) });
+    expect(expired?.status).toBe("failed");
+    expect(expired?.payload["error"]).toContain("timed out");
     await db.update(stacks).set({ executionMode: "remote", agentPoolId: null }).where(eq(stacks.id, stackId));
   });
 

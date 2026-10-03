@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import {
   cancelRunExecution,
   cancellationEscalationTimerCountForTests,
@@ -69,4 +69,40 @@ test("deduplicates delayed workdir cleanup retries", (): void => {
   scheduleRunWorkDirCleanup(cleanupRunId, 60_000);
   scheduleRunWorkDirCleanup(cleanupRunId, 60_000);
   expect(runWorkDirCleanupTimerCountForTests(cleanupRunId)).toBe(1);
+});
+
+test("force cancellation and shutdown retain termination of pending groups after leader exit", async (): Promise<void> => {
+  const signals: unknown[][] = [];
+  const signalSpy = spyOn(process, "kill").mockImplementation((...args): true => {
+    signals.push(args);
+    return true;
+  });
+  try {
+    for (const shutdown of [false, true]) {
+      let finish!: (code: number) => void;
+      const exited = new Promise<number>((resolve) => {
+        finish = resolve;
+      });
+      let leaderSignals = 0;
+      trackRunProcessForTests(runId, {
+        pid: 123456,
+        kill: (): void => {
+          leaderSignals += 1;
+        },
+        exited,
+      });
+      cancelRunExecution(runId);
+      finish(0);
+      await exited;
+      await Promise.resolve();
+      signals.length = 0;
+      if (shutdown) terminateActiveRunExecutions();
+      else cancelRunExecution(runId, true);
+      expect(signals).toEqual([[-123456, "SIGKILL"]]);
+      expect(leaderSignals).toBe(1);
+      expect(cancellationEscalationTimerCountForTests(runId)).toBe(0);
+    }
+  } finally {
+    signalSpy.mockRestore();
+  }
 });
