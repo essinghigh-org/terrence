@@ -164,8 +164,8 @@ function headerFieldsValid(header: Buffer): boolean {
   return (
     header.length >= 100 &&
     header.subarray(0, 16).toString("latin1") === SQLITE_MAGIC &&
-    header[18] === 1 &&
-    header[19] === 1 &&
+    (header[18] === 1 || header[18] === 2) &&
+    (header[19] === 1 || header[19] === 2) &&
     header[21] === 64 &&
     header[22] === 32 &&
     header[23] === 32 &&

@@ -9,12 +9,20 @@ description: Upgrade safely between releases, and what to back up first.
 
 This page covers the most common operation: moving a Terrence instance to a newer release. Stable images use immutable `vX.Y.Z` tags and are also addressed by their registry digest. `latest` and `nightly` are convenience channels, not recovery identifiers.
 
-## Upgrade steps
+## Standalone upgrade steps
 
 1. Back up first. Stop the instance and copy the database plus the whole storage directory (see the [Operations backup procedure](operations#backups)). There is no rollback path: schema migrations are forward-only, so a pre-upgrade backup is the only way back.
 2. Select the exact `vX.Y.Z@sha256:...` image from the release's redacted build manifest, then pull it and restart (`docker compose pull` and `docker compose up -d`).
 3. Migrations run automatically at startup, forward-only. Watch the first boot log for migration errors before sending traffic.
 4. Check the deployed image before reopening traffic. `GET /healthz` proves liveness, `GET /readyz` proves the local database and storage are ready and includes the applied schema version, and an authenticated `GET /api/v1/metadata` returns the application version and build SHA. Use [Operations health endpoints](operations#health-endpoints) for the exact routes.
+
+## HA rolling upgrades
+
+Explicitly enabled PostgreSQL HA deployments can replace replicas one at a time within the supported application and HA protocol version window. PostgreSQL alone does not enable this topology: shared storage/secrets, a common public URL and unique node IDs are required. Follow the [HA prerequisites, mixed-version rules and node-drain procedure](high-availability.md).
+
+Keep a consistent pre-upgrade database/storage backup and the release manifest. Drain the replica being replaced, wait for its owned work and coordinator handoff to finish, deploy the exact release image, and verify readiness and its advertised versions before returning it to service. Then replace the next replica. PostgreSQL migration locking serializes schema checks, and rolling migrations must preserve the documented previous-release contract. Protocol-1 replicas use graceful process shutdown until every replica supports the drain lifecycle.
+
+For recovery from backup, fence all old replicas before switching the cluster to the matching restored database, storage and secrets. A per-node drain is not a cluster restore or a downgrade procedure.
 
 ## What is safe
 
@@ -25,7 +33,7 @@ This page covers the most common operation: moving a Terrence instance to a newe
 ## What is not supported
 
 - Downgrades. Do not run an older image against a database migrated by a newer one; restore the pre-upgrade backup instead.
-- Multiple control-plane replicas during the upgrade. Terrence is a single-process application; keep exactly one instance running.
+- Overlapping standalone instances, any SQLite replica topology, or HA peers outside the documented application/protocol compatibility window. Use the HA rollout procedure only when HA is explicitly enabled.
 - Restoring only the database without the matching storage directory. Encrypted blobs (state payloads, secrets, sensitive variables) will not decrypt.
 
 ## Release provenance and rehearsal

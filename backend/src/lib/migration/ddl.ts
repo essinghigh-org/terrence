@@ -1075,7 +1075,8 @@ export function orderTablesForCopy(tables: readonly TableDef[]): {
   const edges = buildDependencyEdges(tables, names);
   const indegree = computeIndegrees(edges);
   const ordered = topologicalSort(names, edges, indegree);
-  const cycle = [...names].filter((name): boolean => (indegree.get(name) ?? 0) > 0);
+  const copied = new Set(ordered);
+  const cycle = [...names].filter((name): boolean => !copied.has(name));
   return { ordered, cycle };
 }
 

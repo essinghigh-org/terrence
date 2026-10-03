@@ -57,6 +57,55 @@ async function buildSparseDatabase(dir: string, maxIdx: number): Promise<string>
   return dbPath;
 }
 
+for (const previousMigration of [20, 21, 47, 48]) {
+  test(`upgrading from migration ${previousMigration} retains organization and Stack uniqueness`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-rebuild-"));
+    try {
+      const dbPath = await buildSparseDatabase(dir, previousMigration);
+      const script = `
+        await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href)});
+        const { Database } = await import("bun:sqlite");
+        const raw = new Database(${JSON.stringify(dbPath)});
+        raw.run("INSERT INTO organizations (id, name) VALUES ('fixture-first', 'unique-fixture')");
+        let duplicateRejected = false;
+        try { raw.run("INSERT INTO organizations (id, name) VALUES ('fixture-second', 'unique-fixture')"); }
+        catch { duplicateRejected = true; }
+        raw.query("EXPLAIN INSERT INTO stack_agent_jobs (id, step_id, phase) VALUES ('job', 'step', 'plan') ON CONFLICT (step_id, phase) DO NOTHING").all();
+        raw.query("EXPLAIN INSERT INTO stack_state_locks (id, stack_id, deployment, updated_at) VALUES ('lock', 'stack', 'deployment', 1) ON CONFLICT (stack_id, deployment) DO NOTHING").all();
+        console.log(JSON.stringify({
+          duplicateRejected,
+          indexes: raw.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('organizations_name_unique', 'stack_agent_jobs_step_phase_idx', 'stack_agent_jobs_pool_status_created_idx', 'stack_agent_jobs_run_status_idx', 'stack_state_locks_stack_deployment_idx', 'stack_state_locks_run_idx') ORDER BY name").all().map(row => row.name),
+        }));
+        raw.close();
+      `;
+      const child = Bun.spawn([Bun.which("bun")!, "-e", script], {
+        cwd: join(import.meta.dir, "../.."),
+        env: { ...Bun.env, DATABASE_URL: `file:${dbPath}`, STORAGE_DIR: join(dir, "storage") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      const result = JSON.parse(stdout.trim().split("\n").pop()!) as { duplicateRejected: boolean; indexes: string[] };
+      expect(result.duplicateRejected).toBe(true);
+      expect(result.indexes).toEqual([
+        "organizations_name_unique",
+        "stack_agent_jobs_pool_status_created_idx",
+        "stack_agent_jobs_run_status_idx",
+        "stack_agent_jobs_step_phase_idx",
+        "stack_state_locks_run_idx",
+        "stack_state_locks_stack_deployment_idx",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+}
+
 test("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out-of-journal columns", async () => {
   const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-prod-"));
   try {

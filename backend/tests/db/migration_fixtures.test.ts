@@ -7,7 +7,12 @@ import { readdirSync, readFileSync } from "fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
 import { join } from "path";
-import { generateForeignKeySql, parseCreateTableSql, translateDefault } from "../../src/lib/migration/ddl";
+import {
+  generateForeignKeySql,
+  orderTablesForCopy,
+  parseCreateTableSql,
+  translateDefault,
+} from "../../src/lib/migration/ddl";
 
 /**
  * DB migration fixtures (review item 22.10), post-squash.
@@ -268,6 +273,38 @@ test("journal when timestamps are strictly ascending (no upgrade-skip islands)",
 
 test("preserves SQLite defaults containing escaped single quotes", () => {
   expect(translateDefault("'a''b'")).toEqual({ sql: "'a''b'", dropped: false });
+});
+
+test("copies acyclic dependencies once and reserves only unresolved tables for the cycle pass", () => {
+  for (const { sql, expected } of [
+    {
+      sql: [
+        'CREATE TABLE "parent" ("id" INTEGER PRIMARY KEY)',
+        'CREATE TABLE "child" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER REFERENCES "parent" ("id"))',
+        'CREATE TABLE "leaf" ("child_id" INTEGER REFERENCES "child" ("id"))',
+      ],
+      expected: { ordered: ["parent", "child", "leaf"], cycle: [] },
+    },
+    {
+      sql: [
+        'CREATE TABLE "a" ("id" INTEGER PRIMARY KEY, "b_id" INTEGER REFERENCES "b" ("id"))',
+        'CREATE TABLE "b" ("id" INTEGER PRIMARY KEY, "a_id" INTEGER REFERENCES "a" ("id"))',
+        'CREATE TABLE "independent" ("id" INTEGER PRIMARY KEY)',
+      ],
+      expected: { ordered: ["independent"], cycle: ["a", "b"] },
+    },
+    {
+      sql: ['CREATE TABLE "self" ("id" INTEGER PRIMARY KEY, "parent_id" INTEGER REFERENCES "self" ("id"))'],
+      expected: { ordered: ["self"], cycle: [] },
+    },
+  ]) {
+    const tables = sql.map((statement) => {
+      const table = parseCreateTableSql(statement);
+      if (table === null) throw new Error("expected fixture table to parse");
+      return table;
+    });
+    expect(orderTablesForCopy(tables)).toEqual(expected);
+  }
 });
 
 test("preserves inline foreign-key local and referenced columns", () => {
