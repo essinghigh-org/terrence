@@ -5,7 +5,13 @@ import { and, eq, isNull, or } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { generateAuthenticationToken, hashAuthenticationToken } from "./lib/token-service";
-import { peekOAuthHandshakeState, putOAuthHandshakeState, takeOAuthHandshakeState } from "./lib/oauth-handshake";
+import {
+  peekOAuthHandshakeState,
+  putOAuthHandshakeState,
+  takeOAuthHandshakeState,
+  TERRAFORM_AUTH_CODE_PREFIX as AUTH_CODE_PREFIX,
+  TERRAFORM_PENDING_AUTH_PREFIX as PENDING_AUTH_PREFIX,
+} from "./lib/oauth-handshake";
 import { browserSessionDetails, isUserLoginBlocked } from "./routes/accounts";
 import { secureRequest } from "./lib/secure-request";
 
@@ -29,8 +35,6 @@ type AuthorizationRequest = Readonly<{
 // namespaced so the single table serves all three handshake kinds (VCS,
 // pending-auth, auth-code). Atomic consume (DELETE ... RETURNING WHERE
 // expiresAt > now) gives single-use semantics and eliminates sticky routing.
-const PENDING_AUTH_PREFIX = "tf-pending:";
-const AUTH_CODE_PREFIX = "tf-code:";
 
 type StoredAuthCode = {
   codeChallenge: string;

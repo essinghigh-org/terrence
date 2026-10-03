@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, users } from "../../src/db/schema";
+import { apiTokens, controlPlaneNodes, durableJobs, users } from "../../src/db/schema";
+import { BACKUP_REHEARSAL_RECORD_KIND } from "../../src/lib/backup-rehearsal-jobs";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 describe("admin backup verification API", () => {
@@ -24,6 +25,8 @@ describe("admin backup verification API", () => {
   });
 
   afterAll(async () => {
+    await db.delete(durableJobs).where(eq(durableJobs.kind, BACKUP_REHEARSAL_RECORD_KIND));
+    await db.delete(controlPlaneNodes).where(eq(controlPlaneNodes.id, `backup-remote-node-${suffix}`));
     await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, memberId]));
     await db.delete(users).where(inArray(users.id, [adminId, memberId]));
   });
@@ -72,5 +75,65 @@ describe("admin backup verification API", () => {
       data: { attributes: {} },
     });
     expect(response.status).toBe(422);
+  });
+
+  test("shares rehearsal status and singleton admission across replicas, then exposes owner interruption", async () => {
+    const now = Date.now();
+    const remoteNodeId = `backup-remote-node-${suffix}`;
+    const remoteInstanceId = `backup-remote-instance-${suffix}`;
+    const rehearsalId = `backup-rehearsal-${suffix}`;
+    await db.insert(controlPlaneNodes).values({
+      id: remoteNodeId,
+      hostname: remoteNodeId,
+      instanceId: remoteInstanceId,
+      status: "active",
+      registeredAt: now,
+      lastHeartbeatAt: now,
+    });
+    await db.insert(durableJobs).values({
+      id: rehearsalId,
+      kind: BACKUP_REHEARSAL_RECORD_KIND,
+      dedupeKey: "active",
+      status: "running",
+      payload: {
+        ownerNodeId: remoteNodeId,
+        ownerInstanceId: remoteInstanceId,
+        startedAt: new Date(now).toISOString(),
+        source: { sourcePath: "/shared/backups/rehearsal.tar" },
+      },
+      payloadSchemaVersion: 1,
+      attempts: 0,
+      runAfter: now,
+      lockedBy: remoteInstanceId,
+      heartbeatAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // This request represents a poll landing on another API replica: status is
+    // resolved entirely from the shared durable record, not process memory.
+    const remotePoll = await request(`/api/v2/admin/backups/restore-rehearsals/${rehearsalId}`);
+    expect(remotePoll.status).toBe(200);
+    expect((await remotePoll.json()).data.attributes.status).toBe("running");
+
+    const concurrent = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+      data: { attributes: { "backup-path": "/another/shared/backup.tar" } },
+    });
+    expect(concurrent.status).toBe(409);
+
+    // Once the owning replica is outside the cluster heartbeat window, any
+    // replica converts the row to an explicit interrupted terminal state and
+    // releases the singleton key for a new rehearsal.
+    await db.update(controlPlaneNodes).set({ lastHeartbeatAt: 0 }).where(eq(controlPlaneNodes.id, remoteNodeId));
+    const interrupted = await request(`/api/v2/admin/backups/restore-rehearsals/${rehearsalId}`);
+    expect(interrupted.status).toBe(200);
+    const interruptedBody = await interrupted.json();
+    expect(interruptedBody.data.attributes.status).toBe("interrupted");
+    expect(interruptedBody.data.attributes.error.code).toBe("owner-interrupted");
+
+    const retry = await request("/api/v2/admin/backups/restore-rehearsals", adminToken, "POST", {
+      data: { attributes: { "backup-path": "/definitely/missing/backup.tar" } },
+    });
+    expect(retry.status).toBe(202);
   });
 });

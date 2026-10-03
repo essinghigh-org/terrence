@@ -29,6 +29,12 @@ import { issueSsoLogin } from "../lib/sso-login";
 import { isUserLoginBlocked } from "./accounts";
 import { fetchResolvedExternalUrl, resolveExternalUrl, type ResolvedExternalUrl } from "../lib/url-safety";
 import { secureRequest } from "../lib/secure-request";
+import {
+  parseSsoContinuation,
+  resolveSsoContinuation,
+  ssoContinuationTarget,
+  type SsoContinuation,
+} from "../lib/sso-continuation";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -528,6 +534,7 @@ async function buildAuthorizeRedirect(
   request: RequestInfo,
   settings: OidcSettings,
   config: OidcDiscovery,
+  continuation: SsoContinuation | null,
 ): Promise<Response> {
   let verifier: string | null = null;
   let challenge: string | null = null;
@@ -538,7 +545,7 @@ async function buildAuthorizeRedirect(
 
   const state = randomBytes(24).toString("base64url");
   const nonce = randomBytes(24).toString("base64url");
-  await storeSsoChallenge(OIDC_CHALLENGE_KIND, state, { nonce, verifier }, Date.now() + PENDING_TTL_MS);
+  await storeSsoChallenge(OIDC_CHALLENGE_KIND, state, { nonce, verifier, continuation }, Date.now() + PENDING_TTL_MS);
 
   const authorize = new URL(config.authorizationEndpoint);
   authorize.searchParams.set("response_type", "code");
@@ -566,15 +573,28 @@ async function buildAuthorizeRedirect(
 // app.ts applies the sensitive-path rate limiter to both OIDC endpoints before
 // these handlers create or consume authentication challenges.
 export const oidcRoutes = new Elysia({ name: "oidc-sso" })
-  .get("/users/oidc/auth", async ({ request }: { request: RequestInfo }): Promise<unknown> => {
-    const settings = await oidcSettings();
-    if (!settings.enabled || settings.issuer === null || settings.clientId === null) {
-      return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
-    }
-    const loaded = await loadOidcLoginConfig(settings.issuer, settings.pkceMethod);
-    if ("failure" in loaded) return loaded.failure;
-    return buildAuthorizeRedirect(request, settings, loaded.config);
-  })
+  .get(
+    "/users/oidc/auth",
+    async ({
+      query,
+      request,
+    }: {
+      query: Readonly<Record<string, unknown>>;
+      request: RequestInfo;
+    }): Promise<unknown> => {
+      const settings = await oidcSettings();
+      if (!settings.enabled || settings.issuer === null || settings.clientId === null) {
+        return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", "OpenID Connect sign-in is not enabled."), 404);
+      }
+      const continuation = await resolveSsoContinuation(query, request);
+      if ("error" in continuation) {
+        return ssoHtmlResponse(ssoHtmlPage("OpenID Connect", continuation.error), 400);
+      }
+      const loaded = await loadOidcLoginConfig(settings.issuer, settings.pkceMethod);
+      if ("failure" in loaded) return loaded.failure;
+      return buildAuthorizeRedirect(request, settings, loaded.config, continuation.value);
+    },
+  )
   .get(
     "/users/oidc/callback",
     async ({
@@ -617,7 +637,9 @@ async function consumeCallbackState(
   params: Readonly<Record<string, unknown>>,
   request: RequestInfo,
   set: SetObj,
-): Promise<CallbackFailure | { value: { nonce: string; verifier: string | null } }> {
+): Promise<
+  CallbackFailure | { value: { nonce: string; verifier: string | null; continuation: SsoContinuation | null } }
+> {
   const state = typeof params["state"] === "string" ? params["state"] : "";
   // The flow started in a specific browser; only accept the callback if the
   // same cookie accompanies it. This prevents an attacker who obtains a
@@ -637,7 +659,11 @@ async function consumeCallbackState(
     pendingPayload !== undefined &&
     typeof pendingPayload["nonce"] === "string" &&
     (pendingPayload["verifier"] === null || typeof pendingPayload["verifier"] === "string")
-      ? { nonce: pendingPayload["nonce"], verifier: pendingPayload["verifier"] }
+      ? {
+          nonce: pendingPayload["nonce"],
+          verifier: pendingPayload["verifier"],
+          continuation: parseSsoContinuation(pendingPayload["continuation"]),
+        }
       : undefined;
   if (pending === undefined) {
     return {
@@ -918,7 +944,9 @@ async function handleCallback(
   return callbackResponse(
     request,
     set,
-    ssoHtmlPage("OpenID Connect", "You are signed in.", { redirectUrl: "/app" }),
+    ssoHtmlPage("OpenID Connect", "You are signed in.", {
+      redirectUrl: ssoContinuationTarget(claimed.value.continuation),
+    }),
     200,
   );
 }

@@ -114,6 +114,16 @@ describe("bounded journey latency", () => {
     expect(journeys["queue-start"].p95Ms).toBe(31);
     expect(journeys.other.p95Ms).toBe(40);
   });
+
+  test("keeps cumulative request counts after the bounded latency window fills", () => {
+    resetJourneyMetricsForTests();
+    for (let index = 0; index < 300; index += 1) {
+      recordRequestLatency("/api/v2/organizations/acme/workspaces", index);
+    }
+    const journey = processSnapshot().journeys["workspace-list"];
+    expect(journey.requests).toBe(300);
+    expect(journey.sampleCount).toBe(256);
+  });
 });
 
 describe("event-loop delay", () => {
@@ -121,7 +131,11 @@ describe("event-loop delay", () => {
     expect(processSnapshot().eventLoopDelay.sampleCount).toBe(0);
     startProcessSampler(10, 4);
     await Bun.sleep(70);
-    expect(processSnapshot().eventLoopDelay.sampleCount).toBeGreaterThan(0);
+    const sampled = processSnapshot().eventLoopDelay;
+    expect(sampled.sampleCount).toBeGreaterThan(0);
+    expect(sampled.p50Ms).not.toBeNull();
+    expect(sampled.p95Ms).not.toBeNull();
+    if (sampled.p50Ms !== null && sampled.p95Ms !== null) expect(sampled.p50Ms).toBeLessThanOrEqual(sampled.p95Ms);
     stopProcessSampler();
     expect(processSnapshot().eventLoopDelay.sampleCount).toBe(0);
   });

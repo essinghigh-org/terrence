@@ -193,6 +193,37 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   expect(grantedScimAdmin?.isSiteAdmin).toBeTrue();
   expect(grantedScimAdmin?.scimSiteAdmin).toBeTrue();
 
+  // A SAML grant must remain independent when SCIM is removed, and SCIM must
+  // be able to add its own provenance to an already SAML-administered user.
+  await db.update(users).set({ ssoSiteAdmin: true }).where(eq(users.id, groupUserId));
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": "" } },
+      })
+    ).status,
+  ).toBe(200);
+  let mixedAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(mixedAdmin?.isSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.ssoSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.scimSiteAdmin).toBeFalse();
+
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": adminGroupId } },
+      })
+    ).status,
+  ).toBe(200);
+  mixedAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(mixedAdmin?.isSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.ssoSiteAdmin).toBeTrue();
+  expect(mixedAdmin?.scimSiteAdmin).toBeTrue();
+
+  // Restore the fixture to SCIM-only provenance for the remaining lifecycle
+  // checks below.
+  await db.update(users).set({ ssoSiteAdmin: false }).where(eq(users.id, groupUserId));
+
   await db.insert(scimGroupMemberships).values({
     id: `scim-auditor-member-${suffix}`,
     groupId: auditorGroupId,
@@ -260,11 +291,34 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   });
   expect(clearedAdmin.status).toBe(200);
   expect((await clearedAdmin.json()).data.attributes["site-admin-group-scim-id"]).toBeNull();
+  await db.update(users).set({ isSiteAdmin: true }).where(eq(users.id, groupUserId));
+  const restoredManualAdmin = await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+    data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": adminGroupId } },
+  });
+  expect(restoredManualAdmin.status).toBe(200);
+  let manualAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(manualAdmin?.isSiteAdmin).toBeTrue();
+  expect(manualAdmin?.scimSiteAdmin).toBeFalse();
+
+  expect(
+    (
+      await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
+        data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": "" } },
+      })
+    ).status,
+  ).toBe(200);
+  manualAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(manualAdmin?.isSiteAdmin).toBeTrue();
+  expect(manualAdmin?.scimSiteAdmin).toBeFalse();
+
+  await db.update(users).set({ isSiteAdmin: false }).where(eq(users.id, groupUserId));
   const restoredAdmin = await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {
     data: { type: "scim-settings", attributes: { "site-admin-group-scim-id": adminGroupId } },
   });
   expect(restoredAdmin.status).toBe(200);
-
+  const restoredScimAdmin = await db.query.users.findFirst({ where: eq(users.id, groupUserId) });
+  expect(restoredScimAdmin?.isSiteAdmin).toBeTrue();
+  expect(restoredScimAdmin?.scimSiteAdmin).toBeTrue();
   expect(
     (
       await request("PATCH", "/api/v2/admin/scim-settings", adminToken, {

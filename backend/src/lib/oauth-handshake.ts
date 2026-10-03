@@ -21,6 +21,9 @@ import { decryptSecret, encryptSecret } from "./secrets";
 
 export type OAuthHandshakePayload = Record<string, unknown>;
 
+export const TERRAFORM_PENDING_AUTH_PREFIX = "tf-pending:";
+export const TERRAFORM_AUTH_CODE_PREFIX = "tf-code:";
+
 /** Persist a handshake. Overwrites any prior state for the same id. */
 export async function putOAuthHandshakeState(
   id: string,
