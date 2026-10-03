@@ -109,4 +109,21 @@ describe("credential doctor API", () => {
     );
     expect(response.status).toBe(404);
   });
+
+  test("rejects a caller-selected workload identity subject", async () => {
+    const response = await request(
+      `/api/v2/organizations/${orgName}/oidc-configurations/${configId}/credential-doctor`,
+      "POST",
+      {
+        data: {
+          type: "credential-doctor-runs",
+          attributes: { subject: "organization:victim:project:production:workspace:payments:run_phase:apply" },
+        },
+      },
+    );
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      errors: [{ detail: "subject must match the credential doctor identity for this organization" }],
+    });
+  });
 });
