@@ -27,6 +27,7 @@ import {
   idempotencyPrincipal,
 } from "../lib/idempotency";
 import { parsePersistedStatusMetadata } from "../lib/validation";
+import { checkWorkspacePermission } from "../lib/authorization";
 
 const rawStorageDir = process.env["STORAGE_DIR"];
 const storageDir =
@@ -58,7 +59,7 @@ function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
 export function configurationVersionResource(
   cv: DeepReadonly<ConfigurationVersion>,
   request: Readonly<{ url: string }>,
-  includeUploadUrl = true,
+  includeUploadUrl = false,
 ): Record<string, unknown> {
   const statusTimestamps = parsePersistedStatusMetadata(cv.statusTimestamps, cv.statusMetadataSchemaVersion, cv.id);
   const downloadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/download`);
@@ -448,6 +449,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const { number, size } = pageRequest(request);
+      const canUpload = orgId === null && (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "plan"));
       const where = eq(configurationVersions.workspaceId, workspaceId);
       const [cvs, countRows] = await Promise.all([
         db.query.configurationVersions.findMany({
@@ -462,7 +464,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       return {
         data: cvs.map(
           (cv: DeepReadonly<ConfigurationVersion>): Record<string, unknown> =>
-            configurationVersionResource(cv, request),
+            configurationVersionResource(cv, request, canUpload),
         ),
         ...pagination(request, number, size, totalCount),
       };
@@ -514,7 +516,8 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      return { data: configurationVersionResource(cv, request) };
+      const canUpload = orgId === null && (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "plan"));
+      return { data: configurationVersionResource(cv, request, canUpload) };
     },
   )
   .put(

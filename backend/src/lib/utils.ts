@@ -416,7 +416,7 @@ async function loadUserTeamRosterUncached(
   const teamIds = memberships.map((membership): string => membership.teamId);
   if (teamIds.length === 0) return { teamIds, userTeams: [] };
   const userTeams = await db.query.teams.findMany({ where: and(eq(teams.orgId, orgId), inArray(teams.id, teamIds)) });
-  return { teamIds, userTeams };
+  return { teamIds: userTeams.map((team): string => team.id), userTeams };
 }
 
 async function teamProjectGrantsForTeams(
