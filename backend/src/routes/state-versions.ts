@@ -3097,7 +3097,11 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         run === undefined
           ? undefined
           : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
-      if (run === undefined || workspace === undefined) {
+      if (
+        run === undefined ||
+        workspace === undefined ||
+        !(await checkWorkspacePermission(workspace, user?.id, orgId, teamId, "state-read"))
+      ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }

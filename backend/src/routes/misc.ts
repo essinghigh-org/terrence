@@ -104,7 +104,13 @@ async function variableAuthorizationWhere(
           "variables-read",
         );
         if (authorizedWorkspaceIds === null) return eq(workspaces.orgId, organizationId);
-        if (authorizedWorkspaceIds.length > 0) return inArray(workspaceVariables.workspaceId, authorizedWorkspaceIds);
+        if (authorizedWorkspaceIds.length > 0)
+          return (
+            and(
+              eq(workspaces.orgId, organizationId),
+              inArray(workspaceVariables.workspaceId, authorizedWorkspaceIds),
+            ) ?? null
+          );
         return null;
       }),
     )
