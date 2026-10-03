@@ -1,3 +1,4 @@
+import { readConfinedSavedPlan, writeConfinedSavedPlan } from "./lib/saved-plan-files";
 import { integerSetting } from "./lib/runtime-config";
 import { normalizeRunVariables } from "./lib/run-variables";
 export { normalizeRunVariables } from "./lib/run-variables";
@@ -368,15 +369,16 @@ async function persistSavedPlan(
   configurationVersionId: string | null,
   simulated: boolean,
 ): Promise<SavedPlanMetadata> {
-  const source = join(executionDir, "tfplan");
   const directory = savedPlanDirectory(runId);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPlan = join(directory, `.tfplan-${crypto.randomUUID()}`);
-  const bytes = await ((await exists(source))
-    ? readFile(source)
-    : simulated
-      ? Promise.resolve(Buffer.from("terrence-simulated-plan\n"))
-      : Promise.reject(new Error("Terraform did not produce a saved plan file.")));
+  const bytes = await readConfinedSavedPlan(runWorkDir(runId), executionDir).catch((error: unknown): Buffer => {
+    if (isMissingFileError(error)) {
+      if (simulated) return Buffer.from("terrence-simulated-plan\n");
+      throw new Error("Terraform did not produce a saved plan file.");
+    }
+    throw error;
+  });
   const metadata: SavedPlanMetadata = {
     sha256: createHash("sha256").update(bytes).digest("hex"),
     stateId: state.id,
@@ -450,8 +452,7 @@ async function restoreSavedPlan(runId: string, executionDir: string): Promise<Sa
   const bytes = isEncryptedSecret(storedText) ? Buffer.from(await decryptSecret(storedText), "base64") : stored;
   const checksum = createHash("sha256").update(bytes).digest("hex");
   if (checksum !== metadata.sha256) throw new SavedPlanIntegrityError();
-  await mkdir(executionDir, { recursive: true, mode: 0o700 });
-  await writeFile(join(executionDir, "tfplan"), bytes, { mode: 0o600 });
+  await writeConfinedSavedPlan(runWorkDir(runId), executionDir, bytes);
   return metadata;
 }
 
@@ -5986,6 +5987,7 @@ async function assessmentIdentityEnvironment(
       workspaceId: workspace.id,
       workspaceName: workspace.name,
       runId: assessmentResultId,
+      executionKind: "assessment",
       phase: "plan",
       ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
     },

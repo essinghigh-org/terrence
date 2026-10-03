@@ -1501,9 +1501,12 @@ export const workloadIdentityTokens = sqliteTable(
   "workload_identity_tokens",
   {
     jti: text("jti").primaryKey(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
+    // Preserve the original run reference and its cascade for older peers.
+    // Other execution kinds have their own owner and a logical revocation id.
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+    executionId: text("execution_id"),
+    moduleTestRunId: text("module_test_run_id").references(() => moduleTestRuns.id, { onDelete: "cascade" }),
+    assessmentResultId: text("assessment_result_id").references(() => assessmentResults.id, { onDelete: "cascade" }),
     keyId: text("key_id").notNull(),
     audience: text("audience").notNull(),
     subject: text("subject").notNull(),
@@ -1513,6 +1516,9 @@ export const workloadIdentityTokens = sqliteTable(
   },
   (table) => [
     index("workload_identity_tokens_run_idx").on(table.runId, table.expiresAt),
+    index("workload_identity_tokens_execution_idx").on(table.executionId),
+    index("workload_identity_tokens_module_test_idx").on(table.moduleTestRunId),
+    index("workload_identity_tokens_assessment_idx").on(table.assessmentResultId),
     index("workload_identity_tokens_expiry_idx").on(table.expiresAt, table.revokedAt),
   ],
 );

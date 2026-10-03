@@ -484,6 +484,27 @@
       "when": 1790039470813,
       "tag": "0068_overrated_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "6",
+      "when": 1791043358491,
+      "tag": "0069_identity_owner_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "6",
+      "when": 1791043374415,
+      "tag": "0070_identity_execution_owners",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "6",
+      "when": 1791044694534,
+      "tag": "0071_identity_owner_indexes",
+      "breakpoints": true
     }
   ]
 }

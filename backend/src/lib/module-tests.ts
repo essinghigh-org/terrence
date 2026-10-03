@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { RunSandbox, runSandboxRequired } from "./sandbox";
 import type { DeepReadonly } from "./types";
 import { extractValidatedModuleArchive, moduleRootPath } from "./registry-module-archive";
 
@@ -183,6 +184,14 @@ function inheritedTestEnvironment(): Record<string, string> {
   );
 }
 
+function moduleTestSandbox(): RunSandbox | null {
+  if (!runSandboxRequired()) return null;
+  const sandbox = new RunSandbox();
+  if (sandbox.runner === null || sandbox.abi < 1)
+    throw new Error("Mandatory module-test execution sandbox is unavailable");
+  return sandbox;
+}
+
 type TerraformTestProcessResult = Readonly<{ exitCode: number; stdout: string; stderr: string }>;
 
 async function executeTerraformTest(
@@ -191,15 +200,28 @@ async function executeTerraformTest(
   args: string[],
   root: string,
   environment: Readonly<Record<string, string>>,
+  sandbox: Readonly<RunSandbox> | null,
   // AbortSignal exposes mutable event-listener operations by design.
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   signal?: AbortSignal,
 ): Promise<TerraformTestProcessResult> {
-  const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });
+  const processHandle =
+    sandbox === null
+      ? Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe", detached: true })
+      : sandbox.spawnGeneric(args, { cwd: root, env: environment, detached: true });
   const abort = (): void => {
-    processHandle.kill();
+    try {
+      // Each test owns a process group, including provider/local-exec children.
+      process.kill(-processHandle.pid, "SIGKILL");
+    } catch {
+      // Already exited, or a platform without POSIX process-group signals.
+      if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
+    }
   };
-  if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
+  if (signal !== undefined) {
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  }
   let exitCode: number;
   let stdout: string;
   let stderr: string;
@@ -210,7 +232,7 @@ async function executeTerraformTest(
       new Response(processHandle.stderr).text(),
     ]);
   } finally {
-    if (processHandle.exitCode === null) processHandle.kill();
+    abort();
     signal?.removeEventListener("abort", abort);
   }
   return { exitCode, stdout, stderr };
@@ -236,6 +258,8 @@ export async function runModuleTest(
   try {
     await extractValidatedModuleArchive(archivePath, staging);
     const root = await moduleRootPath(staging);
+    const sandbox = moduleTestSandbox();
+    await mkdir(join(root, "tmp"), { recursive: true, mode: 0o700 });
     const binary = process.env["TERRAFORM_TEST_BINARY_PATH"] ?? "terraform";
     const args = [
       binary,
@@ -249,7 +273,7 @@ export async function runModuleTest(
     if (signal?.aborted) throw new Error("Module test canceled");
     const inherited = inheritedTestEnvironment();
     const environment = { ...inherited, ...((await environmentFactory?.(staging)) ?? {}) };
-    const { exitCode, stdout, stderr } = await executeTerraformTest(args, root, environment, signal);
+    const { exitCode, stdout, stderr } = await executeTerraformTest(args, root, environment, sandbox, signal);
     if (signal?.aborted === true) throw new Error("Module test canceled");
     const output = [stdout.trim(), stderr.trim()].filter((entry): boolean => entry !== "").join("\n");
     const counts = summary(output);

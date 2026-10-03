@@ -278,6 +278,8 @@ export class RunSandbox {
       env: Readonly<Record<string, string>>;
       cgroup?: string | null;
       extraRo?: readonly string[];
+      /** Supervisors retain their child in the supervisor process group. */
+      detached?: boolean;
     }>,
   ): Subprocess<"ignore", "pipe", "pipe"> {
     let binaryPath = args[0] ?? "";
@@ -342,7 +344,7 @@ export class RunSandbox {
       env,
       stdout: "pipe",
       stderr: "pipe",
-      detached: true,
+      detached: opts.detached ?? true,
     };
     if (typeof opts.cgroup === "string" && opts.cgroup !== "") {
       spawnOpts["cgroup"] = opts.cgroup;
