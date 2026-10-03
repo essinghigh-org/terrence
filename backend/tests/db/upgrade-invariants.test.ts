@@ -196,11 +196,11 @@ for (const count of new Set([1, Math.max(1, journal.entries.length - 2), Math.ma
       await migrate(bundled);
       if (hasWorkloadTokens) {
         const retained = await execute(
-          "SELECT jti, workspace_run_id, module_test_run_id, assessment_result_id FROM workload_identity_tokens WHERE jti = $1",
+          "SELECT jti, execution_id, module_test_run_id, assessment_result_id FROM workload_identity_tokens WHERE jti = $1",
           [legacyTokenId],
         );
         expect(retained).toEqual([
-          { jti: legacyTokenId, workspace_run_id: null, module_test_run_id: null, assessment_result_id: null },
+          { jti: legacyTokenId, execution_id: null, module_test_run_id: null, assessment_result_id: null },
         ]);
         if (!postgres) expect(await execute('PRAGMA foreign_key_check("workload_identity_tokens")')).toEqual([]);
       }

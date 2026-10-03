@@ -381,8 +381,8 @@ async function issue(
     const token = jwt.sign(tokenClaims, privateKey, { algorithm: "RS256", keyid: key.keyId });
     await db.insert(workloadIdentityTokens).values({
       jti,
-      runId,
-      workspaceRunId: executionKind === "run" ? runId : null,
+      runId: executionKind === "run" ? runId : null,
+      executionId: runId,
       moduleTestRunId: executionKind === "module-test" ? runId : null,
       assessmentResultId: executionKind === "assessment" ? runId : null,
       keyId: key.keyId,
@@ -472,7 +472,7 @@ export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonl
     .set({ revokedAt: Date.now() })
     .where(
       and(
-        eq(workloadIdentityTokens.runId, runId),
+        or(eq(workloadIdentityTokens.runId, runId), eq(workloadIdentityTokens.executionId, runId)),
         isNull(workloadIdentityTokens.revokedAt),
         ...(jtis === undefined ? [] : [inArray(workloadIdentityTokens.jti, [...jtis])]),
       ),
@@ -525,7 +525,8 @@ export async function verifyWorkloadIdentityToken(token: string, audience?: stri
     throw new Error("Workload identity token has been revoked or expired");
   // Pre-upgrade tokens have no concrete owner columns. Their original
   // run-only ownership still applies until they expire or are revoked.
-  if (record.workspaceRunId === null && record.moduleTestRunId === null && record.assessmentResultId === null) {
+  if (record.moduleTestRunId === null && record.assessmentResultId === null) {
+    if (record.runId === null) throw new Error("Workload identity token execution is unavailable");
     const owner = await db.query.runs.findFirst({ where: eq(runs.id, record.runId), columns: { id: true } });
     if (owner === undefined) throw new Error("Workload identity token execution is unavailable");
   }

@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "75ff3abc-b6e2-419e-83b8-301ffc029b9e",
-  "prevId": "60ca5d1e-7822-4708-858a-689fd370ca5b",
+  "id": "5903eb53-4127-4818-9e77-44a898cb94d7",
+  "prevId": "43507302-6a1c-44e0-aeb4-5b018948b459",
   "tables": {
     "action_invocations": {
       "name": "action_invocations",
@@ -13985,11 +13985,11 @@
           "name": "run_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
-        "workspace_run_id": {
-          "name": "workspace_run_id",
+        "execution_id": {
+          "name": "execution_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -14071,12 +14071,12 @@
         }
       },
       "foreignKeys": {
-        "workload_identity_tokens_workspace_run_id_runs_id_fk": {
-          "name": "workload_identity_tokens_workspace_run_id_runs_id_fk",
+        "workload_identity_tokens_run_id_runs_id_fk": {
+          "name": "workload_identity_tokens_run_id_runs_id_fk",
           "tableFrom": "workload_identity_tokens",
           "tableTo": "runs",
           "columnsFrom": [
-            "workspace_run_id"
+            "run_id"
           ],
           "columnsTo": [
             "id"

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "60ca5d1e-7822-4708-858a-689fd370ca5b",
+  "id": "43507302-6a1c-44e0-aeb4-5b018948b459",
   "prevId": "887a4820-8cc6-48e2-97bb-4a08b2ebce7f",
   "tables": {
     "action_invocations": {
@@ -13988,8 +13988,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "workspace_run_id": {
-          "name": "workspace_run_id",
+        "execution_id": {
+          "name": "execution_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

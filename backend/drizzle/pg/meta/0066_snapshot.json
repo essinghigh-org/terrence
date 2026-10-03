@@ -1,5 +1,5 @@
 {
-  "id": "39155611-cdaf-4e01-adbe-fc6523c6ac86",
+  "id": "6ab912cc-844c-4e81-9d1c-a4ef49a5ff00",
   "prevId": "c4b28d36-8ae2-4924-b1cc-4b2ac379490d",
   "version": "7",
   "dialect": "postgresql",
@@ -14852,10 +14852,10 @@
           "name": "run_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
-        "workspace_run_id": {
-          "name": "workspace_run_id",
+        "execution_id": {
+          "name": "execution_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -14960,6 +14960,32 @@
           "tableTo": "runs",
           "columnsFrom": [
             "run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workload_identity_tokens_module_test_run_id_module_test_runs_id_fk": {
+          "name": "workload_identity_tokens_module_test_run_id_module_test_runs_id_fk",
+          "tableFrom": "workload_identity_tokens",
+          "tableTo": "module_test_runs",
+          "columnsFrom": [
+            "module_test_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workload_identity_tokens_assessment_result_id_assessment_results_id_fk": {
+          "name": "workload_identity_tokens_assessment_result_id_assessment_results_id_fk",
+          "tableFrom": "workload_identity_tokens",
+          "tableTo": "assessment_results",
+          "columnsFrom": [
+            "assessment_result_id"
           ],
           "columnsTo": [
             "id"

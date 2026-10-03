@@ -1501,10 +1501,10 @@ export const workloadIdentityTokens = sqliteTable(
   "workload_identity_tokens",
   {
     jti: text("jti").primaryKey(),
-    // Logical execution id used by revocation and existing token claims.
-    // Concrete owner references preserve cascading deletion for each kind.
-    runId: text("run_id").notNull(),
-    workspaceRunId: text("workspace_run_id").references(() => runs.id, { onDelete: "cascade" }),
+    // Preserve the original run reference and its cascade for older peers.
+    // Other execution kinds have their own owner and a logical revocation id.
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+    executionId: text("execution_id"),
     moduleTestRunId: text("module_test_run_id").references(() => moduleTestRuns.id, { onDelete: "cascade" }),
     assessmentResultId: text("assessment_result_id").references(() => assessmentResults.id, { onDelete: "cascade" }),
     keyId: text("key_id").notNull(),

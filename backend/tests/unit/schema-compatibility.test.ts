@@ -82,6 +82,30 @@ describe("expand/contract enforcement", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  test("allows owner foreign keys only on new nullable columns without defaults", async () => {
+    const foreignKey =
+      'ALTER TABLE "tokens" ADD CONSTRAINT "tokens_owner_fk" FOREIGN KEY ("owner_id") REFERENCES "runs"("id") ON DELETE cascade;';
+    const expanded = await runAgainstFixture({
+      "0001_expand.sql": 'ALTER TABLE "tokens" ADD COLUMN "owner_id" text;' + foreignKey,
+    });
+    expect(expanded.exitCode).toBe(0);
+    const priorExpansion = await runAgainstFixture({
+      "0001_expand.sql": 'ALTER TABLE "tokens" ADD COLUMN "owner_id" text;',
+      "0002_owner.sql": foreignKey,
+    });
+    expect(priorExpansion.exitCode).toBe(1);
+    for (const expansion of [
+      "",
+      `ALTER TABLE "tokens" ADD COLUMN "owner_id" text DEFAULT 'legacy';`,
+      'ALTER TABLE "tokens" ADD COLUMN "owner_id" text NOT NULL;',
+      `ALTER TABLE "tokens" ADD COLUMN "owner_id" text; ALTER TABLE "tokens" ALTER COLUMN "owner_id" SET DEFAULT 'legacy';`,
+    ]) {
+      const result = await runAgainstFixture({ "0001_expand.sql": expansion, "0002_owner.sql": foreignKey });
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("foreign-key constraint");
+    }
+  });
+
   test("rejects an unregistered column drop", async () => {
     const result = await runAgainstFixture({
       "0001_contract.sql": 'ALTER TABLE "runs" DROP COLUMN "foo";',

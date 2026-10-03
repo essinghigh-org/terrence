@@ -2920,8 +2920,8 @@ export const workloadIdentityTokens = pgTable(
   "workload_identity_tokens",
   {
     jti: text("jti").notNull().primaryKey(),
-    runId: text("run_id").notNull(),
-    workspaceRunId: text("workspace_run_id").references(() => pgSchema["runs"]!["id"], { onDelete: "cascade" }),
+    runId: text("run_id").references(() => pgSchema["runs"]!["id"], { onDelete: "cascade" }),
+    executionId: text("execution_id"),
     moduleTestRunId: text("module_test_run_id").references(() => pgSchema["moduleTestRuns"]!["id"], {
       onDelete: "cascade",
     }),

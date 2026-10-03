@@ -141,7 +141,8 @@ describe("workload identity", () => {
       where: eq(workloadIdentityTokens.jti, issued.jti),
     });
     expect(record?.assessmentResultId).toBe(assessmentId);
-    expect(record?.workspaceRunId).toBeNull();
+    expect(record?.executionId).toBe(assessmentId);
+    expect(record?.runId).toBeNull();
     expect(record?.moduleTestRunId).toBeNull();
     await db.delete(assessmentResults).where(eq(assessmentResults.id, assessmentId));
     expect(
@@ -191,17 +192,19 @@ describe("workload identity", () => {
         "iam/project/pool/provider",
         "kubernetes",
       ]);
-      await db
-        .update(workloadIdentityTokens)
-        .set({ workspaceRunId: null })
-        .where(eq(workloadIdentityTokens.runId, runId));
+      await db.update(workloadIdentityTokens).set({ executionId: null }).where(eq(workloadIdentityTokens.runId, runId));
       expect((await verifyWorkloadIdentityToken(result.tokens[0]!.token))["jti"]).toBe(result.tokens[0]!.jti);
       await db.delete(runs).where(eq(runs.id, runId));
       const deleted = await verifyWorkloadIdentityToken(result.tokens[0]!.token).catch(
         (error: unknown): unknown => error,
       );
       expect(deleted).toBeInstanceOf(Error);
-      expect((deleted as Error).message).toContain("execution is unavailable");
+      expect((deleted as Error).message).toContain("revoked or expired");
+      expect(
+        await db.query.workloadIdentityTokens.findFirst({
+          where: eq(workloadIdentityTokens.jti, result.tokens[0]!.jti),
+        }),
+      ).toBeUndefined();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
