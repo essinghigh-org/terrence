@@ -20,11 +20,13 @@ This page describes the security model and the hardening applied across the inst
 
 ## Run isolation
 
-When `TERRENCE_RUN_SANDBOX` is enabled (the default), runs execute inside a Landlock sandbox:
+When `TERRENCE_RUN_SANDBOX` is enabled (the default), runs and private-registry module tests execute inside a Landlock sandbox:
 
 - The run process sees only its working directory and the binary directory.
 - Provider plugins and local-exec provisioners inherit the restrictions.
 - The database, encryption keys, and other workspaces are not visible.
+
+Module tests reject an unavailable required sandbox before issuing workload credentials. Saved-plan reads and restoration use descriptor-relative file access on Linux and require `/proc/self/fd`; linked directories and linked/nonregular input plans are rejected. Restoration replaces the destination entry without opening its existing target.
 
 When `TERRENCE_RUN_SANDBOX=false`, those filesystem boundaries do not apply: the run executes as the service identity and may be able to read the storage and key files. Use that setting only for trusted development or on hosts with an equivalent isolation boundary. See [Execution](execution).
 

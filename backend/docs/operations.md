@@ -76,7 +76,7 @@ Application encryption varies by artifact; filesystem permissions and gzip compr
 | Live run logs | Database log rows; CLI and provider output | Plaintext | Run retention archives logs before deleting live rows |
 | Archived logs | `run-logs/*.json.gz` | Plaintext indexed gzip chunks (legacy gzip JSON also readable), mode `0600` | Run retention/deletion |
 | Raw and agent plan JSON | `plan-json/`; input, resource and output values | Plaintext, files created with mode `0600` | Run retention/deletion; public responses are projected separately |
-| Saved binary plans | `saved-plans/`; may embed input values and prior state | Plaintext private files | Saved-plan cleanup; include retained plans in backups |
+| Saved binary plans | `saved-plans/`; may embed input values and prior state | Encrypted envelopes; legacy plaintext files remain readable | Saved-plan cleanup; include retained plans in backups |
 | Configuration archives | `cv/`, `configuration_versions/`; uploaded or fetched source | Plaintext archives; source may contain secrets | Configuration-version retention/deletion |
 | Recovery state | `recovery/`; interrupted-apply snapshot | Encrypted captured state; temporary execution files can be plaintext | Successful recovery removes its capture directory |
 | Generated configuration | Execution work directories; generated HCL and private variable files | Plaintext private files | Execution-directory cleanup |

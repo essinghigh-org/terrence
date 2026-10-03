@@ -50,7 +50,7 @@ async function tfectlVersion(): Promise<string> {
   return stdout.trim();
 }
 
-for (const count of new Set([1, Math.max(1, journal.entries.length - 1)])) {
+for (const count of new Set([1, Math.max(1, journal.entries.length - 2), Math.max(1, journal.entries.length - 1)])) {
   test(`${postgres ? "PostgreSQL" : "SQLite"} upgrade from ${count} bundled migration(s) preserves state, secrets, artifacts and CLI behavior`, async () => {
     const folder = await mkdtemp(join(tmpdir(), "terrence-upgrade-"));
     const artifactRoot = await mkdtemp(join(tmpdir(), "terrence-upgrade-artifacts-"));
@@ -168,8 +168,42 @@ for (const count of new Set([1, Math.max(1, journal.entries.length - 1)])) {
         ]);
       }
 
+      const legacyTokenId = `prior-token-${crypto.randomUUID()}`;
+      const hasWorkloadTokens = await hasColumn(execute, "workload_identity_tokens", "jti");
+      if (hasWorkloadTokens) {
+        const priorRunId = `prior-run-${crypto.randomUUID()}`;
+        await execute("INSERT INTO runs (id, workspace_id, status, created_at) VALUES ($1, $2, $3, $4)", [
+          priorRunId,
+          workspaceId,
+          "planning",
+          Date.now(),
+        ]);
+        await execute(
+          "INSERT INTO workload_identity_tokens (jti, run_id, key_id, audience, subject, issued_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [
+            legacyTokenId,
+            priorRunId,
+            "prior-key",
+            "fixture-audience",
+            "fixture-subject",
+            Date.now(),
+            Date.now() + 600_000,
+          ],
+        );
+      }
+
       await migrate(bundled);
       await migrate(bundled);
+      if (hasWorkloadTokens) {
+        const retained = await execute(
+          "SELECT jti, workspace_run_id, module_test_run_id, assessment_result_id FROM workload_identity_tokens WHERE jti = $1",
+          [legacyTokenId],
+        );
+        expect(retained).toEqual([
+          { jti: legacyTokenId, workspace_run_id: null, module_test_run_id: null, assessment_result_id: null },
+        ]);
+        if (!postgres) expect(await execute('PRAGMA foreign_key_check("workload_identity_tokens")')).toEqual([]);
+      }
       const rows = await execute("SELECT id, username, password_hash, is_site_admin FROM users WHERE id = $1", [
         userId,
       ]);

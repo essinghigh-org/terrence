@@ -463,6 +463,20 @@
       "when": 1790038764819,
       "tag": "0065_purple_sabretooth",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1791042408410,
+      "tag": "0066_workload_identity_owner_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1791042440877,
+      "tag": "0067_workload_identity_execution_owners",
+      "breakpoints": true
     }
   ]
 }
