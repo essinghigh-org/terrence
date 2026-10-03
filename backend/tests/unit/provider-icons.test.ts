@@ -354,6 +354,17 @@ test("serves cached artwork through the provider-icon image route", async () => 
   await AvatarService.sweepCache();
   expect(AvatarService.hasCached(key)).toBe(true);
   expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  // Longer freshness does not exempt provider artwork from shared disk budgets.
+  const priorBudget = process.env["AVATAR_CACHE_MAX_BYTES"];
+  try {
+    process.env["AVATAR_CACHE_MAX_BYTES"] = "1";
+    await AvatarService.sweepCache();
+    expect(await Bun.file(imgPath(key)).exists()).toBeFalse();
+    expect(await Bun.file(metaPath(key)).exists()).toBeFalse();
+  } finally {
+    if (priorBudget === undefined) delete process.env["AVATAR_CACHE_MAX_BYTES"];
+    else process.env["AVATAR_CACHE_MAX_BYTES"] = priorBudget;
+  }
 });
 
 test("serves a deterministic fallback while registry discovery runs in the background", async () => {

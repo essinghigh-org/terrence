@@ -1,6 +1,10 @@
 import { isAbsolute, normalize, resolve, sep } from "path";
 import type { DeepReadonly } from "./lib/types";
 
+export const MAX_TRIGGER_PATTERNS = 128;
+export const MAX_TRIGGER_PATTERN_LENGTH = 1024;
+export const MAX_TRIGGER_PREVIEW_COMPARISONS = 1_000_000;
+
 export const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
 export const ARCHIVE_LIST_TIMEOUT_MS = 5_000;
 
@@ -94,7 +98,8 @@ export function workspaceExecutionDirectory(root: string, value: unknown): strin
 export function invalidTriggerPatternIndexes(patterns: readonly unknown[]): number[] {
   const invalid: number[] = [];
   for (const [index, pattern] of patterns.entries()) {
-    if (typeof pattern !== "string" || pattern.trim() === "") invalid.push(index);
+    if (typeof pattern !== "string" || pattern.trim() === "" || pattern.length > MAX_TRIGGER_PATTERN_LENGTH)
+      invalid.push(index);
   }
   return invalid;
 }

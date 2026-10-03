@@ -989,7 +989,8 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
   if (shardNames === null) return { removed: 0 };
   const entries = await collectAvatarEntries(dir, shardNames);
   await hydrateAvatarEntries(entries);
-  // Provider artwork has its own one-year retention, independent of avatar budgets.
+  // Provider artwork stays fresh for a year, while sharing the finite cache budget.
+  const removals = selectAgeBasedRemovals(entries, now, maxAgeMs);
   for (const key of entries.keys()) {
     const meta = await readAvatarMeta(key);
     if (
@@ -997,9 +998,8 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
       meta.fetchedAt !== null &&
       now < meta.fetchedAt + PROVIDER_ICON_REVALIDATE_MS
     )
-      entries.delete(key);
+      removals.delete(key);
   }
-  const removals = selectAgeBasedRemovals(entries, now, maxAgeMs);
   selectBudgetRemovals(entries, removals, maxBytes, maxEntries);
   const removed = await removeAvatarEntries(entries, removals);
   return { removed };

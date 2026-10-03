@@ -114,6 +114,35 @@ describe("Explorer inventory batch loading", () => {
     expect(memberships).toHaveLength(workspaceIds.length);
   });
 
+  test("fetches only the latest eligible history payload for each workspace", async () => {
+    const workspaceId = workspaceIds[0]!;
+    const historyIds = Array.from({ length: 4 }, (): string => crypto.randomUUID());
+    await db.delete(explorerWorkspaceInventory).where(eq(explorerWorkspaceInventory.workspaceId, workspaceId));
+    await db.insert(stateVersions).values(
+      historyIds.map((id, index) => ({
+        id,
+        workspaceId,
+        serial: index + 1,
+        status: index === 3 ? "pending" : "finalized",
+        intermediate: index === 2,
+        jsonState: JSON.stringify({ version: 4, resources: [], outputs: {} }),
+        statePayload: "{}",
+        md5: id,
+      })),
+    );
+    const stateReads = spyOn(db.query.stateVersions, "findMany");
+    try {
+      await ensureExplorerInventory(orgId);
+      const rows = (await Promise.all(stateReads.mock.results.map((result) => result.value))).flat() as {
+        id: string;
+        workspaceId: string;
+      }[];
+      expect(rows.filter((row) => row.workspaceId === workspaceId).map((row) => row.id)).toEqual([historyIds[1]!]);
+    } finally {
+      stateReads.mockRestore();
+    }
+  });
+
   test("durable backfill uses the same batch relation loader", async (): Promise<void> => {
     await db.delete(explorerCatalogMemberships).where(inArray(explorerCatalogMemberships.workspaceId, workspaceIds));
     await db.delete(explorerWorkspaceInventory).where(inArray(explorerWorkspaceInventory.workspaceId, workspaceIds));

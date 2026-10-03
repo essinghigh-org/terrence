@@ -223,6 +223,10 @@ Removing a user's/team's access prevents new links immediately. Existing bearer 
 Previously issued unsigned log URLs stop working after this upgrade. Fetch a fresh plan/apply resource to obtain the new format. No short-lived automatic renewal is claimed for legacy CLI streams.
 
 
+### Raw log response bounds
+
+Raw plan/apply log endpoints return at most 1 MiB and 16,384 row segments per response, including requests without `limit`. SQL computes byte positions and slices live payloads before returning them to the API. A zero-byte request reads aggregate totals without fetching row payloads. `X-Terrence-Log-Total-Bytes` reports the stream size and `X-Terrence-Log-Truncated` is true when a requested range exceeds the response budget. Continue at `offset + response byte length` to read the remaining output; offsets and limits count UTF-8 bytes.
+
 ### Archived log bounds
 
 New run-log archives use independently compressed JSON chunks, followed by a bounded JSON index and an eight-byte footer (little-endian index length plus `TRL2`). The existing `.json.gz` filename remains unchanged; the complete file is an indexed container, not a single gzip document. Use the authenticated log APIs to read it. Earlier gzip JSON envelopes and bare arrays remain readable, with a 64 MiB decompression limit; their older format still requires full-document parsing.
@@ -250,6 +254,8 @@ These are workload observations, not latency guarantees. Peak RSS comes from the
 ### Optional icon discovery
 
 Provider metadata lookups and avatar refreshes share a process-local admission budget: 64 operations total, eight active, no more than 32 admitted or two active per hostname. Every operation has a four-second deadline including queue time. Expired queued work never starts; a caller can cancel queued work, and a canceled active request retains its slot until it stops. A slow host therefore cannot fill the entire admission budget. Existing DNS validation, pinned connections, origin-bound private-network exceptions, response-type checks, and the 2 MiB avatar limit still apply.
+
+Provider artwork retains its one-year freshness period, and its image and metadata files still count toward the shared avatar cache byte and entry limits. Cache sweeping can evict fresh provider artwork when either storage budget is exceeded; a later request can fetch it again.
 
 Provider metadata responses return a stable same-origin provider path immediately; its image route serves a deterministic SVG fallback while the registry lookup refreshes metadata in the background. Rejected lookups retain the fallback result; avatar requests can serve an existing cached image or report a temporary failure. Provider lookup failures are cached for 30 seconds (admission rejections for five seconds), separately from the 512-entry positive cache so invalid-source floods cannot evict known icons. The negative cache also holds at most 512 entries. Registry JSON responses are limited to 1 MiB. Avatar refresh failures have a five-second, 512-entry negative cache, avatar metadata writes are capped at 128 pending records, and the organization-name cache holds at most 1,024 entries.
 

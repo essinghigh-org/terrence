@@ -1,5 +1,5 @@
 import { newResourceId } from "./resource-id";
-import { and, asc, count, countDistinct, desc, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, count, countDistinct, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   assessmentResults,
@@ -237,6 +237,44 @@ async function loadExplorerWorkspaceDataBatch(workspaceIds: readonly string[]): 
   const projectIds = workspaceRows.flatMap((workspace): string[] =>
     workspace.projectId === null ? [] : [workspace.projectId],
   );
+  // Rank IDs in SQL before fetching payloads: retained history must not
+  // multiply the memory required for a bounded workspace batch.
+  const latestStates = db
+    .select({
+      id: stateVersions.id,
+      rank: sql<number>`row_number() over (partition by ${stateVersions.workspaceId} order by ${stateVersions.serial} desc, ${stateVersions.id} desc)`.as(
+        "rank",
+      ),
+    })
+    .from(stateVersions)
+    .where(
+      and(
+        inArray(stateVersions.workspaceId, ids),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+      ),
+    )
+    .as("latest_states");
+  const latestRuns = db
+    .select({
+      id: runs.id,
+      rank: sql<number>`row_number() over (partition by ${runs.workspaceId} order by ${runs.createdAt} desc, ${runs.id} desc)`.as(
+        "rank",
+      ),
+    })
+    .from(runs)
+    .where(inArray(runs.workspaceId, ids))
+    .as("latest_runs");
+  const latestAssessments = db
+    .select({
+      id: assessmentResults.id,
+      rank: sql<number>`row_number() over (partition by ${assessmentResults.workspaceId} order by ${assessmentResults.createdAt} desc, ${assessmentResults.id} desc)`.as(
+        "rank",
+      ),
+    })
+    .from(assessmentResults)
+    .where(inArray(assessmentResults.workspaceId, ids))
+    .as("latest_assessments");
   const [organizationRows, projectRows, stateRows, runRows, assessmentRows, tagRows, noCodeRows] = await Promise.all([
     db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds), columns: { id: true } }),
     projectIds.length === 0
@@ -246,21 +284,23 @@ async function loadExplorerWorkspaceDataBatch(workspaceIds: readonly string[]): 
           columns: { id: true, name: true },
         }),
     db.query.stateVersions.findMany({
-      where: and(
-        inArray(stateVersions.workspaceId, ids),
-        eq(stateVersions.status, "finalized"),
-        eq(stateVersions.intermediate, false),
+      where: inArray(
+        stateVersions.id,
+        db.select({ id: latestStates.id }).from(latestStates).where(eq(latestStates.rank, 1)),
       ),
       columns: { id: true, workspaceId: true, serial: true, terraformVersion: true, jsonState: true },
       orderBy: [desc(stateVersions.serial), desc(stateVersions.id)],
     }),
     db.query.runs.findMany({
-      where: inArray(runs.workspaceId, ids),
+      where: inArray(runs.id, db.select({ id: latestRuns.id }).from(latestRuns).where(eq(latestRuns.rank, 1))),
       columns: { id: true, workspaceId: true, status: true, appliedAt: true, createdAt: true },
       orderBy: [desc(runs.createdAt), desc(runs.id)],
     }),
     db.query.assessmentResults.findMany({
-      where: inArray(assessmentResults.workspaceId, ids),
+      where: inArray(
+        assessmentResults.id,
+        db.select({ id: latestAssessments.id }).from(latestAssessments).where(eq(latestAssessments.rank, 1)),
+      ),
       columns: {
         id: true,
         workspaceId: true,
