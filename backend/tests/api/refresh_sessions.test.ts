@@ -79,6 +79,49 @@ describe("browser refresh sessions", () => {
     await db.delete(users).where(inArray(users.id, [userId, otherUserId]));
   });
 
+  for (const order of ["rotated-first", "live-first"] as const) {
+    test(`checks every refresh-session family with ${order} cookie fixtures`, async () => {
+      const fixture = `refresh-candidates-${crypto.randomUUID()}`;
+      const rotatedToken = `refresh-${crypto.randomUUID()}`;
+      const liveToken = `refresh-${crypto.randomUUID()}`;
+      const now = Date.now();
+      await db.insert(refreshSessions).values([
+        {
+          id: `${fixture}-old`,
+          familyId: `${fixture}-old`,
+          userId,
+          accessTokenId: `${fixture}-access-old`,
+          tokenHash: hashAuthenticationToken(rotatedToken),
+          expiresAt: now + 60_000,
+          rotatedAt: now - 60_000,
+          rotatedAtMs: now - 60_000,
+        },
+        {
+          id: `${fixture}-live`,
+          familyId: `${fixture}-live`,
+          userId,
+          accessTokenId: `${fixture}-access-live`,
+          tokenHash: hashAuthenticationToken(liveToken),
+          expiresAt: now + 60_000,
+        },
+      ]);
+      try {
+        const cookies = [rotatedToken, liveToken].map((token): string => `terrence_refresh=${token}`);
+        if (order === "live-first") cookies.reverse();
+        const response = await request("/api/v2/users/refresh", undefined, { Cookie: cookies.join("; ") });
+        expect(response.status).toBe(401);
+        expect(
+          (await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.id, `${fixture}-old`) }))?.revokedAt,
+        ).not.toBeNull();
+        expect(
+          await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.id, `${fixture}-live`) }),
+        ).toMatchObject({ rotatedAt: null, revokedAt: null });
+      } finally {
+        await db.delete(refreshSessions).where(inArray(refreshSessions.id, [`${fixture}-old`, `${fixture}-live`]));
+      }
+    });
+  }
+
   test("keeps API login tokens unchanged", async () => {
     const response = await login(false);
     expect(response.status).toBe(200);
