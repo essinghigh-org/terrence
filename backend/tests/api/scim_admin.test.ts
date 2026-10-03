@@ -431,6 +431,38 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
     }),
   ).toBeDefined();
 
+  // Simulate an upgrade from a release that did not record SCIM provenance.
+  await db
+    .update(teamMemberships)
+    .set({ ssoSource: null })
+    .where(and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, groupUserId)));
+  const removeLegacyMember = await request(
+    "PATCH",
+    `/scim/v2/Groups/${engineeringGroupId}`,
+    secondToken.attributes.token,
+    {
+      Operations: [{ op: "remove", path: `members[value eq "scim-user-${suffix}"]` }],
+    },
+  );
+  expect(removeLegacyMember.status).toBe(200);
+  expect(
+    await db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, groupUserId)),
+    }),
+  ).toBeUndefined();
+  expect(
+    await db.query.teamMemberships.findFirst({
+      where: and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, replacedUserId)),
+    }),
+  ).toBeDefined();
+  expect(
+    (
+      await request("PATCH", `/scim/v2/Groups/${engineeringGroupId}`, secondToken.attributes.token, {
+        Operations: [{ op: "add", path: "members", value: [{ value: `scim-user-${suffix}` }] }],
+      })
+    ).status,
+  ).toBe(200);
+
   let shownTeam = await request("GET", `/api/v2/teams/${teamId}`, ownerToken);
   expect((await shownTeam.json()).data.attributes).toMatchObject({
     "sso-team-id": "saml-engineering-updated",

@@ -836,9 +836,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
         const stage = taskPayload.stage;
         if (stage === "post_plan") {
           planJsonApiUrl = taskPayload.plan_json_api_url;
-          const planResponse = await app.handle(new Request(planJsonApiUrl, {
-            headers: { Authorization: "Bearer " + taskPayload.access_token },
-          }));
+          const planResponse = await app.handle(new Request(planJsonApiUrl));
           planJsonAccessStatus = planResponse.status;
           setTimeout(() => {
             void app.handle(new Request(taskPayload.task_result_callback_url, {
@@ -935,6 +933,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
       status: completed?.status,
       planJsonAccessStatus,
       planJsonApiUrlIsAbsolute: typeof planJsonApiUrl === "string" && new URL(planJsonApiUrl).origin !== "",
+      taskPayloadsOmitAccessToken: received.every(({ body }) => !("access_token" in JSON.parse(body))),
       statusKeys: Object.keys(completed?.statusTimestamps ?? {}),
       tasks: received.map(({ body, path, signature }) => ({
         path,
@@ -958,6 +957,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
   expect(result.status).toBe("applied");
   expect(result.planJsonAccessStatus).toBe(200);
   expect(result.planJsonApiUrlIsAbsolute).toBe(true);
+  expect(result.taskPayloadsOmitAccessToken).toBe(true);
   expect(result.tasks).toEqual([
     { path: "/global", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
     { path: "/global", stage: "post_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },

@@ -805,6 +805,33 @@ describe("GitHub Webhooks", () => {
       context: "terrence",
       description: "2 workspace runs: failure",
     });
+
+    await db.update(runs).set({ status: "discarded" }).where(eq(runs.id, primaryRun.id));
+    commitStatuses.length = 0;
+    await reportRunVcsStatus(secondaryRun.id, "applied");
+
+    expect(commitStatuses.at(-1)).toMatchObject({
+      state: "failure",
+      context: "terrence",
+      description: "2 workspace runs: failure",
+    });
+
+    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, primaryRun.id));
+    await db.insert(runs).values({
+      id: crypto.randomUUID(),
+      workspaceId: primaryRun.workspaceId,
+      configurationVersionId: primaryRun.configurationVersionId,
+      status: "canceled",
+      createdAt: primaryRun.createdAt + 1,
+    });
+    commitStatuses.length = 0;
+    await reportRunVcsStatus(secondaryRun.id, "applied");
+
+    expect(commitStatuses.at(-1)).toMatchObject({
+      state: "failure",
+      context: "terrence",
+      description: "2 workspace runs: failure",
+    });
   });
 
   test("does not route a GitHub event to a non-GitHub workspace with the same identifier", async () => {

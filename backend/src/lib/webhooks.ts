@@ -1670,10 +1670,6 @@ async function aggregatedGithubStatus(
     await githubRunsForCommit(context.workspace, context.repoFullName, context.commitSha),
   );
   const relatedStates = relatedRuns
-    .filter(
-      (relatedRun): boolean =>
-        !(["discarded", "canceled", "force_canceled"] as readonly string[]).includes(relatedRun.status),
-    )
     .map((relatedRun): VcsCommitState | undefined => vcsStatus(relatedRun.status))
     .filter((value): value is VcsCommitState => value !== undefined);
   const aggregateState: VcsCommitState = relatedStates.some((value): boolean => value === "failure")

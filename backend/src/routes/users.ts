@@ -296,7 +296,7 @@ async function revokeTeamApiToken(
   // Team tokens: generic delete requires manage-teams on the token's org;
   // the legacy credential can only be removed via the singular endpoint
   // (todo 46).
-  if (token === undefined || token.teamId === null || token.legacy !== false) return false;
+  if (token === undefined || token.teamId === null || token.legacy !== false || token.expiresAt === null) return false;
   const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
   if (
     team === undefined ||
@@ -1762,6 +1762,12 @@ export const userRoutes = new Elysia({ name: "users" })
       try {
         const mem = await requireManageableMembership(memId, user?.id, tokenOrgId, tokenTeamId);
         const updates = resolveMembershipUpdates(membershipPatchInputOrThrow(body), mem.role);
+        if (
+          updates.role !== undefined &&
+          !(await checkOrgPermission(user?.id, mem.orgId, "owner", tokenOrgId, tokenTeamId ?? null))
+        ) {
+          throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+        }
         const { lostActiveAccess } = await applyMembershipUpdates(mem.orgId, memId, updates);
         await auditLog("update", "organization-memberships", memId, user?.id ?? null, mem.orgId, {
           userId: mem.userId,
