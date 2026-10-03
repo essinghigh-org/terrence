@@ -2,7 +2,7 @@ import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { access, mkdir, open, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { and, asc, desc, count, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, count, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { isPostgres } from "../db/driver";
 import { logs } from "../db/schema";
@@ -442,8 +442,11 @@ export async function readRunLogsPage(
 }
 
 /** Query-string byte window for the raw log endpoints (the TFE log-read
- * protocol polls with `offset`/`limit`). Defaults serve the whole stream.
+ * protocol polls with `offset`/`limit`). Each response has a finite byte budget.
  */
+const MAX_LOG_SLICE_BYTES = 1024 * 1024;
+const MAX_LOG_SLICE_ROWS = 16_384;
+
 export function parseLogSliceParams(request: Readonly<{ url: string }>): Readonly<{ offset: number; limit: number }> {
   const params = new URL(request.url).searchParams;
   const parsedOffset = Number.parseInt(params.get("offset") ?? "0", 10);
@@ -516,12 +519,11 @@ function locateLogWindow(sizes: readonly LogSizeRow[], offsetBytes: number, endB
 }
 
 /**
- * Read one byte window of a phase's raw log stream without loading the whole
- * log (issue #585). Row byte lengths come from SQL; only the rows covering
- * the window are fetched, so CLI offset polling costs O(window), not
- * O(log). Live streams are never truncated; archived streams report the
- * retention envelope's marker. Rows are append-only, so a polling window is
- * stable while the tail grows.
+ * Read one bounded byte window of a phase's raw log stream. SQL computes
+ * offsets and slices payload bytes before returning them; the API materializes
+ * at most 1 MiB and 16,384 row segments per response. Requests exceeding a
+ * response budget report truncation, with the total size for offset polling.
+ * Archived streams also report their retention envelope's marker.
  */
 export async function readRunLogSlice(
   runId: string,
@@ -529,47 +531,55 @@ export async function readRunLogSlice(
   offsetBytes: number,
   limitBytes: number,
 ): Promise<RunLogSlice> {
+  const limit = Number.isFinite(limitBytes)
+    ? Math.min(Math.max(0, limitBytes), MAX_LOG_SLICE_BYTES)
+    : MAX_LOG_SLICE_BYTES;
   const where = and(eq(logs.runId, runId), eq(logs.phase, phase));
-  // One snapshot of (id, byte length) in stream order. Fetching by id below
-  // (instead of LIMIT/OFFSET) keeps the window pinned even if the tail grows
-  // between the two queries. If retention deletes a selected row in between,
-  // retry once from a fresh snapshot; the second miss falls back to an
-  // approximate window rather than failing a log tail.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const sizes = await db
-      .select({ id: logs.id, length: outputByteLength })
-      .from(logs)
-      .where(where)
-      .orderBy(asc(logs.createdAt), asc(logs.id));
-    if (sizes.length === 0) return readArchivedLogSlice(runId, phase, offsetBytes, limitBytes);
-
-    const totalBytes = logStreamTotalBytes(sizes);
-    const endBytes = Number.isFinite(limitBytes) ? offsetBytes + limitBytes : totalBytes;
-    const window = locateLogWindow(sizes, offsetBytes, endBytes);
-    if (window === null) {
-      return { bytes: new Uint8Array(0), totalBytes, totalCount: sizes.length, truncated: false };
-    }
-    const rows = await db
-      .select({ id: logs.id, outputText: logs.outputText })
-      .from(logs)
-      .where(and(where, inArray(logs.id, [...window.ids])));
-    const textById = new Map(rows.map((row): readonly [string, string] => [row.id, row.outputText]));
-    if (attempt === 0 && window.ids.some((id): boolean => !textById.has(id))) continue;
-    const joined = Buffer.from(window.ids.map((id): string => textById.get(id) ?? "").join("\n"), "utf8");
-    // Bytes in [offsetBytes, rowStart) are the single separator before the
-    // first fetched row (empty unless the offset lands exactly on it).
-    const prefix = offsetBytes < window.rowStart ? SEPARATOR_BYTE : EMPTY_BYTES;
-    const from = Math.max(0, offsetBytes - window.rowStart);
-    const take = Math.max(0, endBytes - Math.max(offsetBytes, window.rowStart));
-    const body = joined.subarray(from, from + take);
-    return {
-      bytes: prefix.length === 0 ? body : Buffer.concat([prefix, body]),
-      totalBytes,
-      totalCount: sizes.length,
-      truncated: false,
-    };
-  }
-  throw new Error("Unreachable: slice retry loop always returns");
+  const [totals] = await db
+    .select({ count: count(), bytes: sql<number>`coalesce(sum(${outputByteLength}), 0)`.mapWith(Number) })
+    .from(logs)
+    .where(where);
+  const totalCount = totals?.count ?? 0;
+  if (totalCount === 0) return readArchivedLogSlice(runId, phase, offsetBytes, limitBytes);
+  const totalBytes = (totals?.bytes ?? 0) + totalCount - 1;
+  if (limit === 0 || offsetBytes >= totalBytes) return { bytes: EMPTY_BYTES, totalBytes, totalCount, truncated: false };
+  const windowEnd = Math.min(offsetBytes + limit, totalBytes);
+  const order = sql`${logs.createdAt}, ${logs.id}`;
+  const spans = db
+    .select({
+      id: logs.id,
+      length: outputByteLength.as("byte_length"),
+      first: sql<number>`row_number() over (order by ${order})`.as("row_number"),
+      cursor:
+        sql<number>`coalesce(sum(${outputByteLength} + 1) over (order by ${order} rows between unbounded preceding and 1 preceding), 0)`.as(
+          "byte_cursor",
+        ),
+    })
+    .from(logs)
+    .where(where)
+    .as("log_spans");
+  // Each segment includes its preceding separator. SQL slices bytes before
+  // returning payloads, so even one large row stays within the response budget.
+  const start = sql<number>`case when ${spans.first} = 1 then 0 else ${spans.cursor} - 1 end`;
+  const end = sql<number>`${spans.cursor} + ${spans.length}`;
+  const prefix = sql`case when ${spans.first} = 1 then '' else char(10) end`;
+  const segment = isPostgres
+    ? sql`convert_to(case when ${spans.first} = 1 then '' else chr(10) end || ${logs.outputText}, 'UTF8')`
+    : sql`cast(${prefix} || ${logs.outputText} as blob)`;
+  const from = sql<number>`case when ${offsetBytes} > ${start} then ${offsetBytes} - ${start} else 0 end`;
+  const take = sql<number>`case when ${windowEnd} < ${end} then ${windowEnd} else ${end} end - (${start} + ${from})`;
+  const payload = isPostgres
+    ? sql<Uint8Array>`substring(${segment} from cast(${from} + 1 as integer) for cast(${take} as integer))`
+    : sql<Uint8Array>`substr(${segment}, ${from} + 1, ${take})`;
+  const rows = await db
+    .select({ bytes: payload })
+    .from(spans)
+    .innerJoin(logs, eq(logs.id, spans.id))
+    .where(sql`${end} > ${offsetBytes} and ${start} < ${windowEnd}`)
+    .orderBy(sql`${spans.first}`)
+    .limit(MAX_LOG_SLICE_ROWS);
+  const bytes = Buffer.concat(rows.map((row): Buffer => Buffer.from(row.bytes)));
+  return { bytes, totalBytes, totalCount, truncated: bytes.length < Math.min(limitBytes, totalBytes - offsetBytes) };
 }
 
 const SEPARATOR_BYTE = new Uint8Array([10]);
@@ -581,29 +591,28 @@ async function readArchivedLogSlice(
   offsetBytes: number,
   limitBytes: number,
 ): Promise<RunLogSlice> {
+  const limit = Number.isFinite(limitBytes)
+    ? Math.min(Math.max(0, limitBytes), MAX_LOG_SLICE_BYTES)
+    : MAX_LOG_SLICE_BYTES;
   let totalBytes = 0;
   let rowStart = 0;
   const archived = await readArchivedRunLogs(runId, (sizes): readonly string[] => {
     const filtered = sizes.filter((row): boolean => row.phase === phase);
     totalBytes = logStreamTotalBytes(filtered);
-    const window = locateLogWindow(
-      filtered,
-      offsetBytes,
-      Number.isFinite(limitBytes) ? offsetBytes + limitBytes : totalBytes,
-    );
+    const window = locateLogWindow(filtered, offsetBytes, offsetBytes + limit);
     rowStart = window?.rowStart ?? offsetBytes;
     return window?.ids ?? [];
   });
   const joined = Buffer.from(archived.logs.map((log): string => log.outputText).join("\n"));
   const prefix = offsetBytes < rowStart ? SEPARATOR_BYTE : EMPTY_BYTES;
   const from = Math.max(0, offsetBytes - rowStart);
-  const take = Math.max(0, Math.min(limitBytes - prefix.length, totalBytes - Math.max(offsetBytes, rowStart)));
+  const take = Math.max(0, Math.min(limit - prefix.length, totalBytes - Math.max(offsetBytes, rowStart)));
   const body = joined.subarray(from, from + take);
   return {
     bytes: prefix.length === 0 ? body : Buffer.concat([prefix, body]),
     totalBytes,
     totalCount: archived.totalCount,
-    truncated: archived.truncated,
+    truncated: archived.truncated || prefix.length + body.length < Math.min(limitBytes, totalBytes - offsetBytes),
   };
 }
 

@@ -71,6 +71,9 @@ import {
 
 import {
   archiveContainsWorkingDir,
+  MAX_TRIGGER_PATTERNS,
+  MAX_TRIGGER_PATTERN_LENGTH,
+  MAX_TRIGGER_PREVIEW_COMPARISONS,
   invalidTriggerPatternIndexes,
   invalidTriggerPrefixIndexes,
   listArchiveMembers,
@@ -1704,8 +1707,25 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         .map((member): string => member.replace(/^\.\//, ""))
         .filter((file): boolean => file !== "" && !file.endsWith("/"));
       const patterns = Array.isArray(ws.triggerPatterns)
-        ? ws.triggerPatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern !== "")
+        ? [
+            ...new Set(
+              ws.triggerPatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern !== ""),
+            ),
+          ]
         : [];
+      if (!triggerPreviewWorkAllowed(patterns, files.length)) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail:
+                "Trigger preview exceeds the pattern or comparison budget; narrow the saved patterns or configuration file list.",
+            },
+          ],
+        };
+      }
       const previews = patterns.map((pattern): Record<string, unknown> => {
         let matched: string[] = [];
         try {
@@ -3235,6 +3255,14 @@ async function checkLockedInheritedTag(
   return null;
 }
 
+function triggerPreviewWorkAllowed(patterns: readonly string[], fileCount: number): boolean {
+  return (
+    patterns.length <= MAX_TRIGGER_PATTERNS &&
+    !patterns.some((pattern): boolean => pattern.length > MAX_TRIGGER_PATTERN_LENGTH) &&
+    patterns.length * fileCount <= MAX_TRIGGER_PREVIEW_COMPARISONS
+  );
+}
+
 function validateTriggerFields(attributes: Readonly<Record<string, unknown>>): string | null {
   // Issue #628: fail at save on trigger entries that can never match
   // (non-strings, blanks) instead of silently matching nothing at webhook
@@ -3246,9 +3274,15 @@ function validateTriggerFields(attributes: Readonly<Record<string, unknown>>): s
     }
   }
   if (Array.isArray(attributes["trigger-patterns"])) {
+    if (attributes["trigger-patterns"].length > MAX_TRIGGER_PATTERNS)
+      return `trigger-patterns must contain at most ${MAX_TRIGGER_PATTERNS} entries`;
     const badPatterns = invalidTriggerPatternIndexes(attributes["trigger-patterns"] as unknown[]);
     if (badPatterns.length > 0) {
-      return "trigger-patterns entries must be non-blank strings (indexes: " + badPatterns.join(", ") + ")";
+      return (
+        `trigger-patterns entries must be non-blank strings of at most ${MAX_TRIGGER_PATTERN_LENGTH} characters (indexes: ` +
+        badPatterns.join(", ") +
+        ")"
+      );
     }
   }
   return null;

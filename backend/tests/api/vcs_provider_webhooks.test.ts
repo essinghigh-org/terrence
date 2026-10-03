@@ -15,7 +15,7 @@ import {
 } from "../../src/db/schema";
 import { encryptSecret } from "../../src/lib/secrets";
 import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
-import { refetchConfigurationVersion, reportRunVcsStatus } from "../../src/lib/webhooks";
+import { handleBitbucketWebhook, refetchConfigurationVersion, reportRunVcsStatus } from "../../src/lib/webhooks";
 
 const orgId = "org-provider-webhooks";
 const gitlabWorkspaceId = "ws-provider-gitlab";
@@ -437,10 +437,23 @@ describe("GitLab and Bitbucket webhooks", () => {
     ).toBe(true);
   });
 
+  test("rejects an oversized delivery before issuing source requests", async () => {
+    const payload = { ...bitbucketPayload, push: { changes: Array.from({ length: 33 }, () => ({})) } };
+    let rejection: unknown;
+    try {
+      await handleBitbucketWebhook("repo:push", payload);
+    } catch (error: unknown) {
+      rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain("ref changes");
+    expect(fetches).toHaveLength(0);
+  });
+
   test("processes valid branch and tag changes in a multi-ref push", async () => {
     const mainSha = "1111111111111111111111111111111111111111";
-    const releaseSha = "2222222222222222222222222222222222222222";
-    const tagSha = "3333333333333333333333333333333333333333";
+    const releaseSha = mainSha;
+    const tagSha = mainSha;
     const ignoredSha = "4444444444444444444444444444444444444444";
     const change = (type: string, name: string, sha: string): Record<string, unknown> => ({
       new: {
@@ -483,6 +496,16 @@ describe("GitLab and Bitbucket webhooks", () => {
       waitForUploaded(bitbucketReleaseWorkspaceId),
       waitForUploaded(bitbucketTagWorkspaceId),
     ]);
+    expect(fetches.filter((entry) => entry.url.endsWith(`${mainSha}.tar.gz`))).toHaveLength(1);
+    if (!mainVersion?.archivePath || !releaseVersion?.archivePath || !tagVersion?.archivePath)
+      throw new Error("Expected all revision archives");
+    const { stat, unlink } = await import("node:fs/promises");
+    const files = await Promise.all(
+      [mainVersion.archivePath, releaseVersion.archivePath, tagVersion.archivePath].map((path) => stat(path)),
+    );
+    expect(new Set(files.map((file) => file.ino)).size).toBe(1);
+    await unlink(mainVersion.archivePath);
+    expect(await Bun.file(releaseVersion.archivePath).exists()).toBeTrue();
     expect(mainVersion).toMatchObject({ ingressAttributes: { branch: "main", commitSha: mainSha } });
     expect(releaseVersion).toMatchObject({ ingressAttributes: { branch: "release", commitSha: releaseSha } });
     expect(tagVersion).toMatchObject({ ingressAttributes: { tag: "v1.2.3", commitSha: tagSha } });

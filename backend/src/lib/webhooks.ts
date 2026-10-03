@@ -1,5 +1,5 @@
 import { newResourceId } from "./resource-id";
-import { copyFile, mkdir, open, rm } from "node:fs/promises";
+import { copyFile, link, mkdir, open, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import jwt from "jsonwebtoken";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -77,6 +77,10 @@ type VcsCredentialSubject = Readonly<{
     oauthTokenId?: string;
   }> | null;
 }>;
+
+const MAX_BITBUCKET_DELIVERY_REFS = 32;
+const MAX_BITBUCKET_DELIVERY_WORKSPACES = 128;
+type WebhookDownloadBudget = { remainingBytes: number };
 
 const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
@@ -701,6 +705,8 @@ function parseBitbucketPushWebhooks(
 ): readonly ParsedProviderWebhook[] {
   const changes = extractBitbucketChanges(payload);
   if (changes === undefined) return [];
+  if (changes.length > MAX_BITBUCKET_DELIVERY_REFS)
+    throw new Error(`Bitbucket delivery exceeds ${MAX_BITBUCKET_DELIVERY_REFS} ref changes`);
   const parsed: ParsedProviderWebhook[] = [];
   for (const change of changes) {
     const parsedChange = parseBitbucketPushChange(change, repoFullName, cloneUrl, senderUsername, sourceIdentity);
@@ -2374,18 +2380,31 @@ async function createOAuthWebhookRun(
   );
 }
 
-type OAuthWebhookDownloads = Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>;
+type OAuthWebhookDownload = {
+  credentials: ProviderCredentials;
+  configurationVersionIds: string[];
+  repoFullName: string;
+  commitSha: string;
+};
+type OAuthWebhookDownloads = Map<string, OAuthWebhookDownload>;
 
 function addOAuthWebhookDownload(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- downloads are grouped into this mutable per-webhook cache
   downloads: OAuthWebhookDownloads,
   credentials: ProviderCredentials,
   configurationVersionId: string,
+  repoFullName: string,
+  commitSha: string,
 ): void {
-  const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
+  const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}\u0000${repoFullName}\u0000${commitSha}`;
   const group = downloads.get(downloadKey);
   if (group === undefined) {
-    downloads.set(downloadKey, { credentials, configurationVersionIds: [configurationVersionId] });
+    downloads.set(downloadKey, {
+      credentials,
+      configurationVersionIds: [configurationVersionId],
+      repoFullName,
+      commitSha,
+    });
   } else {
     group.configurationVersionIds.push(configurationVersionId);
   }
@@ -2397,8 +2416,11 @@ async function handleOAuthProviderWebhook(
   // ReadonlySet is intentionally preserved by DeepReadonly.
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- accumulates revision groups across one bounded delivery
+  deliveryDownloads?: OAuthWebhookDownloads,
+  admittedWorkspaces?: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
 ): Promise<boolean> {
-  const branchMatchedWorkspaces = await matchingWebhookWorkspaces(provider, details);
+  const branchMatchedWorkspaces = admittedWorkspaces ?? (await matchingWebhookWorkspaces(provider, details));
   // PR/MR payloads carry no changed-file list (kanban 1.6). Bitbucket push
   // payloads do not carry one either, so both paths fetch a complete list.
   // Failures fall back to the empty set (trigger-all) so a VCS API outage can
@@ -2411,7 +2433,7 @@ async function handleOAuthProviderWebhook(
       details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged),
   );
 
-  const downloads: OAuthWebhookDownloads = new Map();
+  const downloads: OAuthWebhookDownloads = deliveryDownloads ?? new Map<string, OAuthWebhookDownload>();
   const missingCredentialConfigurationVersionIds: string[] = [];
   for (const workspace of matchedWorkspaces) {
     const created = await createOAuthWebhookRun(provider, kind, details, workspace);
@@ -2420,13 +2442,23 @@ async function handleOAuthProviderWebhook(
       missingCredentialConfigurationVersionIds.push(created.configurationVersionId);
       continue;
     }
-    addOAuthWebhookDownload(downloads, created.credentials, created.configurationVersionId);
+    addOAuthWebhookDownload(
+      downloads,
+      created.credentials,
+      created.configurationVersionId,
+      details.repoFullName,
+      details.commitSha,
+    );
   }
   if (missingCredentialConfigurationVersionIds.length > 0) {
     await markConfigurationVersionsErrored(
       missingCredentialConfigurationVersionIds,
       `${provider} credentials are unavailable`,
     );
+  }
+  if (deliveryDownloads !== undefined) {
+    await synchronizeVcsPolicySets(provider, kind, details);
+    return true;
   }
   await Promise.all([
     Promise.all(
@@ -2451,13 +2483,34 @@ export async function handleGitlabWebhook(eventName: string, payload: WebhookPay
 
 export async function handleBitbucketWebhook(eventName: string, payload: WebhookPayload): Promise<boolean> {
   const parsed = bitbucketWebhook(eventName, payload);
-  if (parsed === undefined) return false;
-  await Promise.all(
-    parsed.map(async (event): Promise<void> => {
-      await handleOAuthProviderWebhook("bitbucket", event.kind, event.details);
-    }),
-  );
-  return parsed.length > 0;
+  if (parsed === undefined || parsed.length === 0) return false;
+  // Admit the whole bounded delivery before creating configuration versions.
+  let workspaceCount = 0;
+  const admitted: {
+    event: ParsedProviderWebhook;
+    workspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[];
+  }[] = [];
+  for (const event of parsed) {
+    const targets = await matchingWebhookWorkspaces("bitbucket", event.details);
+    workspaceCount += targets.length;
+    admitted.push({ event, workspaces: targets });
+    if (workspaceCount > MAX_BITBUCKET_DELIVERY_WORKSPACES)
+      throw new Error(`Bitbucket delivery exceeds ${MAX_BITBUCKET_DELIVERY_WORKSPACES} workspace targets`);
+  }
+  const downloads: OAuthWebhookDownloads = new Map();
+  for (const { event, workspaces: targets } of admitted)
+    await handleOAuthProviderWebhook("bitbucket", event.kind, event.details, downloads, targets);
+  const budget = { remainingBytes: MAX_TARBALL_BYTES };
+  for (const group of downloads.values()) {
+    await fetchAndSaveProviderTarball(
+      group.configurationVersionIds,
+      group.credentials,
+      group.repoFullName,
+      group.commitSha,
+      budget,
+    );
+  }
+  return true;
 }
 
 /**
@@ -2579,7 +2632,13 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       missingCredentialConfigurationVersionIds.push(created.configurationVersionId);
       continue;
     }
-    addOAuthWebhookDownload(downloads, created.credentials, created.configurationVersionId);
+    addOAuthWebhookDownload(
+      downloads,
+      created.credentials,
+      created.configurationVersionId,
+      details.repoFullName,
+      details.commitSha,
+    );
   }
 
   if (missingCredentialConfigurationVersionIds.length > 0) {
@@ -2631,13 +2690,15 @@ async function fetchAndSaveProviderTarball(
   credentials: ProviderCredentials,
   repoFullName: string,
   commitSha: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- shared aggregate download budget is debited during streaming
+  budget?: WebhookDownloadBudget,
 ): Promise<void> {
   const request = providerTarballRequest(credentials, repoFullName, commitSha);
   if (request === undefined) {
     await markConfigurationVersionsErrored(configurationVersionIds, "Invalid repository or commit SHA");
     return;
   }
-  await downloadAndSaveTarball(configurationVersionIds, credentials.provider, request.url, request.headers);
+  await downloadAndSaveTarball(configurationVersionIds, credentials.provider, request.url, request.headers, budget);
 }
 
 function providerTarballRequest(
@@ -2761,11 +2822,46 @@ async function synchronizeVcsPolicySets(
   );
 }
 
+async function writeWebhookArchive(
+  path: string,
+  body: Readonly<ReadableStream<Uint8Array>>,
+  provider: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- debit the shared delivery budget while streaming
+  budget: WebhookDownloadBudget | undefined,
+): Promise<void> {
+  const file = await open(path, "wx");
+  const reader = body.getReader();
+  let downloadedBytes = 0;
+  try {
+    let finished = false;
+    while (!finished) {
+      const chunk = await reader.read();
+      if (chunk.done) finished = true;
+      else {
+        downloadedBytes += chunk.value.byteLength;
+        if (budget !== undefined) budget.remainingBytes -= chunk.value.byteLength;
+        if (downloadedBytes > MAX_TARBALL_BYTES || (budget !== undefined && budget.remainingBytes < 0)) {
+          throw new Error(`${provider} tarball exceeds the download or delivery byte budget`);
+        }
+        await file.write(chunk.value);
+      }
+    }
+  } catch (error: unknown) {
+    await reader.cancel().catch((): void => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+    await file.close();
+  }
+}
+
 async function downloadAndSaveTarball(
   configurationVersionIds: readonly string[],
   provider: "github" | OAuthProvider,
   url: string,
   headers: Readonly<Record<string, string>>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- debit the delivery budget as bytes arrive, including failed downloads
+  budget?: WebhookDownloadBudget,
 ): Promise<void> {
   const storageDirectory = resolve(
     process.env["STORAGE_DIR"] ?? join(process.cwd(), "storage"),
@@ -2774,9 +2870,11 @@ async function downloadAndSaveTarball(
   const temporaryPath = join(storageDirectory, `.${provider}-${crypto.randomUUID()}.tar.gz`);
   try {
     await mkdir(storageDirectory, { recursive: true });
+    if (budget !== undefined && budget.remainingBytes <= 0)
+      throw new Error("Webhook delivery download byte budget exhausted");
     const response = await fetchVcsUrlStream(url, {
       headers,
-      maxResponseBytes: MAX_TARBALL_BYTES,
+      maxResponseBytes: Math.min(MAX_TARBALL_BYTES, budget?.remainingBytes ?? MAX_TARBALL_BYTES),
       timeoutMs: ARCHIVE_DOWNLOAD_TIMEOUT_MS,
     });
     if (!response.ok || response.body === null) {
@@ -2784,31 +2882,17 @@ async function downloadAndSaveTarball(
       throw new Error(`Failed to download ${provider} tarball`);
     }
 
-    const file = await open(temporaryPath, "wx");
-    let downloadedBytes = 0;
-    try {
-      const reader = response.body.getReader();
-      let finished = false;
-      while (!finished) {
-        const chunk = await reader.read();
-        if (chunk.done) {
-          finished = true;
-        } else {
-          downloadedBytes += chunk.value.byteLength;
-          if (downloadedBytes > MAX_TARBALL_BYTES) {
-            await reader.cancel();
-            throw new Error(`${provider} tarball exceeds the maximum download size`);
-          }
-          await file.write(chunk.value);
-        }
-      }
-    } finally {
-      await file.close();
-    }
+    await writeWebhookArchive(temporaryPath, response.body, provider, budget);
 
     for (const configurationVersionId of configurationVersionIds) {
       const archivePath = join(storageDirectory, `${configurationVersionId}.tar.gz`);
-      await copyFile(temporaryPath, archivePath);
+      if (budget === undefined) await copyFile(temporaryPath, archivePath);
+      else {
+        // Separate links preserve per-version deletion while sharing the
+        // downloaded inode, keeping cumulative delivery storage bounded.
+        await rm(archivePath, { force: true });
+        await link(temporaryPath, archivePath);
+      }
       await db
         .update(configurationVersions)
         .set({

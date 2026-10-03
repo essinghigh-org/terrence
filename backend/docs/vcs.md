@@ -119,3 +119,9 @@ The reporting uses the GitHub App or the OAuth connection.
 | Bitbucket | `/api/webhooks/bitbucket` |
 
 All webhook endpoints verify signatures against the raw request body.
+
+### Delivery and trigger-preview limits
+
+Bitbucket deliveries admit at most 32 ref changes and 128 matched workspace targets before creating configuration versions. Ref processing and revision downloads run sequentially. Identical repository revisions using the same credentials share one download across the delivery, with a total configuration archive download budget of 100 MiB. Each configuration version retains a separate file link, so deleting one version preserves the others. Oversized deliveries fail explicitly in the durable webhook job; archives that exceed the byte budget mark their configuration versions and runs as errored.
+
+Workspace updates accept at most 128 trigger patterns, each at most 1,024 characters. Trigger preview deduplicates saved patterns and rejects work exceeding one million file/pattern comparisons with 422. This also bounds previews for existing configurations with older pattern lists.

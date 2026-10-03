@@ -161,8 +161,11 @@ const BEARER_OR_BASIC_PATTERN = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const URL_SECRET_PARAMETER_PATTERN =
   /([?&](?:access[_-]?token|api[_-]?key|id[_-]?token|refresh[_-]?token|secret|password|signature|token)=)[^&#\s]*/gi;
 const URL_USERINFO_PASSWORD_PATTERN = /(\b[a-z][a-z\d+.-]*:\/\/[^\/\s:@]*):[^\/\s@]+@/gi;
+// Quoted branches exclude backslashes from the ordinary-character branch,
+// so each input character has one path through the matcher. Incomplete
+// quoted credentials are redacted through the end of the string as well.
 const KEY_VALUE_SECRET_PATTERN =
-  /((?:^|[,{\s;])['"]?(?:access[_-]?token|api[_-]?key|authorization|cookie|id[_-]?token|password|passphrase|private[_-]?key|refresh[_-]?token|secret|token)['"]?\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[\s\S])*\2|[^,'"}\s]+)/gi;
+  /((?:^|[,{\s;])['"]?(?:access[_-]?token|api[_-]?key|authorization|cookie|id[_-]?token|password|passphrase|private[_-]?key|refresh[_-]?token|secret|token)['"]?\s*[:=]\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|'(?:\\[\s\S]|[^'\\])*(?:'|\\?$)|[^,'"}\s]+)/gi;
 const KNOWN_TOKEN_PATTERN = /\b(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-)[A-Za-z0-9_\-]+/gi;
 
 type ErrorWithOptionalCause = Error & { cause?: unknown; errors?: unknown };

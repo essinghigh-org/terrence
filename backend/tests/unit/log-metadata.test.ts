@@ -131,4 +131,23 @@ describe("structured logger metadata nesting (12.5)", () => {
       errorSpy.mockRestore();
     }
   });
+  it("redacts escaped and incomplete quoted credentials", async () => {
+    const { log } = await import("../../src/lib/log");
+    const capture = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const message of [
+        'password="quoted \\"value\\""; kept=yes',
+        "token='quoted \\'value\\''; kept=yes",
+        'password="unfinished value',
+        "token='unfinished value",
+      ]) {
+        log.error(message);
+        const line = capture.mock.calls.at(-1)?.[0] as string;
+        expect(line).not.toContain("value");
+        expect(JSON.parse(line).message).toContain("[REDACTED]");
+      }
+    } finally {
+      capture.mockRestore();
+    }
+  });
 });

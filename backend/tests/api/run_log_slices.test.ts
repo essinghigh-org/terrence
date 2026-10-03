@@ -109,6 +109,35 @@ describe("run log slices", () => {
     }
   });
 
+  it("bounds default responses and slices a large row before loading it", async () => {
+    const largeRunId = `run-logslice-large-row-${suffix}`;
+    const output = "ordinary log output ".repeat(100_000);
+    await db.insert(runs).values({ id: largeRunId, workspaceId, status: "errored", createdAt: Date.now() });
+    await db.insert(logs).values({
+      id: crypto.randomUUID(),
+      runId: largeRunId,
+      phase: "apply",
+      outputText: output,
+      createdAt: Date.now(),
+    });
+    try {
+      const response = await request(`/api/v2/runs/${largeRunId}/apply/log`);
+      const first = Buffer.from(await response.arrayBuffer());
+      expect(first.length).toBe(1024 * 1024);
+      expect(first).toEqual(Buffer.from(output).subarray(0, first.length));
+      expect(response.headers.get("X-Terrence-Log-Truncated")).toBe("true");
+      const continuation = await readRunLogSlice(largeRunId, "apply", first.length, 32);
+      expect(Buffer.from(continuation.bytes)).toEqual(Buffer.from(output).subarray(first.length, first.length + 32));
+      const empty = await readRunLogSlice(largeRunId, "apply", 0, 0);
+      expect(empty.bytes.length).toBe(0);
+      expect(empty.totalBytes).toBe(Buffer.byteLength(output));
+      expect(empty.totalCount).toBe(1);
+    } finally {
+      await db.delete(logs).where(eq(logs.runId, largeRunId));
+      await db.delete(runs).where(eq(runs.id, largeRunId));
+    }
+  });
+
   it("reports the true total on over-cap runs and marks archived truncation", async () => {
     const base = Date.now();
     const total = 10005;

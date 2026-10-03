@@ -79,6 +79,12 @@ afterAll(async (): Promise<void> => {
 
 describe("workspace save-time validation (#628)", (): void => {
   test("rejects trigger entries that can never match", async (): Promise<void> => {
+    const tooMany = await patchWorkspace({
+      "trigger-patterns": Array.from({ length: 129 }, (_, index) => `dir-${index}/**`),
+    });
+    expect(tooMany.status).toBe(422);
+    const tooLong = await patchWorkspace({ "trigger-patterns": ["x".repeat(1025)] });
+    expect(tooLong.status).toBe(422);
     const blank = await patchWorkspace({ "trigger-patterns": ["terraform/**/*.tf", ""] });
     expect(blank.status).toBe(422);
     const blankBody = (await blank.json()) as { errors: { detail: string }[] };
@@ -106,7 +112,7 @@ describe("workspace save-time validation (#628)", (): void => {
   });
 
   test("previews trigger patterns against the latest configuration", async (): Promise<void> => {
-    await patchWorkspace({ "trigger-patterns": ["terraform/**/*.tf", "nomatch/**/*.tf"] });
+    await patchWorkspace({ "trigger-patterns": ["terraform/**/*.tf", "terraform/**/*.tf", "nomatch/**/*.tf"] });
     const preview = await api("GET", "/api/v2/workspaces/" + workspaceId + "/trigger-preview");
     expect(preview.status).toBe(200);
     const body = (await preview.json()) as {
@@ -119,6 +125,7 @@ describe("workspace save-time validation (#628)", (): void => {
       };
     };
     expect(body.data.attributes["files-checked"]).toBeGreaterThan(0);
+    expect(body.data.attributes.patterns).toHaveLength(2);
     const byPattern = new Map(body.data.attributes.patterns.map((entry) => [entry.pattern, entry]));
     expect(byPattern.get("terraform/**/*.tf")?.matches).toBeGreaterThan(0);
     expect(byPattern.get("nomatch/**/*.tf")?.matches).toBe(0);
