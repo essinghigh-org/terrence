@@ -61,6 +61,9 @@ function sourceFromAttributes(attrs: Readonly<Record<string, unknown>>): BackupS
     ...(typeof attrs["database-path"] === "string" && attrs["database-path"].trim() !== ""
       ? { databasePath: attrs["database-path"] }
       : {}),
+    ...(typeof attrs["postgres-target-url"] === "string" && attrs["postgres-target-url"].trim() !== ""
+      ? { postgresTargetUrl: attrs["postgres-target-url"] }
+      : {}),
   };
   return source;
 }
@@ -152,6 +155,7 @@ export const backupRoutes = new Elysia({ name: "admin-backups" })
           "last-verified-restore-at": status.lastVerifiedRestoreAt,
           "last-verified-manifest-sha256": status.lastVerifiedManifestSha256,
           "last-rehearsal-id": status.lastRehearsalId,
+          "last-verified-database-driver": status.lastVerifiedDatabaseDriver,
         },
       },
     };
