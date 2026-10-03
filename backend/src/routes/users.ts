@@ -1762,6 +1762,12 @@ export const userRoutes = new Elysia({ name: "users" })
       try {
         const mem = await requireManageableMembership(memId, user?.id, tokenOrgId, tokenTeamId);
         const updates = resolveMembershipUpdates(membershipPatchInputOrThrow(body), mem.role);
+        if (
+          updates.role !== undefined &&
+          !(await checkOrgPermission(user?.id, mem.orgId, "owner", tokenOrgId, tokenTeamId ?? null))
+        ) {
+          throw new HttpStatusError(404, { errors: [{ status: "404", title: "Not Found" }] });
+        }
         const { lostActiveAccess } = await applyMembershipUpdates(mem.orgId, memId, updates);
         await auditLog("update", "organization-memberships", memId, user?.id ?? null, mem.orgId, {
           userId: mem.userId,
