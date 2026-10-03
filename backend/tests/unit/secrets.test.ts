@@ -1,4 +1,4 @@
-import { createCipheriv, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv, scryptSync } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { rmSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -215,6 +215,10 @@ describe("password-derived KDF parameters", () => {
       const mod = await import("../../src/lib/secrets");
 
       expect(await mod.decryptSecret(envelope)).toBe(plaintext);
+      // Both readers share the warmed legacy key, without rereading salt or
+      // deriving it again for each state record.
+      rmSync(join(dir, ".encryption-salt"));
+      expect(mod.decryptSecretSync(envelope, dir)).toBe(plaintext);
       expect(mod.decryptSecretSync(envelope, dir)).toBe(plaintext);
     } finally {
       if (previousDir === undefined) delete process.env["STORAGE_DIR"];
@@ -222,6 +226,57 @@ describe("password-derived KDF parameters", () => {
       if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
       else process.env["ENCRYPTION_PASSWORD"] = previousPass;
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads pre-installation-salt ciphertext without changing the write KDF", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "terrence-static-kdf-"));
+    const writeDir = mkdtempSync(join(tmpdir(), "terrence-modern-kdf-"));
+    const previousDir = process.env["STORAGE_DIR"];
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
+    const password = "static-compatibility-fixture";
+    process.env["STORAGE_DIR"] = dir;
+    process.env["ENCRYPTION_PASSWORD"] = password;
+    try {
+      const cipher = createCipheriv(
+        "aes-256-gcm",
+        scryptSync(password, "terrence:secrets:v1", 32),
+        Buffer.alloc(12, 3),
+      );
+      const ciphertext = Buffer.concat([cipher.update("historical secret", "utf8"), cipher.final()]);
+      const envelope = [
+        "enc:v1",
+        Buffer.alloc(12, 3).toString("base64"),
+        cipher.getAuthTag().toString("base64"),
+        ciphertext.toString("base64"),
+      ].join(":");
+      const mod = await import("../../src/lib/secrets");
+      expect(mod.decryptSecretSync(envelope, dir)).toBe("historical secret");
+      expect(existsSync(join(dir, ".encryption-salt"))).toBeFalse();
+      expect(await mod.decryptSecret(envelope)).toBe("historical secret");
+      process.env["STORAGE_DIR"] = writeDir;
+      expect(existsSync(join(writeDir, ".encryption-salt"))).toBeFalse();
+      const modern = await mod.encryptSecret("new secret");
+      expect(existsSync(join(writeDir, ".encryption-salt"))).toBeTrue();
+      const salt = Buffer.from(readFileSync(join(writeDir, ".encryption-salt"), "utf8").trim(), "base64");
+      const parts = modern.split(":");
+      const decipher = createDecipheriv(
+        "aes-256-gcm",
+        scryptSync(password, salt, 32, mod.PASSWORD_KDF_OPTIONS),
+        Buffer.from(parts[2]!, "base64"),
+      );
+      decipher.setAuthTag(Buffer.from(parts[3]!, "base64"));
+      expect(Buffer.concat([decipher.update(Buffer.from(parts[4]!, "base64")), decipher.final()]).toString()).toBe(
+        "new secret",
+      );
+      expect(mod.decryptSecretSync(modern, writeDir)).toBe("new secret");
+    } finally {
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(writeDir, { recursive: true, force: true });
     }
   });
 });
