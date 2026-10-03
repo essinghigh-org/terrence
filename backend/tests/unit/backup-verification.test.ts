@@ -41,12 +41,20 @@ import {
   verifyBackupIntegrity,
 } from "../../src/lib/backup-verification";
 
+const backupStatusPath = join(storageDir, BACKUP_STATUS_FILE);
+const originalBackupStatus = (await Bun.file(backupStatusPath).exists()) ? await readFile(backupStatusPath) : null;
+
+async function restoreBackupStatus(): Promise<void> {
+  if (originalBackupStatus === null) await rm(backupStatusPath, { force: true });
+  else await writeFile(backupStatusPath, originalBackupStatus, { mode: 0o600 });
+}
+
 describe("backup verification and restore rehearsal", () => {
   let work: string | undefined;
 
   afterAll(async () => {
     if (work !== undefined) await rm(work, { recursive: true, force: true });
-    await rm(join(storageDir, BACKUP_STATUS_FILE), { force: true });
+    await restoreBackupStatus();
   });
 
   it("creates a checksummed manifest and verifies a copied SQLite backup", async () => {
@@ -313,6 +321,13 @@ it.skipIf(!isPostgres)(
         ["corrupt-fixture-migration"],
       );
       await failed("schema-migration");
+      await restored.unsafe("DELETE FROM drizzle.__drizzle_migrations");
+      const historyError = await rejectionOf(createBackupManifestForSource(source, { outputDirectory: folder }));
+      expect(historyError).toMatchObject({
+        code: "schema-migration",
+        message: "The restored PostgreSQL database has no applied migration history",
+      });
+      expect(await readBackupStatus()).toEqual(status);
       await restored.unsafe("ALTER TABLE users ADD COLUMN fixture_drift text");
       await failed("schema");
       await restored.unsafe("DROP TABLE workspace_variables");
@@ -339,7 +354,7 @@ it.skipIf(!isPostgres)(
       if (roleCreated) await admin.unsafe(`DROP ROLE "${roleName}"`);
       await admin.close();
       await rm(folder, { recursive: true, force: true });
-      await rm(join(storageDir, BACKUP_STATUS_FILE), { force: true });
+      await restoreBackupStatus();
     }
   },
   60_000,

@@ -766,6 +766,11 @@ async function createPostgresManifestForSource(
   persist: boolean,
 ): Promise<Readonly<{ manifest: BackupManifest; path: string | null }>> {
   const snapshot = await readPostgresSnapshot(targetUrl);
+  if (snapshot.migrationHashes.length === 0)
+    throw new BackupVerificationError(
+      "schema-migration",
+      "The restored PostgreSQL database has no applied migration history",
+    );
   const version = snapshot.migrationHashes.at(-1) ?? null;
   const migration = await postgresMigrationCheck(snapshot, version);
   if (migration.status === "fail")
