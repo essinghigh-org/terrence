@@ -37,23 +37,55 @@ const resource = (role: typeof organizationRoles.$inferSelect): Record<string, u
     "updated-at": new Date(role.updatedAt).toISOString(),
   },
 });
-const input = (
-  body: unknown,
-): { name: string; description: string | null; permissions: Record<string, boolean> } | null => {
-  const data = object(object(body)["data"]);
-  const attrs = object(data["attributes"]);
-  if (typeof attrs["name"] !== "string" || attrs["name"].trim() === "") return null;
-  const raw = object(attrs["permissions"]);
+type RoleInput = {
+  name: string;
+  description: string | null;
+  permissions: Record<string, boolean>;
+};
+
+function parsePermissions(value: unknown): Record<string, boolean> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const permissions: Record<string, boolean> = {};
-  for (const [key, value] of Object.entries(raw))
-    if (typeof value !== "boolean") return null;
-    else permissions[key] = value;
+  for (const [key, permission] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof permission !== "boolean") return null;
+    permissions[key] = permission;
+  }
+  return permissions;
+}
+
+function createInput(body: unknown): RoleInput | null {
+  const attrs = object(object(object(body)["data"])["attributes"]);
+  if (typeof attrs["name"] !== "string" || attrs["name"].trim() === "") return null;
+  const permissions = attrs["permissions"] === undefined ? {} : parsePermissions(attrs["permissions"]);
+  if (permissions === null) return null;
+  const description = attrs["description"];
+  if (description !== undefined && description !== null && typeof description !== "string") return null;
   return {
     name: attrs["name"].trim(),
-    description: typeof attrs["description"] === "string" ? attrs["description"].trim() || null : null,
+    description: typeof description === "string" ? description.trim() || null : null,
     permissions,
   };
-};
+}
+
+function patchInput(body: unknown): Partial<RoleInput> | null {
+  const attrs = object(object(object(body)["data"])["attributes"]);
+  const updates: Partial<RoleInput> = {};
+  if (attrs["name"] !== undefined) {
+    if (typeof attrs["name"] !== "string" || attrs["name"].trim() === "") return null;
+    updates.name = attrs["name"].trim();
+  }
+  if (attrs["description"] !== undefined) {
+    const description = attrs["description"];
+    if (description !== null && typeof description !== "string") return null;
+    updates.description = typeof description === "string" ? description.trim() || null : null;
+  }
+  if (attrs["permissions"] !== undefined) {
+    const permissions = parsePermissions(attrs["permissions"]);
+    if (permissions === null) return null;
+    updates.permissions = permissions;
+  }
+  return updates;
+}
 
 export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
   .use(authPlugin)
@@ -76,7 +108,7 @@ export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
         !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "manage-organization-access"))
       )
         return error(set, 404, "Organization not found");
-      const parsed = input(body);
+      const parsed = createInput(body);
       if (parsed === null) return error(set, 422, "name and boolean permissions are required");
       const role = {
         id: newResourceId("role"),
@@ -103,8 +135,8 @@ export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
         !(await checkOrganizationPermission(role.orgId, user?.id, orgId, teamId, "manage-organization-access"))
       )
         return error(set, 404, "Role not found");
-      const parsed = input(body);
-      if (parsed === null) return error(set, 422, "name and boolean permissions are required");
+      const parsed = patchInput(body);
+      if (parsed === null) return error(set, 422, "supplied role fields are invalid");
       const updated = { ...role, ...parsed, updatedAt: Date.now() };
       await db
         .update(organizationRoles)

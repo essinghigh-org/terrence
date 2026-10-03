@@ -22,6 +22,12 @@ import {
 import { claimSsoChallenge, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
 import { secureRequest } from "../lib/secure-request";
+import {
+  parseSsoContinuation,
+  resolveSsoContinuation,
+  ssoContinuationTarget,
+  type SsoContinuation,
+} from "../lib/sso-continuation";
 import { isUserLoginBlocked } from "./accounts";
 import { browserSessionUser, revokeBrowserSession } from "./accounts";
 
@@ -1024,7 +1030,7 @@ async function assertSamlChallengeBinding(args: {
   relayState: string | null;
   inResponseTo: string;
   assertionId: string;
-}): Promise<{ issuedTokenResponse: boolean }> {
+}): Promise<{ issuedTokenResponse: boolean; continuation: SsoContinuation | null }> {
   if (cookieValue(args.request, SAML_STATE_COOKIE) !== args.inResponseTo) {
     throw new SamlAuthError(400, "SAML response does not match the browser that started this sign-in.");
   }
@@ -1050,7 +1056,7 @@ async function assertSamlChallengeBinding(args: {
   ) {
     throw new SamlAuthError(400, "SAML assertion has already been used.");
   }
-  return { issuedTokenResponse };
+  return { issuedTokenResponse, continuation: parseSsoContinuation(authnChallenge?.["continuation"]) };
 }
 
 async function resolveSamlIdentity(args: {
@@ -1166,15 +1172,18 @@ async function syncSamlAccountState(args: {
     args.settings.attrSiteAdmin !== "" &&
     args.settings.siteAdminRole !== ""
   ) {
-    const noLongerSiteAdmin = user.isSiteAdmin && !args.siteAdminMatches;
-    if (args.siteAdminMatches && !user.isSiteAdmin) {
+    const manualSiteAdmin = user.isSiteAdmin === true && user.ssoSiteAdmin !== true && user.scimSiteAdmin !== true;
+    if (args.siteAdminMatches && !user.ssoSiteAdmin && !manualSiteAdmin) {
       await db.update(users).set({ isSiteAdmin: true, ssoSiteAdmin: true }).where(eq(users.id, user.id));
       await auditLog("sso-site-admin", "saml", user.id, user.id, null, {
         username: user.username,
         role: args.settings.siteAdminRole,
       });
-    } else if (noLongerSiteAdmin && user.ssoSiteAdmin) {
-      await db.update(users).set({ isSiteAdmin: false, ssoSiteAdmin: false }).where(eq(users.id, user.id));
+    } else if (!args.siteAdminMatches && user.ssoSiteAdmin) {
+      await db
+        .update(users)
+        .set({ isSiteAdmin: user.scimSiteAdmin === true, ssoSiteAdmin: false })
+        .where(eq(users.id, user.id));
       await auditLog("sso-site-admin-revoked", "saml", user.id, user.id, null, {
         username: user.username,
         role: args.settings.siteAdminRole,
@@ -1198,6 +1207,7 @@ async function completeSamlLogin(args: {
   user: Awaited<ReturnType<typeof syncSamlAccountState>>;
   settings: SamlRow;
   issuedTokenResponse: boolean;
+  continuation: SsoContinuation | null;
   set: SetObj;
   request: RequestInfo;
   server?: unknown;
@@ -1241,7 +1251,9 @@ async function completeSamlLogin(args: {
     clearSamlStateCookie(args.request, response, args.server);
     return response;
   }
-  return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
+  return respond(
+    ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: ssoContinuationTarget(args.continuation) }),
+  );
 }
 
 function appRedirect(set: SetObj): Response {
@@ -1337,6 +1349,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       if (!secureRequest(request, server)) {
         return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML SSO requires HTTPS."), 400);
       }
+      const continuation = await resolveSsoContinuation(query, request);
+      if ("error" in continuation) {
+        return ssoHtmlResponse(ssoHtmlPage("SAML SSO", continuation.error), 400);
+      }
       let target: URL;
       let entityId: string;
       let assertionConsumerService: string;
@@ -1366,6 +1382,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
         {
           relayState,
           tokenResponse: wantsToken(request, relayState),
+          continuation: continuation.value,
         },
         Date.now() + PENDING_AUTHNREQUEST_TTL_MS,
       );
@@ -1453,7 +1470,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
 
         assertSamlIssuer(assertionElement, settings);
         const { nameIdText, inResponseTo } = resolveBearerSubject({ assertionElement, assertionConsumerService, now });
-        const { issuedTokenResponse } = await assertSamlChallengeBinding({
+        const { issuedTokenResponse, continuation } = await assertSamlChallengeBinding({
           request,
           relayState,
           inResponseTo,
@@ -1474,7 +1491,15 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
           attrGroupsConfigured: identity.attrGroupsConfigured,
           groups: identity.groups,
         });
-        return await completeSamlLogin({ user: activeUser, settings, issuedTokenResponse, set, request, server });
+        return await completeSamlLogin({
+          user: activeUser,
+          settings,
+          issuedTokenResponse,
+          continuation,
+          set,
+          request,
+          server,
+        });
       } catch (error: unknown) {
         if (error instanceof SamlAuthError) return reject(error.message, error.status);
         throw error;

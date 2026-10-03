@@ -288,6 +288,104 @@ describe("OIDC SSO flow", () => {
     expect(location.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
+  test("resumes a signed-out Terraform PKCE login after OIDC authentication", async () => {
+    const verifier = "oidc-terraform-login-verifier-0123456789-abcdefghijklmnopqrstuvwxyz";
+    const cliState = `oidc-cli-state-${suffix}`;
+    const redirectUri = "http://localhost:10000/login";
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const authorization = new URLSearchParams({
+      client_id: "terraform-cli",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      redirect_uri: redirectUri,
+      response_type: "code",
+      state: cliState,
+    });
+    const oauthBegin = await app.handle(
+      new Request(`http://terrence.test/oauth/authorization?${authorization.toString()}`),
+    );
+    expect(oauthBegin.status).toBe(302);
+    const oauthState = cookieValue(oauthBegin, "terraform_oauth_state");
+    expect(oauthState).not.toBe("");
+
+    mockSubject = `oidc-cli-sub-${suffix}`;
+    mockUsername = `oidc-cli-${suffix}`;
+    mockEmail = `oidc-cli-${suffix}@example.com`;
+    const oidcAuth = await app.handle(
+      new Request(`http://terrence.test/users/oidc/auth?oauth_state=${encodeURIComponent(oauthState)}`, {
+        headers: { Cookie: `terraform_oauth_state=${oauthState}` },
+      }),
+    );
+    expect(oidcAuth.status).toBe(302);
+    const oidcStateCookie = cookieValue(oidcAuth, "terrence_oidc_state");
+    const idpResponse = await fetch(oidcAuth.headers.get("Location") ?? "", { redirect: "manual" });
+    expect(idpResponse.status).toBe(302);
+    const callbackUrl = idpResponse.headers.get("Location") ?? "";
+    const callback = await app.handle(
+      new Request(callbackUrl, {
+        headers: {
+          Cookie: `terrence_oidc_state=${oidcStateCookie}; terraform_oauth_state=${oauthState}`,
+        },
+      }),
+    );
+    expect(callback.status).toBe(200);
+    expect(await callback.clone().text()).toContain(`/oauth/authorization/complete?oauth_state=${oauthState}`);
+
+    const refreshCookie = cookieValue(callback, "terrence_refresh");
+    expect(refreshCookie).not.toBe("");
+    const complete = await app.handle(
+      new Request(`http://terrence.test/oauth/authorization/complete?oauth_state=${encodeURIComponent(oauthState)}`, {
+        headers: {
+          Cookie: `terraform_oauth_state=${oauthState}; terrence_refresh=${refreshCookie}`,
+        },
+      }),
+    );
+    expect(complete.status).toBe(302);
+    const cliCallback = new URL(complete.headers.get("Location") ?? "");
+    expect(cliCallback.origin + cliCallback.pathname).toBe(redirectUri);
+    expect(cliCallback.searchParams.get("state")).toBe(cliState);
+    const code = cliCallback.searchParams.get("code");
+    expect(code).not.toBeNull();
+
+    const exchange = await app.handle(
+      new Request("http://terrence.test/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "terraform-cli",
+          code: code ?? "",
+          redirect_uri: redirectUri,
+          code_verifier: verifier,
+        }).toString(),
+      }),
+    );
+    expect(exchange.status).toBe(200);
+    expect(typeof (await exchange.json()).access_token).toBe("string");
+  });
+
+  test("preserves a validated app deep link through OIDC and rejects an untrusted destination", async () => {
+    mockSubject = `oidc-deep-sub-${suffix}`;
+    mockUsername = `oidc-deep-${suffix}`;
+    mockEmail = `oidc-deep-${suffix}@example.com`;
+    const auth = await app.handle(new Request("http://terrence.test/users/oidc/auth?returnTo=%2Fapp%2Faccount"));
+    expect(auth.status).toBe(302);
+    const stateCookie = cookieValue(auth, "terrence_oidc_state");
+    const idpResponse = await fetch(auth.headers.get("Location") ?? "", { redirect: "manual" });
+    const callback = await app.handle(
+      new Request(idpResponse.headers.get("Location") ?? "", {
+        headers: { Cookie: `terrence_oidc_state=${stateCookie}` },
+      }),
+    );
+    expect(callback.status).toBe(200);
+    expect(await callback.text()).toContain("/app/account");
+
+    const untrusted = await app.handle(
+      new Request("http://terrence.test/users/oidc/auth?returnTo=https%3A%2F%2Fevil.example"),
+    );
+    expect(untrusted.status).toBe(400);
+  });
+
   test("completes the callback, verifies the ID token, and provisions a user", async () => {
     const { response } = await completeFlow();
     expect(response.status).toBe(200);

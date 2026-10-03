@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { ApiError, fetchApi, setAuthToken } from "@/lib/api";
-import { resolveReturnTarget } from "@/lib/return-to";
+import { resolveReturnTarget, ssoContinuationQuery } from "@/lib/return-to";
 import { isString } from "../lib/type-guards";
 
 function submitDisabled(
@@ -148,11 +148,13 @@ function SsoButtons({
   showLocalForm,
   samlEnabled,
   oidcEnabled,
+  continuationQuery,
 }: Readonly<{
   ssoEnabled: boolean;
   showLocalForm: boolean;
   samlEnabled: boolean;
   oidcEnabled: boolean;
+  continuationQuery: string;
 }>): React.JSX.Element | null {
   if (!ssoEnabled) return null;
   return (
@@ -166,7 +168,7 @@ function SsoButtons({
           variant="outline"
           className="w-full"
           onClick={(): void => {
-            window.location.href = "/users/saml/auth";
+            window.location.href = `/users/saml/auth${continuationQuery}`;
           }}
         >
           Sign in with SAML SSO
@@ -178,7 +180,7 @@ function SsoButtons({
           variant="outline"
           className="w-full"
           onClick={(): void => {
-            window.location.href = "/users/oidc/auth";
+            window.location.href = `/users/oidc/auth${continuationQuery}`;
           }}
         >
           Sign in with OpenID Connect
@@ -214,6 +216,8 @@ export function Login(): React.JSX.Element {
   // return-to helper so the flag can never act as an open redirect.
   const returnTo = searchParams.get("returnTo");
   const returnTarget = (): string => resolveReturnTarget(returnTo);
+
+  const continuationQuery = ssoContinuationQuery(oauthState, returnTo);
 
   const finishOauthHandshake = (): void => {
     if (oauthState === null || oauthState === "") return;
@@ -409,6 +413,7 @@ export function Login(): React.JSX.Element {
                 showLocalForm={showLocalForm}
                 samlEnabled={samlEnabled}
                 oidcEnabled={oidcEnabled}
+                continuationQuery={continuationQuery}
               />
             )}
             {(showLocalForm || mfaChallengeToken !== null) && (

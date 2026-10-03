@@ -11,6 +11,7 @@ import { databaseCurrentTimeMs, db } from "../db";
 import { controlPlaneNodes } from "../db/schema";
 import {
   controlPlaneCoordinatorSuspended,
+  controlPlaneCoordinatorElectionInFlight,
   isControlPlaneCoordinatorLeader,
   resignControlPlaneLease,
   resumeControlPlaneCoordinator,
@@ -117,6 +118,7 @@ function drainComplete(): boolean {
     activity.activeAssessments === 0 &&
     activity.activeDurableJobs === 0 &&
     !isControlPlaneCoordinatorLeader() &&
+    !controlPlaneCoordinatorElectionInFlight() &&
     controlPlaneCoordinatorSuspended()
   );
 }

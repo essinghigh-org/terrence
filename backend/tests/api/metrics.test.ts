@@ -379,7 +379,16 @@ describe("instance metrics", () => {
       "workspace-list",
     ]);
     expect(journeyLatency["workspace-list"]?.requests).toBeGreaterThanOrEqual(0);
-    expect(metrics["terrence_event_loop_delay"]).toMatchObject({ sample_count: expect.any(Number) });
+    const eventLoopDelay = metrics["terrence_event_loop_delay"] as {
+      sample_count: number;
+      mean_ms: number | null;
+      p50_ms: number | null;
+      p95_ms: number | null;
+    };
+    expect(typeof eventLoopDelay.sample_count).toBe("number");
+    expect(eventLoopDelay.p50_ms === null || typeof eventLoopDelay.p50_ms === "number").toBe(true);
+    expect(eventLoopDelay.mean_ms === null || typeof eventLoopDelay.mean_ms === "number").toBe(true);
+    expect(eventLoopDelay.p95_ms === null || typeof eventLoopDelay.p95_ms === "number").toBe(true);
     const worker = metrics["terrence_worker"] as {
       polls: number;
       last_poll_at: number | null;

@@ -190,6 +190,26 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
     expect(netCheck?.status).toBe("OK");
   });
 
+  test("public /readyz follows structured maintenance readiness while /healthz stays live", async () => {
+    const previousStatus = process.env["TERRENCE_NODE_STATUS"];
+    process.env["TERRENCE_NODE_STATUS"] = "maintenance";
+    try {
+      const ready = await app.handle(new Request("http://localhost/readyz"));
+      expect(ready.status).toBe(503);
+      expect(await ready.text()).toBe("not ready: draining");
+
+      const live = await app.handle(new Request("http://localhost/healthz"));
+      expect(live.status).toBe(200);
+
+      const structured = await systemRequest("/api/v1/health/readiness");
+      expect(structured.status).toBe(503);
+      expect((await structured.json()).status).toBe("DRAINING");
+    } finally {
+      if (previousStatus === undefined) Reflect.deleteProperty(process.env, "TERRENCE_NODE_STATUS");
+      else process.env["TERRENCE_NODE_STATUS"] = previousStatus;
+    }
+  });
+
   afterAll(async () => {
     if (createdTokenIds.length > 0) {
       await db.delete(systemApiTokens).where(inArray(systemApiTokens.id, createdTokenIds));
