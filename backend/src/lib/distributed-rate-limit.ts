@@ -72,7 +72,9 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
           try {
             const { db: db2 } = await import("../db");
             await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
-              sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`,
+              sql`DELETE FROM rate_limit_buckets
+                  WHERE left(bucket, ${bucketPrefix.length + 1}) = ${`${bucketPrefix}:`}
+                    AND window_start < ${staleBefore}`,
             );
           } catch {}
         }

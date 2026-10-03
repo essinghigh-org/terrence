@@ -2,7 +2,8 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { ssoChallenges, users } from "../../src/db/schema";
+import { apiTokens, refreshSessions, ssoChallenges, user2FA, users } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { generateTotpCode, generateTotpSecret, otpauthUrl, verifyTotp } from "../../src/lib/totp";
 
 async function api(
@@ -37,6 +38,50 @@ async function api(
     // non-JSON body
   }
   return { status: res.status, json };
+}
+
+for (const state of ["active", "expired", "revoked", "rotated"] as const) {
+  test(`MFA assurance updates only an active ${state} browser-session fixture`, async () => {
+    const id = `mfa-session-${crypto.randomUUID()}`;
+    const token = `user-${crypto.randomUUID()}`;
+    const refreshToken = `refresh-${crypto.randomUUID()}`;
+    const secret = generateTotpSecret();
+    const now = Date.now();
+    await db.insert(users).values({ id, username: id, passwordHash: "fixture" });
+    try {
+      await db.insert(apiTokens).values({ id, token: hashAuthenticationToken(token), userId: id });
+      await db.insert(user2FA).values({ userId: id, secret, enabled: false });
+      await db.insert(refreshSessions).values({
+        id,
+        userId: id,
+        familyId: id,
+        accessTokenId: id,
+        tokenHash: hashAuthenticationToken(refreshToken),
+        createdAt: now,
+        expiresAt: state === "expired" ? now - 1 : now + 60_000,
+        revokedAt: state === "revoked" ? now : null,
+        rotatedAt: state === "rotated" ? now : null,
+        mfaVerified: false,
+      });
+      const response = await app.handle(
+        new Request("http://localhost/api/v2/account/mfa/verify", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Cookie: `terrence_refresh=${refreshToken}`,
+            "Content-Type": "application/vnd.api+json",
+          },
+          body: JSON.stringify({ data: { attributes: { code: generateTotpCode(secret) } } }),
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect((await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.id, id) }))?.mfaVerified).toBe(
+        state === "active",
+      );
+    } finally {
+      await db.delete(users).where(eq(users.id, id));
+    }
+  });
 }
 
 // ── TOTP unit tests ──────────────────────────────────────────────────────────

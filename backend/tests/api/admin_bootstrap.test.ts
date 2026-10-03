@@ -355,9 +355,21 @@ describe("initial administrator bootstrap", () => {
 
       const bootstrapped = await bootstrapInitialAdmin();
       const beforeReset = await login("original-admin-password");
+      const { apiTokens, refreshSessions, users } = await import("./src/db/schema.ts");
+      const { eq, and, isNull } = await import("drizzle-orm");
+      const { putOAuthHandshakeState, peekOAuthHandshakeState } = await import("./src/lib/oauth-handshake.ts");
+      const admin = (await db.query.users.findMany())[0];
+      const previousToken = await db.query.apiTokens.findFirst({ where: eq(apiTokens.userId, admin.id) });
+      await db.insert(refreshSessions).values({ id: "reset-fixture-session", familyId: "reset-fixture-family", tokenHash: "reset-fixture-hash", userId: admin.id, accessTokenId: previousToken.id, expiresAt: Date.now()+60000, createdAt: Date.now() });
+      await putOAuthHandshakeState("tf-code:reset-fixture", Date.now()+60000, { userId: admin.id });
+      await putOAuthHandshakeState("tf-code:unrelated-fixture", Date.now()+60000, { userId: "unrelated-fixture" });
       process.env.TERRENCE_ADMIN_PASSWORD_RESET = "1";
       process.env.ADMIN_PASSWORD = "recovery-admin-password";
       const reset = await resetAdminPassword();
+      const previousTokens = await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, admin.id) });
+      const previousSessions = await db.query.refreshSessions.findMany({ where: and(eq(refreshSessions.userId, admin.id), isNull(refreshSessions.revokedAt)) });
+      const previousCode = await peekOAuthHandshakeState("tf-code:reset-fixture");
+      const unrelatedCode = await peekOAuthHandshakeState("tf-code:unrelated-fixture");
       const oldLogin = await login("original-admin-password");
       const newLogin = await login("recovery-admin-password");
       const stored = (await db.query.users.findMany())[0];
@@ -387,6 +399,10 @@ describe("initial administrator bootstrap", () => {
         bootstrapped,
         beforeReset,
         reset,
+        previousTokens: previousTokens.length,
+        previousSessions: previousSessions.length,
+        previousCodeRemoved: previousCode === undefined,
+        unrelatedCodeRetained: unrelatedCode !== undefined,
         oldLogin,
         newLogin,
         mustChangePassword: stored?.mustChangePassword ?? null,
@@ -404,6 +420,10 @@ describe("initial administrator bootstrap", () => {
       bootstrapped: "created",
       beforeReset: 200,
       reset: "reset",
+      previousTokens: 0,
+      previousSessions: 0,
+      previousCodeRemoved: true,
+      unrelatedCodeRetained: true,
       oldLogin: 401,
       newLogin: 200,
       mustChangePassword: true,

@@ -1,10 +1,17 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import jwt from "jsonwebtoken";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "../../src/db";
-import { organizations, runs, workspaces, workloadIdentityKeys, workloadIdentityTokens } from "../../src/db/schema";
+import {
+  organizations,
+  runs,
+  workspaces,
+  workloadIdentityKeys,
+  workloadIdentityLeases,
+  workloadIdentityTokens,
+} from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import {
   issueModuleTestIdentityToken,
@@ -41,6 +48,29 @@ afterEach(async (): Promise<void> => {
 });
 
 describe("workload identity", () => {
+  test("does not publish a generated key after its lease expires", async () => {
+    // The production database wrapper supports awaited transactions on both
+    // drivers; Drizzle's SQLite declaration still describes a sync callback.
+    const asyncDb = db as unknown as {
+      transaction: (callback: (tx: typeof db) => Promise<unknown>, options?: unknown) => Promise<unknown>;
+    };
+    const originalTransaction = asyncDb.transaction.bind(db);
+    const transaction = spyOn(asyncDb, "transaction").mockImplementation(async (callback, ...options) => {
+      await db
+        .update(workloadIdentityLeases)
+        .set({ leaseExpiresAt: Date.now() - 1 })
+        .where(eq(workloadIdentityLeases.id, "workload-identity-signing"));
+      return originalTransaction(callback, ...options);
+    });
+    try {
+      const rotation = rotateWorkloadIdentityKey();
+      expect(rotation).rejects.toThrow("Lost workload identity signing-key leadership");
+      await rotation.catch((): void => undefined);
+      expect(await db.query.workloadIdentityKeys.findMany()).toHaveLength(0);
+    } finally {
+      transaction.mockRestore();
+    }
+  });
   test("issues a module-test token with the documented subject and validity window", async () => {
     const runId = `module-run-${crypto.randomUUID()}`;
     await ensureTestRun(runId);

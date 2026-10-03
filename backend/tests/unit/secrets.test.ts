@@ -215,7 +215,48 @@ describe("password-derived KDF parameters", () => {
       const mod = await import("../../src/lib/secrets");
 
       expect(await mod.decryptSecret(envelope)).toBe(plaintext);
+      // Both readers share the warmed legacy key, without rereading salt or
+      // deriving it again for each state record.
+      rmSync(join(dir, ".encryption-salt"));
       expect(mod.decryptSecretSync(envelope, dir)).toBe(plaintext);
+      expect(mod.decryptSecretSync(envelope, dir)).toBe(plaintext);
+    } finally {
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads pre-installation-salt ciphertext without changing the write KDF", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "terrence-static-kdf-"));
+    const previousDir = process.env["STORAGE_DIR"];
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
+    const password = "static-compatibility-fixture";
+    process.env["STORAGE_DIR"] = dir;
+    process.env["ENCRYPTION_PASSWORD"] = password;
+    try {
+      const cipher = createCipheriv(
+        "aes-256-gcm",
+        scryptSync(password, "terrence:secrets:v1", 32),
+        Buffer.alloc(12, 3),
+      );
+      const ciphertext = Buffer.concat([cipher.update("historical secret", "utf8"), cipher.final()]);
+      const envelope = [
+        "enc:v1",
+        Buffer.alloc(12, 3).toString("base64"),
+        cipher.getAuthTag().toString("base64"),
+        ciphertext.toString("base64"),
+      ].join(":");
+      const mod = await import("../../src/lib/secrets");
+      expect(mod.decryptSecretSync(envelope, dir)).toBe("historical secret");
+      expect(existsSync(join(dir, ".encryption-salt"))).toBeFalse();
+      expect(await mod.decryptSecret(envelope)).toBe("historical secret");
+      const modern = await mod.encryptSecret("new secret");
+      expect(await mod.decryptSecret(modern)).toBe("new secret");
+      expect(mod.decryptSecretSync(modern, dir)).toBe("new secret");
+      expect(existsSync(join(dir, ".encryption-salt"))).toBeTrue();
     } finally {
       if (previousDir === undefined) delete process.env["STORAGE_DIR"];
       else process.env["STORAGE_DIR"] = previousDir;

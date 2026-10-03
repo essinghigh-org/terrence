@@ -348,7 +348,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     const issued = await db.transaction(async (tx): Promise<boolean> => {
       const currentUser = await tx.query.users.findFirst({ where: eq(users.id, entry.userId) });
-      if (currentUser === undefined || isUserLoginBlocked(currentUser)) return false;
+      if (currentUser === undefined || isUserLoginBlocked(currentUser) || currentUser.mustChangePassword) return false;
 
       // Acquire a row lock on PostgreSQL and a serialized write slot on
       // SQLite without overwriting a suspension committed by another request.
@@ -357,7 +357,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
         .set({ isSuspended: false })
         .where(and(eq(users.id, currentUser.id), or(eq(users.isSuspended, false), isNull(users.isSuspended))));
       const eligibleUser = await tx.query.users.findFirst({ where: eq(users.id, currentUser.id) });
-      if (eligibleUser === undefined || isUserLoginBlocked(eligibleUser)) return false;
+      if (eligibleUser === undefined || isUserLoginBlocked(eligibleUser) || eligibleUser.mustChangePassword)
+        return false;
 
       await tx.insert(apiTokens).values({
         id: crypto.randomUUID(),

@@ -14,15 +14,29 @@
 // union type on read. Rows carry an `expiresAt` so a periodic sweep (pruneExpired)
 // can drop stale handshakes, and read paths filter on it so an expired state can
 // never be resurrected.
-import { and, eq, gt, lt, sql } from "drizzle-orm";
+import { and, eq, gt, like, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { oauthHandshakeStates } from "../db/schema";
 import { decryptSecret, encryptSecret } from "./secrets";
+import { jsonExtract } from "./db-json";
 
 export type OAuthHandshakePayload = Record<string, unknown>;
 
 export const TERRAFORM_PENDING_AUTH_PREFIX = "tf-pending:";
 export const TERRAFORM_AUTH_CODE_PREFIX = "tf-code:";
+
+/** Password recovery/rotation invalidates authorizations issued with old credentials. */
+export async function revokeUserOAuthAuthorizationCodes(transaction: unknown, userId: string): Promise<void> {
+  const tx = transaction as typeof db;
+  await tx
+    .delete(oauthHandshakeStates)
+    .where(
+      and(
+        like(oauthHandshakeStates.id, `${TERRAFORM_AUTH_CODE_PREFIX}%`),
+        eq(jsonExtract(oauthHandshakeStates.payload, "$.userId"), userId),
+      ),
+    );
+}
 
 /** Persist a handshake. Overwrites any prior state for the same id. */
 export async function putOAuthHandshakeState(
