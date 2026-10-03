@@ -7857,15 +7857,10 @@ async function errorInterruptedAssessments(): Promise<number> {
   return assessmentsErrored;
 }
 
-async function reconcileTerminalRunWorkspaceLocks(databaseNow?: number): Promise<number> {
-  const currentNow = databaseNow ?? (await databaseCurrentTimeMs());
-  const heldLocks = await db.query.workspaces.findMany({
-    where: and(eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "run"), isNotNull(workspaces.lockOwnerId)),
-    columns: { id: true, lockOwnerId: true },
-    limit: 500,
-  });
-  if (heldLocks.length === 0) return 0;
-
+async function reconcileTerminalRunWorkspaceLockPage(
+  heldLocks: readonly Readonly<{ id: string; lockOwnerId: string | null }>[],
+  currentNow: number,
+): Promise<number> {
   const ownerIds = [
     ...new Set(
       heldLocks.map((workspace): string | null => workspace.lockOwnerId).filter((id): id is string => id !== null),
@@ -7909,6 +7904,30 @@ async function reconcileTerminalRunWorkspaceLocks(databaseNow?: number): Promise
       )
       .returning({ id: workspaces.id });
     released += updated.length;
+  }
+  return released;
+}
+async function reconcileTerminalRunWorkspaceLocks(databaseNow?: number): Promise<number> {
+  const currentNow = databaseNow ?? (await databaseCurrentTimeMs());
+  let cursor: string | undefined;
+  let released = 0;
+  for (;;) {
+    const heldLocks = await db.query.workspaces.findMany({
+      where: and(
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "run"),
+        isNotNull(workspaces.lockOwnerId),
+        cursor === undefined ? undefined : gt(workspaces.id, cursor),
+      ),
+      columns: { id: true, lockOwnerId: true },
+      orderBy: [asc(workspaces.id)],
+      limit: 500,
+    });
+    const tail = heldLocks.at(-1);
+    if (tail === undefined) break;
+    cursor = tail.id;
+    released += await reconcileTerminalRunWorkspaceLockPage(heldLocks, currentNow);
+    if (heldLocks.length < 500) break;
   }
   return released;
 }

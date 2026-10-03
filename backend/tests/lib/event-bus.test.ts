@@ -123,7 +123,6 @@ postgresTest("a notification read completing after shutdown cannot dispatch to l
 });
 
 postgresTest("live notifications cannot advance replay past an older missed durable event", async () => {
-  await db.delete(controlEvents);
   await startDistributedEventBus();
 
   const topic = `event-replay-${crypto.randomUUID()}`;
@@ -161,7 +160,7 @@ postgresTest("live notifications cannot advance replay past an older missed dura
       originInstanceId: "remote-instance",
       topic,
       payload: { marker: "old" },
-      createdAt: now - 120_000,
+      createdAt: now,
     });
     await notifyPostgresChannel(channel, oldId);
     await Promise.all([liveReadFailed, catchUpReadFailed]);
@@ -178,7 +177,7 @@ postgresTest("live notifications cannot advance replay past an older missed dura
     originInstanceId: "remote-instance",
     topic,
     payload: { marker: "new" },
-    createdAt: now,
+    createdAt: now + 120_000,
   });
   await notifyPostgresChannel(channel, newId);
   await waitUntil((): boolean => received.includes("new"));

@@ -259,4 +259,62 @@ describe("expired local execution recovery", () => {
     expect(recovered?.lockOwnerType).toBeNull();
     expect(recovered?.lockOwnerId).toBeNull();
   });
+
+  test("recovery pages past a full batch of live owners to release a later terminal lock", async () => {
+    const held = Array.from({ length: 500 }, (_, index) => ({
+      workspaceId: `aaa-live-lock-${suffix}-${String(index).padStart(3, "0")}`,
+      runId: `run-live-lock-${suffix}-${index}`,
+    }));
+    const terminalWorkspace = `zzz-terminal-lock-${suffix}`;
+    const terminalRun = `run-terminal-lock-${suffix}`;
+    const allWorkspaceIds = [...held.map((item) => item.workspaceId), terminalWorkspace];
+    const allRunIds = [...held.map((item) => item.runId), terminalRun];
+    const liveUntil = Date.now() + 120_000;
+    try {
+      for (let offset = 0; offset < held.length; offset += 100) {
+        const batch = held.slice(offset, offset + 100);
+        await db.insert(workspaces).values(
+          batch.map((item) => ({
+            ...executionWorkspace(item.workspaceId, item.runId, liveUntil),
+            locked: true,
+            lockOwnerType: "run",
+            lockOwnerId: item.runId,
+          })),
+        );
+        await db
+          .insert(runs)
+          .values(batch.map((item) => executionRun(item.runId, item.workspaceId, "planning", "plan", liveUntil)));
+      }
+      await db.insert(workspaces).values({
+        id: terminalWorkspace,
+        orgId,
+        name: terminalWorkspace,
+        locked: true,
+        lockOwnerType: "run",
+        lockOwnerId: terminalRun,
+      });
+      await db.insert(runs).values({
+        id: terminalRun,
+        workspaceId: terminalWorkspace,
+        status: "applied",
+        createdAt: Date.now(),
+      });
+
+      await reconcileInterruptedLocalRuns();
+      const recovered = await db.query.workspaces.findFirst({ where: eq(workspaces.id, terminalWorkspace) });
+      expect(recovered).toMatchObject({ locked: false, lockOwnerId: null, lockOwnerType: null });
+      const active = await db.query.workspaces.findMany({
+        where: inArray(
+          workspaces.id,
+          held.map((item) => item.workspaceId),
+        ),
+        columns: { locked: true },
+      });
+      expect(active).toHaveLength(500);
+      expect(active.every((workspace) => workspace.locked)).toBe(true);
+    } finally {
+      await db.delete(runs).where(inArray(runs.id, allRunIds));
+      await db.delete(workspaces).where(inArray(workspaces.id, allWorkspaceIds));
+    }
+  });
 });
