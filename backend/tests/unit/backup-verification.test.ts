@@ -253,14 +253,15 @@ it.skipIf(!isPostgres)(
         ciphertext.toString("base64"),
       ].join(":");
       await restored.unsafe("INSERT INTO organizations (id, name) VALUES ($1, $2)", ["org-backup", "backup"]);
-      await restored.unsafe("INSERT INTO workspaces (id, org_id, name) VALUES ($1, $2, $3)", [
+      await restored.unsafe("INSERT INTO workspaces (id, org_id, name, created_at) VALUES ($1, $2, $3, $4)", [
         "ws-backup",
         "org-backup",
         "backup",
+        Date.now(),
       ]);
       await restored.unsafe(
-        "INSERT INTO configuration_versions (id, workspace_id, status, archive_path) VALUES ($1, $2, $3, $4)",
-        ["cv-backup", "ws-backup", "uploaded", archivePath],
+        "INSERT INTO configuration_versions (id, workspace_id, status, archive_path, created_at) VALUES ($1, $2, $3, $4, $5)",
+        ["cv-backup", "ws-backup", "uploaded", archivePath, Date.now()],
       );
       await restored.unsafe(
         "INSERT INTO workspace_variables (id, workspace_id, key, value, value_encrypted, sensitive) VALUES ($1, $2, $3, $4, $5, TRUE)",
