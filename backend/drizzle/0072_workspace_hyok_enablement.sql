@@ -1,0 +1,1 @@
+ALTER TABLE `workspaces` ADD `hyok_enabled` integer DEFAULT false NOT NULL;

@@ -56,6 +56,7 @@ The manifest's `route_ownership` map covers every route module registered by `ba
 Certain callbacks and surfaces exist solely because client protocols require an acknowledgment or schema presence, rather than altering backend execution:
 
 - **Module artifacts callback (`POST /api/v2/runs/:run_id/modules`):** Sent by the Terraform CLI and `tfc-agent` during execution. Terrence acknowledges the payload with HTTP 201 (`{ data: { modules: [] } }`) to prevent client execution failure, while intentionally discarding the metadata rather than duplicating repository state.
+- **Workspace HYOK enablement (`tfe_workspace_hyok_enabled`):** The workspace `hyok-enabled` flag persists, defaults to false, and can only move to true. Destroying the provider resource leaves the flag enabled. This is headless migration metadata; it does not configure an external KMS, wrap state keys, or change Terrence's encryption.
 - **Headless provider resources (`provider-sets`, `hyok`, `token-ttl`, `admin-registry-sharing`):** Retained solely to allow `hashicorp/tfe` configuration to apply without errors when migrating existing workspace definitions.
 
 ## State representation

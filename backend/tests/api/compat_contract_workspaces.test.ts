@@ -136,6 +136,58 @@ describe("remote-workflow workspaces contract", () => {
     expect(resource.attributes["description"]).toBe("updated");
   });
 
+  it("persists provider HYOK metadata and forbids reversing enablement", async () => {
+    const name = `hyok-${seed.suffix}`;
+    const created = await expectSuccessResponse(
+      await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ data: { type: "workspaces", attributes: { name } } }),
+      }),
+      201,
+      "workspaces",
+    );
+    const byId = `/api/v2/workspaces/${created.id}`;
+    const byName = `/api/v2/organizations/${seed.orgName}/workspaces/${name}`;
+    const patch = (path: string, attributes: Readonly<Record<string, unknown>>): Promise<Response> =>
+      request(path, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ data: { type: "workspaces", attributes } }),
+      });
+    expect(created.attributes["hyok-enabled"]).toBe(false);
+    for (const value of ["true", 1, null]) await expectErrorResponse(await patch(byId, { "hyok-enabled": value }), 422);
+    await expectErrorResponse(
+      await request(byId, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { type: "workspaces", attributes: { "hyok-enabled": true } } }),
+      }),
+      404,
+    );
+    const [settingsResponse, enabledResponse] = await Promise.all([
+      patch(byName, { "global-remote-state": true }),
+      patch(byId, { "hyok-enabled": true }),
+    ]);
+    expect(settingsResponse.status).toBe(200);
+    const enabled = await expectSuccessResponse(enabledResponse, 200, "workspaces");
+    expect(enabled.attributes["hyok-enabled"]).toBe(true);
+    const responses = await Promise.all([
+      patch(byName, { description: "retained enablement" }),
+      patch(byId, { "hyok-enabled": true }),
+      patch(byName, { "hyok-enabled": false, description: "must not save" }),
+    ]);
+    expect(responses.map((response): number => response.status)).toEqual([200, 200, 422]);
+    for (const path of [byId, byName]) {
+      const resource = await expectSuccessResponse(await request(path, { headers }), 200, "workspaces");
+      expect(resource.attributes["hyok-enabled"]).toBe(true);
+    }
+    const persisted = await db.query.workspaces.findFirst({ where: eq(workspaces.id, created.id) });
+    expect(persisted?.hyokEnabled).toBe(true);
+    expect(persisted?.globalRemoteState).toBe(true);
+    expect(persisted?.description).not.toBe("must not save");
+  });
+
   it("validates and persists lock reasons, then clears them when unlocked", async () => {
     const lockWorkspaceId = `lock-workspace-${seed.suffix}`;
     await db.insert(workspaces).values({ id: lockWorkspaceId, name: `lock-${seed.suffix}`, orgId: seed.orgId });

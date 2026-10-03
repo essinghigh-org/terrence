@@ -3,7 +3,7 @@
   "provider": "hashicorp/tfe v0.81.0",
   "resource_count": 73,
   "data_source_count": 43,
-  "resources_covered": 72,
+  "resources_covered": 73,
   "data_sources_covered": 43,
   "resources": [
     {
@@ -338,7 +338,7 @@
     },
     {
       "name": "tfe_workspace_hyok_enabled",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "602aea4c4fb6d88c47c70c0b0b6ef131411b0f31322293618982886f4e05c610"
     },
     {

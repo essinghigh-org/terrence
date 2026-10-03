@@ -3044,6 +3044,7 @@ export const workspaces = pgTable(
     sourceName: text("source_name"),
     sourceUrl: text("source_url"),
     source: text("source").default("tfe-api"),
+    hyokEnabled: boolean("hyok_enabled").notNull().default(false),
     autoApply: boolean("auto_apply").default(false),
     autoApplyRunTrigger: boolean("auto_apply_run_trigger").default(false),
     fileTriggersEnabled: boolean("file_triggers_enabled").default(true),

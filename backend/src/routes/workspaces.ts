@@ -2382,7 +2382,8 @@ function validateCreatePreamble(attributes: Readonly<Record<string, unknown>>): 
   if (globalRemoteState && projectRemoteState) {
     return "global-remote-state and project-remote-state cannot both be true";
   }
-  return validateOwnershipFields(attributes);
+  const hyokError = validateHyokField(attributes);
+  return hyokError ?? validateOwnershipFields(attributes);
 }
 
 type ActorScope = Readonly<{
@@ -2675,6 +2676,7 @@ function buildWorkspaceCreateRow(args: WorkspaceCreateRowArgs): typeof workspace
     orgId: args.orgId,
     description: typeof description === "string" ? description : null,
     projectId: args.project.id,
+    hyokEnabled: attributes["hyok-enabled"] === true,
     autoApply: booleanUpdateField(attributes["auto-apply"], false),
     terraformVersion: typeof terraformVersion === "string" ? terraformVersion : "latest",
     workingDirectory: args.dir,
@@ -3042,7 +3044,17 @@ function validateOwnershipFields(attributes: Readonly<Record<string, unknown>>):
   return null;
 }
 
+function validateHyokField(attributes: Readonly<Record<string, unknown>>): string | null {
+  const value = attributes["hyok-enabled"];
+  if (value !== undefined && typeof value !== "boolean") return "hyok-enabled must be a boolean";
+  return null;
+}
+
 function validateWorkspaceUpdateScalars(args: WorkspaceUpdateScalars): string | null {
+  const hyokError = validateHyokField(args.attributes);
+  if (hyokError !== null) return hyokError;
+  if (args.attributes["hyok-enabled"] === false && args.workspace.hyokEnabled)
+    return "HYOK enablement cannot be disabled";
   const flagsError = validateRemoteStateFlags(args.attributes, args.workspace);
   if (flagsError !== null) return flagsError;
   if (args.tagBindingsData !== undefined && args.tagBindings === undefined) return "Invalid tag bindings";
@@ -3322,6 +3334,8 @@ function buildWorkspaceUpdateRow(args: WorkspaceUpdateRowArgs): Partial<typeof w
     name: args.name ?? workspace.name,
     description: nullableStringUpdateField(attributes["description"], workspace.description),
     projectId: args.newProjectId,
+    // Never copy a stale false flag into an unrelated concurrent update.
+    ...(attributes["hyok-enabled"] === true ? { hyokEnabled: true } : {}),
     autoApply: booleanUpdateField(attributes["auto-apply"], workspace.autoApply),
     autoApplyRunTrigger: booleanUpdateField(attributes["auto-apply-run-trigger"], workspace.autoApplyRunTrigger),
     fileTriggersEnabled: booleanUpdateField(attributes["file-triggers-enabled"], workspace.fileTriggersEnabled),
@@ -3363,6 +3377,7 @@ type WorkspaceUpdateTxArgs = Readonly<{
   vcsRepoFallback: DeepReadonly<WorkspaceVcsRepo> | null | undefined;
   tagBindings: readonly { key: string; value: string }[] | undefined;
   workspaceId: string;
+  rejectsEnabledHyok: boolean;
 }>;
 
 async function applyWorkspaceUpdateTx(tx: unknown, args: WorkspaceUpdateTxArgs): Promise<string | null> {
@@ -3372,7 +3387,14 @@ async function applyWorkspaceUpdateTx(tx: unknown, args: WorkspaceUpdateTxArgs):
     if ("error" in normalized) return normalized.error;
     args.row.vcsRepo = normalized.value;
   }
-  await database.update(workspaces).set(args.row).where(eq(workspaces.id, args.workspaceId));
+  const changed = await database
+    .update(workspaces)
+    .set(args.row)
+    .where(
+      and(eq(workspaces.id, args.workspaceId), args.rejectsEnabledHyok ? eq(workspaces.hyokEnabled, false) : undefined),
+    )
+    .returning({ id: workspaces.id });
+  if (changed.length === 0) return "HYOK enablement cannot be disabled";
   if (args.tagBindings !== undefined) {
     await database.delete(workspaceTags).where(eq(workspaceTags.workspaceId, args.workspaceId));
     if (args.tagBindings.length > 0) {
@@ -3553,14 +3575,56 @@ async function lockedWorkspaceResource(
   );
 }
 
+async function persistHyokOnlyUpdate(
+  attributes: Readonly<Record<string, unknown>>,
+  relationships: Readonly<Record<string, unknown>>,
+  workspaceId: string,
+): Promise<{ saved: typeof workspaces.$inferSelect } | { error: string } | null> {
+  const hyokEnabled = attributes["hyok-enabled"];
+  if (
+    typeof hyokEnabled !== "boolean" ||
+    Object.keys(attributes).length !== 1 ||
+    Object.keys(relationships).length !== 0
+  )
+    return null;
+  // The provider manages enablement separately from workspace settings.
+  // Write only its column so a concurrent settings PATCH keeps its values.
+  const [saved] = await db
+    .update(workspaces)
+    .set({ hyokEnabled })
+    .where(and(eq(workspaces.id, workspaceId), hyokEnabled ? undefined : eq(workspaces.hyokEnabled, false)))
+    .returning();
+  return saved === undefined ? { error: "HYOK enablement cannot be disabled" } : { saved };
+}
+
+type WorkspaceUpdatePrincipal = Readonly<{
+  userId: string | undefined;
+  principalOrgId: string | null;
+  teamId: string | null;
+}>;
+
+async function workspaceUpdateResultResponse(
+  result: DeepReadonly<{ saved: typeof workspaces.$inferSelect } | { error: string }>,
+  defaultIacBinary: string | null | undefined,
+  principal: WorkspaceUpdatePrincipal,
+  set: SetObj,
+  orgName?: string | null,
+): Promise<unknown> {
+  if ("error" in result) return failWorkspaceUpdate(set, 422, result.error);
+  return {
+    data: await workspaceResource(
+      result.saved,
+      defaultIacBinary,
+      await resourcePermissions(result.saved, principal.userId, principal.principalOrgId, principal.teamId),
+      workspaceOrgOption(orgName),
+    ),
+  };
+}
+
 async function updateWorkspaceResponse(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   defaultIacBinary: string | null | undefined,
-  principal: Readonly<{
-    userId: string | undefined;
-    principalOrgId: string | null;
-    teamId: string | null;
-  }>,
+  principal: WorkspaceUpdatePrincipal,
   body: unknown,
   set: SetObj,
   orgName?: string | null,
@@ -3577,6 +3641,9 @@ async function updateWorkspaceResponse(
     name: parsed.name,
   });
   if (scalarsError !== null) return failWorkspaceUpdate(set, 422, scalarsError);
+
+  const hyokOnly = await persistHyokOnlyUpdate(attributes, parsed.rels, workspace.id);
+  if (hyokOnly !== null) return workspaceUpdateResultResponse(hyokOnly, defaultIacBinary, principal, set, orgName);
 
   const workingDir = await resolveUpdateWorkingDirectory(attributes, workspace);
   if ("error" in workingDir) return failWorkspaceUpdate(set, 422, workingDir.error);
@@ -3660,15 +3727,7 @@ async function updateWorkspaceResponse(
     vcsRepoFallback: workspace.vcsRepo,
     tagBindings: parsed.tagBindings,
     workspaceId: workspace.id,
+    rejectsEnabledHyok: attributes["hyok-enabled"] === false,
   });
-  if ("error" in persisted) return failWorkspaceUpdate(set, 422, persisted.error);
-  const saved = persisted.saved;
-  return {
-    data: await workspaceResource(
-      saved,
-      defaultIacBinary,
-      await resourcePermissions(saved, principal.userId, principal.principalOrgId, principal.teamId),
-      workspaceOrgOption(orgName),
-    ),
-  };
+  return workspaceUpdateResultResponse(persisted, defaultIacBinary, principal, set, orgName);
 }

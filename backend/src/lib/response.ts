@@ -311,6 +311,7 @@ function buildWorkspaceCoreAttributes(workspace: WorkspaceParam): Record<string,
 function buildWorkspaceFlagAttributes(workspace: WorkspaceParam): Record<string, unknown> {
   return {
     "allow-destroy-plan": workspace.allowDestroyPlan ?? true,
+    "hyok-enabled": workspace.hyokEnabled === true,
     "auto-apply": workspace.autoApply === true,
     "auto-apply-run-trigger": workspace.autoApplyRunTrigger === true,
     "file-triggers-enabled": workspace.fileTriggersEnabled ?? true,
