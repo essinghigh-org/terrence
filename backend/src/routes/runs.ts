@@ -613,7 +613,9 @@ async function includedConfigurationVersionsForRuns(
     if (run.configurationVersionId === null) continue;
     const configuration = byId.get(run.configurationVersionId);
     if (configuration === undefined) continue;
-    resources.push(configurationVersionResource(configuration, request));
+    // A run include is a read representation. Upload capabilities are issued
+    // by the configuration-version endpoints after checking planning access.
+    resources.push(configurationVersionResource(configuration, request, false));
     if (includes.has("configuration_version.ingress_attributes") && configurationVersionHasIngressData(configuration)) {
       resources.push(configurationVersionIngressResource(configuration));
     }

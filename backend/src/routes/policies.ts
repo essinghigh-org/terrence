@@ -374,6 +374,7 @@ function normalizePoliciesPath(input: unknown): Readonly<{ value: string | null 
 function policySetVersionResource(
   version: PolicySetVersionItem,
   request: Readonly<{ readonly url: string }>,
+  includeUploadUrl = false,
 ): Record<string, unknown> {
   const uploadPath = `/api/v2/policy-set-versions/${version.id}/upload`;
   const statusTimestamps =
@@ -400,7 +401,7 @@ function policySetVersionResource(
     },
     links: {
       self: `/api/v2/policy-set-versions/${version.id}`,
-      ...(version.status === "pending" && version.source === "tfe-api"
+      ...(includeUploadUrl && version.status === "pending" && version.source === "tfe-api"
         ? { upload: signedApiURL(request, uploadPath, "PUT", 3600) }
         : {}),
     },
@@ -1663,7 +1664,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       } satisfies typeof policySetVersions.$inferInsert;
       await db.insert(policySetVersions).values(version);
       (set as { status: number }).status = 201;
-      return { data: policySetVersionResource(version, request) };
+      return { data: policySetVersionResource(version, request, true) };
     },
   )
   .get(
@@ -1689,7 +1690,14 @@ export const policyRoutes = new Elysia({ name: "policies" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      return { data: policySetVersionResource(version, request) };
+      const canUpload = await checkOrganizationPermission(
+        policySet.orgId,
+        user?.id,
+        tokenOrgId,
+        tokenTeamId ?? null,
+        "manage-policies",
+      );
+      return { data: policySetVersionResource(version, request, canUpload) };
     },
   )
   .put(

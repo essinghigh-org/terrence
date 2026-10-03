@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { configurationVersions, workspaces } from "../../src/db/schema";
+import { apiTokens, configurationVersions, workspaces } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import {
   cleanupSeed,
   expectCollection,
@@ -69,6 +70,28 @@ describe("remote-workflow configuration versions contract", () => {
     const pending = await showResponse.json();
     expect(pending.data.attributes["upload-url"]).toBeTypeOf("string");
     const refreshedUploadUrl = pending.data.attributes["upload-url"] as string;
+    const readerId = `cv-reader-${crypto.randomUUID()}`;
+    const readerToken = `cv-reader-${crypto.randomUUID()}`;
+    await db.insert(apiTokens).values({
+      id: readerId,
+      userId: seed.userId,
+      token: hashAuthenticationToken(readerToken),
+      scopes: JSON.stringify({ version: 1, orgs: [seed.orgId], permissions: { "workspaces:read": true } }),
+      expiresAt: Date.now() + 60_000,
+    });
+    try {
+      const read = await request(`/api/v2/configuration-versions/${cvId}`, { headers: jsonHeaders(readerToken) });
+      expect(read.status).toBe(200);
+      expect((await read.json()).data.attributes["upload-url"]).toBeUndefined();
+      const list = await request(`/api/v2/workspaces/${workspaceId}/configuration-versions`, {
+        headers: jsonHeaders(readerToken),
+      });
+      expect(list.status).toBe(200);
+      const listed = (await list.json()) as { data: { id: string; attributes: Record<string, unknown> }[] };
+      expect(listed.data.find((resource): boolean => resource.id === cvId)?.attributes["upload-url"]).toBeUndefined();
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, readerId));
+    }
     const upload = await request(refreshedUploadUrl, {
       method: "PUT",
       headers: { Authorization: `Bearer ${seed.token}`, "Content-Type": "application/octet-stream" },
