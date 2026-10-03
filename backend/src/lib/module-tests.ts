@@ -207,12 +207,21 @@ async function executeTerraformTest(
 ): Promise<TerraformTestProcessResult> {
   const processHandle =
     sandbox === null
-      ? Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" })
-      : sandbox.spawnGeneric(args, { cwd: root, env: environment, detached: false });
+      ? Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe", detached: true })
+      : sandbox.spawnGeneric(args, { cwd: root, env: environment, detached: true });
   const abort = (): void => {
-    processHandle.kill();
+    try {
+      // Each test owns a process group, including provider/local-exec children.
+      process.kill(-processHandle.pid, "SIGKILL");
+    } catch {
+      // Already exited, or a platform without POSIX process-group signals.
+      if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
+    }
   };
-  if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
+  if (signal !== undefined) {
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  }
   let exitCode: number;
   let stdout: string;
   let stderr: string;
@@ -223,7 +232,7 @@ async function executeTerraformTest(
       new Response(processHandle.stderr).text(),
     ]);
   } finally {
-    if (processHandle.exitCode === null) processHandle.kill();
+    abort();
     signal?.removeEventListener("abort", abort);
   }
   return { exitCode, stdout, stderr };

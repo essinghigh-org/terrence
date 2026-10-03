@@ -2937,6 +2937,9 @@ export const workloadIdentityTokens = pgTable(
   },
   (table) => [
     index("workload_identity_tokens_run_idx").on(table["runId"], table["expiresAt"]),
+    index("workload_identity_tokens_execution_idx").on(table["executionId"]),
+    index("workload_identity_tokens_module_test_idx").on(table["moduleTestRunId"]),
+    index("workload_identity_tokens_assessment_idx").on(table["assessmentResultId"]),
     index("workload_identity_tokens_expiry_idx").on(table["expiresAt"], table["revokedAt"]),
   ],
 );

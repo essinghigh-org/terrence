@@ -93,9 +93,9 @@ Outbound requests (notifications, avatars, VCS fetches) follow safe URL rules:
 - Audit strict mode records sensitive reads. See [Audit trail](audit-trail).
 
 Encryption is artifact-specific. State payloads, sensitive variable values, and
-recovery captures use authenticated encryption; logs, plans, configuration
-archives, generated configuration, and AI explanations remain plaintext private
-artifacts. See the [operations storage table](operations#storage-layout) before
+recovery captures use authenticated encryption. Saved binary plans use encrypted
+envelopes; raw and agent plan JSON, logs, configuration archives, generated
+configuration, and AI explanations remain plaintext private artifacts. See the [operations storage table](operations#storage-layout) before
 designing backup or access controls.
 
 ## IP allowlists

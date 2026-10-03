@@ -1,0 +1,3 @@
+CREATE INDEX `workload_identity_tokens_execution_idx` ON `workload_identity_tokens` (`execution_id`);--> statement-breakpoint
+CREATE INDEX `workload_identity_tokens_module_test_idx` ON `workload_identity_tokens` (`module_test_run_id`);--> statement-breakpoint
+CREATE INDEX `workload_identity_tokens_assessment_idx` ON `workload_identity_tokens` (`assessment_result_id`);
