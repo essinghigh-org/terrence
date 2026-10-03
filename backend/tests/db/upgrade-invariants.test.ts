@@ -193,7 +193,14 @@ for (const count of new Set([1, Math.max(1, journal.entries.length - 2), Math.ma
       }
 
       await migrate(bundled);
+      expect(await execute("SELECT hyok_enabled FROM workspaces WHERE id = $1", [workspaceId])).toEqual([
+        { hyok_enabled: postgres ? false : 0 },
+      ]);
+      await execute("UPDATE workspaces SET hyok_enabled = TRUE WHERE id = $1", [workspaceId]);
       await migrate(bundled);
+      expect(await execute("SELECT hyok_enabled FROM workspaces WHERE id = $1", [workspaceId])).toEqual([
+        { hyok_enabled: postgres ? true : 1 },
+      ]);
       if (hasWorkloadTokens) {
         const retained = await execute(
           "SELECT jti, execution_id, module_test_run_id, assessment_result_id FROM workload_identity_tokens WHERE jti = $1",

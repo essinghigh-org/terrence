@@ -142,6 +142,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_gcp_oidc_configuration.gcp_oidc",
   "tfe_vault_oidc_configuration.vault_oidc",
   "tfe_hyok_configuration.hyok",
+  "tfe_workspace_hyok_enabled.ws_hyok",
   "tfe_saml_settings.saml",
   "tfe_scim_settings.scim",
   "tfe_scim_token.scim_tok",
@@ -658,6 +659,10 @@ resource "tfe_workspace" "ws" {
   project_id   = tfe_project.proj.id
   auto_apply   = true
   force_delete = true
+}
+
+resource "tfe_workspace_hyok_enabled" "ws_hyok" {
+  workspace_id = tfe_workspace.ws.id
 }
 
 resource "tfe_workspace" "ws2" {
@@ -1640,6 +1645,29 @@ describe("tfe provider e2e", () => {
           cliOk(apply, "apply");
           expect(apply.out).toContain("Apply complete");
 
+          lifecycleStage = "irreversible workspace HYOK metadata lifecycle";
+          const workspaceHyokPath = `/api/v2/organizations/pe2e-org-${suffix}/workspaces/pe2e-ws-${suffix}`;
+          const enabledWorkspace = await api(backend.port, "GET", workspaceHyokPath, undefined, auth.token);
+          expect(enabledWorkspace.status).toBe(200);
+          expect(enabledWorkspace.json["data"].attributes["hyok-enabled"]).toBe(true);
+          const hyokWorkspaceId = enabledWorkspace.json["data"].id as string;
+          cliOk(
+            await cli(
+              bin,
+              ["destroy", "-target=tfe_workspace_hyok_enabled.ws_hyok", "-auto-approve", "-input=false", "-no-color"],
+              cfgDir,
+              cliEnv,
+            ),
+            "HYOK resource destroy",
+          );
+          const retainedWorkspace = await api(backend.port, "GET", workspaceHyokPath, undefined, auth.token);
+          expect(retainedWorkspace.status).toBe(200);
+          expect(retainedWorkspace.json["data"].attributes["hyok-enabled"]).toBe(true);
+          cliOk(
+            await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv),
+            "HYOK resource recreate",
+          );
+
           // A successful create is not convergence: refresh and plan twice.
           for (let refresh = 0; refresh < 2; refresh++) {
             cliOk(
@@ -1715,6 +1743,28 @@ describe("tfe provider e2e", () => {
           cliOk(
             await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv),
             "import convergence",
+          );
+
+          lifecycleStage = "minimal workspace HYOK import";
+          await writeFile(
+            join(importDir, "hyok.tf"),
+            `resource "tfe_workspace_hyok_enabled" "imported" {
+  workspace_id = "${hyokWorkspaceId}"
+}
+`,
+          );
+          cliOk(
+            await cli(
+              bin,
+              ["import", "-input=false", "-no-color", "tfe_workspace_hyok_enabled.imported", hyokWorkspaceId],
+              importDir,
+              cliEnv,
+            ),
+            "workspace HYOK import",
+          );
+          cliOk(
+            await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv),
+            "workspace HYOK import convergence",
           );
 
           const stateList = await cli(bin, ["state", "list"], cfgDir, cliEnv);
@@ -2196,6 +2246,12 @@ data "tfe_no_code_module" "d_ncm" {
             contract_version: providerLifecycleContract.version,
             fixtures: [
               familyEvidence("workspace-lifecycle"),
+              familyEvidence("workspace-hyok-lifecycle", [
+                "import-minimal",
+                "no-op-plan-after-import",
+                "destroy-retains-enablement",
+                "recreate-already-enabled",
+              ]),
               familyEvidence("variables-and-sets-lifecycle"),
               familyEvidence("variable-set-optional-transitions", ["update", "clear-optional", "restore-optional"]),
               familyEvidence("teams-and-projects-lifecycle"),

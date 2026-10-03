@@ -17,7 +17,9 @@
     "no-op-plan-after-import",
     "pagination",
     "permission-denied",
-    "normalized-state-convergence"
+    "normalized-state-convergence",
+    "destroy-retains-enablement",
+    "recreate-already-enabled"
   ],
   "fixtures": [
     {
@@ -26,6 +28,13 @@
       "priority": true,
       "resources": ["tfe_workspace"],
       "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "workspace-hyok-lifecycle",
+      "label": "Workspace HYOK metadata",
+      "priority": true,
+      "resources": ["tfe_workspace_hyok_enabled"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "normalized-state-convergence", "import-minimal", "no-op-plan-after-import", "destroy-retains-enablement", "recreate-already-enabled"]
     },
     {
       "id": "variables-and-sets-lifecycle",

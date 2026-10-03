@@ -483,6 +483,8 @@ export const workspaces = sqliteTable(
     sourceName: text("source_name"),
     sourceUrl: text("source_url"),
     source: text("source").default("tfe-api"),
+    // Provider-compatible HYOK metadata; this does not configure external keys.
+    hyokEnabled: integer("hyok_enabled", { mode: "boolean" }).notNull().default(false),
     autoApply: integer("auto_apply", { mode: "boolean" }).default(false),
     autoApplyRunTrigger: integer("auto_apply_run_trigger", { mode: "boolean" }).default(false),
     fileTriggersEnabled: integer("file_triggers_enabled", { mode: "boolean" }).default(true),

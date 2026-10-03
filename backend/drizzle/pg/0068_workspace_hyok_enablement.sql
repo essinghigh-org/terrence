@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "hyok_enabled" boolean DEFAULT false NOT NULL;

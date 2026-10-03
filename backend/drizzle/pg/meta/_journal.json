@@ -477,6 +477,13 @@
       "when": 1791044695302,
       "tag": "0067_identity_owner_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1791044919773,
+      "tag": "0068_workspace_hyok_enablement",
+      "breakpoints": true
     }
   ]
 }
