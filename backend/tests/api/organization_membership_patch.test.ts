@@ -51,14 +51,12 @@ describe("organization membership PATCH", () => {
       { id: memberMemId, userId: memberId, orgId, role: "member", status: "invited" },
       { id: managerMemId, userId: managerId, orgId, role: "member" },
     ]);
-    await db
-      .insert(teams)
-      .values({
-        id: managerTeamId,
-        orgId,
-        name: `membership-managers-${suffix}`,
-        organizationAccess: { "manage-membership": true },
-      });
+    await db.insert(teams).values({
+      id: managerTeamId,
+      orgId,
+      name: `membership-managers-${suffix}`,
+      organizationAccess: { "manage-membership": true },
+    });
     await db
       .insert(teamMemberships)
       .values({ id: `teammem-mempatch-manager-${suffix}`, teamId: managerTeamId, userId: managerId });
