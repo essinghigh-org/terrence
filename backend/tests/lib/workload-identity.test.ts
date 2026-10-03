@@ -63,8 +63,14 @@ describe("workload identity", () => {
       return originalTransaction(callback, ...options);
     });
     try {
-      const rotation = rotateWorkloadIdentityKey();
-      await expect(rotation).rejects.toThrow("Lost workload identity signing-key leadership");
+      let rejection: unknown;
+      try {
+        await rotateWorkloadIdentityKey();
+      } catch (error: unknown) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toContain("Lost workload identity signing-key leadership");
       expect(await db.query.workloadIdentityKeys.findMany()).toHaveLength(0);
     } finally {
       transaction.mockRestore();
