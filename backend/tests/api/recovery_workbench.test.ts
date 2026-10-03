@@ -4,7 +4,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { runs, stateVersions, workspaces } from "../../src/db/schema";
+import { apiTokens, runs, stateVersions, workspaces } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { storageDir } from "../../src/db/driver";
 import {
   cleanupSeed,
@@ -122,5 +123,31 @@ describe("recovery workbench (FEAT-18)", () => {
     const repeated = await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers });
     expect(repeated.status).toBe(200);
     expect((await repeated.json()).meta).toMatchObject({ idempotent: true, evidenceRetained: true });
+  });
+
+  it("requires both administrator and state-read grants for a recovery download", async () => {
+    for (const permissions of [
+      { "workspaces:write": true },
+      { "state:read": true },
+      { "workspaces:write": true, "state:read": true },
+    ]) {
+      const tokenId = `recovery-scope-${crypto.randomUUID()}`;
+      const token = `recovery-scope-${crypto.randomUUID()}`;
+      await db.insert(apiTokens).values({
+        id: tokenId,
+        userId: seed.userId,
+        token: hashAuthenticationToken(token),
+        scopes: JSON.stringify({ version: 1, orgs: [seed.orgId], permissions }),
+        expiresAt: Date.now() + 60_000,
+      });
+      try {
+        const response = await request(`/api/v2/runs/${runId}/recovery-state`, { headers: jsonHeaders(token) });
+        const canRead = permissions["workspaces:write"] === true && permissions["state:read"] === true;
+        expect(response.status).toBe(canRead ? 200 : 404);
+        if (canRead) expect(await response.text()).toBe(stateForSerial(2));
+      } finally {
+        await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+      }
+    }
   });
 });

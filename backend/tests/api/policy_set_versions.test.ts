@@ -64,7 +64,31 @@ describe("policy set version uploads", () => {
 
     const beforeUpload = await request(`/api/v2/policy-set-versions/${versionId}`);
     expect(beforeUpload.status).toBe(200);
-    expect((await beforeUpload.json()).data.attributes.status).toBe("pending");
+    const beforeDocument = await beforeUpload.json();
+    expect(beforeDocument.data.attributes.status).toBe("pending");
+    expect(beforeDocument.data.links.upload).toBeString();
+    const readerId = `policy-reader-${crypto.randomUUID()}`;
+    const readerToken = `policy-reader-${crypto.randomUUID()}`;
+    await db.insert(apiTokens).values({
+      id: readerId,
+      userId,
+      token: createHash("sha256").update(readerToken).digest("hex"),
+      scopes: JSON.stringify({ version: 1, orgs: [orgId], permissions: { "policies:read": true } }),
+      expiresAt: Date.now() + 60_000,
+    });
+    try {
+      const read = await app.handle(
+        new Request(`http://localhost/api/v2/policy-set-versions/${versionId}`, {
+          headers: { Authorization: `Bearer ${readerToken}` },
+        }),
+      );
+      expect(read.status).toBe(200);
+      const readDocument = await read.json();
+      expect(readDocument.data.attributes.status).toBe("pending");
+      expect(readDocument.data.links.upload).toBeUndefined();
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, readerId));
+    }
 
     const archive = gzipSync(Buffer.alloc(1024));
     const uploaded = await request(upload, "PUT", archive, false);

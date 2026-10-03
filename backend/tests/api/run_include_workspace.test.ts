@@ -3,7 +3,15 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, organizationMemberships, organizations, runs, users, workspaces } from "../../src/db/schema";
+import {
+  apiTokens,
+  configurationVersions,
+  organizationMemberships,
+  organizations,
+  runs,
+  users,
+  workspaces,
+} from "../../src/db/schema";
 
 describe("run include workspace sideload (audit finding 8)", () => {
   const suffix = crypto.randomUUID();
@@ -12,6 +20,7 @@ describe("run include workspace sideload (audit finding 8)", () => {
   const orgName = `sideload-org-${suffix}`;
   const workspaceId = `workspace-${suffix}`;
   const runId = `run-${suffix}`;
+  const configurationId = `cv-${suffix}`;
   const token = `token-${suffix}`;
 
   const request = (path: string) =>
@@ -36,9 +45,13 @@ describe("run include workspace sideload (audit finding 8)", () => {
       userId,
     });
     await db.insert(workspaces).values({ id: workspaceId, name: "Sideload", orgId });
+    await db
+      .insert(configurationVersions)
+      .values({ id: configurationId, workspaceId, status: "pending", source: "tfe-api" });
     await db.insert(runs).values({
       id: runId,
       workspaceId,
+      configurationVersionId: configurationId,
       status: "planned",
       message: "sideload check",
       isDestroy: false,
@@ -63,5 +76,23 @@ describe("run include workspace sideload (audit finding 8)", () => {
     expect(sideload?.attributes["name"]).toBe("Sideload");
     expect(sideload?.attributes["locked"]).toBe(false);
     expect(sideload?.attributes["structured-run-output-enabled"]).toBe(true);
+  });
+
+  it("includes configuration metadata without issuing upload capabilities", async () => {
+    for (const path of [
+      `/api/v2/runs/${runId}`,
+      `/api/v2/organizations/${orgName}/runs`,
+      `/api/v2/workspaces/${workspaceId}/runs`,
+    ]) {
+      const response = await request(`${path}?include=configuration_version`);
+      expect(response.status).toBe(200);
+      const document = (await response.json()) as {
+        included: { id: string; type: string; attributes: Record<string, unknown> }[];
+      };
+      const configuration = document.included.find((resource): boolean => resource.id === configurationId);
+      expect(configuration?.type).toBe("configuration-versions");
+      expect(configuration?.attributes["status"]).toBe("pending");
+      expect(configuration?.attributes["upload-url"]).toBeUndefined();
+    }
   });
 });

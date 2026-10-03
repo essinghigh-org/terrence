@@ -10,9 +10,11 @@ import {
   teamMemberships,
   teams,
   teamWorkspaces,
+  workspaceVariables,
   users,
   workspaces,
 } from "../../src/db/schema";
+import { workspaceIdsForPermission } from "../../src/lib/authorization";
 
 describe("team workspace permission validation", () => {
   const suffix = crypto.randomUUID();
@@ -91,6 +93,49 @@ describe("team workspace permission validation", () => {
     await db.delete(teams).where(eq(teams.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.id, userId));
+  });
+
+  it("bounds team workspace grants and global variable queries to the selected organization", async () => {
+    const otherOrgId = `org-other-${suffix}`;
+    const otherWorkspaceId = `ws-other-${suffix}`;
+    const otherTeamId = `team-other-${suffix}`;
+    const scopeId = `scope-team-${suffix}`;
+    const scopeToken = `scope-team-${crypto.randomUUID()}`;
+    await db.insert(organizations).values({ id: otherOrgId, name: otherOrgId });
+    try {
+      await db.insert(organizationMemberships).values({ id: otherOrgId, orgId: otherOrgId, userId, role: "member" });
+      await db.insert(workspaces).values({ id: otherWorkspaceId, orgId: otherOrgId, name: otherWorkspaceId });
+      await db.insert(teams).values({ id: otherTeamId, orgId: otherOrgId, name: otherTeamId, organizationAccess: {} });
+      await db.insert(teamMemberships).values({ id: otherTeamId, teamId: otherTeamId, userId });
+      await db
+        .insert(teamWorkspaces)
+        .values({ id: otherTeamId, teamId: otherTeamId, workspaceId: otherWorkspaceId, access: "read" });
+      await db.insert(workspaceVariables).values([
+        { id: `${scopeId}-local`, workspaceId, key: "LOCAL_FIXTURE", value: "local" },
+        { id: `${scopeId}-other`, workspaceId: otherWorkspaceId, key: "OTHER_FIXTURE", value: "other" },
+      ]);
+      const ids = await workspaceIdsForPermission(orgId, userId, null, null, "variables-read");
+      expect(ids).toContain(workspaceId);
+      expect(ids).not.toContain(otherWorkspaceId);
+      await db.insert(apiTokens).values({
+        id: scopeId,
+        userId,
+        token: createHash("sha256").update(scopeToken).digest("hex"),
+        scopes: JSON.stringify({ version: 1, orgs: [orgId], permissions: { "variables:read": true } }),
+        expiresAt: Date.now() + 60_000,
+      });
+      const response = await app.handle(
+        new Request("http://terrence.test/api/v2/vars", { headers: { Authorization: `Bearer ${scopeToken}` } }),
+      );
+      expect(response.status).toBe(200);
+      const document = (await response.json()) as { data: { id: string }[] };
+      expect(document.data.map((resource): string => resource.id)).toContain(`${scopeId}-local`);
+      expect(document.data.map((resource): string => resource.id)).not.toContain(`${scopeId}-other`);
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, scopeId));
+      await db.delete(workspaceVariables).where(eq(workspaceVariables.id, `${scopeId}-local`));
+      await db.delete(organizations).where(eq(organizations.id, otherOrgId));
+    }
   });
 
   it("validates relationship grants and blocks policy overrides from workspace admins", async () => {
