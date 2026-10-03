@@ -134,8 +134,8 @@ function safeGroupName(runId: string): string | null {
  * group whose members were culled via cgroup.kill SIGKILLs freshly attached
  * processes until it is deleted and recreated, and a still-populated group
  * would couple two runs' cancellation. When the stale removal fails the
- * creation fails closed (null) — runs proceed without a cgroup rather than
- * sharing one. */
+ * creation throws so the caller stops execution instead of continuing
+ * without its configured limits. */
 export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const root = probeCgroupRoot(env);
   if (root === null) return null;
@@ -144,7 +144,7 @@ export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.
   const path = join(root, name);
   // Remove any leftover group from a previous run of this id. Only ENOENT
   // counts as success; anything else leaves an unknown-state group behind.
-  if (!removeCgroupDir(path)) return null;
+  if (!removeCgroupDir(path)) throw new Error(`Cannot replace occupied cgroup for execution ${runId}`);
   try {
     mkdirSync(path, { recursive: true });
     const limits = resolveCgroupLimits(env);

@@ -125,8 +125,8 @@ describe("run cgroups (kanban 8/9)", () => {
     // A populated group cannot be rmdir'd — exactly what a live sibling run
     // leaves behind. Creation must refuse to hand this path out again.
     writeFileSync(join(groupPath, "cgroup.procs"), "999999\n");
-    expect(createRunCgroup("run-stuck-1", env)).toBeNull();
-    // The caller proceeds without a cgroup; the stuck group is untouched.
+    expect(() => createRunCgroup("run-stuck-1", env)).toThrow("Cannot replace occupied cgroup");
+    // Execution stops and the occupied group remains untouched.
     expect(existsSync(groupPath)).toBeTrue();
     rmSync(groupPath, { recursive: true, force: true });
   });
