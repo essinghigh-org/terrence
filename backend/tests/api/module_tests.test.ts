@@ -4,6 +4,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { runModuleTest } from "../../src/lib/module-tests";
+import { resetLandlockAbiCache } from "../../src/lib/sandbox";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -150,6 +152,140 @@ describe("private registry module tests", () => {
     expect(argumentsText).toContain("-verbose\n");
     expect(argumentsText).toContain("-filter=tests/basic.tftest.hcl\n");
     expect(argumentsText).toContain("-var=replicas=2\n");
+  });
+
+  it("requires an available sandbox before issuing module-test credentials", async () => {
+    const previous = { sandbox: process.env["TERRENCE_RUN_SANDBOX"], runner: process.env["TERRENCE_LANDLOCK_RUNNER"] };
+    const runner = join(directory, "unavailable-sandbox");
+    await writeFile(runner, "#!/bin/sh\nprintf '0\\n'\n", { mode: 0o700 });
+    process.env["TERRENCE_RUN_SANDBOX"] = "true";
+    process.env["TERRENCE_LANDLOCK_RUNNER"] = runner;
+    resetLandlockAbiCache();
+    let credentialsIssued = 0;
+    try {
+      const result = await runModuleTest(
+        versionId,
+        archivePath,
+        { verbose: false, filters: [], testDirectory: "tests", variables: [] },
+        undefined,
+        async (): Promise<Record<string, string>> => {
+          credentialsIssued += 1;
+          return {};
+        },
+      );
+      expect(result.status).toBe("errored");
+      expect(result.error).toContain("Mandatory module-test execution sandbox is unavailable");
+      expect(credentialsIssued).toBe(0);
+    } finally {
+      for (const [key, value] of Object.entries({
+        TERRENCE_RUN_SANDBOX: previous.sandbox,
+        TERRENCE_LANDLOCK_RUNNER: previous.runner,
+      })) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+      resetLandlockAbiCache();
+    }
+  });
+
+  it("delegates required module-test execution through the sandbox runner", async () => {
+    const previous = { sandbox: process.env["TERRENCE_RUN_SANDBOX"], runner: process.env["TERRENCE_LANDLOCK_RUNNER"] };
+    const runner = join(directory, "recording-sandbox");
+    const rulesPath = join(directory, "sandbox-rules.txt");
+    // This trusted runner fixture records delegation. Kernel enforcement is
+    // owned by the existing Landlock integration suite.
+    await writeFile(
+      runner,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--probe" ]; then printf "1\\n"; exit 0; fi',
+        `printf '%s\\n' "$@" > '${rulesPath}'`,
+        'while [ "$1" != "--" ]; do shift; done',
+        'shift; exec "$@"',
+        "",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    process.env["TERRENCE_RUN_SANDBOX"] = "true";
+    process.env["TERRENCE_LANDLOCK_RUNNER"] = runner;
+    resetLandlockAbiCache();
+    try {
+      const result = await runModuleTest(versionId, archivePath, {
+        verbose: false,
+        filters: [],
+        testDirectory: "tests",
+        variables: [],
+      });
+      expect(result.status).toBe("passed");
+      expect(result.testsPassed).toBe(2);
+      const rules = await readFile(rulesPath, "utf8");
+      const argumentsList = rules.trim().split("\n");
+      const writable = argumentsList.find((argument): boolean => argument.startsWith("--rwx="))?.slice(6);
+      const cwd = argumentsList.find((argument): boolean => argument.startsWith("--cwd="))?.slice(6);
+      expect(writable).toBeDefined();
+      expect(cwd).toBeDefined();
+      expect(writable).toBe(cwd);
+      expect(writable).toMatch(/^\/.*\/terrence-module-test-[^/]+$/);
+      expect(rules).toContain("terraform-test\ntest\n-json");
+      const sleeper = join(directory, "cancel-test");
+      const childPidPath = join(directory, "child.pid");
+      await writeFile(sleeper, `#!/bin/sh\nsleep 30 &\nprintf '%s' "$!" > '${childPidPath}'\nwait\n`, {
+        mode: 0o700,
+      });
+      process.env["TERRAFORM_TEST_BINARY_PATH"] = sleeper;
+      const controller = new AbortController();
+      const canceled = runModuleTest(
+        versionId,
+        archivePath,
+        { verbose: false, filters: [], testDirectory: "tests", variables: [] },
+        controller.signal,
+      );
+      let childPid = 0;
+      try {
+        for (let attempt = 0; attempt < 200 && !(await Bun.file(childPidPath).exists()); attempt += 1)
+          await Bun.sleep(10);
+        childPid = Number(await readFile(childPidPath, "utf8"));
+        expect(childPid).toBeGreaterThan(0);
+        process.kill(childPid, 0);
+        controller.abort();
+        const completion = await Promise.race([canceled, Bun.sleep(2000).then(() => null)]);
+        expect(completion?.status).toBe("errored");
+        expect(completion?.error).toBe("Module test canceled");
+        let childRunning = true;
+        for (let attempt = 0; attempt < 100 && childRunning; attempt += 1) {
+          try {
+            process.kill(childPid, 0);
+            // A terminated orphan may await reaping by the host's init process.
+            const stat = await readFile(`/proc/${String(childPid)}/stat`, "utf8");
+            childRunning = !stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z");
+          } catch {
+            childRunning = false;
+          }
+          if (childRunning) await Bun.sleep(10);
+        }
+        expect(childRunning).toBe(false);
+      } finally {
+        controller.abort();
+        if (childPid > 0) {
+          try {
+            process.kill(childPid, "SIGKILL");
+          } catch {
+            // Already terminated by the production cancellation boundary.
+          }
+        }
+        await canceled;
+        process.env["TERRAFORM_TEST_BINARY_PATH"] = join(directory, "terraform-test");
+      }
+    } finally {
+      for (const [key, value] of Object.entries({
+        TERRENCE_RUN_SANDBOX: previous.sandbox,
+        TERRENCE_LANDLOCK_RUNNER: previous.runner,
+      })) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+      resetLandlockAbiCache();
+    }
   });
 
   it("rejects unsafe test paths before invoking Terraform", async () => {

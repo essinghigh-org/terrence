@@ -130,6 +130,12 @@ N+2   remove the old surface
 
 `bun run check:schema-compat` checks PostgreSQL migrations after the pre-HA3 baseline. It rejects unapproved contractions such as dropped/renamed columns, required columns without defaults, type changes, removed defaults, and new uniqueness or integrity constraints.
 
+The compatibility check validates schema shape, not lock duration. Generated
+PostgreSQL migrations can take write-blocking locks while adding indexes or
+validating foreign keys, including keys on newly added nullable columns. Schedule
+large token-table upgrades in a maintenance window and test migration duration
+against a representative database copy before a rolling deployment.
+
 An approved contraction must name the exact migration and surface in `backend/src/data/schema_contractions.json`, with release, owner, and justification metadata. Registering one surface does not exempt other changes in the same migration.
 
 SQLite is not checked because HA does not support SQLite.

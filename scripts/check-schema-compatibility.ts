@@ -382,6 +382,31 @@ async function loadRegister(currentRelease: string): Promise<ParsedRegister> {
   return parseRegister(JSON.parse(await readFile(REGISTER_PATH, "utf8")) as unknown, currentRelease);
 }
 
+/** New nullable columns without a default are invisible to old writers.
+ * A foreign key on only those columns therefore preserves their inserts. */
+function additiveForeignKey(statement: string, nullableExpansions: StringMembership): boolean {
+  const table = tableFromAlter(statement);
+  if (table === null) return false;
+  const columns = /\bFOREIGN\s+KEY\s*\(([^)]+)\)/i.exec(statement)?.[1];
+  if (columns === undefined) return false;
+  const names = columns.split(",").map((column): string => column.trim().replace(/^"|"$/g, ""));
+  return names.length > 0 && names.every((column): boolean => nullableExpansions.has(`${table}.${column}`));
+}
+
+function trackNullableExpansion(
+  statement: string,
+  expansions: Readonly<{ add: (value: string) => unknown; delete: (value: string) => unknown }>,
+): void {
+  const table = tableFromAlter(statement);
+  if (table === null) return;
+  const added = identifier(/\bADD\s+COLUMN\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/i.exec(statement));
+  if (added !== null && !/\b(?:NOT\s+NULL|DEFAULT)\b/i.test(statement)) {
+    expansions.add(`${table}.${added}`);
+  }
+  const altered = identifier(/\b(?:ALTER|DROP|RENAME)\s+COLUMN\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/i.exec(statement));
+  if (altered !== null) expansions.delete(`${table}.${altered}`);
+}
+
 type StringMembership = Readonly<{ has: (value: string) => boolean }>;
 
 async function scanMigrations(
@@ -396,13 +421,18 @@ async function scanMigrations(
   const observed = new Set<string>();
   const violations: string[] = [];
   let enforced = 0;
-
   for (const file of files) {
+    // Exempt only columns introduced by this very migration. A column from
+    // an earlier release may already be written by supported replicas.
+    const nullableExpansions = new Set<string>();
     const stem = migrationStem(file);
     if (register.enforcedFrom !== "" && stem.localeCompare(register.enforcedFrom) <= 0) continue;
     enforced += 1;
     for (const statement of statements(await readFile(join(MIGRATIONS_DIR, file), "utf8"))) {
+      trackNullableExpansion(statement, nullableExpansions);
       for (const finding of detectContractions(statement)) {
+        if (finding.label === "add foreign-key constraint" && additiveForeignKey(statement, nullableExpansions))
+          continue;
         const key = `${stem}|${finding.surface}`;
         observed.add(key);
         if (!approvals.has(key)) violations.push(`${file}: ${finding.label} (${finding.surface})`);

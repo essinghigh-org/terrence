@@ -42,10 +42,10 @@ fi
 CHANGES=$(git status --porcelain backend/drizzle/ 2>/dev/null || true)
 if [ -n "$CHANGES" ]; then
   echo "pre-commit: staging generated drizzle migration:" >&2
-  echo "$CHANGES" | awk '{print $2}' | while read -r f; do
-    git add "$f"
-    echo "  + $f" >&2
-  done
+  # Stage the directory as a unit so regenerated renames and deletions do
+  # not turn porcelain's old filename into an invalid pathspec.
+  git add -A -- backend/drizzle/
+  printf '%s\n' "$CHANGES" >&2
   echo "pre-commit: review the generated SQL before pushing." >&2
 fi
 

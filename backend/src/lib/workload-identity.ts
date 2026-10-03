@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { and, asc, desc, eq, gt, isNull, inArray, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { db } from "../db";
-import { workloadIdentityKeys, workloadIdentityLeases, workloadIdentityTokens } from "../db/schema";
+import { runs, workloadIdentityKeys, workloadIdentityLeases, workloadIdentityTokens } from "../db/schema";
 import { decryptSecret, encryptSecret } from "./secrets";
 
 const DEFAULT_MODULE_TEST_TTL = 600;
@@ -27,6 +27,7 @@ export type WorkspaceIdentityInput = Readonly<{
   workspaceId: string;
   workspaceName: string;
   runId: string;
+  executionKind?: "run" | "assessment";
   phase: "plan" | "apply";
   audience: string;
   ttlSeconds: number;
@@ -357,11 +358,14 @@ function moduleTestClaims(input: ModuleTestIdentityInput, iat: number, exp: numb
   };
 }
 
+type IdentityExecutionKind = "run" | "module-test" | "assessment";
+
 async function issue(
   claims: TokenClaims,
   runId: string,
   audience: string,
   ttlSeconds: number,
+  executionKind: IdentityExecutionKind,
 ): Promise<IssuedIdentityToken> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const key = await currentWorkloadIdentityKey();
@@ -377,7 +381,10 @@ async function issue(
     const token = jwt.sign(tokenClaims, privateKey, { algorithm: "RS256", keyid: key.keyId });
     await db.insert(workloadIdentityTokens).values({
       jti,
-      runId,
+      runId: executionKind === "run" ? runId : null,
+      executionId: runId,
+      moduleTestRunId: executionKind === "module-test" ? runId : null,
+      assessmentResultId: executionKind === "assessment" ? runId : null,
       keyId: key.keyId,
       audience,
       subject: String(tokenClaims["sub"]),
@@ -444,6 +451,7 @@ export async function issueWorkspaceIdentityToken(input: WorkspaceIdentityInput)
     input.runId,
     input.audience,
     Math.max(1, Math.floor(input.ttlSeconds)),
+    input.executionKind ?? "run",
   );
 }
 
@@ -455,7 +463,7 @@ export async function issueModuleTestIdentityToken(input: ModuleTestIdentityInpu
   const generatedAt = Math.floor(Date.now() / 1000);
   const exp = generatedAt + ttl;
   const jti = crypto.randomUUID();
-  return issue(moduleTestClaims(input, generatedAt, exp, jti), input.runId, input.audience, ttl);
+  return issue(moduleTestClaims(input, generatedAt, exp, jti), input.runId, input.audience, ttl, "module-test");
 }
 
 export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonly string[]): Promise<void> {
@@ -464,7 +472,7 @@ export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonl
     .set({ revokedAt: Date.now() })
     .where(
       and(
-        eq(workloadIdentityTokens.runId, runId),
+        or(eq(workloadIdentityTokens.runId, runId), eq(workloadIdentityTokens.executionId, runId)),
         isNull(workloadIdentityTokens.revokedAt),
         ...(jtis === undefined ? [] : [inArray(workloadIdentityTokens.jti, [...jtis])]),
       ),
@@ -515,6 +523,13 @@ export async function verifyWorkloadIdentityToken(token: string, audience?: stri
   });
   if (record === undefined || record.revokedAt !== null || record.expiresAt <= Date.now())
     throw new Error("Workload identity token has been revoked or expired");
+  // Pre-upgrade tokens have no concrete owner columns. Their original
+  // run-only ownership still applies until they expire or are revoked.
+  if (record.moduleTestRunId === null && record.assessmentResultId === null) {
+    if (record.runId === null) throw new Error("Workload identity token execution is unavailable");
+    const owner = await db.query.runs.findFirst({ where: eq(runs.id, record.runId), columns: { id: true } });
+    if (owner === undefined) throw new Error("Workload identity token execution is unavailable");
+  }
   return verified;
 }
 
