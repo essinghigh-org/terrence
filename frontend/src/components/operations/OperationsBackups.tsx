@@ -55,11 +55,19 @@ function BackupFreshness(): React.JSX.Element {
             <span>
               Last verified restore: <InsightDate value={backup["last-verified-restore-at"]} />
             </span>
+            <span>
+              Verified backend:{" "}
+              {backup["last-verified-database-driver"] === "postgres"
+                ? "PostgreSQL"
+                : backup["last-verified-database-driver"] === "sqlite"
+                  ? "SQLite"
+                  : "Unknown"}
+            </span>
           </div>
           {backup["status"] === "unknown" && (
             <InsightNotice>
-              No successful restore rehearsal is recorded. A newly created manifest does not count as a verified
-              restore.
+              No successful restore rehearsal is recorded for the active database backend. A newly created manifest does
+              not count as a verified restore.
             </InsightNotice>
           )}
           {backup["status"] === "overdue" && (
@@ -171,8 +179,8 @@ function RehearsalProgress({ id, onFinished }: Readonly<{ id: string; onFinished
       )}
       {load.data !== null && <BackupReport attributes={load.data.attributes} />}
       <InsightNotice>
-        Rehearsal jobs are retained in process memory. After a service restart a missing job is unknown, not successful;
-        the last verified timestamp remains the durable evidence.
+        Rehearsal results are shared across API replicas. An interrupted job remains interrupted; only a successful
+        rehearsal updates the durable verification timestamp.
       </InsightNotice>
     </InsightSection>
   );
@@ -183,6 +191,7 @@ function BackupTools({ onFinished }: Readonly<{ onFinished: () => void }>): Reac
   const [path, setPath] = useState("");
   const [databasePath, setDatabasePath] = useState("");
   const [storagePath, setStoragePath] = useState("");
+  const [postgresTargetUrl, setPostgresTargetUrl] = useState("");
   const [confirmation, setConfirmation] = useState<Readonly<{ kind: BackupAction; attributes: InsightRecord }> | null>(
     null,
   );
@@ -196,6 +205,7 @@ function BackupTools({ onFinished }: Readonly<{ onFinished: () => void }>): Reac
         "backup-path": path.trim(),
         ...(databasePath.trim() === "" ? {} : { "database-path": databasePath.trim() }),
         ...(storagePath.trim() === "" ? {} : { "storage-path": storagePath.trim() }),
+        ...(postgresTargetUrl.trim() === "" ? {} : { "postgres-target-url": postgresTargetUrl.trim() }),
       },
     });
   };
@@ -216,7 +226,7 @@ function BackupTools({ onFinished }: Readonly<{ onFinished: () => void }>): Reac
     <>
       <InsightSection
         title="Verify an operator backup"
-        description="Paths refer to files on the Terrence host, not your browser. Use a stopped, consistent SQLite backup copy; PostgreSQL recovery remains an operator-managed workflow."
+        description="Paths refer to files on the Terrence host. Supply a consistent SQLite copy, or backup storage plus an operator-restored PostgreSQL database with a distinct name."
       >
         <InsightNotice>
           These actions create evidence and test a disposable copy. They do not create a backup, restore production,
@@ -237,7 +247,7 @@ function BackupTools({ onFinished }: Readonly<{ onFinished: () => void }>): Reac
           <summary className="cursor-pointer font-medium">Advanced source paths</summary>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             <label>
-              Database path (optional)
+              SQLite database path (optional)
               <Input
                 value={databasePath}
                 onInput={(event): void => {
@@ -245,6 +255,23 @@ function BackupTools({ onFinished }: Readonly<{ onFinished: () => void }>): Reac
                 }}
                 disabled={action.busy}
               />
+            </label>
+            <label className="md:col-span-2">
+              Isolated PostgreSQL target URL (optional)
+              <Input
+                type="password"
+                autoComplete="off"
+                value={postgresTargetUrl}
+                onInput={(event): void => {
+                  setPostgresTargetUrl(event.currentTarget.value);
+                }}
+                disabled={action.busy}
+                placeholder="postgresql://user:password@restore-host/terrence_rehearsal"
+              />
+              <span className="text-muted-foreground">
+                Restore the database separately. Verification uses read-only queries and requires a different database
+                name from production.
+              </span>
             </label>
             <label>
               Storage path (optional)
@@ -290,8 +317,8 @@ function BackupTools({ onFinished }: Readonly<{ onFinished: () => void }>): Reac
                 Source: <code className="break-all">{text(confirmation?.attributes["backup-path"])}</code>
               </span>
               <span className="mt-2 block">
-                This may read and hash the entire backup. A rehearsal extracts into a private temporary directory. No
-                live restore is performed.
+                This may read and hash the entire backup. A rehearsal copies storage into a private temporary directory.
+                PostgreSQL checks read the isolated target without applying migrations. No live restore is performed.
               </span>
             </>
           }

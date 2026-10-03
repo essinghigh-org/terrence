@@ -8,6 +8,9 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { createCipheriv, randomBytes } from "node:crypto";
 import * as schema from "../../src/db/schema-sqlite";
 import { storageDir } from "../../src/db/driver";
+import { isPostgres } from "../../src/db";
+import { drizzle as postgresDrizzle } from "drizzle-orm/bun-sql";
+import { migrate as migratePostgres } from "drizzle-orm/bun-sql/migrator";
 
 async function createTar(source: string, archive: string, members: readonly string[]): Promise<void> {
   const proc = Bun.spawn(["tar", "-cf", archive, "-C", source, ...members], { stdout: "pipe", stderr: "pipe" });
@@ -176,6 +179,7 @@ describe("backup verification and restore rehearsal", () => {
     const status = await readBackupStatus();
     expect(status.lastVerifiedRestoreAt).toBe(rehearsal.lastVerifiedRestoreAt);
     expect(status.lastRehearsalId).toBe(rehearsal.id);
+    expect(status.lastVerifiedDatabaseDriver).toBe("sqlite");
 
     // Database and storage can be supplied as separate operator paths; the
     // rehearsal must copy both into its private staging directory.
@@ -214,3 +218,128 @@ describe("backup verification and restore rehearsal", () => {
     expect(databaseReport.checks.find((check) => check.name === "database-digest")?.status).toBe("fail");
   });
 });
+
+it.skipIf(!isPostgres)(
+  "verifies an isolated PostgreSQL restore with SELECT-only credentials and retains evidence after failures",
+  async () => {
+    const folder = await mkdtemp(join(tmpdir(), "terrence-backup-postgres-"));
+    const databaseName = `backup_${crypto.randomUUID().replaceAll("-", "")}`;
+    const roleName = `backup_reader_${crypto.randomUUID().replaceAll("-", "")}`;
+    const password = crypto.randomUUID();
+    const url = new URL(process.env["DATABASE_URL"] ?? "");
+    const admin = new Bun.SQL(url.toString());
+    let restored: Bun.SQL | undefined;
+    let roleCreated = false;
+    try {
+      await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+      url.pathname = `/${databaseName}`;
+      restored = new Bun.SQL(url.toString());
+      await migratePostgres(postgresDrizzle(restored), { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
+      const backupStorage = join(folder, "storage");
+      await mkdir(backupStorage);
+      const key = randomBytes(32);
+      await writeFile(join(backupStorage, ".encryption-key"), key.toString("base64"), { mode: 0o600 });
+      const archivePath = join(backupStorage, "configuration.tar.gz");
+      await writeFile(archivePath, "postgres archive fixture");
+      // Retain the IV independently so the backup is an external crypto fixture.
+      const iv = randomBytes(12);
+      const encryptor = createCipheriv("aes-256-gcm", key, iv);
+      const ciphertext = Buffer.concat([encryptor.update("restored secret", "utf8"), encryptor.final()]);
+      const encrypted = [
+        "enc",
+        "v1",
+        iv.toString("base64"),
+        encryptor.getAuthTag().toString("base64"),
+        ciphertext.toString("base64"),
+      ].join(":");
+      await restored.unsafe("INSERT INTO organizations (id, name) VALUES ($1, $2)", ["org-backup", "backup"]);
+      await restored.unsafe("INSERT INTO workspaces (id, org_id, name) VALUES ($1, $2, $3)", [
+        "ws-backup",
+        "org-backup",
+        "backup",
+      ]);
+      await restored.unsafe(
+        "INSERT INTO configuration_versions (id, workspace_id, status, archive_path) VALUES ($1, $2, $3, $4)",
+        ["cv-backup", "ws-backup", "uploaded", archivePath],
+      );
+      await restored.unsafe(
+        "INSERT INTO workspace_variables (id, workspace_id, key, value, value_encrypted, sensitive) VALUES ($1, $2, $3, $4, $5, TRUE)",
+        ["var-backup", "ws-backup", "secret", "", encrypted],
+      );
+      await admin.unsafe(`CREATE ROLE "${roleName}" LOGIN PASSWORD '${password}'`);
+      roleCreated = true;
+      await restored.unsafe(`GRANT USAGE ON SCHEMA public, drizzle TO "${roleName}"`);
+      await restored.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA public, drizzle TO "${roleName}"`);
+      url.username = roleName;
+      url.password = password;
+      const source = { sourcePath: folder, postgresTargetUrl: url.toString() };
+      const created = await createBackupManifestForSource(source, { outputDirectory: folder });
+      expect(created.manifest.database.driver).toBe("postgres");
+      expect(JSON.stringify(created.manifest)).not.toContain(password);
+      const success = await runRestoreRehearsal({ source });
+      expect(success.checks.filter((check) => check.status === "fail")).toEqual([]);
+      expect(success.passed).toBe(true);
+      expect(success.databaseDriver).toBe("postgres");
+      expect(success.checks.find((check) => check.name === "schema-migration")?.status).toBe("pass");
+      expect(success.checks.find((check) => check.name === "encrypted-records")?.detail).toBe(
+        "1 selected encrypted record(s) decrypted",
+      );
+      const status = await readBackupStatus();
+      expect(status.lastVerifiedDatabaseDriver).toBe("postgres");
+      expect(status.lastRehearsalId).toBe(success.id);
+      expect(status.lastVerifiedRestoreAt).toBe(success.lastVerifiedRestoreAt);
+
+      const failed = async (name: string): Promise<void> => {
+        const report = await runRestoreRehearsal({ source });
+        expect(report.passed).toBe(false);
+        expect(report.checks.find((check) => check.name === name)?.status).toBe("fail");
+        expect(await readBackupStatus()).toEqual(status);
+      };
+      await rm(archivePath);
+      await failed("artifact-references");
+      await writeFile(archivePath, "postgres archive fixture");
+      await writeFile(join(backupStorage, ".encryption-key"), randomBytes(32).toString("base64"));
+      await failed("encrypted-records");
+      await writeFile(join(backupStorage, ".encryption-key"), key.toString("base64"));
+      await restored.unsafe("DELETE FROM workspace_variables WHERE id = $1", ["var-backup"]);
+      await failed("table-counts");
+      await restored.unsafe(
+        "INSERT INTO workspace_variables (id, workspace_id, key, value, value_encrypted, sensitive) VALUES ($1, $2, $3, $4, $5, TRUE)",
+        ["var-backup", "ws-backup", "secret", "", encrypted],
+      );
+      await restored.unsafe(
+        "UPDATE drizzle.__drizzle_migrations SET hash = $1 WHERE id = (SELECT max(id) FROM drizzle.__drizzle_migrations)",
+        ["corrupt-fixture-migration"],
+      );
+      await failed("schema-migration");
+      await restored.unsafe("ALTER TABLE users ADD COLUMN fixture_drift text");
+      await failed("schema");
+      await restored.unsafe("DROP TABLE workspace_variables");
+      await failed("schema-incompatible");
+      const missing = await runRestoreRehearsal({ source: { sourcePath: folder } });
+      expect(missing.passed).toBe(false);
+      expect(missing.checks.find((check) => check.name === "database-input")?.status).toBe("fail");
+      const live = await runRestoreRehearsal({
+        source: { sourcePath: folder, postgresTargetUrl: process.env["DATABASE_URL"] ?? "" },
+      });
+      expect(live.checks.find((check) => check.name === "postgres-target-live")?.status).toBe("fail");
+      expect(await readBackupStatus()).toEqual(status);
+      const missingUrl = new URL(url);
+      missingUrl.pathname = `/missing_${databaseName}`;
+      const unavailable = await runRestoreRehearsal({
+        source: { sourcePath: folder, postgresTargetUrl: missingUrl.toString() },
+      });
+      expect(unavailable.passed).toBe(false);
+      expect(JSON.stringify(unavailable)).not.toContain(password);
+      expect(unavailable.checks.find((check) => check.name === "postgres-target-unavailable")?.status).toBe("fail");
+    } finally {
+      await restored?.close();
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`);
+      if (roleCreated) await admin.unsafe(`DROP ROLE "${roleName}"`);
+      await admin.close();
+      await rm(folder, { recursive: true, force: true });
+      await rm(join(storageDir, BACKUP_STATUS_FILE), { force: true });
+    }
+  },
+  60_000,
+);

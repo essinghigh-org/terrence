@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { and, eq, inArray } from "drizzle-orm";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { app } from "../../src/app";
-import { db } from "../../src/db";
+import { db, isPostgres } from "../../src/db";
+import { storageDir } from "../../src/db/driver";
+import { BACKUP_STATUS_FILE } from "../../src/lib/backup-verification";
 import { apiTokens, users, adminSettings, auditLogs } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { invalidateSettingsCache } from "../../src/lib/settings";
@@ -68,6 +70,33 @@ test("restore freshness distinguishes absent, invalid, future, current and overd
     status: "overdue",
     ageDays: 31,
   });
+});
+
+test("restore evidence is current only for the active backend and exposes its recorded identity", async () => {
+  const path = join(storageDir, BACKUP_STATUS_FILE);
+  const original = await readFile(path).catch((): null => null);
+  const active = isPostgres ? "postgres" : "sqlite";
+  try {
+    for (const driver of [active, isPostgres ? "sqlite" : "postgres", null]) {
+      await writeFile(
+        path,
+        JSON.stringify({
+          lastVerifiedRestoreAt: new Date().toISOString(),
+          lastVerifiedDatabaseDriver: driver,
+          lastRehearsalId: "evidence-fixture",
+        }),
+      );
+      const response = await request("/admin/operations-center");
+      expect(response.status).toBe(200);
+      const backup = (await response.json()).data.attributes.backup;
+      expect(backup["last-verified-database-driver"]).toBe(driver);
+      expect(backup["database-driver"]).toBe(active);
+      expect(backup.status).toBe(driver === active ? "current" : "unknown");
+    }
+  } finally {
+    if (original === null) await rm(path, { force: true });
+    else await writeFile(path, original);
+  }
 });
 
 test("operations center and browser support routes require a site administrator", async () => {

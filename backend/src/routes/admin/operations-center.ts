@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { and, desc, eq, gt, isNotNull, lte, sql } from "drizzle-orm";
 import { authPlugin } from "../../auth";
-import { databaseCurrentTimeMs, db } from "../../db";
+import { databaseCurrentTimeMs, db, isPostgres } from "../../db";
 import { controlPlaneLeases, controlPlaneNodes, runs } from "../../db/schema";
 import { readBackupStatus } from "../../lib/backup-verification";
 import { CONTROL_PLANE_LEASE_NAME } from "../../lib/control-plane-coordinator";
@@ -102,7 +102,15 @@ export const operationsCenterRoutes = new Elysia({ name: "admin-operations-cente
         "last-verified-restore-at": backup.lastVerifiedRestoreAt,
         "last-rehearsal-id": backup.lastRehearsalId,
         "last-verified-manifest-sha256": backup.lastVerifiedManifestSha256,
-        ...rehearsalFreshness(backup.lastVerifiedRestoreAt, maxAgeDays, now),
+        "last-verified-database-driver": backup.lastVerifiedDatabaseDriver,
+        "database-driver": isPostgres ? "postgres" : "sqlite",
+        ...rehearsalFreshness(
+          backup.lastVerifiedDatabaseDriver === (isPostgres ? "postgres" : "sqlite")
+            ? backup.lastVerifiedRestoreAt
+            : null,
+          maxAgeDays,
+          now,
+        ),
       },
       nodes: nodes.map(
         (node): Record<string, unknown> => ({
