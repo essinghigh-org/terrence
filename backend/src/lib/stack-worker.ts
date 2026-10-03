@@ -1705,7 +1705,7 @@ async function persistStackExecutionResult(
   }
 }
 
-type StackStepExecutionPreparation = Readonly<{ ready: boolean; fencingToken: number | null }>;
+type StackStepExecutionPreparation = Readonly<{ ready: boolean; fencingToken: number | null; startedAt: number }>;
 
 async function prepareStackStepExecution(
   run: DeepReadonly<typeof stackRecords.$inferSelect>,
@@ -1713,24 +1713,39 @@ async function prepareStackStepExecution(
   stack: Stack,
   operation: "plan" | "apply",
 ): Promise<StackStepExecutionPreparation> {
+  const startKey = `${operation}-started-at`;
+  const persistedStart = step.payload[startKey];
+  const startedAt =
+    typeof persistedStart === "number" && Number.isFinite(persistedStart)
+      ? persistedStart
+      : step.status === "running"
+        ? step.updatedAt
+        : Date.now();
   let fencingToken: number | null = null;
   if (operation === "apply" || (step.payload ?? {})["requires-state-lock"] === true) {
     fencingToken = await acquireStackStateLock(stack.id, run.name ?? "default", run.id);
     if (fencingToken === null) {
       await scheduleStackRun(run.id, 1000);
-      return { ready: false, fencingToken: null };
+      return { ready: false, fencingToken: null, startedAt };
     }
-    await db
-      .update(stackRecords)
-      .set({ payload: { ...(step.payload ?? {}), "fencing-token": fencingToken }, updatedAt: Date.now() })
-      .where(eq(stackRecords.id, step.id));
   }
-  await db.update(stackRecords).set({ status: "running", updatedAt: Date.now() }).where(eq(stackRecords.id, step.id));
+  await db
+    .update(stackRecords)
+    .set({
+      status: "running",
+      payload: {
+        ...step.payload,
+        [startKey]: startedAt,
+        ...(fencingToken === null ? {} : { "fencing-token": fencingToken }),
+      },
+      updatedAt: Date.now(),
+    })
+    .where(eq(stackRecords.id, step.id));
   await db
     .update(stackRecords)
     .set({ status: operation === "apply" ? "applying" : "planning", updatedAt: Date.now() })
     .where(eq(stackRecords.id, run.id));
-  return { ready: true, fencingToken };
+  return { ready: true, fencingToken, startedAt };
 }
 
 async function executeStackDeploymentStep(
@@ -1746,7 +1761,7 @@ async function executeStackDeploymentStep(
     const planArtifactPath = await planArtifactPathForStackStep(run, component, step, operation);
     if (stack.executionMode === "agent") {
       const timeoutMs = await stackExecutionTimeoutMs(operation);
-      if (Date.now() - step.updatedAt > timeoutMs) {
+      if (Date.now() - preparation.startedAt > timeoutMs) {
         await failStackRun(
           stack,
           run,

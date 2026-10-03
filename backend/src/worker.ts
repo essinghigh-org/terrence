@@ -724,6 +724,9 @@ export function cancelRunExecution(runId: string, force = false): void {
   // as the primary path; the cgroup kill is the backstop, and only escalates
   // immediately on force.
   if (force) {
+    for (const pgid of cancellationEscalationTimers.get(runId)?.keys() ?? []) {
+      terminateProcessGroup(pgid, "SIGKILL");
+    }
     clearCancellationEscalationTimers(runId);
     killRunCgroup(runId);
   }
@@ -754,14 +757,7 @@ export function terminateActiveRunExecutions(): void {
     ...activeRunCgroups.keys(),
     ...cancellationEscalationTimers.keys(),
   ]);
-  for (const runId of runIds) {
-    clearCancellationEscalationTimers(runId);
-    for (const child of activeRunProcesses.get(runId) ?? []) {
-      terminateProcessGroup(child.pid, "SIGKILL");
-      killTrackedProcess(child, "SIGKILL", runId, "shutdown");
-    }
-    if (activeRunCgroups.has(runId)) killRunCgroup(runId);
-  }
+  for (const runId of runIds) cancelRunExecution(runId, true);
 }
 
 export function terminateActiveAssessmentExecutions(): void {
@@ -1104,6 +1100,7 @@ async function readPlanJson(
   timeoutMs: number,
   outputDirectory: string,
   requireExecutionLease = true,
+  cancellationOwner: CancellationOwner = { kind: "run", id: runId },
 ): Promise<PlanJsonCapture | undefined> {
   const tfplanPath = join(executionDir, "tfplan");
   if (!(await exists(tfplanPath))) return undefined;
@@ -1133,7 +1130,14 @@ async function readPlanJson(
         requireExecutionLease,
       );
       outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "terraform-show-json");
-      const [exitCode, output] = await waitForTrackedProcess(runId, "plan", child, outputPromise, timeoutMs);
+      const [exitCode, output] = await waitForTrackedProcess(
+        runId,
+        "plan",
+        child,
+        outputPromise,
+        timeoutMs,
+        cancellationOwner,
+      );
       captured = output;
       if (exitCode === 0) {
         // Terraform show -json is a file-backed user artifact and may
@@ -1172,7 +1176,10 @@ export async function readPlanJsonForTests(
   outputDirectory: string,
   requireExecutionLease = true,
 ): Promise<PlanJsonCapture | undefined> {
-  return readPlanJson(runId, executionDir, planBinaryPath, timeoutMs, outputDirectory, requireExecutionLease);
+  return readPlanJson(runId, executionDir, planBinaryPath, timeoutMs, outputDirectory, requireExecutionLease, {
+    kind: requireExecutionLease ? "run" : "assessment",
+    id: runId,
+  });
 }
 
 function processEnv(key: string): string {
@@ -1461,12 +1468,15 @@ export function classifyCancellationPoll(status: string | undefined, missingStre
   return "none";
 }
 
+type CancellationOwner = Readonly<{ kind: "run" | "assessment"; id: string }>;
+
 async function waitForTrackedProcess<T>(
   runId: string,
   phase: string,
   child: TrackedRunProcess,
   output: Promise<T>,
   timeoutMs: number,
+  owner: CancellationOwner = { kind: "run", id: runId },
 ): Promise<readonly [number, T]> {
   const timeoutDetail = phaseTimeoutDetail(phase, timeoutMs);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1491,8 +1501,11 @@ async function waitForTrackedProcess<T>(
     }
   };
   const cancellationPoller = setInterval((): void => {
-    void db.query.runs
-      .findFirst({ where: eq(runs.id, runId), columns: { status: true } })
+    const statusQuery =
+      owner.kind === "assessment"
+        ? db.query.assessmentResults.findFirst({ where: eq(assessmentResults.id, owner.id), columns: { status: true } })
+        : db.query.runs.findFirst({ where: eq(runs.id, owner.id), columns: { status: true } });
+    void statusQuery
       .then((run): void => {
         if (run === undefined) missingRunPolls += 1;
         else missingRunPolls = 0;
@@ -1500,7 +1513,7 @@ async function waitForTrackedProcess<T>(
         if (decision === "force-cancel") requestCancellation(true);
         else if (decision === "cancel") {
           if (run === undefined && missingRunPolls === MISSING_RUN_POLLS_BEFORE_CANCEL) {
-            log.warn("Run record deleted during execution; requesting cooperative cancellation", { runId, phase });
+            log.warn("Execution record deleted; requesting cooperative cancellation", { runId, phase, owner });
           }
           requestCancellation(false);
         }
@@ -5402,17 +5415,21 @@ export async function runPolicyChecks(
 type CapturedProcess = Readonly<{ exitCode: number; output: string; capturedOutput: CapturedProcessOutput }>;
 
 async function captureProcess(
-  runId: string,
+  assessmentResultId: string,
   args: readonly string[],
   cwd: string,
   env: Readonly<Record<string, string>>,
   timeoutMs: number,
   outputDirectory: string,
 ): Promise<CapturedProcess> {
+  const runId = `assessment-${assessmentResultId}`;
   assertAssessmentCoordinatorOwnership();
   const child = spawnRunProcess(runId, args, { cwd, env, stdout: "pipe", stderr: "pipe" }, runSandbox, false);
   const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "assessment");
-  const [exitCode, capturedOutput] = await waitForTrackedProcess(runId, "assessment", child, outputPromise, timeoutMs);
+  const [exitCode, capturedOutput] = await waitForTrackedProcess(runId, "assessment", child, outputPromise, timeoutMs, {
+    kind: "assessment",
+    id: assessmentResultId,
+  });
   return { exitCode, output: processOutputPreview(capturedOutput), capturedOutput };
 }
 
@@ -6040,7 +6057,7 @@ async function runAssessmentPlanCapture(
   appendOutput: (text: string) => void,
 ): Promise<JsonObject> {
   const init = await captureProcess(
-    `assessment-${assessmentResultId}`,
+    assessmentResultId,
     [resolved.binaryPath, "init", "-reconfigure", "-no-color", "-input=false"],
     executionDir,
     environment,
@@ -6054,7 +6071,7 @@ async function runAssessmentPlanCapture(
   if (terraformVariables.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
   if (appliedRunTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
   const plan = await captureProcess(
-    `assessment-${assessmentResultId}`,
+    assessmentResultId,
     planArgs,
     executionDir,
     environment,
@@ -6073,6 +6090,7 @@ async function runAssessmentPlanCapture(
     assessmentTimeoutMs,
     workDir,
     false,
+    { kind: "assessment", id: assessmentResultId },
   );
   if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
   return generatedPlan.planJson;
@@ -6088,7 +6106,7 @@ async function readAssessmentProviderSchema(
   appendOutput: (text: string) => void,
 ): Promise<JsonObject> {
   const schema = await captureProcess(
-    `assessment-${assessmentResultId}`,
+    assessmentResultId,
     [resolved.binaryPath, "providers", "schema", "-json"],
     executionDir,
     environment,
@@ -6224,6 +6242,17 @@ async function cleanupAssessmentRun(assessmentResultId: string, workDir: string)
   }
 }
 
+async function enforceAssessmentExecutorPolicy(
+  workspace: typeof workspaces.$inferSelect,
+  organization: typeof organizations.$inferSelect | undefined,
+): Promise<void> {
+  const project = workspace.projectId
+    ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
+    : undefined;
+  const policyError = executorPolicyAllowsLocal(workspace, project ?? null, organization ?? null);
+  if (policyError !== null) throw new Error(policyError);
+}
+
 async function executeAssessmentImpl(assessmentResultId: string): Promise<void> {
   assertRunSandboxAvailable();
   assertAssessmentCoordinatorOwnership();
@@ -6249,6 +6278,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   try {
     if (!(await checkAssessmentEnabled(workspace, organization, assessmentResultId))) return;
     assertAssessmentCoordinatorOwnership();
+    await enforceAssessmentExecutorPolicy(workspace, organization);
     // Existing assessment rows may have null legacy artifacts; malformed
     // imported artifacts fail this worker with a typed row-aware diagnostic.
     parsePersistedArtifact(assessment.jsonOutput, assessment.artifactSchemaVersion, assessment.id);
