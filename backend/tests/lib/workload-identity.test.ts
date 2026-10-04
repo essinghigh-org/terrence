@@ -71,6 +71,14 @@ describe("workload identity", () => {
       return originalTransaction(callback, ...options);
     });
     try {
+      // Assert on the keys this attempt ADDED rather than on the whole table.
+      // The suite shares one temp database across files, so a file that ran
+      // earlier and issued a workload identity token would otherwise break a
+      // whole-table emptiness check (issue #1019). Backend files execute
+      // sequentially (--max-concurrency=1), so a key appearing across this
+      // window can only have been published by the rotate call below, and
+      // attributing it here is unambiguous.
+      const before = new Set((await db.query.workloadIdentityKeys.findMany()).map((key): string => key.id));
       let rejection: unknown;
       try {
         await rotateWorkloadIdentityKey();
@@ -79,7 +87,8 @@ describe("workload identity", () => {
       }
       expect(rejection).toBeInstanceOf(Error);
       expect((rejection as Error).message).toContain("Lost workload identity signing-key leadership");
-      expect(await db.query.workloadIdentityKeys.findMany()).toHaveLength(0);
+      const leaked = (await db.query.workloadIdentityKeys.findMany()).filter((key): boolean => !before.has(key.id));
+      expect(leaked).toHaveLength(0);
     } finally {
       transaction.mockRestore();
     }
