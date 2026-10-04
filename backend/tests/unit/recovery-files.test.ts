@@ -223,7 +223,8 @@ describe("sweepIncompleteRecoveryCopies (#579)", () => {
       partialExists = false;
     }
     expect(partialExists).toBe(false);
-    expect(await readdir(stagedDir)).toEqual([".recovered", "terraform.tfstate"]);
+    // readdir() order is filesystem-dependent (ext4 hash order), not sorted.
+    expect((await readdir(stagedDir)).sort()).toEqual([".recovered", "terraform.tfstate"]);
   });
 
   it("is a no-op without a recovery root", async () => {

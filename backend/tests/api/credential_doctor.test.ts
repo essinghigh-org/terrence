@@ -9,6 +9,7 @@ import {
   organizationMemberships,
   organizations,
   users,
+  workloadIdentityKeys,
   workloadIdentityTokens,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
@@ -21,6 +22,10 @@ describe("credential doctor API", () => {
   const orgName = `doctor-${suffix}`;
   const authToken = `doctor-token-${suffix}`;
   const configId = `oidc-doctor-${suffix}`;
+  // Signing keys that already existed when this file started. The doctor run
+  // publishes one of its own, and afterAll removes only the difference so this
+  // file never deletes rows it did not create.
+  let preexistingKeyIds: Set<string> = new Set<string>();
 
   const request = (path: string, method = "GET", body?: unknown): Promise<Response> =>
     app.handle(
@@ -35,6 +40,7 @@ describe("credential doctor API", () => {
     );
 
   beforeAll(async () => {
+    preexistingKeyIds = new Set((await db.query.workloadIdentityKeys.findMany()).map((key): string => key.id));
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db
@@ -64,6 +70,16 @@ describe("credential doctor API", () => {
 
   afterAll(async () => {
     setExternalUrlTransportForTests(undefined);
+    // The doctor run signs an ephemeral identity via
+    // issueCredentialDoctorIdentityToken -> currentWorkloadIdentityKey(), which
+    // lazily PUBLISHES a signing key on first use. Leaving that row behind
+    // breaks any test file that asserts on workload_identity_keys while the
+    // suite shares one temp database (issue #1019). Delete only what this file
+    // added, never rows another file owns.
+    for (const key of await db.query.workloadIdentityKeys.findMany()) {
+      if (!preexistingKeyIds.has(key.id))
+        await db.delete(workloadIdentityKeys).where(eq(workloadIdentityKeys.id, key.id));
+    }
     await db.delete(auditLogs).where(and(eq(auditLogs.orgId, orgId), eq(auditLogs.action, "credential_doctor.run")));
     await db.delete(oidcConfigs).where(eq(oidcConfigs.id, configId));
     await db.delete(apiTokens).where(eq(apiTokens.id, `token-row-${suffix}`));
