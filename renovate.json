@@ -15,13 +15,13 @@
   "rangeStrategy": "bump",
   "packageRules": [
     {
-      "matchCategories": ["javascript"],
+      "matchCategories": ["js"],
       "matchUpdateTypes": ["minor", "patch"],
       "matchFileNames": ["backend/package.json", "package.json"],
       "groupName": "backend minor+patch"
     },
     {
-      "matchCategories": ["javascript"],
+      "matchCategories": ["js"],
       "matchUpdateTypes": ["minor", "patch"],
       "matchFileNames": ["frontend/package.json"],
       "groupName": "frontend minor+patch"

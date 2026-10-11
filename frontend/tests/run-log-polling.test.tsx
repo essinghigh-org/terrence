@@ -1,13 +1,15 @@
-import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { afterEach, expect, jest, mock, test } from "bun:test";
+import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { RunDetail } from "../src/views/RunDetail";
 import type { JsonValue } from "../src/lib/json";
+import { useRunView } from "../src/lib/use-run-view";
 
 const originalFetch = globalThis.fetch;
 
 afterEach((): void => {
   cleanup();
+  jest.useRealTimers();
   globalThis.fetch = originalFetch;
 });
 
@@ -39,30 +41,39 @@ function logSlice(whole: string, offsetParam: string | null): Response {
   });
 }
 
+type FetchMockOptions = Readonly<{
+  beforeRun?: Promise<void>;
+  applyLog?: () => string;
+}>;
+
 function installFetchMock(
   status: string,
   onPlanLog: (offset: string | null) => void,
   planLog: () => string,
   onApplyLog: (offset: string | null) => void = (): void => undefined,
+  options: FetchMockOptions = {},
 ): void {
   const fetchMock = mock((input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(raw, "http://terrence.local");
     if (url.pathname.endsWith("/runs/run-polling")) {
-      return Promise.resolve(
-        json({
-          data: {
-            id: "run-polling",
-            attributes: {
-              message: "Polling run",
-              status,
-              actions: { "is-confirmable": false },
-              permissions: { "can-apply": false },
-              "created-at": "2026-07-29T10:00:00.000Z",
-              "status-timestamps": { "planning-at": "2026-07-29T10:00:01.000Z" },
+      const timestamps: Record<string, string> = { "planning-at": "2026-07-29T10:00:01.000Z" };
+      if (status === "applied") timestamps["applied-at"] = "2026-07-29T10:00:02.000Z";
+      return (options.beforeRun ?? Promise.resolve()).then(
+        (): Response =>
+          json({
+            data: {
+              id: "run-polling",
+              attributes: {
+                message: "Polling run",
+                status,
+                actions: { "is-confirmable": false },
+                permissions: { "can-apply": false },
+                "created-at": "2026-07-29T10:00:00.000Z",
+                "status-timestamps": timestamps,
+              },
             },
-          },
-        }),
+          }),
       );
     }
     if (url.pathname.endsWith("/runs/run-polling/plan/log")) {
@@ -71,7 +82,7 @@ function installFetchMock(
     }
     if (url.pathname.endsWith("/runs/run-polling/apply/log")) {
       onApplyLog(url.searchParams.get("offset"));
-      return Promise.resolve(logSlice("", url.searchParams.get("offset")));
+      return Promise.resolve(logSlice(options.applyLog?.() ?? "", url.searchParams.get("offset")));
     }
     return Promise.resolve(json({ data: null }));
   });
@@ -154,26 +165,58 @@ test("appended log output is added to what is already on screen", async () => {
 }, 25000);
 
 test("a terminal run stops polling once it has read its logs", async () => {
-  let calls = 0;
-  // Both phases are counted: a terminal run that kept polling its apply log
-  // must fail here, not just one that re-reads the plan log.
-  const count = (): void => {
-    calls += 1;
-  };
-  installFetchMock("applied", count, (): string => "done\n", count);
-  renderDetail();
-
-  await waitFor(
-    (): void => {
-      expect(calls).toBeGreaterThanOrEqual(1);
-    },
-    { timeout: 10000 },
-  );
-  const settled = calls;
-  await new Promise((resolve): void => {
-    setTimeout(resolve, 5500);
+  jest.useFakeTimers();
+  let releaseRun = noteNothing;
+  const beforeRun = new Promise<void>((resolve): void => {
+    releaseRun = resolve;
   });
-  // No cadence at all for a finished run: the page it replaces kept a 30s
-  // timer refetching applied runs for as long as the tab stayed open.
-  expect(calls).toBe(settled);
-}, 25000);
+  let planLog = "plan started\n";
+  let applyLog = "apply started\n";
+  const planOffsets: (string | null)[] = [];
+  const applyOffsets: (string | null)[] = [];
+  installFetchMock(
+    "applied",
+    (offset): void => {
+      planOffsets.push(offset);
+    },
+    (): string => planLog,
+    (offset): void => {
+      applyOffsets.push(offset);
+    },
+    { beforeRun, applyLog: (): string => applyLog },
+  );
+  const { result } = renderHook(() => useRunView("run-polling"));
+
+  // Hold the run response until the opening reads have committed. Seeing the
+  // first request alone is not a barrier: the terminal-status effect still
+  // owes each started phase its final read.
+  await act(async (): Promise<void> => {
+    await Promise.resolve();
+  });
+  expect(result.current.state.run).toBeNull();
+  expect(result.current.state.planLog.text).toBe(planLog);
+  expect(result.current.state.applyLog.text).toBe(applyLog);
+  const planFinalOffset = String(new TextEncoder().encode(planLog).byteLength);
+  const applyFinalOffset = String(new TextEncoder().encode(applyLog).byteLength);
+
+  planLog += "plan finished\n";
+  applyLog += "apply finished\n";
+  await act(async (): Promise<void> => {
+    releaseRun();
+    await beforeRun;
+  });
+  expect(result.current.state.run?.attributes.status).toBe("applied");
+  expect(result.current.state.planLog.text).toBe(planLog);
+  expect(result.current.state.applyLog.text).toBe(applyLog);
+  expect(planOffsets).toEqual(["0", planFinalOffset]);
+  expect(applyOffsets).toEqual(["0", applyFinalOffset]);
+
+  // Cross the old 30s cadence twice without a wall-clock sleep. Both phases
+  // must remain idle after their final bytes have actually reached state.
+  await act(async (): Promise<void> => {
+    jest.advanceTimersByTime(60_000);
+    await Promise.resolve();
+  });
+  expect(planOffsets).toEqual(["0", planFinalOffset]);
+  expect(applyOffsets).toEqual(["0", applyFinalOffset]);
+});
