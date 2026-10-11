@@ -7,7 +7,7 @@ updates:
     schedule:
       interval: "daily"
     # Security-only updates: version bumps stay with Renovate.
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "security"
@@ -15,7 +15,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    # Zero disables version PRs without limiting security updates.
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "security"
