@@ -30,6 +30,32 @@ async function runAgentProtocolScript(script: string): Promise<Record<string, un
   }
 }
 
+test("agent handoff refuses legacy PR configuration before releasing execution credentials", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, workspaces, configurationVersions, runs, agentPools, agentPoolTokens, agents, agentJobs, runTokens } = await import("./src/db/schema.ts");
+    const { hashAuthenticationToken } = await import("./src/lib/token-service.ts");
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agentPoolTokens).values({ id: "token", agentPoolId: "pool", token: hashAuthenticationToken("agent-fixture-token") });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "idle" });
+    await db.insert(workspaces).values({ id: "ws", orgId: "org", name: "ws", executionMode: "agent", agentPoolId: "pool" });
+    await db.insert(configurationVersions).values({ id: "cv", workspaceId: "ws", status: "uploaded", source: "github", speculative: true, ingressAttributes: { pullRequestNumber: 1 } });
+    await db.insert(runs).values({ id: "run", workspaceId: "ws", configurationVersionId: "cv", status: "plan_queued", planOnly: true, createdAt: 1 });
+    await db.insert(agentJobs).values({ id: "job", runId: "run", agentPoolId: "pool", phase: "plan", status: "queued" });
+    const response = await app.handle(new Request("http://localhost/api/v2/agents/agent/jobs/poll", { method: "POST", headers: { Authorization: "Bearer agent-fixture-token" } }));
+    console.log(JSON.stringify({ status: response.status, job: await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") }), tokens: await db.query.runTokens.findMany({ where: eq(runTokens.runId, "run") }) }));
+  `);
+  expect(result["status"]).toBe(204);
+  expect(result["job"]).toMatchObject({
+    status: "errored",
+    errorMessage: "Pull-request configuration lacks trusted repository admission",
+  });
+  expect(result["tokens"]).toEqual([]);
+});
+
 test("dispatches agent runs through authenticated atomic claim, logs, and completion", async () => {
   const result = await runAgentProtocolScript(`
     const { createHash } = await import("node:crypto");

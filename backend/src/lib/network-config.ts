@@ -2,7 +2,10 @@ import { isIP } from "node:net";
 
 export type NetworkConfiguration = Readonly<
   Record<
-    "TERRENCE_TRUSTED_PROXY_CIDRS" | "TERRENCE_OUTBOUND_ALLOW_CIDRS" | "TERRENCE_OUTBOUND_ALLOW_HOSTS",
+    | "TERRENCE_TRUSTED_PROXY_CIDRS"
+    | "TERRENCE_OUTBOUND_ALLOW_CIDRS"
+    | "TERRENCE_OUTBOUND_ALLOW_HOSTS"
+    | "TERRENCE_ALLOWED_HOSTS",
     readonly string[]
   >
 >;
@@ -26,18 +29,24 @@ function configuredList(raw: string | undefined, validate: (value: string) => bo
   return Object.freeze([...new Set(values)]);
 }
 
+function configuredHostList(raw: string | undefined): readonly string[] {
+  return Object.freeze(
+    configuredList(
+      raw,
+      (value): boolean =>
+        value.length <= 253 &&
+        /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.?$/.test(value),
+    ).map((value): string => value.toLowerCase().replace(/\.$/, "")),
+  );
+}
+
 export function parseNetworkConfiguration(
   environment: Readonly<Record<string, string | undefined>>,
 ): NetworkConfiguration {
-  const hosts = configuredList(environment["TERRENCE_OUTBOUND_ALLOW_HOSTS"], (value): boolean => {
-    return (
-      value.length <= 253 &&
-      /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.?$/.test(value)
-    );
-  }).map((value): string => value.toLowerCase().replace(/\.$/, ""));
   return Object.freeze({
+    TERRENCE_ALLOWED_HOSTS: configuredHostList(environment["TERRENCE_ALLOWED_HOSTS"]),
     TERRENCE_TRUSTED_PROXY_CIDRS: configuredList(environment["TERRENCE_TRUSTED_PROXY_CIDRS"], validConfiguredCidr),
     TERRENCE_OUTBOUND_ALLOW_CIDRS: configuredList(environment["TERRENCE_OUTBOUND_ALLOW_CIDRS"], validConfiguredCidr),
-    TERRENCE_OUTBOUND_ALLOW_HOSTS: Object.freeze(hosts),
+    TERRENCE_OUTBOUND_ALLOW_HOSTS: configuredHostList(environment["TERRENCE_OUTBOUND_ALLOW_HOSTS"]),
   });
 }

@@ -4,6 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens,
+  configurationVersions,
   organizationMemberships,
   organizations,
   projects,
@@ -129,6 +130,33 @@ describe("remote-state consumer precedence (STATE-005)", () => {
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(organizations).where(eq(organizations.id, otherOrgId));
     await db.delete(users).where(eq(users.id, `user-rscons-${suffix}`));
+  });
+
+  test("VCS speculative run credentials need verified admission before consuming shared state", async () => {
+    const cvId = `cv-trust-${suffix}`;
+    await db.insert(configurationVersions).values({
+      id: cvId,
+      workspaceId: explicitConsumer,
+      source: "github",
+      speculative: true,
+      ingressAttributes: { pullRequestNumber: 7 },
+    });
+    await db.update(runs).set({ configurationVersionId: cvId, planOnly: true }).where(eq(runs.id, runInConsumer));
+    try {
+      for (const endpoint of ["current-state-version", "current-state-version-outputs"]) {
+        expect((await request(`/api/v2/workspaces/${producer}/${endpoint}`, consumerRunToken)).status).toBe(404);
+      }
+      await db
+        .update(configurationVersions)
+        .set({ ingressAttributes: { pullRequestNumber: 7, trustedPullRequest: true } })
+        .where(eq(configurationVersions.id, cvId));
+      expect((await request(`/api/v2/workspaces/${producer}/current-state-version`, consumerRunToken)).status).toBe(
+        200,
+      );
+    } finally {
+      await db.update(runs).set({ configurationVersionId: null, planOnly: false }).where(eq(runs.id, runInConsumer));
+      await db.delete(configurationVersions).where(eq(configurationVersions.id, cvId));
+    }
   });
 
   // --- Precedence, pinned against the resolver directly ---

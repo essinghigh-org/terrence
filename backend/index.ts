@@ -224,7 +224,7 @@ if (isPostgres && !haEnabled()) {
 // #576). Warn once so reverse-proxy deployments set it.
 if (typeof process.env["PUBLIC_URL"] !== "string" || process.env["PUBLIC_URL"] === "") {
   console.warn(
-    "[terrence] PUBLIC_URL is not set. Generated upload/download URLs and private " +
+    "[terrence] PUBLIC_URL is not set. DNS hostnames require TERRENCE_ALLOWED_HOSTS. Generated upload/download URLs and private " +
       "registry resolution fall back to proxy headers, then localhost. Set PUBLIC_URL " +
       "to the outward address (for example https://terraform.example.com) when serving " +
       "behind a reverse proxy or using the private registry.",

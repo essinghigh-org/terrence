@@ -4,7 +4,79 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, refreshSessions, ssoChallenges, user2FA, users } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
+import { issueMfaChallenge } from "../../src/lib/mfa-challenge";
 import { generateTotpCode, generateTotpSecret, otpauthUrl, verifyTotp } from "../../src/lib/totp";
+
+test("MFA failures persist across password challenges and lock pending challenges account-wide", async () => {
+  const id = `mfa-lock-${crypto.randomUUID()}`;
+  const secret = generateTotpSecret();
+  await db.insert(users).values({
+    id,
+    username: id,
+    passwordHash: await Bun.password.hash("test-password"),
+    loginFailedAttempts: 4,
+    loginFailureWindowStartedAt: Date.now(),
+  });
+  await db.insert(user2FA).values({ userId: id, secret, enabled: true });
+  try {
+    const pending = await issueMfaChallenge(id);
+    const login = await api("POST", "/api/v2/users/login", {
+      data: { attributes: { username: id, password: "test-password" } },
+    });
+    expect(login.status).toBe(200);
+    expect((await db.query.users.findFirst({ where: eq(users.id, id) }))?.loginFailedAttempts).toBe(4);
+    const wrong = ["000000", "111111", "222222", "333333"].find((code) => !verifyTotp(secret, code))!;
+    const failed = await api("POST", "/api/v2/users/login/mfa", {
+      data: {
+        attributes: {
+          "challenge-token": login.json.data?.attributes?.["mfa-challenge-token"],
+          code: wrong,
+        },
+      },
+    });
+    expect(failed.status).toBe(401);
+    expect((await db.query.users.findFirst({ where: eq(users.id, id) }))?.loginLockedUntil).toBeGreaterThan(Date.now());
+    const locked = await api("POST", "/api/v2/users/login/mfa", {
+      data: {
+        attributes: {
+          "challenge-token": pending,
+          code: generateTotpCode(secret),
+        },
+      },
+    });
+    expect(locked.status).toBe(401);
+    expect(await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, id) })).toEqual([]);
+  } finally {
+    await db.delete(users).where(eq(users.id, id));
+  }
+});
+
+test("successful MFA completion clears accumulated login failures", async () => {
+  const id = `mfa-success-${crypto.randomUUID()}`;
+  const secret = generateTotpSecret();
+  await db.insert(users).values({
+    id,
+    username: id,
+    passwordHash: "fixture",
+    loginFailedAttempts: 2,
+    loginFailureWindowStartedAt: Date.now(),
+  });
+  await db.insert(user2FA).values({ userId: id, secret, enabled: true });
+  try {
+    const result = await api("POST", "/api/v2/users/login/mfa", {
+      data: {
+        attributes: {
+          "challenge-token": await issueMfaChallenge(id),
+          code: generateTotpCode(secret),
+        },
+      },
+    });
+    expect(result.status).toBe(200);
+    expect((await db.query.users.findFirst({ where: eq(users.id, id) }))?.loginFailedAttempts).toBe(0);
+  } finally {
+    await db.delete(users).where(eq(users.id, id));
+  }
+});
 
 async function api(
   method: string,

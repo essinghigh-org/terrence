@@ -13,6 +13,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import {
   agentJobs,
+  configurationVersions,
   auditLogs,
   logs,
   stateOutputIndex,
@@ -753,6 +754,35 @@ function decodeStateVersionBodies(
   return { statePayload, jsonState, jsonStateOutputs };
 }
 
+/** A planning credential is read-only, even when its creator can later apply. */
+async function assertRunStateWrite(run: NonNullable<ParamCtx["run"]>, workspaceId: string): Promise<void> {
+  const active = await db.query.runs.findFirst({ where: eq(runs.id, run.runId) });
+  const configuration =
+    active?.configurationVersionId == null
+      ? undefined
+      : await db.query.configurationVersions.findFirst({
+          where: eq(configurationVersions.id, active.configurationVersionId),
+        });
+  if (
+    run.workspaceId !== workspaceId ||
+    active?.workspaceId !== workspaceId ||
+    active.status !== "applying" ||
+    active.planOnly ||
+    active.softDeletedAt !== null ||
+    configuration?.speculative === true
+  ) {
+    throw new StateVersionRejected(403, {
+      errors: [
+        {
+          status: "403",
+          title: "Forbidden",
+          detail: "Run credentials may write state only during a non-speculative apply",
+        },
+      ],
+    });
+  }
+}
+
 async function resolveStateVersionWorkspace(
   workspaceId: string,
   run: ParamCtx["run"],
@@ -760,6 +790,7 @@ async function resolveStateVersionWorkspace(
   orgId: string | null,
   teamId: string | null,
 ): Promise<typeof workspaces.$inferSelect> {
+  if (run !== null) await assertRunStateWrite(run, workspaceId);
   const ws =
     run !== null && run.workspaceId === workspaceId
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
@@ -1375,6 +1406,7 @@ async function resolveUploadWorkspace(
   orgId: string | null,
   teamId: string | null,
 ) {
+  if (run !== null) await assertRunStateWrite(run, workspaceId);
   const ws =
     run !== null && run.workspaceId === workspaceId
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.NODE_ENV ??= "test";
+process.env["TERRENCE_ALLOWED_HOSTS"] ??= "terrence.test,test.local,t";
 process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] ??= "true";
 // The run sandbox is fail-closed by default; CI/dev hosts usually lack
 // the Landlock ABI the sandbox needs, so tests explicitly opt out.

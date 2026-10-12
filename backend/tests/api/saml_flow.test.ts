@@ -100,7 +100,7 @@ describe("SAML SSO flow", () => {
     await db
       .insert(organizations)
       .values({ id: orgId, name: orgName, samlEnabled: true, ownersTeamSamlRoleId: "admins" });
-    await db.insert(teams).values({ id: `team-dev-${suffix}`, orgId, name: "developers" });
+    await db.insert(teams).values({ id: `team-dev-${suffix}`, orgId, name: "developers", ssoTeamId: "developers" });
     await db.insert(apiTokens).values({
       id: `api-samlflow-${suffix}`,
       token: createHash("sha256").update(adminToken).digest("hex"),
@@ -272,8 +272,8 @@ describe("SAML SSO flow", () => {
       process.env.NODE_ENV = "production";
       delete process.env["PUBLIC_URL"];
       const response = await app.handle(new Request("https://spoofed.example.test/users/saml/auth"));
-      expect(response.status).toBe(502);
-      expect(await response.text()).toContain("PUBLIC_URL");
+      expect(response.status).toBe(421);
+      expect(response.headers.get("set-cookie")).toBeNull();
     } finally {
       if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = previousNodeEnv;
@@ -557,6 +557,46 @@ describe("SAML SSO flow", () => {
     expect(await response.text()).toContain("confirmation");
   });
 
+  test("requires explicit group mapping before admitting a user to an organization", async () => {
+    const otherOrg = `org-unmapped-${suffix}`;
+    const username = `unmapped-${suffix}`;
+    await db.insert(organizations).values({ id: otherOrg, name: otherOrg, samlEnabled: true });
+    await db.insert(teams).values({ id: otherOrg, orgId: otherOrg, name: "developers" });
+    try {
+      const response = await validAcs({ username, email: `${username}@example.com`, groups: ["developers"] });
+      expect(response.status).toBe(200);
+      const user = await db.query.users.findFirst({ where: eq(users.username, username) });
+      expect(user).toBeDefined();
+      expect(
+        await db.query.organizationMemberships.findFirst({
+          where: and(eq(organizationMemberships.orgId, otherOrg), eq(organizationMemberships.userId, user!.id)),
+        }),
+      ).toBeUndefined();
+      expect(
+        await db.query.teamMemberships.findFirst({
+          where: and(eq(teamMemberships.teamId, otherOrg), eq(teamMemberships.userId, user!.id)),
+        }),
+      ).toBeUndefined();
+      expect(
+        await db.query.organizationMemberships.findFirst({
+          where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, user!.id)),
+        }),
+      ).toBeDefined();
+    } finally {
+      await db.delete(organizations).where(eq(organizations.id, otherOrg));
+    }
+  });
+
+  test("an empty group assertion creates no organization memberships", async () => {
+    const username = `no-groups-${suffix}`;
+    expect((await validAcs({ username, email: `${username}@example.com`, groups: [] })).status).toBe(200);
+    const user = await db.query.users.findFirst({ where: eq(users.username, username) });
+    expect(user).toBeDefined();
+    expect(
+      await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.userId, user!.id) }),
+    ).toEqual([]);
+  });
+
   test("maps groups to teams and the owners role", async () => {
     const response = await validAcs({
       username: `grouped-${suffix}`,
@@ -599,7 +639,7 @@ describe("SAML SSO flow", () => {
     ).not.toBeUndefined();
 
     // Next login omits the groups attribute; the empty-group synchronization
-    // prunes the SAML-sourced team membership and downgrades the org role.
+    // prunes both SAML-sourced team and organization membership.
     const second = await validAcs({
       username: groupedUsername,
       email: `${groupedUsername}@example.com`,
@@ -613,7 +653,7 @@ describe("SAML SSO flow", () => {
     const membershipAfter = await db.query.organizationMemberships.findFirst({
       where: and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.userId, grouped!.id)),
     });
-    expect(membershipAfter?.role).toBe("member");
+    expect(membershipAfter).toBeUndefined();
   });
 
   test("falls back to the default email attributes when attrEmail is cleared", async () => {

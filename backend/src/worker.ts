@@ -1,3 +1,4 @@
+import { runConfigurationTrusted } from "./lib/run-trust";
 import { readConfinedSavedPlan, writeConfinedSavedPlan } from "./lib/saved-plan-files";
 import { integerSetting } from "./lib/runtime-config";
 import { normalizeRunVariables } from "./lib/run-variables";
@@ -2724,6 +2725,8 @@ async function executeRunImpl(runId: string): Promise<void> {
   let plannedAgainstState: { id: string | null; serial: number } = { id: null, serial: 0 };
 
   try {
+    if (!(await runConfigurationTrusted(run)))
+      throw new Error("Pull-request configuration lacks trusted repository admission");
     await preparePlanWorkspace(runId, workspace, org, run.configurationVersionId, workDir);
     if (!(await runPrePlanGate(runId, workspace, org, run.operation))) return;
 

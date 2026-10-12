@@ -20,6 +20,8 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
   function mrPayload(): Record<string, unknown> {
     return {
       object_attributes: {
+        source_project_id: 123,
+        target_project_id: 123,
         action: "open",
         iid: 7,
         source_branch: "feature",
@@ -33,6 +35,7 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
         },
       },
       project: {
+        id: 123,
         path_with_namespace: "acme/infra",
         git_http_url: "https://gitlab.example.com/acme/infra.git",
         web_url: "https://gitlab.example.com/acme/infra",
@@ -126,6 +129,16 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
     tarballFetches = 0;
   }
 
+  it("does not admit fork or unidentified merge-request heads", async () => {
+    for (const sourceProject of [999, undefined]) {
+      const payload = mrPayload();
+      (payload["object_attributes"] as Record<string, unknown>)["source_project_id"] = sourceProject;
+      await handleGitlabWebhook("Merge Request Hook", payload);
+      expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
+      expect(tarballFetches).toBe(0);
+    }
+  });
+
   it("does not create a run when the MR changes do not match the trigger patterns", async () => {
     resetTarballCounter();
     mergeRequestDiffs = [{ old_path: "docs/readme.md", new_path: "docs/readme.md" }];
@@ -205,6 +218,7 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
       total_commits_count: 21,
       commits: [{ modified: ["docs/readme.md"] }],
       project: {
+        id: 123,
         path_with_namespace: "acme/infra",
         git_http_url: "https://gitlab.example.com/acme/infra.git",
         web_url: "https://gitlab.example.com/acme/infra",

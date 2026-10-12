@@ -8,6 +8,7 @@ import {
   configurationVersions,
   runs,
   logs,
+  runTokens,
   githubAppInstallations,
 } from "../../src/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -92,6 +93,29 @@ async function makeTarball(archivePath: string): Promise<void> {
   const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", configDir, "."]);
   expect(await tar.exited).toBe(0);
 }
+
+test("legacy PR configurations fail before preparing execution files or credentials", async () => {
+  const { orgId, workspaceId, cvId, runId } = await seedVcsFixtures();
+  await db.insert(configurationVersions).values({
+    id: cvId,
+    workspaceId,
+    source: "github",
+    speculative: true,
+    status: "uploaded",
+    ingressAttributes: { pullRequestNumber: 1 },
+  });
+  await createRun(runId, workspaceId, cvId);
+  try {
+    const failure = await executeRun(runId).catch((error: unknown): unknown => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("Pull-request configuration lacks trusted repository admission");
+    expect((await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status).toBe("errored");
+    expect(await db.query.runTokens.findMany({ where: eq(runTokens.runId, runId) })).toEqual([]);
+    expect(await waitForPlanLog(runId, "trusted repository admission")).toBe(true);
+  } finally {
+    await db.delete(organizations).where(eq(organizations.id, orgId));
+  }
+});
 
 test("a run whose VCS configuration download errored fails loudly instead of planning empty", async () => {
   const { workspaceId, cvId, runId } = await seedVcsFixtures();

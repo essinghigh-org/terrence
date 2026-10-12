@@ -1,3 +1,4 @@
+import { runConfigurationTrusted } from "./run-trust";
 import { integerSetting } from "./runtime-config";
 import { newResourceId } from "./resource-id";
 import { tokenHashCandidates } from "./token-service";
@@ -710,7 +711,7 @@ export async function authenticateAgent(agentId: string, authorization: string |
 
 async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undefined> {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, job.runId) });
-  if (run === undefined) return undefined;
+  if (run === undefined || !(await runConfigurationTrusted(run))) return undefined;
   const [workspace, configuration, inputState, planJob] = await Promise.all([
     db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) }),
     run.configurationVersionId === null
@@ -807,6 +808,22 @@ async function validateCandidateRun(
       .update(agentJobs)
       .set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" })
       .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+    return null;
+  }
+  if (!(await runConfigurationTrusted(run))) {
+    await db
+      .update(agentJobs)
+      .set({
+        status: "errored",
+        completedAt: Date.now(),
+        errorMessage: "Pull-request configuration lacks trusted repository admission",
+      })
+      .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+    await db
+      .update(runs)
+      .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
+      .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+    notifyRunStatus(run.id, "errored");
     return null;
   }
   return { run, expectedRunStatus, nextRunStatus };

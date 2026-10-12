@@ -2,10 +2,10 @@ import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { registryComponents } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { TFP_API_VERSION } from "../lib/constants";
-import { checkOrganizationPermission } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -147,13 +147,47 @@ async function insertComponentRow(
 
 export const registryComponentsRoutes = new Elysia({ name: "registry-components" })
   .use(authPlugin)
-  .get("/api/registry/v1/components", async ({ request, set }: Ctx): Promise<unknown> => {
-    const url = new URL(request.url);
-    const orgName = url.searchParams.get("organization") ?? url.searchParams.get("filter[organization]") ?? "";
-    if (orgName === "") {
+  .get(
+    "/api/registry/v1/components",
+    async ({ request, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
+      const url = new URL(request.url);
+      const orgName = url.searchParams.get("organization") ?? url.searchParams.get("filter[organization]") ?? "";
+      if (orgName === "") {
+        const producers = await db.selectDistinct({ orgId: registryComponents.orgId }).from(registryComponents);
+        const readable = await Promise.all(
+          producers.map(async (row) =>
+            checkOrgPermission(user?.id, row.orgId, "member", tokenOrgId ?? null, teamId ?? null, "registry:read"),
+          ),
+        );
+        const allowedOrgIds = producers
+          .filter((_, index): boolean => readable[index] === true)
+          .map((row): string => row.orgId);
+        const rows =
+          allowedOrgIds.length === 0
+            ? []
+            : await db.query.registryComponents.findMany({
+                where: inArray(registryComponents.orgId, allowedOrgIds),
+                orderBy: (t, { desc }) => [desc(t.createdAt)],
+                limit: 50,
+              });
+        const h = (set as { headers: Record<string, string | number> }).headers;
+        h["TFP-API-Version"] = TFP_API_VERSION;
+        return {
+          data: rows.map(componentResource),
+          meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } },
+        };
+      }
+      const org = await cachedOrgByName(orgName);
+      if (
+        org === undefined ||
+        !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId ?? null, teamId ?? null, "registry:read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
       const rows = await db.query.registryComponents.findMany({
+        where: eq(registryComponents.orgId, org.id),
         orderBy: (t, { desc }) => [desc(t.createdAt)],
-        limit: 50,
       });
       const h = (set as { headers: Record<string, string | number> }).headers;
       h["TFP-API-Version"] = TFP_API_VERSION;
@@ -161,32 +195,23 @@ export const registryComponentsRoutes = new Elysia({ name: "registry-components"
         data: rows.map(componentResource),
         meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } },
       };
-    }
-    const org = await cachedOrgByName(orgName);
-    if (org === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    const rows = await db.query.registryComponents.findMany({
-      where: eq(registryComponents.orgId, org.id),
-      orderBy: (t, { desc }) => [desc(t.createdAt)],
-    });
-    const h = (set as { headers: Record<string, string | number> }).headers;
-    h["TFP-API-Version"] = TFP_API_VERSION;
-    return {
-      data: rows.map(componentResource),
-      meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } },
-    };
-  })
-  .get("/api/registry/v1/components/:id", async ({ params, set }: Ctx): Promise<unknown> => {
-    const id = params["id"] ?? "";
-    const row = await db.query.registryComponents.findFirst({ where: eq(registryComponents.id, id) });
-    if (row === undefined) {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found", detail: `Component ${id} not found` }] };
-    }
-    return { data: componentResource(row) };
-  })
+    },
+  )
+  .get(
+    "/api/registry/v1/components/:id",
+    async ({ params, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
+      const id = params["id"] ?? "";
+      const row = await db.query.registryComponents.findFirst({ where: eq(registryComponents.id, id) });
+      if (
+        row === undefined ||
+        !(await checkOrgPermission(user?.id, row.orgId, "member", tokenOrgId ?? null, teamId ?? null, "registry:read"))
+      ) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: `Component ${id} not found` }] };
+      }
+      return { data: componentResource(row) };
+    },
+  )
   .post(
     "/api/registry/v1/components",
     async ({ body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {

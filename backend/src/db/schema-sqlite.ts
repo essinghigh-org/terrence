@@ -711,6 +711,7 @@ export const configurationVersions = sqliteTable(
       branch?: string;
       tag?: string;
       pullRequestNumber?: number;
+      trustedPullRequest?: boolean;
       senderUsername?: string;
       senderAvatarUrl?: string;
       senderProviderId?: string;

@@ -78,12 +78,14 @@ function pullRequestPayload(): Record<string, unknown> {
     action: "opened",
     number: 42,
     pull_request: {
-      head: { ref: "main", sha: "abcdef123abcdef123abcdef123abcdef123abcd" },
+      head: { ref: "main", sha: "abcdef123abcdef123abcdef123abcdef123abcd", repo: { id: 123 } },
+      base: { ref: "main", repo: { id: 123 } },
       title: "New feature",
       html_url: "https://github.com/hashicorp/terraform/pull/42",
     },
     sender: { login: "octocat" },
     repository: {
+      id: 123,
       full_name: "hashicorp/terraform",
       clone_url: "https://github.com/hashicorp/terraform.git",
     },
@@ -495,6 +497,20 @@ describe("GitHub Webhooks", () => {
       state: "failure",
     });
   });
+
+  for (const headRepo of [{ id: 999 }, undefined]) {
+    test(`pull requests require a verified same-repository head (${headRepo === undefined ? "missing" : "fork"})`, async () => {
+      const payload = pullRequestPayload();
+      const pr = payload["pull_request"] as Record<string, unknown>;
+      const head = pr["head"] as Record<string, unknown>;
+      head["repo"] = headRepo;
+      const deliveryId = crypto.randomUUID();
+      expect((await sendWebhook("pull_request", payload, deliveryId)).status).toBe(200);
+      await waitForDelivery(deliveryId);
+      expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
+      expect(tarballFetches).toBe(0);
+    });
+  }
 
   test("matching pull request creates a speculative run", async () => {
     const deliveryId = crypto.randomUUID();

@@ -737,7 +737,7 @@ async function checkPostLoginState(
   localPasswordAuthenticated: boolean,
   set: SetObj,
 ): Promise<unknown> {
-  if (localPasswordAuthenticated && isLoginLocked(user)) {
+  if (isLoginLocked(user)) {
     (set as { status: number }).status = 401;
     return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
   }
@@ -751,7 +751,8 @@ async function checkPostLoginState(
   }
   // Keep the compare-and-clear even when the stale user row appears clean:
   // a failed login can set a lock while password verification is in flight.
-  if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
+  const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+  if (localPasswordAuthenticated && mfa?.enabled !== true && !(await clearLoginFailures(user.id))) {
     (set as { status: number }).status = 401;
     return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
   }
@@ -819,16 +820,22 @@ async function validateMfaChallenge(
     };
   }
 
-  const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
-  if (mfa === undefined || mfa.enabled !== true) {
-    (set as { status: number }).status = 401;
-    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
-  }
-  if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
-    (set as { status: number }).status = 401;
-    return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
-  }
-  return { userId: challenge.userId };
+  return withDbLock(`mfa-login:${challenge.userId}`, async () => {
+    const account = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
+    const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
+    const denied = (): { error: unknown } => {
+      (set as { status: number }).status = 401;
+      return { error: { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] } };
+    };
+    if (account === undefined || isUserLoginBlocked(account) || isLoginLocked(account) || mfa?.enabled !== true)
+      return denied();
+    if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
+      await recordFailedLogin(challenge.userId);
+      return denied();
+    }
+    if (!(await clearLoginFailures(challenge.userId))) return denied();
+    return { userId: challenge.userId };
+  });
 }
 
 async function issueGraceAccessToken(

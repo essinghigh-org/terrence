@@ -286,6 +286,32 @@ describe("GitLab and Bitbucket webhooks", () => {
     ).toBe("uploaded");
   });
 
+  test("Bitbucket PR admission requires matching source and destination repository UUIDs", async () => {
+    const repositoryId = "{fixture-repository}";
+    for (const sourceId of ["{other-repository}", undefined, repositoryId]) {
+      const payload = {
+        actor: bitbucketPayload.actor,
+        repository: { ...bitbucketPayload.repository, uuid: repositoryId },
+        pullrequest: {
+          id: 7,
+          title: "Fixture change",
+          source: { repository: { uuid: sourceId }, branch: { name: "feature" }, commit: { hash: "a".repeat(40) } },
+          destination: { repository: { uuid: repositoryId }, branch: { name: "main" } },
+          links: { html: { href: "https://bitbucket.org/platform/infrastructure/pull-requests/7" } },
+        },
+      };
+      await handleBitbucketWebhook("pullrequest:created", payload);
+      const created = await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketWorkspaceId) });
+      expect(created).toHaveLength(sourceId === repositoryId ? 1 : 0);
+      if (sourceId === repositoryId) {
+        const configuration = await db.query.configurationVersions.findFirst({
+          where: eq(configurationVersions.id, created[0]!.configurationVersionId!),
+        });
+        expect(configuration?.ingressAttributes?.trustedPullRequest).toBe(true);
+      }
+    }
+  });
+
   test("prefers provider delivery UUID headers for durable identity", async () => {
     const gitlabBody = JSON.stringify(gitlabPayload);
     const gitlabResponse = await app.handle(

@@ -52,6 +52,7 @@ type WebhookDetails = Readonly<{
   readonly filesChanged: ReadonlySet<string>;
   readonly githubInstallationId?: number;
   readonly pullRequestNumber?: number;
+  readonly trustedPullRequest?: boolean;
   readonly repoFullName: string;
   readonly senderUsername: string;
   readonly senderAvatarUrl?: string;
@@ -381,6 +382,23 @@ function buildGithubPrDetails(
   };
 }
 
+function trustedGithubPullRequest(payload: WebhookPayload): boolean {
+  const pullRequest = asRecord(payload["pull_request"]);
+  const head = asRecord(pullRequest?.["head"]);
+  const baseRef = asRecord(pullRequest?.["base"]);
+  const headRepository = asRecord(head?.["repo"]);
+  const baseRepository = asRecord(baseRef?.["repo"]);
+  const repository = asRecord(payload["repository"]);
+  const repositoryId = repository?.["id"];
+  return (
+    typeof repositoryId === "number" &&
+    Number.isSafeInteger(repositoryId) &&
+    repositoryId > 0 &&
+    headRepository?.["id"] === repositoryId &&
+    baseRepository?.["id"] === repositoryId
+  );
+}
+
 function parseGithubPullRequestWebhook(
   payload: WebhookPayload,
   base: DeepReadonly<{
@@ -412,7 +430,10 @@ function parseGithubPullRequestWebhook(
     !Number.isSafeInteger(pullRequestNumber)
   )
     return undefined;
-  return buildGithubPrDetails(branch, targetBranch, base, commitMessage, commitSha, commitUrl, pullRequestNumber);
+  return {
+    ...buildGithubPrDetails(branch, targetBranch, base, commitMessage, commitSha, commitUrl, pullRequestNumber),
+    trustedPullRequest: trustedGithubPullRequest(payload),
+  };
 }
 
 function extractGitlabCommits(payload: WebhookPayload): unknown[] {
@@ -540,6 +561,7 @@ function buildPullRequestDetails(
   commitSha: string,
   commitUrl: string,
   pullRequestNumber: number,
+  trustedPullRequest: boolean,
 ): ParsedProviderWebhook {
   return {
     kind: "pull_request",
@@ -552,11 +574,23 @@ function buildPullRequestDetails(
       commitUrl,
       filesChanged: new Set<string>(),
       pullRequestNumber,
+      trustedPullRequest,
       repoFullName,
       senderUsername,
       sourceIdentity,
     },
   };
+}
+
+function trustedGitlabMergeRequest(payload: WebhookPayload): boolean {
+  const attributes = asRecord(payload["object_attributes"]);
+  return (
+    typeof attributes?.["source_project_id"] === "number" &&
+    Number.isSafeInteger(attributes["source_project_id"]) &&
+    attributes["source_project_id"] > 0 &&
+    attributes["source_project_id"] === attributes["target_project_id"] &&
+    attributes["target_project_id"] === asRecord(payload["project"])?.["id"]
+  );
 }
 
 function parseGitlabMergeRequestWebhook(
@@ -596,6 +630,7 @@ function parseGitlabMergeRequestWebhook(
     commitSha,
     commitUrl,
     pullRequestNumber,
+    trustedGitlabMergeRequest(payload),
   );
 }
 
@@ -766,6 +801,17 @@ function extractBitbucketPrFields(payload: WebhookPayload): {
   };
 }
 
+function trustedBitbucketPullRequest(payload: WebhookPayload): boolean {
+  const pr = asRecord(payload["pullrequest"]);
+  const repositoryId = asRecord(payload["repository"])?.["uuid"];
+  return (
+    typeof repositoryId === "string" &&
+    repositoryId !== "" &&
+    asRecord(asRecord(pr?.["source"])?.["repository"])?.["uuid"] === repositoryId &&
+    asRecord(asRecord(pr?.["destination"])?.["repository"])?.["uuid"] === repositoryId
+  );
+}
+
 function parseBitbucketPullRequestWebhook(
   payload: WebhookPayload,
   repoFullName: string,
@@ -795,6 +841,7 @@ function parseBitbucketPullRequestWebhook(
     commitSha,
     commitUrl,
     pullRequestNumber,
+    trustedBitbucketPullRequest(payload),
   );
 }
 
@@ -2260,7 +2307,9 @@ function webhookIngressAttributes(
           senderProviderId: webhookProviderId(provider, credentials),
         }),
     cloneUrl: details.cloneUrl,
-    ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
+    ...(details.pullRequestNumber === undefined
+      ? {}
+      : { pullRequestNumber: details.pullRequestNumber, trustedPullRequest: details.trustedPullRequest === true }),
   };
 }
 
@@ -2342,6 +2391,10 @@ async function createWebhookRun(
   resolveCredentials: () => Promise<ProviderCredentials | undefined>,
 ): Promise<OAuthWebhookRun | undefined> {
   const isSpeculative = kind === "pull_request";
+  // Automatic plans receive workspace credentials. Forks and incomplete
+  // repository identities require review/merge into the connected repository;
+  // a global fork opt-in is not per-revision authorization to release secrets.
+  if (isSpeculative && details.trustedPullRequest !== true) return undefined;
   // Local-execution workspaces never run remotely (issue #567): VCS events
   // must not queue remote runs for them.
   if (workspace.executionMode === "local") return undefined;

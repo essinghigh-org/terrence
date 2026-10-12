@@ -1,3 +1,4 @@
+import { requestHostAllowed } from "./lib/request-host";
 import { SettingsValidationError } from "./lib/settings-contract";
 import { databaseConstraint } from "./lib/database-errors";
 import { executionSetting, integerSetting } from "./lib/runtime-config";
@@ -1047,6 +1048,11 @@ function rejectScopedSiteAdminAccess(
 }
 
 export const app = new Elysia()
+  .onRequest(({ request, server, set }: RequestContext): Record<string, unknown> | undefined => {
+    if (requestHostAllowed(request, server)) return undefined;
+    (set as { status: number }).status = 421;
+    return { errors: [{ status: "421", title: "Misdirected Request" }] };
+  })
   .use(authPlugin)
   .onBeforeHandle(
     ({

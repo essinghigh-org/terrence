@@ -63,6 +63,7 @@ RATE_LIMIT_ fail startup. Unrelated process variables remain available.
 | TERRENCE_AGENT_UPDATE_SHA256 | unset | optional | yes |
 | TERRENCE_AGENT_UPDATE_URL | unset | optional | yes |
 | TERRENCE_AGENT_UPDATE_VERSION | unset | optional | yes |
+| TERRENCE_ALLOWED_HOSTS | empty | list | yes |
 | TERRENCE_ALLOW_INSECURE_OAUTH_URLS | false | true, false, 1, or 0 | yes |
 | TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS | false | true, false, 1, or 0 | yes |
 | TERRENCE_ALLOW_PRIVATE_URLS | false | true, false, 1, or 0 | yes |
@@ -121,6 +122,11 @@ RATE_LIMIT_ fail startup. Unrelated process variables remain available.
 | TERRENCE_WORKER_POLL_MS | 1500 | Integer 100–2147483647 | yes |
 
 PUBLIC_URL accepts an HTTP(S) URL without credentials, query, or fragment.
+The public listener accepts that hostname, localhost, and literal IP addresses.
+Additional DNS names require TERRENCE_ALLOWED_HOSTS, a comma-separated list of
+exact hostnames (no wildcards, schemes, ports, or paths). Unknown Host names are
+rejected before routing. Proxies must preserve the public Host or use an explicitly
+configured internal alias; trusted X-Forwarded-Host values are also checked.
 CORS_ORIGIN accepts comma-separated HTTP(S) origins without paths; an empty value
 means no explicit origin list. TERRENCE_RUN_SANDBOX accepts true/false and the
 aliases 1/0, yes/no, on/off, and none (disabled). TERRENCE_RUN_NET_POLICY accepts

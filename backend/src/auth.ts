@@ -1,6 +1,7 @@
+import { runConfigurationTrusted } from "./lib/run-trust";
 import { Elysia } from "elysia";
 import { db } from "./db";
-import { apiTokens, refreshSessions, runTokens, users, teams, systemApiTokens } from "./db/schema";
+import { apiTokens, refreshSessions, runTokens, runs, users, teams, systemApiTokens } from "./db/schema";
 import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { tokenHashCandidates } from "./lib/token-service";
 import { setRequestSiteAdmin } from "./lib/request-scope";
@@ -122,6 +123,8 @@ async function resolveRunToken(
   if (runToken.expiresAt <= now) {
     return anonymousAuth("expired");
   }
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runToken.runId) });
+  if (run?.softDeletedAt !== null || !(await runConfigurationTrusted(run))) return anonymousAuth("revoked");
   rateLimitPrincipals.set(request, `run:${runToken.runId}`);
   return {
     ...anonymousAuth(null),

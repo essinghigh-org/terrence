@@ -375,8 +375,8 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<SsoProvis
 
 /**
  * SAML group mapping: groups matching an organization's owners-team-saml-role-id
- * grant the owner role; groups matching existing team names grant team
- * membership; all SAML users of SAML-enabled organizations get basic membership.
+ * grant the owner role; groups matching explicit team SSO IDs grant team
+ * membership. Admission requires an explicit owner or team group mapping.
  */
 type SamlGroupMappingData = Readonly<{
   samlOrgs: readonly (typeof organizations.$inferSelect)[];
@@ -416,6 +416,13 @@ async function loadSamlGroupMappingData(database: SsoDatabase, userId: string): 
   };
 }
 
+function promoteSamlOwner(
+  isOwner: boolean,
+  membership: Readonly<SamlGroupMappingData["memberships"][number]>,
+): boolean {
+  return isOwner && membership.role !== "owner" && membership.ssoSource === "saml";
+}
+
 async function applySamlGroupMapping(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
   database: SsoDatabase,
@@ -434,6 +441,11 @@ async function applySamlGroupMapping(
   for (const org of samlOrgs) {
     const existing = membershipByOrg.get(org.id);
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
+    const matchedTeams = (teamsByOrg.get(org.id) ?? []).filter(
+      (team): boolean => team.ssoTeamId !== null && team.ssoTeamId !== "" && groupSet.has(team.ssoTeamId),
+    );
+    if (!isOwner && matchedTeams.length === 0) continue;
+    if (existing !== undefined && existing.status !== "active") continue;
     if (existing === undefined) {
       membershipInserts.push({
         id: newResourceId("orgmem"),
@@ -445,7 +457,7 @@ async function applySamlGroupMapping(
         // remove or downgrade it without touching admin-granted rows.
         ssoSource: "saml",
       });
-    } else if (isOwner && existing.role !== "owner" && existing.ssoSource === "saml") {
+    } else if (promoteSamlOwner(isOwner, existing)) {
       // Preserve admin-granted provenance so pruning never removes the row.
       await database
         .update(organizationMemberships)
@@ -459,10 +471,6 @@ async function applySamlGroupMapping(
         );
     }
 
-    const matchedTeams = (teamsByOrg.get(org.id) ?? []).filter((team): boolean =>
-      team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name),
-    );
-    if (matchedTeams.length === 0) continue;
     const inserts = matchedTeams
       .filter((team): boolean => !existingTeamIds.has(team.id))
       .map((team): typeof teamMemberships.$inferInsert => ({
@@ -484,8 +492,8 @@ async function applySamlGroupMapping(
  * the SAML mapper created (ssoSource = 'saml') are ever removed or
  * downgraded; admin-granted memberships are left untouched. Called when the
  * same identity logs in with fewer groups. Managed organization memberships
- * are retained as members when their group disappears; only team memberships
- * are removed. Admin-granted memberships remain untouched.
+ * are removed when their last explicit group grant disappears.
+ * Admin-granted memberships remain untouched.
  */
 async function pruneSamlGroupMappings(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle's database client type is mutable by contract
@@ -507,7 +515,7 @@ async function pruneSamlGroupMappings(
     const teamsForOrg = teamByOrg.get(org.id) ?? [];
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle rows are mutable by contract
     const matches = (team: Readonly<(typeof teamsForOrg)[number]>): boolean =>
-      team.ssoTeamId !== null ? groupSet.has(team.ssoTeamId) : groupSet.has(team.name);
+      team.ssoTeamId !== null && team.ssoTeamId !== "" && groupSet.has(team.ssoTeamId);
     const staleTeamIds = teamsForOrg.filter((team): boolean => !matches(team)).map((team): string => team.id);
     if (staleTeamIds.length > 0) {
       await database
@@ -535,12 +543,7 @@ async function pruneSamlGroupMappings(
       }
       continue;
     }
-    if (membership.role !== "member") {
-      await database
-        .update(organizationMemberships)
-        .set({ role: "member" })
-        .where(eq(organizationMemberships.id, membership.id));
-    }
+    await database.delete(organizationMemberships).where(eq(organizationMemberships.id, membership.id));
   }
 }
 

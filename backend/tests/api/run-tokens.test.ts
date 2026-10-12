@@ -111,6 +111,7 @@ beforeAll(async () => {
   );
   expect(runRes.status).toBe(201);
   runA = (await runRes.json()).data.id as string;
+  await db.update(runs).set({ status: "applying" }).where(eq(runs.id, runA));
 
   await seedRegistryModule(orgA, `vpc-${suffix}`);
   await seedRegistryModule(orgB, `vpc-${suffix}`);
