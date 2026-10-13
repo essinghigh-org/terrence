@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
-import { eq, inArray } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import { startLdapFixture, stopLdapFixture, type LdapFixture } from "./ldap-fixture";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { adminSettings, apiTokens, users } from "../../src/db/schema";
+import { adminSettings, apiTokens, refreshSessions, users } from "../../src/db/schema";
 import { oauthPlugin } from "../../src/oauth";
 import { invalidatePingSsoCache } from "../../src/routes/health";
 import { invalidateSettingsCache } from "../../src/lib/settings";
@@ -149,35 +149,73 @@ describe("LDAP authentication", () => {
     expect(created?.email).toBe(`${ldapUsername}@example.com`);
   });
 
-  test("does not apply local password lockout state to LDAP authentication", async () => {
-    const provisioned = await db.query.users.findFirst({ where: eq(users.username, ldapUsername) });
-    expect(provisioned).not.toBeUndefined();
-    if (provisioned === undefined) return;
-    const lockedUntil = Date.now() + 60_000;
-    await db
-      .update(users)
-      .set({
-        loginFailedAttempts: 5,
-        loginFailureWindowStartedAt: Date.now() - 1_000,
-        loginLockedUntil: lockedUntil,
-      })
-      .where(eq(users.id, provisioned.id));
-    try {
-      const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
-      expect(response.status).toBe(200);
-      const unchanged = await db.query.users.findFirst({ where: eq(users.id, provisioned.id) });
-      expect(unchanged?.loginLockedUntil).toBe(lockedUntil);
-    } finally {
+  test.each([true, false])(
+    "honours account lockout for LDAP authentication (browser-session=%s)",
+    async (browserSession) => {
+      // Provision through the production route so this regression also runs on
+      // its own, including the CI guard-mutation check.
+      expect((await login(ldapUsername, VALID_USER_PASSWORD, browserSession)).status).toBe(200);
+      const provisioned = await db.query.users.findFirst({ where: eq(users.username, ldapUsername) });
+      expect(provisioned).not.toBeUndefined();
+      if (provisioned === undefined) throw new Error("LDAP login did not provision a user");
+      const tokenCount = async (): Promise<number> =>
+        (await db.select({ value: count() }).from(apiTokens).where(eq(apiTokens.userId, provisioned.id)))[0]!.value;
+      const sessionCount = async (): Promise<number> =>
+        (
+          await db.select({ value: count() }).from(refreshSessions).where(eq(refreshSessions.userId, provisioned.id))
+        )[0]!.value;
+      const tokensBefore = await tokenCount();
+      const sessionsBefore = await sessionCount();
+      const lockedUntil = Date.now() + 60_000;
+      const failureWindowStartedAt = Date.now() - 1_000;
       await db
         .update(users)
         .set({
-          loginFailedAttempts: 0,
-          loginFailureWindowStartedAt: null,
-          loginLockedUntil: null,
+          loginFailedAttempts: 5,
+          loginFailureWindowStartedAt: failureWindowStartedAt,
+          loginLockedUntil: lockedUntil,
         })
         .where(eq(users.id, provisioned.id));
-    }
-  });
+      try {
+        const response = await login(ldapUsername, VALID_USER_PASSWORD, browserSession);
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({
+          errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }],
+        });
+        expect(response.headers.getSetCookie()).toHaveLength(0);
+        expect(await tokenCount()).toBe(tokensBefore);
+        expect(await sessionCount()).toBe(sessionsBefore);
+        const unchanged = await db.query.users.findFirst({ where: eq(users.id, provisioned.id) });
+        expect(unchanged).toMatchObject({
+          loginFailedAttempts: 5,
+          loginFailureWindowStartedAt: failureWindowStartedAt,
+          loginLockedUntil: lockedUntil,
+        });
+
+        // Expiring only the lock must restore directory sign-in. The password
+        // failure counters must not permanently block a valid LDAP account.
+        await db
+          .update(users)
+          .set({ loginLockedUntil: Date.now() - 1 })
+          .where(eq(users.id, provisioned.id));
+        const unlocked = await login(ldapUsername, VALID_USER_PASSWORD, browserSession);
+        expect(unlocked.status).toBe(200);
+        const body = (await unlocked.json()) as { data: { attributes: { token: string } } };
+        expect(body.data.attributes.token).toMatch(/^user-/);
+        expect(await tokenCount()).toBe(tokensBefore + 1);
+        expect(await sessionCount()).toBe(sessionsBefore + (browserSession ? 1 : 0));
+      } finally {
+        await db
+          .update(users)
+          .set({
+            loginFailedAttempts: 0,
+            loginFailureWindowStartedAt: null,
+            loginLockedUntil: null,
+          })
+          .where(eq(users.id, provisioned.id));
+      }
+    },
+  );
 
   test("rejects wrong directory credentials", async () => {
     const response = await login(ldapUsername, "wrong-password", true);

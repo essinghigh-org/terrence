@@ -3,7 +3,7 @@
 ## Getting Started
 
 1. Clone the repository
-2. Ensure Bun 1.4.0 is installed
+2. Install the exact Bun version pinned in `package.json` (`packageManager`)
 3. Run `bun install` at the project root (this also installs the pre-commit hook)
 4. Build the frontend: `(cd frontend && bun run build)`
 5. Run `(cd backend && bun run index.ts)` to start the server

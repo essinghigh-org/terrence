@@ -6,6 +6,17 @@ import { basename, join, resolve } from "node:path";
 const backend = resolve(import.meta.dir, "..");
 const mutations = [
   {
+    name: "account lockout must also block LDAP authentication",
+    file: "src/routes/accounts.ts",
+    before: "  if (isLoginLocked(user)) {",
+    after: "  if (localPasswordAuthenticated && isLoginLocked(user)) {",
+    occurrences: 1,
+    testFile: "tests/api/ldap_flow.test.ts",
+    testName: "honours account lockout for LDAP authentication",
+    // The integration fixture may need to pull and start its pinned LDAP image.
+    timeoutMs: 240_000,
+  },
+  {
     name: "state permission cannot become run permission",
     file: "src/routes/runs.ts",
     before: 'findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "state-read")',
@@ -73,7 +84,13 @@ try {
       spawnSync(
         process.execPath,
         ["test", mutation.testFile, "--test-name-pattern", mutation.testName, "--max-concurrency=1", "--no-orphans"],
-        { cwd: copy, env: environment, encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024 },
+        {
+          cwd: copy,
+          env: environment,
+          encoding: "utf8",
+          timeout: "timeoutMs" in mutation ? mutation.timeoutMs : 30_000,
+          maxBuffer: 2 * 1024 * 1024,
+        },
       );
     const baseline = run();
     const baselineOutput = `${String(baseline.stdout)}${String(baseline.stderr)}`;
