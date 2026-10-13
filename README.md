@@ -84,7 +84,7 @@ ADMIN_PASSWORD="pick-a-long-password" docker compose up -d
 
 Requirements:
 
-- Bun 1.4.0
+- Bun (use the exact version pinned in `package.json` under `packageManager`)
 - Terraform >= 1.9 or OpenTofu >= 1.7
 
 ```bash

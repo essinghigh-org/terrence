@@ -32,6 +32,12 @@
       "groupName": "github-actions minor+patch"
     },
     {
+      "description": "Keep the Bun runtime in package manifests, GitHub Actions, and the Docker image on the same version.",
+      "matchDepNames": ["bun", "oven/bun"],
+      "groupName": "Bun runtime",
+      "groupSlug": "bun-runtime"
+    },
+    {
       "description": "TypeScript majors have historically required code changes (6 -> 7 needed the lint-config refresh); keep them individually reviewed.",
       "matchPackageNames": ["typescript"],
       "matchUpdateTypes": ["major"],

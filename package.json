@@ -1,16 +1,16 @@
 {
   "name": "terrence",
   "version": "1.5.0",
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "engines": {
-    "bun": "1.4.2"
+    "bun": "1.4.3"
   },
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "eslint": "^10.12.0",
-    "knip": "^6.40.0",
+    "knip": "^6.41.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "^8.71.1"
   },
