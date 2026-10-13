@@ -12,6 +12,9 @@ const workflow = `jobs:
           bun-version: "${version}" # Keep all runtime pins aligned.
 `;
 const packageJson = { packageManager: `bun@${version}`, engines: { bun: version } };
+const unpinnedStep = `      - name: A second Bun installation
+        uses: oven-sh/setup-bun@${"a".repeat(40)}
+`;
 
 function runCheck(replacement?: Readonly<{ file: string; content: string }>): Readonly<{
   exitCode: number;
@@ -80,6 +83,24 @@ describe("Bun version policy CLI", (): void => {
       label: "a missing workflow runtime pin",
       file: ".github/workflows/ci.yml",
       content: workflow.replace(/^.*bun-version:.*\n/m, ""),
+      source: "ci.yml",
+    },
+    {
+      label: "an unpinned step after a pinned step",
+      file: ".github/workflows/ci.yml",
+      content: `${workflow}${unpinnedStep}`,
+      source: "ci.yml",
+    },
+    {
+      label: "an unpinned step before a pinned step",
+      file: ".github/workflows/ci.yml",
+      content: workflow.replace("    steps:\n", `    steps:\n${unpinnedStep}`),
+      source: "ci.yml",
+    },
+    {
+      label: "an unpinned step in a different job",
+      file: ".github/workflows/ci.yml",
+      content: `${workflow}  another-job:\n    steps:\n${unpinnedStep}`,
       source: "ci.yml",
     },
   ])("rejects $label", (fixture): void => {

@@ -23,6 +23,10 @@ function checkVersion(version: string | undefined, source: string): void {
 checkVersion(Bun.version, "the current runtime");
 checkVersion(packageJson.engines.bun, "package.json engines.bun");
 
+function object(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
 const dockerPins = [...dockerfile.matchAll(/^FROM\s+oven\/bun:([^\s@]+)/gm)];
 if (dockerPins.length === 0) checkVersion(undefined, "Dockerfile");
@@ -31,9 +35,18 @@ for (const match of dockerPins) checkVersion(match[1], "Dockerfile");
 const workflowDirectory = join(root, ".github/workflows");
 for (const file of readdirSync(workflowDirectory).filter((name): boolean => /\.ya?ml$/.test(name))) {
   const workflow = readFileSync(join(workflowDirectory, file), "utf8");
-  const pins = [...workflow.matchAll(/^\s*bun-version:\s*["']?([^\s"'#]+)/gm)];
-  if (workflow.includes("oven-sh/setup-bun@") && pins.length === 0) checkVersion(undefined, file);
-  for (const match of pins) checkVersion(match[1], file);
+  const jobs = object(object(Bun.YAML.parse(workflow))["jobs"]);
+  for (const [jobName, job] of Object.entries(jobs)) {
+    const steps = object(job)["steps"];
+    if (!Array.isArray(steps)) continue;
+    for (const [index, step] of steps.entries()) {
+      const setup = object(step);
+      const action = setup["uses"];
+      if (typeof action !== "string" || !action.startsWith("oven-sh/setup-bun@")) continue;
+      const pin = object(setup["with"])["bun-version"];
+      checkVersion(typeof pin === "string" ? pin : undefined, `${file} job ${jobName} step ${index + 1}`);
+    }
+  }
 }
 
 console.log(`Bun version OK: ${expectedVersion} (runtime, package.json, Dockerfile, and GitHub Actions)`);
