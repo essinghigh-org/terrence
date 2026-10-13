@@ -17,11 +17,11 @@
     "test:profile:browser": "bun run ../backend/scripts/test-profile.ts browser"
   },
   "dependencies": {
-    "@base-ui/react": "^1.8.0",
+    "@base-ui/react": "^1.9.0",
     "@xyflow/react": "^12.12.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.53.0",
+    "lucide-react": "^1.55.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
