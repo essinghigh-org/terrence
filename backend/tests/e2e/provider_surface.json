@@ -1,8 +1,8 @@
 {
-  "_comment": "Authoritative hashicorp/tfe v0.81.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
-  "provider": "hashicorp/tfe v0.81.0",
-  "resource_count": 73,
-  "data_source_count": 43,
+  "_comment": "Authoritative hashicorp/tfe v0.82.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "provider": "hashicorp/tfe v0.82.0",
+  "resource_count": 75,
+  "data_source_count": 44,
   "resources_covered": 73,
   "data_sources_covered": 43,
   "resources": [
@@ -79,12 +79,12 @@
     {
       "name": "tfe_notification_configuration",
       "status": "covered",
-      "schema_hash": "7fac378e9b628f240a1d6ff9b84051c68ee6ca8ad500528a9eaee7305572af11"
+      "schema_hash": "25806901c75e3495fb733d153011898b7562ca184d997051e0ecf0c1585d9e08"
     },
     {
       "name": "tfe_oauth_client",
       "status": "covered",
-      "schema_hash": "180f9af8b6539f42716b783b5604f5aa6a8397723a77dcb87051b5ed95b850dd"
+      "schema_hash": "e135deff4dd3f6fb20d4149edbb9e2dfe2eba904a0ce29d1add635efa9052802"
     },
     {
       "name": "tfe_opa_version",
@@ -139,7 +139,7 @@
     {
       "name": "tfe_policy_set",
       "status": "covered",
-      "schema_hash": "ec3ab85649e2e2ebc0673965a42cb65f62172ec7c118648fbb6c57d6ee7f8055"
+      "schema_hash": "1782da07f9d9fab6af54fbae32398ca43ec7df42b788b6f82ef7348b5a6945d0"
     },
     {
       "name": "tfe_policy_set_parameter",
@@ -154,7 +154,7 @@
     {
       "name": "tfe_project_notification_configuration",
       "status": "covered",
-      "schema_hash": "3002f1ac51d1cf4faf11086b42adefff7b6b871c9e8cf218c43771f665248c53"
+      "schema_hash": "6dfebd811e2ddf1c3ca65e62a4b17613b342a1e817ca336136a4998e500021a8"
     },
     {
       "name": "tfe_project_oauth_client",
@@ -187,6 +187,11 @@
       "schema_hash": "c6628b1d72871763a724573d66eacbd3b4ec1a81d2beb7bf7cbddc0a64825028"
     },
     {
+      "name": "tfe_registry_artifact_tag",
+      "status": "backend-gap",
+      "schema_hash": "c7411ed2474a5bee84e09e750eb81b51909996af3292a0d463158cc672f6c535"
+    },
+    {
       "name": "tfe_registry_gpg_key",
       "status": "covered",
       "schema_hash": "8bb9db3f2aac560396b234271d0144015361c538a97f1ee128009d4028ceb3c2"
@@ -205,6 +210,11 @@
       "name": "tfe_run_trigger",
       "status": "covered",
       "schema_hash": "fa97cad9bbac0e015d5d0411a11e1fcfabd7411e85a03927101a621b3107173d"
+    },
+    {
+      "name": "tfe_saml_idp_certificate",
+      "status": "backend-gap",
+      "schema_hash": "15f755f59aa758c9464a3c4a69375a5ada59aa00adeeaa804702339dc6fedf3f"
     },
     {
       "name": "tfe_saml_settings",
@@ -254,12 +264,12 @@
     {
       "name": "tfe_tag_policy_set",
       "status": "covered",
-      "schema_hash": "74377f10582ac1f5f0e71876b09f4894cf9f03e3f657d1c87a2b834416196575"
+      "schema_hash": "e96a8e66b41b795302699a938452b488ecbe8e0582d5b1624b2b23aa9b270e30"
     },
     {
       "name": "tfe_tag_policy_set_exclusion",
       "status": "covered",
-      "schema_hash": "88dc3cff631f728b745bf088845f84cd1fc9deec64a52b16d84081a46d9d92f6"
+      "schema_hash": "93921405ce114ee4b5e3a08ec6e27512fdd61faf3010fd9559562548a7d5989e"
     },
     {
       "name": "tfe_team",
@@ -284,7 +294,7 @@
     {
       "name": "tfe_team_notification_configuration",
       "status": "covered",
-      "schema_hash": "0b1fa93e87c79493f0ad17b8e5df36c2eaabdbbf88cadd77ef1c36f626dc41d9"
+      "schema_hash": "8431758d7fecbd45ea2d5a6be94e892f588eb545c7abb5c1181c40b1b31e8a0a"
     },
     {
       "name": "tfe_team_organization_member",
@@ -319,7 +329,7 @@
     {
       "name": "tfe_variable",
       "status": "covered",
-      "schema_hash": "7e20ecd2d4fb57c7c84544d90a20966cbb845dc1248c6ad7d947ad9d49f43907"
+      "schema_hash": "df5468661b876681c07d1da3a5a4f46f1682ef98d93a241ee6a3d5cde16e9ffa"
     },
     {
       "name": "tfe_variable_set",
@@ -416,7 +426,7 @@
     {
       "name": "tfe_oauth_client",
       "status": "covered",
-      "schema_hash": "dacf4aafc30da322e9fa314bf8a1953ebc46c99b6ddb779ed737946d05db9e9e"
+      "schema_hash": "3b4b3e2e706095458a678986299ead8bf6a13ce463873f3a09548e3746f8acf1"
     },
     {
       "name": "tfe_org_max_token_ttl_policy",
@@ -436,7 +446,7 @@
     {
       "name": "tfe_organization_members",
       "status": "covered",
-      "schema_hash": "faf04f4c71c97cc5688667d5c2d26072d734b95ac878d15e5c1f16df7ddb9161"
+      "schema_hash": "700f9f9b6dbd444c6657a500bda0dbd45a7b0b5166f467d9a1dfc179508c65a7"
     },
     {
       "name": "tfe_organization_membership",
@@ -471,7 +481,7 @@
     {
       "name": "tfe_policy_set",
       "status": "covered",
-      "schema_hash": "ecc5adcaf4483d07ab7a40156a49ac9b2cce25d9605bc149f96287ba6ad67261"
+      "schema_hash": "cd94d82f67b8036e2852d01ff208e30bde6fde8c88e71ab6119dce11d0769c5f"
     },
     {
       "name": "tfe_project",
@@ -487,6 +497,11 @@
       "name": "tfe_provider_set",
       "status": "covered",
       "schema_hash": "f68d245f787fc82a58976cfd7786a9bed0a30eeb588ad72c52a3b34c4d562378"
+    },
+    {
+      "name": "tfe_registry_artifact_tags",
+      "status": "backend-gap",
+      "schema_hash": "12ca624d66114e639397a9badab96d60e6a77150c4688988bc469616890652dd"
     },
     {
       "name": "tfe_registry_gpg_key",
