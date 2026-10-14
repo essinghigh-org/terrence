@@ -11,12 +11,12 @@ Generated from successful lifecycle artifacts by `backend/scripts/report-cli-com
 
 | CLI | Pin | Tested version | Completed (UTC) | Binary SHA-256 |
 |---|---|---|---|---|
-| Terraform | floor | 1.6.6 | 2026-10-03T16:46:35.109Z | `5e1a9226bef2b38b5bc74d71e84389d1a0d135afc54b8612a18028cc5735a355` |
-| Terraform | current | 1.16.1 | 2026-10-03T16:46:44.274Z | `0b5a4e400548d9538af88a4c5a2726b97b38751b8f577aa6687ad051ba2070f2` |
-| OpenTofu | floor | 1.6.3 | 2026-10-03T16:45:57.537Z | `2429d2a9fe330bb658532118a4c36c9e085d5620d7c79b8fb90e4eddf762993b` |
-| OpenTofu | current | 1.12.6 | 2026-10-03T16:45:55.799Z | `8f95cbe1523ef7b7913773634a6d6ac94c38f3c8eadba2e18b1e5b01567561ad` |
+| Terraform | floor | 1.6.6 | 2026-10-14T17:13:47.604Z | `5e1a9226bef2b38b5bc74d71e84389d1a0d135afc54b8612a18028cc5735a355` |
+| Terraform | current | 1.16.1 | 2026-10-14T17:13:23.347Z | `0b5a4e400548d9538af88a4c5a2726b97b38751b8f577aa6687ad051ba2070f2` |
+| OpenTofu | floor | 1.6.3 | 2026-10-14T17:13:20.023Z | `2429d2a9fe330bb658532118a4c36c9e085d5620d7c79b8fb90e4eddf762993b` |
+| OpenTofu | current | 1.12.6 | 2026-10-14T17:13:15.880Z | `8f95cbe1523ef7b7913773634a6d6ac94c38f3c8eadba2e18b1e5b01567561ad` |
 
-These combinations use SQLite, a local worker and a trusted HTTPS proxy. CLI archives pass upstream checksum verification and cached executables are checked against their integrity records. Provider version: `hashicorp/tfe 0.81.0`.
+These combinations use SQLite, a local worker and a trusted HTTPS proxy. CLI archives pass upstream checksum verification and cached executables are checked against their integrity records. Provider version: `hashicorp/tfe 0.82.0`.
 
 ## What the results establish
 
