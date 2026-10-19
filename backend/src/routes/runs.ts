@@ -1,5 +1,5 @@
 import { log } from "../lib/log";
-import { normalizeRunVariables, runVariablesForWrite } from "../lib/run-variables";
+import { normalizeRunVariables, type runVariablesForWrite } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
 import { createHash } from "node:crypto";
 import { exists } from "node:fs/promises";
@@ -68,8 +68,8 @@ import { newRunId } from "../lib/run-id";
 import { RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
 import { auditLogValues } from "../lib/audit-trail";
 import { decryptSecret } from "../lib/secrets";
-import { effectiveWorkspaceVariables, type EffectiveVariable } from "../lib/effective-variables";
-import { buildRunProvenanceCapsule, canonicalJson, sha256Hex, type CapsuleInput } from "../lib/run-provenance";
+import { canonicalJson, sha256Hex, type buildRunProvenanceCapsule } from "../lib/run-provenance";
+import { assembleRunProvenance, provenanceInsert } from "../lib/run-provenance-capture";
 import { issueRunLogCapability, findLogCapability, signedApiURL, validSignedApiURL } from "../lib/capabilities";
 import { authorizedRunCapability, authorizedStateAccess } from "../lib/authorized-resources";
 import { pageRequest, pagination, cursorPagination } from "../lib/pagination";
@@ -1278,29 +1278,6 @@ async function checkRunCreationGuards(
   return { canApply };
 }
 
-function manifestProvenanceVariables(
-  entries: readonly EffectiveVariable[],
-): Pick<CapsuleInput, "effectiveVariables" | "effectiveExecutionVariables"> {
-  return {
-    effectiveVariables: entries.map((entry) => ({
-      source: entry.source,
-      key: entry.variable.key,
-      category: entry.variable.category,
-      sensitive: entry.variable.sensitive,
-      ...(entry.source === "varset" ? { variableSetId: entry.setId } : {}),
-    })),
-    effectiveExecutionVariables: entries.map((entry) => ({
-      key: entry.variable.key,
-      value: entry.variable.value,
-      category: entry.variable.category ?? "terraform",
-      sensitive: entry.variable.sensitive === true,
-      ...(entry.variable.valueEncrypted === null || entry.variable.valueEncrypted === undefined
-        ? {}
-        : { valueEncrypted: entry.variable.valueEncrypted }),
-    })),
-  };
-}
-
 function resolveRunDisplayFields(
   attributes: Readonly<Record<string, unknown>>,
   requestedPlanOnly: boolean | undefined,
@@ -1371,19 +1348,6 @@ function resolveRunAutoApply(
   };
 }
 
-function provenanceConfigurationDigest(
-  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
-): string {
-  return sha256Hex(
-    canonicalJson({
-      id: configurationVersion?.id ?? null,
-      status: configurationVersion?.status ?? null,
-      ingressAttributes: configurationVersion?.ingressAttributes ?? null,
-      createdAt: configurationVersion?.createdAt ?? null,
-    }),
-  );
-}
-
 async function completeRunCreationResponse(
   input: Readonly<{
     id: string;
@@ -1427,51 +1391,6 @@ async function completeRunCreationResponse(
   const responseBody = { data: input.createdResource };
   if (input.begin.kind === "reserved") await completeIdempotency(input.begin.id, 201, responseBody, input.id);
   return responseBody;
-}
-
-async function assembleRunProvenance(
-  workspace: typeof workspaces.$inferSelect,
-  cvId: string | undefined,
-  configurationVersion: typeof configurationVersions.$inferSelect | undefined,
-  effectiveTool: string,
-  effectiveVersion: string | null,
-  id: string,
-  createdAt: number,
-  runVariablesInput: Parameters<typeof runVariablesForWrite>[0] | null,
-): Promise<
-  Readonly<{
-    provenance: Awaited<ReturnType<typeof buildRunProvenanceCapsule>>;
-    runVariables: Awaited<ReturnType<typeof runVariablesForWrite>> | null;
-  }>
-> {
-  const [effectiveVariables, inputState] = await Promise.all([
-    effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
-    db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { id: true, uploadSha256: true },
-    }),
-  ]);
-  const runVariables = runVariablesInput === null ? null : await runVariablesForWrite(runVariablesInput);
-  const provenance = await buildRunProvenanceCapsule({
-    runId: id,
-    createdAt,
-    configurationVersionId: cvId ?? null,
-    configurationSource: configurationVersion?.source ?? null,
-    configurationIngress: configurationVersion?.ingressAttributes ?? null,
-    configurationDigest: provenanceConfigurationDigest(configurationVersion),
-    engine: effectiveTool,
-    engineVersion: effectiveVersion ?? null,
-    workspaceId: workspace.id,
-    workingDirectory: workspace.workingDirectory,
-    executionMode: workspace.executionMode,
-    agentPoolId: workspace.agentPoolId,
-    inputStateId: inputState?.id ?? null,
-    inputStateDigest: inputState?.uploadSha256 ?? null,
-    runVariables: runVariables ?? [],
-    ...manifestProvenanceVariables(effectiveVariables),
-  });
-  return { provenance, runVariables };
 }
 
 type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
@@ -2698,15 +2617,7 @@ export async function createRun(
       appliedAt: null,
       createdAt,
     });
-    await tx.insert(runProvenanceCapsules).values({
-      id: newResourceId("rpc"),
-      runId: id,
-      schemaVersion: provenance.publicManifest.schemaVersion,
-      publicManifest: provenance.publicManifest,
-      manifestSha256: provenance.manifestSha256,
-      executionMaterial: provenance.executionMaterial,
-      createdAt,
-    });
+    await tx.insert(runProvenanceCapsules).values(provenanceInsert(id, createdAt, provenance));
     return null;
   });
   if (lockConflict !== null) {

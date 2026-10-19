@@ -15,6 +15,7 @@ import {
   organizationMemberships,
   organizations,
   runs,
+  runProvenanceCapsules,
   users,
   workspaces,
 } from "../src/db/schema";
@@ -411,6 +412,13 @@ describe("GitHub Webhooks", () => {
     );
     expect(run.message).toBe("Update Terraform");
     expect(run.createdBy).toBeNull();
+    const capsule = await db.query.runProvenanceCapsules.findFirst({
+      where: eq(runProvenanceCapsules.runId, run.id),
+    });
+    expect(capsule?.publicManifest).toMatchObject({
+      configuration: { commitSha: pushPayload.after, source: "github" },
+      runId: run.id,
+    });
     const runResponse = await app.handle(
       new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -422,6 +430,10 @@ describe("GitHub Webhooks", () => {
     expect(runDocument.data.attributes).toMatchObject({
       "triggered-by": "octocat",
       "triggered-by-avatar-url": expect.stringMatching(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/),
+    });
+    expect(runDocument.data.attributes["provenance"]).toMatchObject({
+      "schema-version": 1,
+      "manifest-url": `/api/v2/runs/${run.id}/provenance`,
     });
     const eventResponse = await app.handle(
       new Request(`http://127.0.0.1/api/v2/runs/${run.id}/run-events`, {

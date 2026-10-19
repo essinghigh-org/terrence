@@ -14,6 +14,7 @@ import {
   policySets,
   registryModules,
   runs,
+  runProvenanceCapsules,
   workspaces,
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
@@ -38,6 +39,7 @@ import {
 } from "./vcs-source";
 import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
 import { newRunId } from "./run-id";
+import { assembleRunProvenance, provenanceInsert } from "./run-provenance-capture";
 import { log } from "./log";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
@@ -2357,20 +2359,39 @@ async function persistWebhookRun(
     statusTimestamps: {},
     statusMetadataSchemaVersion: 1,
   });
-  await db.insert(runs).values({
-    id: runId,
-    workspaceId: workspace.id,
+  const [configuration, organization] = await Promise.all([
+    db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, configurationVersionId) }),
+    db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
+  ]);
+  if (configuration === undefined) throw new Error("Webhook configuration version was not persisted");
+  const createdAt = Date.now();
+  const { provenance } = await assembleRunProvenance(
+    workspace,
     configurationVersionId,
-    message: commitSubject(details.commitMessage),
-    status: "pending",
-    isDestroy: false,
-    autoApply: workspace.autoApply === true && !isSpeculative,
-    planOnly: isSpeculative,
-    statusTimestamps: { "pending-at": new Date().toISOString() },
-    inputSchemaVersion: 1,
-    statusMetadataSchemaVersion: 1,
-    logToken: crypto.randomUUID(),
-    createdAt: Date.now(),
+    configuration,
+    workspace.iacBinary ?? organization?.defaultIacBinary ?? "terraform",
+    workspace.terraformVersion ?? organization?.defaultTerraformVersion ?? null,
+    runId,
+    createdAt,
+    null,
+  );
+  await db.transaction(async (transaction) => {
+    await transaction.insert(runs).values({
+      id: runId,
+      workspaceId: workspace.id,
+      configurationVersionId,
+      message: commitSubject(details.commitMessage),
+      status: "pending",
+      isDestroy: false,
+      autoApply: workspace.autoApply === true && !isSpeculative,
+      planOnly: isSpeculative,
+      statusTimestamps: { "pending-at": new Date(createdAt).toISOString() },
+      inputSchemaVersion: 1,
+      statusMetadataSchemaVersion: 1,
+      logToken: crypto.randomUUID(),
+      createdAt,
+    });
+    await transaction.insert(runProvenanceCapsules).values(provenanceInsert(runId, createdAt, provenance));
   });
   await auditLog(
     "create",
