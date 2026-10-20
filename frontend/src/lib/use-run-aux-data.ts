@@ -85,7 +85,7 @@ function isProvenanceManifest(value: unknown): value is RunProvenanceManifest {
   );
 }
 
-export function useProvenanceManifest(runId: string): ProvenanceState {
+export function useProvenanceManifest(runId: string, hasProvenance: boolean): ProvenanceState {
   const [provenanceManifest, setProvenanceManifest] = useState<RunProvenanceManifest | null>(null);
   const [provenanceError, setProvenanceError] = useState("");
 
@@ -93,6 +93,12 @@ export function useProvenanceManifest(runId: string): ProvenanceState {
     const controller = new AbortController();
     setProvenanceManifest(null);
     setProvenanceError("");
+    // Older and externally queued runs have no immutable capsule. Absence is
+    // represented by the run resource's null provenance attribute, not an error.
+    if (!hasProvenance)
+      return (): void => {
+        controller.abort();
+      };
     fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/provenance`, { signal: controller.signal })
       .then((payload: unknown): void => {
         if (controller.signal.aborted) return;
@@ -110,7 +116,7 @@ export function useProvenanceManifest(runId: string): ProvenanceState {
     return (): void => {
       controller.abort();
     };
-  }, [runId]);
+  }, [runId, hasProvenance]);
 
   return { provenanceManifest, provenanceError };
 }

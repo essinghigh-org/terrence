@@ -23,7 +23,14 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
-import { hashRunToken, mintRunToken, revokeRunTokens, writeRunCliConfig } from "../../src/lib/run-token";
+import {
+  hashRunToken,
+  mintRunToken,
+  RUN_TOKEN_TTL_MS,
+  revokeRunTokenValue,
+  revokeRunTokens,
+  writeRunCliConfig,
+} from "../../src/lib/run-token";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 let suffix = "";
@@ -164,6 +171,48 @@ describe("run token minting and storage", () => {
     // 24h expiry.
     expect(rt.expiresAt! - rt.createdAt!).toBe(24 * 60 * 60 * 1000);
     await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
+  });
+
+  test("assessment credentials can use shorter, bounded token lifetimes", async () => {
+    const ttl = 10 * 60_000;
+    const token = await mintRunToken(runA, wsA, orgA, ttl);
+    try {
+      const record = await db.query.runTokens.findFirst({ where: eq(runTokens.tokenHash, hashRunToken(token)) });
+      if (record?.expiresAt == null || record.createdAt == null) throw new Error("Expected token expiry metadata");
+      expect(record.expiresAt - record.createdAt).toBe(ttl);
+      expect(record.expiresAt - Date.now()).toBeLessThanOrEqual(ttl);
+    } finally {
+      await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
+    }
+    for (const invalid of [0, -1, 1.5, Number.NaN, RUN_TOKEN_TTL_MS + 1]) {
+      const rejection = await mintRunToken(runA, wsA, orgA, invalid).then(
+        (): null => null,
+        (error: unknown): unknown => error,
+      );
+      expect(rejection).toBeInstanceOf(RangeError);
+    }
+  });
+
+  test("revokes an assessment credential without revoking other tokens of the same applied run", async () => {
+    const first = await mintRunToken(runA, wsA, orgA);
+    const second = await mintRunToken(runA, wsA, orgA);
+    try {
+      await revokeRunTokenValue(first);
+      const firstRow = await db.query.runTokens.findFirst({ where: eq(runTokens.tokenHash, hashRunToken(first)) });
+      const secondRow = await db.query.runTokens.findFirst({ where: eq(runTokens.tokenHash, hashRunToken(second)) });
+      expect(firstRow?.revokedAt).not.toBeNull();
+      expect(secondRow?.revokedAt).toBeNull();
+      expect(
+        (await app.handle(request(`/api/registry/v1/modules/${orgA}/vpc-${suffix}/aws/versions`, "GET", first))).status,
+      ).toBeGreaterThanOrEqual(400);
+      expect(
+        (await app.handle(request(`/api/registry/v1/modules/${orgA}/vpc-${suffix}/aws/versions`, "GET", second)))
+          .status,
+      ).toBe(200);
+    } finally {
+      await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(first)));
+      await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(second)));
+    }
   });
 
   test("writes a 0600 CLI config scoped to the hostname", async () => {

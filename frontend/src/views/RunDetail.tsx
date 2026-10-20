@@ -95,7 +95,7 @@ export function RunDetail({
   const rerun = useRerunRun({ runId, workspaceId, workspacePath });
   const speculativeRun = useSpeculativeRun(runId, view.run);
   const taskOutcome = useTaskOutcome(runId);
-  const { provenanceManifest, provenanceError } = useProvenanceManifest(runId);
+  const { provenanceManifest, provenanceError } = useProvenanceManifest(runId, run?.attributes.provenance != null);
   const [logWrap, setLogWrap] = useState<boolean>(true);
   const [planSummary, setPlanSummary] = useState<Readonly<{
     runId: string;

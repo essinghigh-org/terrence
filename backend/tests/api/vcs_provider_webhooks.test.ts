@@ -11,6 +11,7 @@ import {
   oauthTokens,
   organizations,
   runs,
+  runProvenanceCapsules,
   workspaces,
 } from "../../src/db/schema";
 import { encryptSecret } from "../../src/lib/secrets";
@@ -247,12 +248,16 @@ describe("GitLab and Bitbucket webhooks", () => {
       },
     });
     expect(run?.planOnly).toBe(false);
-    const runCreatedEvent =
-      run === undefined
-        ? undefined
-        : await db.query.auditLogs.findFirst({
-            where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, run.id)),
-          });
+    if (run === undefined || version === undefined) throw new Error("Expected GitLab run and configuration version");
+    const capsule = await db.query.runProvenanceCapsules.findFirst({
+      where: eq(runProvenanceCapsules.runId, run.id),
+    });
+    expect(capsule?.publicManifest).toMatchObject({
+      configuration: { commitSha: gitlabPayload.checkout_sha, source: "gitlab" },
+    });
+    const runCreatedEvent = await db.query.auditLogs.findFirst({
+      where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, run.id)),
+    });
     expect(runCreatedEvent?.details).toMatchObject({
       source: "gitlab",
       triggerReason: "push",
@@ -262,7 +267,6 @@ describe("GitLab and Bitbucket webhooks", () => {
       authorization: "Bearer gitlab-token",
       url: `https://gitlab.example/api/v4/projects/platform%2Finfrastructure/repository/archive.tar.gz?sha=${gitlabPayload.checkout_sha}`,
     });
-    if (run === undefined || version === undefined) throw new Error("Expected GitLab run and configuration version");
     await reportRunVcsStatus(run.id, "applied");
     expect(
       requestBodies.some(

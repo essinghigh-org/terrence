@@ -80,7 +80,13 @@ import {
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
 import { agentPoolAllowsWorkspace } from "./lib/agent-pool-scope";
 import { insertAgentApplyJobTx, recoverStaleAgentJobs, type AgentJob } from "./lib/agent-jobs";
-import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-token";
+import {
+  mintRunToken,
+  revokeRunTokenValue,
+  revokeRunTokens,
+  RUN_TOKEN_TTL_MS,
+  writeRunCliConfig,
+} from "./lib/run-token";
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { pruneControlEvents, publish } from "./lib/event-bus";
@@ -6232,7 +6238,16 @@ async function failAssessmentRun(
   queueAssessmentNotification(assessmentResultId, "assessment:failed");
 }
 
-async function cleanupAssessmentRun(assessmentResultId: string, workDir: string): Promise<void> {
+async function cleanupAssessmentRun(
+  assessmentResultId: string,
+  workDir: string,
+  registryToken: string | null,
+): Promise<void> {
+  if (registryToken !== null) {
+    await revokeRunTokenValue(registryToken).catch((error: unknown): void => {
+      log.error("Failed to revoke assessment registry token", { assessmentResultId, error: String(error) });
+    });
+  }
   await revokeWorkloadIdentityTokens(assessmentResultId).catch((error: unknown): void => {
     log.error("Failed to revoke assessment workload identity tokens", { assessmentResultId, error: String(error) });
   });
@@ -6276,6 +6291,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
 
   const workDir = assessmentWorkDir(assessmentResultId);
   const output: string[] = [];
+  let registryToken: string | null = null;
   const appendOutput = (text: string): void => {
     if (text !== "") output.push(text.trimEnd());
   };
@@ -6317,11 +6333,20 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         await runSandbox.ensureTool(resolved.tool, resolved.version, resolved.binaryPath);
         await runSandbox.prepareWorkDir(`assessment-${assessmentResultId}`);
       }
+      // Assessments use the same private module registry as ordinary runs.
+      // Issue a short-lived run-scoped credential against the applied baseline,
+      // and revoke this specific token on completion (including init failures).
+      // A crash before cleanup must not leave a 24-hour registry credential.
+      // Allow a short grace period beyond the Terraform init timeout.
+      const registryTokenTtlMs = Math.min(RUN_TOKEN_TTL_MS, terraformEnv.assessmentTimeoutMs + 5 * 60_000);
+      registryToken = await mintRunToken(appliedRun.id, workspace.id, workspace.orgId, registryTokenTtlMs);
+      const cliConfig = await writeRunCliConfig(workDir, registryHostname(), registryToken);
+      const environment = { ...terraformEnv.environment, TF_CLI_CONFIG_FILE: cliConfig };
       planJson = await runAssessmentPlanCapture(
         assessmentResultId,
         resolved,
         executionDir,
-        terraformEnv.environment,
+        environment,
         terraformEnv.assessmentTimeoutMs,
         workDir,
         tfVarsFiles.terraformVariables,
@@ -6332,7 +6357,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         assessmentResultId,
         resolved,
         executionDir,
-        terraformEnv.environment,
+        environment,
         terraformEnv.assessmentTimeoutMs,
         workDir,
         appendOutput,
@@ -6357,7 +6382,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       throw failureError;
     }
   } finally {
-    await cleanupAssessmentRun(assessmentResultId, workDir);
+    await cleanupAssessmentRun(assessmentResultId, workDir, registryToken);
   }
 }
 

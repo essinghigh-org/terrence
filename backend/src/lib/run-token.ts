@@ -18,7 +18,15 @@ export const RUN_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
  * token hash is stored, so the API layer can authenticate it later without
  * being able to recover the plaintext.
  */
-export async function mintRunToken(runId: string, workspaceId: string, organizationId: string): Promise<string> {
+export async function mintRunToken(
+  runId: string,
+  workspaceId: string,
+  organizationId: string,
+  ttlMs = RUN_TOKEN_TTL_MS,
+): Promise<string> {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > RUN_TOKEN_TTL_MS) {
+    throw new RangeError("Run token TTL must be a positive integer of at most 24 hours");
+  }
   const token = `trun_${randomBytes(32).toString("base64url")}`;
   const now = Date.now();
   await db.insert(runTokens).values({
@@ -28,7 +36,7 @@ export async function mintRunToken(runId: string, workspaceId: string, organizat
     workspaceId,
     organizationId,
     createdAt: now,
-    expiresAt: now + RUN_TOKEN_TTL_MS,
+    expiresAt: now + ttlMs,
     revokedAt: null,
   });
   return token;
@@ -37,6 +45,14 @@ export async function mintRunToken(runId: string, workspaceId: string, organizat
 /** Explicitly revoke all tokens for a run (called on terminal state). */
 export async function revokeRunTokens(runId: string): Promise<void> {
   await db.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, runId));
+}
+
+/** Revoke only one short-lived credential, without affecting other runs or assessments. */
+export async function revokeRunTokenValue(token: string): Promise<void> {
+  await db
+    .update(runTokens)
+    .set({ revokedAt: Date.now() })
+    .where(eq(runTokens.tokenHash, hashRunToken(token)));
 }
 
 /**
