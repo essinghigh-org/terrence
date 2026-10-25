@@ -30,7 +30,7 @@ FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029e
 RUN CGO_ENABLED=0 GOBIN=/out go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
 
 # ---------- Build stage: Bun backend workspaces + frontend + static landlock ---
-FROM oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598 AS builder
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS builder
 WORKDIR /app
 
 # Copy dependency manifests first for optimal Docker layer caching
