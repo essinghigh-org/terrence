@@ -46,11 +46,15 @@ type ExecutionState =
   | "removed"
   | "failed";
 
-type ResourceExecutionInfo = {
+type ResourceExecutionProgress = {
   state: ExecutionState;
   elapsed?: string | undefined;
   resourceId?: string | undefined;
   error?: string | undefined;
+};
+
+type ResourceExecutionInfo = ResourceExecutionProgress & {
+  deposed?: ReadonlyMap<string, ResourceExecutionProgress>;
 };
 
 type LoadState =
@@ -227,18 +231,37 @@ function applyErrorLine(map: Map<string, ResourceExecutionInfo>, address: string
   return false;
 }
 
-function applyTextLineToMap(map: Map<string, ResourceExecutionInfo>, line: string): void {
+function applyTextLineToMap(
+  map: Map<string, ResourceExecutionInfo>,
+  line: string,
+  deposed: Map<string, Map<string, ResourceExecutionInfo>>,
+): void {
   // Match the address once, rather than scanning every planned resource for
   // every line. Quoted instance keys can contain colons and escaped quotes;
   // only the colon outside those keys separates the address from progress.
   const trimmed = line.trimStart();
-  const address = /^((?:[^":]|"(?:\\.|[^"\\])*")+): /.exec(trimmed)?.[1];
-  if (address === undefined || !map.has(address)) return;
-  const progress = trimmed.slice(address.length);
-  if (applyCreationLine(map, address, progress)) return;
-  if (applyModificationLine(map, address, progress)) return;
-  if (applyDestructionLine(map, address, progress)) return;
-  applyErrorLine(map, address, progress);
+  const fullAddress = /^((?:[^":]|"(?:\\.|[^"\\])*")+): /.exec(trimmed)?.[1];
+  if (fullAddress === undefined) return;
+  const suffix = /^(.*) \(deposed object ([0-9a-f]{8})\)$/.exec(fullAddress);
+  const address = suffix?.[1] ?? fullAddress;
+  if (!map.has(address)) return;
+  let target = map;
+  let key = address;
+  const deposedKey = suffix?.[2];
+  if (deposedKey !== undefined) {
+    key = deposedKey;
+    let instances = deposed.get(address);
+    if (instances === undefined) {
+      instances = new Map();
+      deposed.set(address, instances);
+    }
+    target = instances;
+  }
+  const progress = trimmed.slice(fullAddress.length);
+  if (applyCreationLine(target, key, progress)) return;
+  if (applyModificationLine(target, key, progress)) return;
+  if (applyDestructionLine(target, key, progress)) return;
+  applyErrorLine(target, key, progress);
 }
 
 function markInterruptedFailed(map: Map<string, ResourceExecutionInfo>, applyFailed: boolean): void {
@@ -257,6 +280,9 @@ function parseApplyLogsToExecMap(
   applyFailed: boolean,
 ): Map<string, ResourceExecutionInfo> {
   const map = seedExecMap(resources, applyFinished, applyFailed);
+  // Old replacement instances can still be destroying after the new one is
+  // created. Keep their lifecycle separate so cleanup cannot overwrite it.
+  const deposed = new Map<string, Map<string, ResourceExecutionInfo>>();
 
   if (logs === "") return map;
 
@@ -269,15 +295,20 @@ function parseApplyLogsToExecMap(
       if (applyJsonLineToMap(map, trimmed)) continue;
     }
 
-    applyTextLineToMap(map, line);
+    applyTextLineToMap(map, line, deposed);
   }
 
   markInterruptedFailed(map, applyFailed);
+  for (const [address, instances] of deposed) {
+    markInterruptedFailed(instances, applyFailed);
+    const execution = map.get(address);
+    if (execution !== undefined) map.set(address, { ...execution, deposed: instances });
+  }
 
   return map;
 }
 
-function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionInfo }>): React.JSX.Element {
+function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionProgress }>): React.JSX.Element {
   const { state, elapsed } = execution;
 
   if (state === "pending") {
@@ -401,8 +432,23 @@ function ApplyResourceRow({
           </div>
         </div>
 
-        <div className="shrink-0">
+        <div className="flex shrink-0 flex-col items-end gap-1">
           <ExecutionBadge execution={execution} />
+          {Array.from(execution.deposed ?? []).map(
+            ([key, progress]): React.JSX.Element => (
+              <span
+                key={key}
+                role="group"
+                aria-label={`Cleanup of deposed object ${key}`}
+                className="flex items-center gap-1.5 text-2xs text-muted-foreground"
+              >
+                <span>
+                  Previous object <code>{key}</code>
+                </span>
+                <ExecutionBadge execution={progress} />
+              </span>
+            ),
+          )}
         </div>
       </summary>
       <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={resource.name} />

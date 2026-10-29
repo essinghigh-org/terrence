@@ -158,6 +158,37 @@ test("matches plain-text apply progress to the exact resource address", async ()
   expect(row(4).getByText("Pending")).toBeTruthy();
 });
 
+test.each(["null_resource.foo", 'module.child["west: primary"].null_resource.foo["key (deposed object abcdef01)"]'])(
+  "keeps deposed cleanup separate from the replacement instance for %s",
+  async (address) => {
+    globalThis.fetch = mock(
+      async (): Promise<Response> =>
+        json({
+          resource_changes: [
+            { address, type: "null_resource", change: { actions: ["create", "delete"], before: {}, after: {} } },
+          ],
+        }),
+    ) as unknown as typeof fetch;
+    const logs = [
+      `${address}: Creation complete after 1s [id=new-instance]`,
+      `${address} (deposed object 21af4693): Destroying... [id=old-instance]`,
+      `${address} (deposed object deadbeef): Destruction complete after 2s`,
+    ].join("\n");
+    const view = render(<ApplyOutput runId="run-deposed" status="applying" applyStatus="running" applyLogs={logs} />);
+    await waitFor((): void => {
+      expect(view.getByLabelText(`Apply details for ${address}`)).toBeTruthy();
+    });
+    expect(view.getByText("created")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object 21af4693")).getByText("destroying…")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
+
+    view.rerender(<ApplyOutput runId="run-deposed" status="errored" applyStatus="errored" applyLogs={logs} />);
+    expect(view.getByText("created")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object 21af4693")).getByText("Failed")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
+  },
+);
+
 test("resolves duplicate provider icons by notification without per-instance intervals", async () => {
   clearProviderIconCacheForTests();
   let resolveFetch: ((response: Response) => void) | undefined;
