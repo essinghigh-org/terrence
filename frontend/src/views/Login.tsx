@@ -8,7 +8,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
-import { ApiError, fetchApi, setAuthToken } from "@/lib/api";
+import { ApiError, fetchApi } from "@/lib/api";
 import { resolveReturnTarget, ssoContinuationQuery } from "@/lib/return-to";
 import { isString } from "../lib/type-guards";
 
@@ -283,7 +283,6 @@ export function Login(): React.JSX.Element {
     "must-change-password"?: boolean;
   }): Promise<void> => {
     if (!isString(attributes.token)) throw new Error("Missing access token");
-    setAuthToken(attributes.token, attributes["expired-at"], true);
     if (oauthState !== null && oauthState !== "") {
       finishOauthHandshake();
       return;

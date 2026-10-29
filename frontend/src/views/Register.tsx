@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { fetchApi, setAuthToken } from "@/lib/api";
+import { fetchApi } from "@/lib/api";
 import { resolveReturnTarget } from "@/lib/return-to";
 
 export function Register(): React.JSX.Element {
@@ -69,11 +69,10 @@ export function Register(): React.JSX.Element {
 
       try {
         // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const login = (await fetchApi("/users/login", {
+        await fetchApi("/users/login", {
           method: "POST",
           body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
-        })) as { data: { attributes: { token: string; "expired-at"?: string | null } } };
-        setAuthToken(login.data.attributes.token, login.data.attributes["expired-at"], true);
+        });
         await navigate(resolveReturnTarget(returnTo));
       } catch (loginError: unknown) {
         if (loginError instanceof DOMException && loginError.name === "AbortError") return;

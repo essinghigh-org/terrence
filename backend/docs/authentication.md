@@ -60,6 +60,8 @@ SCIM-managed teams are synchronized. Manual edits to those teams are refused. Us
 
 Organizations control session length and refresh. Site administration sets the global session policy.
 
+The browser UI verifies password and MFA logins with `X-Terrence-Session-Mode: staged` and fetch credentials omitted. Verification returns a single-use `session-commit-token`, valid for two minutes, without issuing an access token or changing cookies. The active browser generation submits that handoff to `POST /api/v2/users/login/complete`. Completion issues the access token and HttpOnly refresh cookie together; the client serializes completion, refresh, and logout responses so an older response cannot replace a newer session's cookie. Invalid, expired, or replayed handoffs never clear an existing cookie. API clients that do not request staging retain the existing login response format.
+
 ## Sign-in flow
 
 1. The user enters credentials or picks an external provider.
@@ -78,6 +80,7 @@ Failed attempts are rate limited. See [Security](security).
 - `POST /api/v2/saml/authorize`
 - `POST /api/v2/users/login`
 - `POST /api/v2/users/login/mfa`
+- `POST /api/v2/users/login/complete` (browser login handoff)
 - `POST /api/v2/users/refresh`
 - `POST /api/v2/signup`
 - SCIM: `POST /scim/v2/Users`, `POST /scim/v2/Groups`

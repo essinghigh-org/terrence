@@ -204,6 +204,20 @@ type AccessTokenDocument = Readonly<{
 }>;
 
 let refreshRequest: Readonly<{ generation: number; promise: Promise<string | null> }> | null = null;
+let cookieMutationTail: Promise<unknown> = Promise.resolve();
+let pendingCookieMutations = 0;
+
+async function mutateSessionCookie<T>(generation: number, operation: () => Promise<T>): Promise<T> {
+  pendingCookieMutations += 1;
+  const result = cookieMutationTail.then(async (): Promise<T> => {
+    assertAuthGeneration(generation);
+    return operation();
+  });
+  cookieMutationTail = result.catch((): void => undefined);
+  return result.finally((): void => {
+    pendingCookieMutations -= 1;
+  });
+}
 
 /**
  * Bootstrap the access token for a fresh page load. Browser sessions have
@@ -235,7 +249,7 @@ async function refreshAccessToken(force = false): Promise<string | null> {
   if (!force && !refreshableSession) return null;
   if (refreshRequest?.generation === authGeneration) return refreshRequest.promise;
   const generation = authGeneration;
-  const promise = (async (): Promise<string | null> => {
+  const promise = mutateSessionCookie(generation, async (): Promise<string | null> => {
     const response = await fetch(`${API_BASE_URL}/users/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/vnd.api+json" },
@@ -251,7 +265,7 @@ async function refreshAccessToken(force = false): Promise<string | null> {
     if (generation !== authGeneration) return null;
     storeAuthToken(token, isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null, true);
     return token;
-  })().finally((): void => {
+  }).finally((): void => {
     // A new login can start its own refresh before this one settles.
     if (refreshRequest?.promise === promise) refreshRequest = null;
   });
@@ -294,7 +308,14 @@ function shouldRefreshBeforeRequest(token: string | null, expiresAt: number | nu
 }
 
 function isAuthEndpoint(url: string): boolean {
-  return url.endsWith("/users/login") || url.endsWith("/users/refresh") || url.endsWith("/users/logout");
+  const path = url.split(/[?#]/, 1)[0] ?? url;
+  return (
+    path.endsWith("/users/login") ||
+    path.endsWith("/users/login/mfa") ||
+    path.endsWith("/users/login/complete") ||
+    path.endsWith("/users/refresh") ||
+    path.endsWith("/users/logout")
+  );
 }
 
 function shouldRetryWorkspace404(
@@ -346,6 +367,11 @@ async function throwApiError(response: ReadonlyResponse, token: string | null, u
 }
 
 async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
+  if (isBrowserLogin(endpoint, options)) {
+    return Response.json(await browserLogin(endpoint, options), {
+      headers: { "Content-Type": "application/vnd.api+json" },
+    });
+  }
   // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
   // are used verbatim; everything else is relative to the v2 API base.
   const url = endpoint.startsWith("/api/") ? endpoint : `${API_BASE_URL}${endpoint}`;
@@ -380,6 +406,75 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
   }
 
   return response;
+}
+
+function isBrowserLogin(endpoint: string, options: Readonly<{ method?: string; body?: unknown }>): boolean {
+  const path = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
+  if (
+    (options.method ?? "GET").toUpperCase() !== "POST" ||
+    (!path.endsWith("/users/login") && !path.endsWith("/users/login/mfa")) ||
+    typeof options.body !== "string"
+  )
+    return false;
+  try {
+    const document: unknown = JSON.parse(options.body);
+    const data = asRecordOrNull(document)?.["data"];
+    return asRecordOrNull(asRecordOrNull(data)?.["attributes"])?.["browser-session"] === true;
+  } catch {
+    return false;
+  }
+}
+
+function loginAttributes(document: DeepReadonly<JsonValue>): JsonObject | null {
+  return asRecordOrNull(asRecordOrNull(asRecordOrNull(document)?.["data"])?.["attributes"]);
+}
+
+async function browserLogin(endpoint: string, options: ReadonlyRequestInit = {}): Promise<JsonValue> {
+  const generation = authGeneration;
+  const url = endpoint.startsWith("/api/") ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const response = await sendApiRequest(url, {
+    ...options,
+    // Also ignore Set-Cookie from older servers that do not support staging.
+    credentials: "omit",
+    headers: {
+      ...Object.fromEntries(new Headers(options.headers as HeadersInit)),
+      "X-Terrence-Session-Mode": "staged",
+    },
+  });
+  assertAuthGeneration(generation);
+  if (!response.ok) return throwApiError(response, null, url);
+  const document = await readResponseBody(response);
+  assertAuthGeneration(generation);
+  const attributes = loginAttributes(document);
+  if (attributes?.["mfa-required"] === true) return document;
+  const commitToken = attributes?.["session-commit-token"];
+  if (!isString(commitToken) || commitToken === "")
+    throw new Error("The server did not provide a browser login handoff");
+  return mutateSessionCookie(generation, async (): Promise<JsonValue> => {
+    const commitUrl = `${API_BASE_URL}/users/login/complete`;
+    const committed = await sendApiRequest(commitUrl, {
+      method: "POST",
+      credentials: "same-origin",
+      body: JSON.stringify({ data: { attributes: { "session-commit-token": commitToken } } }),
+    });
+    assertAuthGeneration(generation);
+    if (!committed.ok) return throwApiError(committed, null, commitUrl);
+    try {
+      const result = await readResponseBody(committed);
+      assertAuthGeneration(generation);
+      const accepted = loginAttributes(result);
+      const token = accepted?.["token"];
+      const expiresAt = accepted?.["expired-at"];
+      if (!isString(token) || token === "") throw new Error("Missing access token");
+      setAuthToken(token, isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null, true);
+      return result;
+    } catch (error: unknown) {
+      // A successful response may already have changed the cookie even if its
+      // body is unreadable. Do not retain an access token for another session.
+      if (generation === authGeneration) clearAuthMemory();
+      throw error;
+    }
+  });
 }
 
 export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyRequestInit = {}): Promise<T> {
@@ -1070,13 +1165,16 @@ function removeAuthToken(): void {
 }
 
 export async function logoutAuthSession(): Promise<void> {
-  const refreshable = isRefreshableSession();
+  const refreshable = isRefreshableSession() || pendingCookieMutations > 0;
   removeAuthToken();
+  const generation = authGeneration;
   try {
     if (refreshable) {
-      await fetch(`${API_BASE_URL}/users/logout`, {
-        method: "POST",
-        credentials: "same-origin",
+      await mutateSessionCookie(generation, async (): Promise<void> => {
+        await fetch(`${API_BASE_URL}/users/logout`, {
+          method: "POST",
+          credentials: "same-origin",
+        });
       });
     }
   } catch {

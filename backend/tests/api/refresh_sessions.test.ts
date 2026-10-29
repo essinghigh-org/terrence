@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, refreshSessions, users } from "../../src/db/schema";
+import { apiTokens, refreshSessions, ssoChallenges, user2FA, users } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
+import { generateTotpCode, generateTotpSecret } from "../../src/lib/totp";
 
 describe("browser refresh sessions", () => {
   const suffix = crypto.randomUUID();
@@ -12,6 +13,9 @@ describe("browser refresh sessions", () => {
   const otherUserId = `user-refresh-other-${suffix}`;
   const otherUsername = `refresh-other-${suffix}`;
   const password = "correct horse battery staple";
+  const stagedMfaUserId = `user-staged-mfa-${suffix}`;
+  const stagedPasswordUserId = `user-staged-password-${suffix}`;
+  const stagedMfaSecret = generateTotpSecret();
 
   const request = (path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Response> =>
     app.handle(
@@ -72,12 +76,101 @@ describe("browser refresh sessions", () => {
     await db.insert(users).values([
       { id: userId, username, passwordHash },
       { id: otherUserId, username: otherUsername, passwordHash },
+      { id: stagedMfaUserId, username: stagedMfaUserId, passwordHash },
+      { id: stagedPasswordUserId, username: stagedPasswordUserId, passwordHash },
     ]);
+    await db.insert(user2FA).values({ userId: stagedMfaUserId, secret: stagedMfaSecret, enabled: true });
   });
 
   afterAll(async () => {
-    await db.delete(users).where(inArray(users.id, [userId, otherUserId]));
+    await db.delete(users).where(inArray(users.id, [userId, otherUserId, stagedMfaUserId, stagedPasswordUserId]));
   });
+
+  for (const mfa of [false, true]) {
+    test(`staged ${mfa ? "MFA" : "password"} login sets a cookie only on single-use completion`, async () => {
+      const headers = { "X-Terrence-Session-Mode": "staged" };
+      let staged = await loginAs(mfa ? stagedMfaUserId : stagedPasswordUserId, true, headers);
+      if (mfa) {
+        const challenge = (await staged.json()).data.attributes["mfa-challenge-token"];
+        staged = await request(
+          "/api/v2/users/login/mfa",
+          {
+            data: {
+              attributes: {
+                "challenge-token": challenge,
+                code: generateTotpCode(stagedMfaSecret),
+                "browser-session": true,
+              },
+            },
+          },
+          headers,
+        );
+      }
+      expect(staged.status).toBe(200);
+      expect(staged.headers.get("set-cookie")).toBeNull();
+      const attrs = (await staged.json()).data.attributes;
+      expect(attrs.token).toBeUndefined();
+      const commitToken = attrs["session-commit-token"] as string;
+      expect((await accountStatus(commitToken)).status).toBe(401);
+      const body = { data: { attributes: { "session-commit-token": commitToken } } };
+      const formPost = await app.handle(
+        new Request("http://terrence.test/api/v2/users/login/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `session-commit-token=${commitToken}`,
+        }),
+      );
+      expect(formPost.status).toBe(415);
+      expect(formPost.headers.get("set-cookie")).toBeNull();
+      const completed = await request("/api/v2/users/login/complete", body);
+      expect(completed.status).toBe(200);
+      expect(completed.headers.get("set-cookie")).toContain("HttpOnly");
+      const accessToken = (await completed.json()).data.attributes.token as string;
+      const session = await db.query.refreshSessions.findFirst({
+        where: eq(refreshSessions.tokenHash, hashAuthenticationToken(rawCookieToken(cookie(completed)))),
+      });
+      expect(session?.userId).toBe(mfa ? stagedMfaUserId : stagedPasswordUserId);
+      expect(session?.mfaVerified).toBe(mfa);
+      const replay = await request("/api/v2/users/login/complete", body, { Cookie: cookie(completed) });
+      expect(replay.status).toBe(401);
+      expect(replay.headers.get("set-cookie")).toBeNull();
+      expect((await accountStatus(accessToken)).status).toBe(200);
+    });
+  }
+
+  for (const invalidation of ["expiry", "password change", "suspension", "MFA enrollment"] as const) {
+    test(`a staged login invalidated by ${invalidation} cannot change an existing cookie`, async () => {
+      const staged = await loginAs(username, true, { "X-Terrence-Session-Mode": "staged" });
+      const commitToken = (await staged.json()).data.attributes["session-commit-token"] as string;
+      const original = await db.query.users.findFirst({ where: eq(users.id, userId) });
+      try {
+        if (invalidation === "expiry")
+          await db
+            .update(ssoChallenges)
+            .set({ expiresAt: Date.now() - 1 })
+            .where(eq(ssoChallenges.id, hashAuthenticationToken(commitToken)));
+        if (invalidation === "password change")
+          await db.update(users).set({ passwordHash: "changed" }).where(eq(users.id, userId));
+        if (invalidation === "suspension")
+          await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
+        if (invalidation === "MFA enrollment")
+          await db.insert(user2FA).values({ userId, secret: generateTotpSecret(), enabled: true });
+        const result = await request(
+          "/api/v2/users/login/complete",
+          { data: { attributes: { "session-commit-token": commitToken } } },
+          { Cookie: "terrence_refresh=existing-cookie" },
+        );
+        expect(result.status).toBe(401);
+        expect(result.headers.get("set-cookie")).toBeNull();
+      } finally {
+        if (invalidation === "MFA enrollment") await db.delete(user2FA).where(eq(user2FA.userId, userId));
+        await db
+          .update(users)
+          .set({ passwordHash: original!.passwordHash, isSuspended: original!.isSuspended })
+          .where(eq(users.id, userId));
+      }
+    });
+  }
 
   for (const order of ["rotated-first", "live-first"] as const) {
     test(`checks every refresh-session family with ${order} cookie fixtures`, async () => {

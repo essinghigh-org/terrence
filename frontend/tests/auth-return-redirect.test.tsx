@@ -152,7 +152,9 @@ test("sign-in returns the user to the preserved destination", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({});
-    if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    if (url === "/api/v2/users/login")
+      return json({ data: { attributes: { "session-commit-token": "login-handoff" } } });
+    if (url === "/api/v2/users/login/complete") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -185,7 +187,9 @@ test("external returnTo values are ignored", async () => {
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({});
-    if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    if (url === "/api/v2/users/login")
+      return json({ data: { attributes: { "session-commit-token": "login-handoff" } } });
+    if (url === "/api/v2/users/login/complete") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -251,7 +255,9 @@ test("registration restores the preserved destination through the shared validat
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({ "signup-enabled": true });
     if (url === "/api/v2/users") return json({ data: { id: "user-1" } });
-    if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    if (url === "/api/v2/users/login")
+      return json({ data: { attributes: { "session-commit-token": "login-handoff" } } });
+    if (url === "/api/v2/users/login/complete") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock as unknown as typeof fetch;
