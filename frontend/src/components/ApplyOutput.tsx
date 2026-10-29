@@ -228,13 +228,17 @@ function applyErrorLine(map: Map<string, ResourceExecutionInfo>, address: string
 }
 
 function applyTextLineToMap(map: Map<string, ResourceExecutionInfo>, line: string): void {
-  for (const address of map.keys()) {
-    if (!line.includes(address)) continue;
-    if (applyCreationLine(map, address, line)) continue;
-    if (applyModificationLine(map, address, line)) continue;
-    if (applyDestructionLine(map, address, line)) continue;
-    applyErrorLine(map, address, line);
-  }
+  // Match the address once, rather than scanning every planned resource for
+  // every line. Quoted instance keys can contain colons and escaped quotes;
+  // only the colon outside those keys separates the address from progress.
+  const trimmed = line.trimStart();
+  const address = /^((?:[^":]|"(?:\\.|[^"\\])*")+): /.exec(trimmed)?.[1];
+  if (address === undefined || !map.has(address)) return;
+  const progress = trimmed.slice(address.length);
+  if (applyCreationLine(map, address, progress)) return;
+  if (applyModificationLine(map, address, progress)) return;
+  if (applyDestructionLine(map, address, progress)) return;
+  applyErrorLine(map, address, progress);
 }
 
 function markInterruptedFailed(map: Map<string, ResourceExecutionInfo>, applyFailed: boolean): void {

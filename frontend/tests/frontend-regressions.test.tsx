@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { isValidElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -113,6 +113,49 @@ test("renders the apply fallback when plan JSON responds with 204", async () => 
     expect(view.getByText("Apply view is unavailable. See raw apply logs below.")).toBeTruthy();
   });
   expect(view.queryByText("Cannot read properties of null")).toBeNull();
+});
+
+test("matches plain-text apply progress to the exact resource address", async () => {
+  const addresses = [
+    "null_resource.foo",
+    "null_resource.foobar",
+    "module.child.null_resource.foo",
+    'module.child["west: primary"].null_resource.foo["a\\\"b: Creating..."]',
+    "null_resource.other",
+  ];
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: addresses.map((address) => ({
+          address,
+          type: "null_resource",
+          change: { actions: ["create"], before: null, after: {} },
+        })),
+      }),
+  ) as unknown as typeof fetch;
+
+  const view = render(
+    <ApplyOutput
+      runId="run-addresses"
+      status="applying"
+      applyStatus="running"
+      applyLogs={[
+        "null_resource.foobar: Creation complete after 1s [id=null_resource.other]",
+        "module.child.null_resource.foo: Still creating... [10s elapsed]",
+        `${addresses[3]}: Error creating resource`,
+      ].join("\n")}
+    />,
+  );
+  await waitFor((): void => {
+    expect(view.getByLabelText(`Apply details for ${addresses[0]}`)).toBeTruthy();
+  });
+  const row = (index: number): ReturnType<typeof within> =>
+    within(view.getByLabelText(`Apply details for ${addresses[index]}`));
+  expect(row(0).getByText("Pending")).toBeTruthy();
+  expect(row(1).getByText("created")).toBeTruthy();
+  expect(row(2).getByText("creating…")).toBeTruthy();
+  expect(row(3).getByText("Failed")).toBeTruthy();
+  expect(row(4).getByText("Pending")).toBeTruthy();
 });
 
 test("resolves duplicate provider icons by notification without per-instance intervals", async () => {
