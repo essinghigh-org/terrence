@@ -231,6 +231,21 @@ function applyErrorLine(map: Map<string, ResourceExecutionInfo>, address: string
   return false;
 }
 
+function deposedProgressKey(
+  explicitKey: string | undefined,
+  progress: string,
+  instances: ReadonlyMap<string, Readonly<ResourceExecutionProgress>> | undefined,
+): string | undefined {
+  if (explicitKey !== undefined || !progress.startsWith(": Still destroying...")) return explicitKey;
+  // OpenTofu omits the suffix on periodic cleanup updates. Completed old
+  // instances must not capture normal destruction of the current instance.
+  let activeKey: string | undefined;
+  for (const [key, execution] of instances ?? []) {
+    if (execution.state === "destroying") activeKey = key;
+  }
+  return activeKey;
+}
+
 function applyTextLineToMap(
   map: Map<string, ResourceExecutionInfo>,
   line: string,
@@ -247,7 +262,8 @@ function applyTextLineToMap(
   if (!map.has(address)) return;
   let target = map;
   let key = address;
-  const deposedKey = suffix?.[2];
+  const progress = trimmed.slice(fullAddress.length);
+  const deposedKey = deposedProgressKey(suffix?.[2], progress, deposed.get(address));
   if (deposedKey !== undefined) {
     key = deposedKey;
     let instances = deposed.get(address);
@@ -257,7 +273,6 @@ function applyTextLineToMap(
     }
     target = instances;
   }
-  const progress = trimmed.slice(fullAddress.length);
   if (applyCreationLine(target, key, progress)) return;
   if (applyModificationLine(target, key, progress)) return;
   if (applyDestructionLine(target, key, progress)) return;

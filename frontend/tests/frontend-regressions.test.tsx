@@ -173,6 +173,7 @@ test.each(["null_resource.foo", 'module.child["west: primary"].null_resource.foo
       `${address}: Creation complete after 1s [id=new-instance]`,
       `${address} (deposed object 21af4693): Destroying... [id=old-instance]`,
       `${address} (deposed object deadbeef): Destruction complete after 2s`,
+      `${address}: Still destroying... [id=old-instance, 10s elapsed]`,
     ].join("\n");
     const view = render(<ApplyOutput runId="run-deposed" status="applying" applyStatus="running" applyLogs={logs} />);
     await waitFor((): void => {
@@ -180,6 +181,7 @@ test.each(["null_resource.foo", 'module.child["west: primary"].null_resource.foo
     });
     expect(view.getByText("created")).toBeTruthy();
     expect(within(view.getByLabelText("Cleanup of deposed object 21af4693")).getByText("destroying…")).toBeTruthy();
+    expect(view.getByLabelText("Cleanup of deposed object 21af4693").textContent).toContain("10s");
     expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
 
     view.rerender(<ApplyOutput runId="run-deposed" status="errored" applyStatus="errored" applyLogs={logs} />);
@@ -188,6 +190,27 @@ test.each(["null_resource.foo", 'module.child["west: primary"].null_resource.foo
     expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
   },
 );
+
+test("completed deposed cleanup does not capture current-instance destruction progress", async () => {
+  const address = "null_resource.deleted";
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          { address, type: "null_resource", change: { actions: ["delete"], before: {}, after: null } },
+        ],
+      }),
+  ) as unknown as typeof fetch;
+  const logs = [
+    `${address} (deposed object deadbeef): Destruction complete after 2s`,
+    `${address}: Destroying... [id=current-instance]`,
+    `${address}: Still destroying... [id=current-instance, 20s elapsed]`,
+  ].join("\n");
+  const view = render(<ApplyOutput runId="run-delete" status="applying" applyStatus="running" applyLogs={logs} />);
+  expect(await view.findByText("destroying…")).toBeTruthy();
+  expect(view.getByLabelText("Apply details for null_resource.deleted").textContent).toContain("20s");
+  expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
+});
 
 test("resolves duplicate provider icons by notification without per-instance intervals", async () => {
   clearProviderIconCacheForTests();
