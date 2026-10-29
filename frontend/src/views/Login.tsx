@@ -321,6 +321,7 @@ export function Login(): React.JSX.Element {
       }
       await completeSignIn(attributes);
     } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof ApiError) {
         // Surface the backend\'s specific message (e.g. invitation not accepted,
         // LDAP unavailable, rate-limited) instead of always blaming the password.
@@ -355,6 +356,7 @@ export function Login(): React.JSX.Element {
       const attributes = response.data.attributes;
       await completeSignIn(attributes);
     } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof ApiError) setError(error.message);
       else if (error instanceof Error) setError(error.message);
       else setError("That authentication code was not accepted. Try again.");

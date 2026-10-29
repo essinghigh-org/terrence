@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { AuthSessionManager, ProtectedRoute } from "../src/App";
 import { Toaster } from "../src/components/ui/toast";
-import { AUTH_EXPIRED_EVENT, expireAuthSession } from "../src/lib/api";
+import { AUTH_EXPIRED_EVENT, expireAuthSession, getAuthToken, setAuthToken } from "../src/lib/api";
 import { loginPathWithReturnTo, resolveReturnTarget, ssoContinuationQuery } from "../src/lib/return-to";
 import { Login } from "../src/views/Login";
 import { Register } from "../src/views/Register";
@@ -281,6 +281,91 @@ test("registration restores the preserved destination through the shared validat
     expect(view.getByText("ACCOUNT")).toBeTruthy();
   });
   expect(view.queryByText("HOME")).toBeNull();
+});
+
+test.each([
+  { phase: "login", registration: false, mfa: false, endpoint: "/api/v2/users/login" },
+  { phase: "MFA login", registration: false, mfa: true, endpoint: "/api/v2/users/login/mfa" },
+  { phase: "signup", registration: true, mfa: false, endpoint: "/api/v2/users" },
+  { phase: "automatic login", registration: true, mfa: false, endpoint: "/api/v2/users/login" },
+])("ignores a stale session abort during $phase", async ({ registration, mfa, endpoint }) => {
+  let release: ((response: Response) => void) | undefined;
+  const response = new Promise<Response>((resolve): void => {
+    release = resolve;
+  });
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve): void => {
+    markStarted = resolve;
+  });
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/ping") return json({ "signup-enabled": true, "local-auth-enabled": true });
+    if (url === endpoint) {
+      markStarted?.();
+      return response;
+    }
+    if (url === "/api/v2/users") return json({ data: { id: "user-1" } });
+    if (url === "/api/v2/users/login")
+      return json({ data: { attributes: { "mfa-required": true, "mfa-challenge-token": "challenge-1" } } });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as unknown as typeof fetch;
+  const path = registration ? "/register" : "/login";
+  const view = render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path={path} element={registration ? <Register /> : <Login />} />
+        <Route path="/app" element={<div>HOME</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  try {
+    const usernameLabel = registration ? "Username" : "Username or email address";
+    changeInput(await view.findByLabelText(usernameLabel), "alice");
+    changeInput(view.getByLabelText("Password"), "correct horse 123");
+    if (registration) changeInput(view.getByLabelText("Email address"), "alice@example.com");
+    let submit = view.getByRole("button", { name: registration ? "Create account" : "Sign in" });
+    await act(async (): Promise<void> => {
+      fireEvent.submit(submit.closest("form")!);
+    });
+    if (mfa) {
+      changeInput(await view.findByLabelText("Authentication code"), "123456");
+      submit = view.getByRole("button", { name: "Verify code" });
+      await act(async (): Promise<void> => {
+        fireEvent.submit(submit.closest("form")!);
+      });
+    }
+    await started;
+    await act(async (): Promise<void> => {
+      setAuthToken("new-session", Date.now() + 60_000, true);
+      release?.(json({ data: { attributes: { token: "stale-session" } } }));
+    });
+    await waitFor((): void => {
+      expect((submit as HTMLButtonElement).disabled).toBeFalse();
+    });
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(getAuthToken()).toBe("new-session");
+    expect(view.queryByText("HOME")).toBeNull();
+  } finally {
+    release?.(new Response(null, { status: 401 }));
+  }
+});
+
+test.each([
+  { registration: false, failure: Object.assign(new Error("Credentials rejected"), { name: "AbortError" }) },
+  { registration: true, failure: new DOMException("Registration unavailable", "NetworkError") },
+])("authentication forms still report other errors ($registration)", async ({ registration, failure }) => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    if (getUrlString(input) === "/api/v2/ping") return json({ "signup-enabled": true, "local-auth-enabled": true });
+    throw failure;
+  }) as unknown as typeof fetch;
+  const view = render(<MemoryRouter>{registration ? <Register /> : <Login />}</MemoryRouter>);
+  changeInput(await view.findByLabelText(registration ? "Username" : "Username or email address"), "alice");
+  changeInput(view.getByLabelText("Password"), "correct horse 123");
+  if (registration) changeInput(view.getByLabelText("Email address"), "alice@example.com");
+  await act(async (): Promise<void> => {
+    fireEvent.submit(view.getByRole("button", { name: registration ? "Create account" : "Sign in" }).closest("form")!);
+  });
+  expect((await view.findByRole("alert")).textContent).toBe(failure.message);
 });
 
 test("the login-path helper preserves /app destinations and drops the rest (issue #738)", () => {

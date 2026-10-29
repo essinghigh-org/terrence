@@ -61,6 +61,7 @@ export function Register(): React.JSX.Element {
           }),
         });
       } catch (signupError: unknown) {
+        if (signupError instanceof DOMException && signupError.name === "AbortError") return;
         const message = signupError instanceof Error ? signupError.message : "Failed to create account";
         setError(message);
         return;
@@ -74,7 +75,8 @@ export function Register(): React.JSX.Element {
         })) as { data: { attributes: { token: string; "expired-at"?: string | null } } };
         setAuthToken(login.data.attributes.token, login.data.attributes["expired-at"], true);
         await navigate(resolveReturnTarget(returnTo));
-      } catch (_loginError: unknown) {
+      } catch (loginError: unknown) {
+        if (loginError instanceof DOMException && loginError.name === "AbortError") return;
         setError("Account created, but failed to log in automatically. Please sign in.");
       }
     } finally {
