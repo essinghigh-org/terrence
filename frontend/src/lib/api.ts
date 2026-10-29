@@ -18,8 +18,12 @@ const SESSION_EXPIRED_KEY = "tfe_session_expired";
 let accessToken: string | null = null;
 let accessTokenExpiry: number | null = null;
 let refreshableSession = false;
+// A refresh belongs to the login that started it. Logout, expiry, or a new
+// login invalidates its eventual response even if fetch has already completed.
+let authGeneration = 0;
 
 function clearAuthMemory(): void {
+  authGeneration += 1;
   accessToken = null;
   accessTokenExpiry = null;
   refreshableSession = false;
@@ -155,6 +159,11 @@ export function isRefreshableSession(): boolean {
 }
 
 export function setAuthToken(token: string, expiresAt?: string | number | null, refreshable = false): void {
+  authGeneration += 1;
+  storeAuthToken(token, expiresAt, refreshable);
+}
+
+function storeAuthToken(token: string, expiresAt: string | number | null | undefined, refreshable: boolean): void {
   accessToken = token;
   const normalizedExpiry = isString(expiresAt) ? Date.parse(expiresAt) : expiresAt;
   accessTokenExpiry = isNumber(normalizedExpiry) && Number.isFinite(normalizedExpiry) ? normalizedExpiry : null;
@@ -194,7 +203,21 @@ type AccessTokenDocument = Readonly<{
   }>;
 }>;
 
-let refreshRequest: Promise<string | null> | null = null;
+let refreshRequest: Readonly<{ generation: number; promise: Promise<string | null> }> | null = null;
+let cookieMutationTail: Promise<unknown> = Promise.resolve();
+let pendingCookieMutations = 0;
+
+async function mutateSessionCookie<T>(generation: number, operation: () => Promise<T>): Promise<T> {
+  pendingCookieMutations += 1;
+  const result = cookieMutationTail.then(async (): Promise<T> => {
+    assertAuthGeneration(generation);
+    return operation();
+  });
+  cookieMutationTail = result.catch((): void => undefined);
+  return result.finally((): void => {
+    pendingCookieMutations -= 1;
+  });
+}
 
 /**
  * Bootstrap the access token for a fresh page load. Browser sessions have
@@ -224,7 +247,9 @@ export async function bootstrapAuth(): Promise<string | null> {
 
 async function refreshAccessToken(force = false): Promise<string | null> {
   if (!force && !refreshableSession) return null;
-  refreshRequest ??= (async (): Promise<string | null> => {
+  if (refreshRequest?.generation === authGeneration) return refreshRequest.promise;
+  const generation = authGeneration;
+  const promise = mutateSessionCookie(generation, async (): Promise<string | null> => {
     const response = await fetch(`${API_BASE_URL}/users/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/vnd.api+json" },
@@ -237,12 +262,15 @@ async function refreshAccessToken(force = false): Promise<string | null> {
     const token = document.data?.attributes?.token;
     const expiresAt = document.data?.attributes?.["expired-at"];
     if (!isString(token) || token === "") return null;
-    setAuthToken(token, isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null, true);
+    if (generation !== authGeneration) return null;
+    storeAuthToken(token, isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null, true);
     return token;
-  })().finally((): void => {
-    refreshRequest = null;
+  }).finally((): void => {
+    // A new login can start its own refresh before this one settles.
+    if (refreshRequest?.promise === promise) refreshRequest = null;
   });
-  return refreshRequest;
+  refreshRequest = { generation, promise };
+  return promise;
 }
 
 async function sendApiRequest(
@@ -271,12 +299,23 @@ function hasUsableToken(token: string | null): boolean {
   return token !== null && token !== "";
 }
 
+function assertAuthGeneration(generation: number): void {
+  if (generation !== authGeneration) throw new DOMException("The authentication session changed", "AbortError");
+}
+
 function shouldRefreshBeforeRequest(token: string | null, expiresAt: number | null): boolean {
   return hasUsableToken(token) && expiresAt !== null && expiresAt <= Date.now() && isRefreshableSession();
 }
 
 function isAuthEndpoint(url: string): boolean {
-  return url.endsWith("/users/login") || url.endsWith("/users/refresh") || url.endsWith("/users/logout");
+  const path = url.split(/[?#]/, 1)[0] ?? url;
+  return (
+    path.endsWith("/users/login") ||
+    path.endsWith("/users/login/mfa") ||
+    path.endsWith("/users/login/complete") ||
+    path.endsWith("/users/refresh") ||
+    path.endsWith("/users/logout")
+  );
 }
 
 function shouldRetryWorkspace404(
@@ -328,25 +367,38 @@ async function throwApiError(response: ReadonlyResponse, token: string | null, u
 }
 
 async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
+  // Select the cookie-safe transport; both paths authenticate on the server.
+  if (isBrowserSessionRequest(endpoint, options)) {
+    return Response.json(await requestBrowserSession(endpoint, options), {
+      headers: { "Content-Type": "application/vnd.api+json" },
+    });
+  }
   // Absolute /api/* paths (v1 compatibility endpoints like /api/v1/metadata)
   // are used verbatim; everything else is relative to the v2 API base.
   const url = endpoint.startsWith("/api/") ? endpoint : `${API_BASE_URL}${endpoint}`;
   let token = getAuthToken();
+  const generation = authGeneration;
   const expiresAt = getAuthTokenExpiry();
   if (shouldRefreshBeforeRequest(token, expiresAt)) {
     token = (await refreshAccessToken().catch((): null => null)) ?? token;
+    assertAuthGeneration(generation);
   }
   let response = await sendApiRequest(url, options, token);
+  assertAuthGeneration(generation);
   if (response.status === 401 && hasUsableToken(token) && isRefreshableSession() && !isAuthEndpoint(url)) {
     const refreshedToken = await refreshAccessToken().catch((): null => null);
+    assertAuthGeneration(generation);
     if (refreshedToken !== null) {
       response = await sendApiRequest(url, options, refreshedToken);
+      assertAuthGeneration(generation);
     }
   }
   if (shouldRetryWorkspace404(response.status, options.method, token, url)) {
     const refreshedToken = await refreshAccessToken().catch((): null => null);
+    assertAuthGeneration(generation);
     if (refreshedToken !== null && refreshedToken !== token) {
       response = await sendApiRequest(url, options, refreshedToken);
+      assertAuthGeneration(generation);
     }
   }
 
@@ -355,6 +407,75 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
   }
 
   return response;
+}
+
+function isBrowserSessionRequest(endpoint: string, options: Readonly<{ method?: string; body?: unknown }>): boolean {
+  const path = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
+  if (
+    (options.method ?? "GET").toUpperCase() !== "POST" ||
+    (!path.endsWith("/users/login") && !path.endsWith("/users/login/mfa")) ||
+    typeof options.body !== "string"
+  )
+    return false;
+  try {
+    const document: unknown = JSON.parse(options.body);
+    const data = asRecordOrNull(document)?.["data"];
+    return asRecordOrNull(asRecordOrNull(data)?.["attributes"])?.["browser-session"] === true;
+  } catch {
+    return false;
+  }
+}
+
+function loginAttributes(document: DeepReadonly<JsonValue>): JsonObject | null {
+  return asRecordOrNull(asRecordOrNull(asRecordOrNull(document)?.["data"])?.["attributes"]);
+}
+
+async function requestBrowserSession(endpoint: string, options: ReadonlyRequestInit = {}): Promise<JsonValue> {
+  const generation = authGeneration;
+  const url = endpoint.startsWith("/api/") ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const response = await sendApiRequest(url, {
+    ...options,
+    // Also ignore Set-Cookie from older servers that do not support staging.
+    credentials: "omit",
+    headers: {
+      ...Object.fromEntries(new Headers(options.headers as HeadersInit)),
+      "X-Terrence-Session-Mode": "staged",
+    },
+  });
+  assertAuthGeneration(generation);
+  if (!response.ok) return throwApiError(response, null, url);
+  const document = await readResponseBody(response);
+  assertAuthGeneration(generation);
+  const attributes = loginAttributes(document);
+  if (attributes?.["mfa-required"] === true) return document;
+  const commitToken = attributes?.["session-commit-token"];
+  if (!isString(commitToken) || commitToken === "")
+    throw new Error("The server did not provide a browser login handoff");
+  return mutateSessionCookie(generation, async (): Promise<JsonValue> => {
+    const commitUrl = `${API_BASE_URL}/users/login/complete`;
+    const committed = await sendApiRequest(commitUrl, {
+      method: "POST",
+      credentials: "same-origin",
+      body: JSON.stringify({ data: { attributes: { "session-commit-token": commitToken } } }),
+    });
+    assertAuthGeneration(generation);
+    if (!committed.ok) return throwApiError(committed, null, commitUrl);
+    try {
+      const result = await readResponseBody(committed);
+      assertAuthGeneration(generation);
+      const accepted = loginAttributes(result);
+      const token = accepted?.["token"];
+      const expiresAt = accepted?.["expired-at"];
+      if (!isString(token) || token === "") throw new Error("Missing access token");
+      setAuthToken(token, isString(expiresAt) || isNumber(expiresAt) ? expiresAt : null, true);
+      return result;
+    } catch (error: unknown) {
+      // A successful response may already have changed the cookie even if its
+      // body is unreadable. Do not retain an access token for another session.
+      if (generation === authGeneration) clearAuthMemory();
+      throw error;
+    }
+  });
 }
 
 export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyRequestInit = {}): Promise<T> {
@@ -761,15 +882,21 @@ export async function streamExplain(
   const url = `${API_BASE_URL}/runs/${encodeURIComponent(runId)}/explain`;
   // Same refresh-and-retry semantics as fetchApi: an expired token is
   // refreshed once and the request replayed before the session is expired.
-  let token = await prepareAuthToken();
+  const tokenRequest = prepareAuthToken();
+  const generation = authGeneration;
+  let token = await tokenRequest;
+  assertAuthGeneration(generation);
   const first = await trySendExplainRequest(url, kind, refresh, signal, token);
+  assertAuthGeneration(generation);
   if (first === null) return;
   let response = first;
   if (response.status === 401 && token !== null && token !== "" && isRefreshableSession()) {
     const refreshedToken = await refreshAccessToken().catch((): null => null);
+    assertAuthGeneration(generation);
     if (refreshedToken !== null) {
       token = refreshedToken;
       const retry = await trySendExplainRequest(url, kind, refresh, signal, refreshedToken);
+      assertAuthGeneration(generation);
       if (retry === null) return;
       response = retry;
     }
@@ -913,6 +1040,7 @@ async function maybeRefreshLogResponse(
   send: (token: string | null) => Promise<Response>,
   token: string | null,
   status: number,
+  generation: number,
 ): Promise<Response | null> {
   // `prepareAuthToken` only refreshes when the local clock already says the
   // token expired. Without this retry a token revoked or expired server-side
@@ -920,11 +1048,13 @@ async function maybeRefreshLogResponse(
   // (which goes through fetchApi, and does retry) carried on working.
   if (status !== 401 || !hasUsableToken(token) || !isRefreshableSession()) return null;
   const refreshed = await refreshAccessToken().catch((): null => null);
+  assertAuthGeneration(generation);
   if (refreshed === null) {
     expireAuthSession();
     return null;
   }
   const response = await send(refreshed);
+  assertAuthGeneration(generation);
   if (response.status === 401) expireAuthSession();
   return response;
 }
@@ -944,13 +1074,9 @@ async function maybeRefreshLogResponse(
  * `offset` past the end returns an empty chunk, which is the idle case while a
  * phase is running but quiet.
  *
- * DELIBERATELY sends no `limit`. The server documents that a windowed read is
- * byte-exact and may therefore split a multibyte character, whereas an
- * unlimited read always ends at end-of-stream and so is always complete, valid
- * UTF-8. That is what makes the `text()` → byte-length round-trip below exact.
- * Adding a `limit` here without switching to an incremental streaming decoder
- * would let a split codepoint decode to U+FFFD, re-encode to three bytes, and
- * put `nextOffset` permanently out of step with the server.
+ * The server caps responses even when no `limit` is requested. Decode only
+ * complete UTF-8 characters and leave an incomplete suffix for the next read,
+ * whose byte offset points back to that character's first byte.
  */
 export async function fetchRunLogTail(
   runId: string,
@@ -968,9 +1094,13 @@ export async function fetchRunLogTail(
     return fetch(path, { headers, ...(signal === undefined ? {} : { signal }) });
   };
 
-  const token = await prepareAuthToken();
+  const tokenRequest = prepareAuthToken();
+  const generation = authGeneration;
+  const token = await tokenRequest;
+  assertAuthGeneration(generation);
   const first = await send(token);
-  const response = (await maybeRefreshLogResponse(send, token, first.status)) ?? first;
+  assertAuthGeneration(generation);
+  const response = (await maybeRefreshLogResponse(send, token, first.status, generation)) ?? first;
 
   if (!response.ok) {
     throw new ApiError(response.status, `Could not read the ${phase} log (${response.status})`);
@@ -983,31 +1113,47 @@ export async function fetchRunLogTail(
   if (contentType !== "" && !contentType.startsWith("text/")) {
     return { chunk: "", totalBytes: from, totalKnown: false, nextOffset: from, truncated: false };
   }
-  const chunk = await response.text();
-  // The byte length of the chunk, not its character length: a multibyte
-  // character makes the two disagree, and the next offset must be in bytes.
-  const chunkBytes = new TextEncoder().encode(chunk).byteLength;
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const chunkBytes = completeUtf8PrefixLength(bytes);
+  const chunk = new TextDecoder().decode(bytes.subarray(0, chunkBytes));
   const headerTotal = Number.parseInt(response.headers.get("X-Terrence-Log-Total-Bytes") ?? "", 10);
   const knownTotal = Number.isSafeInteger(headerTotal) && headerTotal >= 0;
   return {
     chunk,
-    // Falling back to `from + chunkBytes` when the header is missing is not
+    // Falling back to the received byte count when the header is missing is not
     // merely approximate: it is always >= the requested offset, which makes
     // the caller's "the stream shrank, restart it" branch unreachable. Say so
     // via `totalKnown` rather than quietly reporting a total we do not have.
-    totalBytes: knownTotal ? headerTotal : from + chunkBytes,
+    totalBytes: knownTotal ? headerTotal : from + bytes.byteLength,
     totalKnown: knownTotal,
     nextOffset: from + chunkBytes,
     truncated: response.headers.get("X-Terrence-Log-Truncated") === "true",
   };
 }
 
+/** A response budget may cut a UTF-8 character after its first 1–3 bytes. */
+function completeUtf8PrefixLength(bytes: Readonly<ArrayLike<number>>): number {
+  if (bytes.length === 0) return 0;
+  let start = bytes.length - 1;
+  while (start > 0 && bytes.length - start < 4) {
+    const byte = bytes[start] ?? 0;
+    if (byte < 0x80 || byte > 0xbf) break;
+    start -= 1;
+  }
+  const first = bytes[start] ?? 0;
+  const width =
+    first >= 0xc2 && first <= 0xdf ? 2 : first >= 0xe0 && first <= 0xef ? 3 : first >= 0xf0 && first <= 0xf4 ? 4 : 1;
+  return bytes.length - start < width ? start : bytes.length;
+}
+
 /** Resolve the bearer token, refreshing it first when it is about to expire. */
 export async function prepareAuthToken(): Promise<string | null> {
   let token = getAuthToken();
+  const generation = authGeneration;
   const expiresAt = getAuthTokenExpiry();
   if (token !== null && token !== "" && expiresAt !== null && expiresAt <= Date.now() && isRefreshableSession()) {
     token = (await refreshAccessToken().catch((): null => null)) ?? token;
+    assertAuthGeneration(generation);
   }
   return token;
 }
@@ -1020,17 +1166,19 @@ function removeAuthToken(): void {
 }
 
 export async function logoutAuthSession(): Promise<void> {
-  const refreshable = isRefreshableSession();
+  const refreshable = isRefreshableSession() || pendingCookieMutations > 0;
+  removeAuthToken();
+  const generation = authGeneration;
   try {
     if (refreshable) {
-      await fetch(`${API_BASE_URL}/users/logout`, {
-        method: "POST",
-        credentials: "same-origin",
+      await mutateSessionCookie(generation, async (): Promise<void> => {
+        await fetch(`${API_BASE_URL}/users/logout`, {
+          method: "POST",
+          credentials: "same-origin",
+        });
       });
     }
   } catch {
     // Local logout still succeeds when the server is unreachable.
-  } finally {
-    removeAuthToken();
   }
 }

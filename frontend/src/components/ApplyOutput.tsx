@@ -46,12 +46,18 @@ type ExecutionState =
   | "removed"
   | "failed";
 
-type ResourceExecutionInfo = {
+type ResourceExecutionProgress = {
   state: ExecutionState;
   elapsed?: string | undefined;
   resourceId?: string | undefined;
   error?: string | undefined;
 };
+
+type ResourceExecutionInfo = ResourceExecutionProgress & {
+  deposed?: ReadonlyMap<string, ResourceExecutionProgress>;
+};
+
+const DESTRUCTION_PROGRESS = /\[(?:id=(.*), )?([^\]]+) elapsed\]/;
 
 type LoadState =
   | Readonly<{ kind: "loading" }>
@@ -203,7 +209,7 @@ function applyModificationLine(map: Map<string, ResourceExecutionInfo>, address:
 
 function applyDestructionLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
   if (line.includes(": Destroying...")) {
-    map.set(address, { state: "destroying" });
+    map.set(address, { state: "destroying", resourceId: /\[id=([^\]]+)\]/.exec(line)?.[1] });
     return true;
   }
   if (line.includes(": Destruction complete after")) {
@@ -212,8 +218,13 @@ function applyDestructionLine(map: Map<string, ResourceExecutionInfo>, address: 
     return true;
   }
   if (line.includes(": Still destroying...")) {
-    const match = /\[(.*?) elapsed\]/.exec(line);
-    map.set(address, { state: "destroying", elapsed: match?.[1] });
+    const match = DESTRUCTION_PROGRESS.exec(line);
+    const current = map.get(address);
+    map.set(address, {
+      state: "destroying",
+      elapsed: match?.[2],
+      resourceId: match?.[1] ?? current?.resourceId,
+    });
     return true;
   }
   return false;
@@ -227,14 +238,62 @@ function applyErrorLine(map: Map<string, ResourceExecutionInfo>, address: string
   return false;
 }
 
-function applyTextLineToMap(map: Map<string, ResourceExecutionInfo>, line: string): void {
-  for (const address of map.keys()) {
-    if (!line.includes(address)) continue;
-    if (applyCreationLine(map, address, line)) continue;
-    if (applyModificationLine(map, address, line)) continue;
-    if (applyDestructionLine(map, address, line)) continue;
-    applyErrorLine(map, address, line);
+function deposedProgressKey(
+  explicitKey: string | undefined,
+  progress: string,
+  current: Readonly<ResourceExecutionProgress> | undefined,
+  instances: ReadonlyMap<string, Readonly<ResourceExecutionProgress>> | undefined,
+): string | undefined | null {
+  if (explicitKey !== undefined || !progress.startsWith(": Still destroying...") || instances === undefined)
+    return explicitKey;
+  // Periodic updates omit the deposed suffix. Use the ID captured at the
+  // destruction start, and skip updates that could belong to multiple objects.
+  const candidates: { key: string | undefined; execution: Readonly<ResourceExecutionProgress> }[] = [];
+  if (current?.state === "destroying") candidates.push({ key: undefined, execution: current });
+  for (const [key, execution] of instances) {
+    if (execution.state === "destroying") candidates.push({ key, execution });
   }
+  if (candidates.length === 0) return undefined;
+  const resourceId = DESTRUCTION_PROGRESS.exec(progress)?.[1];
+  const matches = candidates.filter(
+    ({ execution }): boolean =>
+      resourceId === undefined || execution.resourceId === undefined || execution.resourceId === resourceId,
+  );
+  return matches.length === 1 ? matches[0]?.key : null;
+}
+
+function applyTextLineToMap(
+  map: Map<string, ResourceExecutionInfo>,
+  line: string,
+  deposed: Map<string, Map<string, ResourceExecutionInfo>>,
+): void {
+  // Match the address once, rather than scanning every planned resource for
+  // every line. Quoted instance keys can contain colons and escaped quotes;
+  // only the colon outside those keys separates the address from progress.
+  const trimmed = line.trimStart();
+  const fullAddress = /^((?:[^":]|"(?:\\.|[^"\\])*")+): /.exec(trimmed)?.[1];
+  if (fullAddress === undefined) return;
+  const suffix = /^(.*) \(deposed object ([0-9a-f]{8})\)$/.exec(fullAddress);
+  const address = suffix?.[1] ?? fullAddress;
+  if (!map.has(address)) return;
+  let target = map;
+  let key = address;
+  const progress = trimmed.slice(fullAddress.length);
+  const deposedKey = deposedProgressKey(suffix?.[2], progress, map.get(address), deposed.get(address));
+  if (deposedKey === null) return;
+  if (deposedKey !== undefined) {
+    key = deposedKey;
+    let instances = deposed.get(address);
+    if (instances === undefined) {
+      instances = new Map();
+      deposed.set(address, instances);
+    }
+    target = instances;
+  }
+  if (applyCreationLine(target, key, progress)) return;
+  if (applyModificationLine(target, key, progress)) return;
+  if (applyDestructionLine(target, key, progress)) return;
+  applyErrorLine(target, key, progress);
 }
 
 function markInterruptedFailed(map: Map<string, ResourceExecutionInfo>, applyFailed: boolean): void {
@@ -253,6 +312,9 @@ function parseApplyLogsToExecMap(
   applyFailed: boolean,
 ): Map<string, ResourceExecutionInfo> {
   const map = seedExecMap(resources, applyFinished, applyFailed);
+  // Old replacement instances can still be destroying after the new one is
+  // created. Keep their lifecycle separate so cleanup cannot overwrite it.
+  const deposed = new Map<string, Map<string, ResourceExecutionInfo>>();
 
   if (logs === "") return map;
 
@@ -265,15 +327,20 @@ function parseApplyLogsToExecMap(
       if (applyJsonLineToMap(map, trimmed)) continue;
     }
 
-    applyTextLineToMap(map, line);
+    applyTextLineToMap(map, line, deposed);
   }
 
   markInterruptedFailed(map, applyFailed);
+  for (const [address, instances] of deposed) {
+    markInterruptedFailed(instances, applyFailed);
+    const execution = map.get(address);
+    if (execution !== undefined) map.set(address, { ...execution, deposed: instances });
+  }
 
   return map;
 }
 
-function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionInfo }>): React.JSX.Element {
+function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionProgress }>): React.JSX.Element {
   const { state, elapsed } = execution;
 
   if (state === "pending") {
@@ -397,8 +464,23 @@ function ApplyResourceRow({
           </div>
         </div>
 
-        <div className="shrink-0">
+        <div className="flex shrink-0 flex-col items-end gap-1">
           <ExecutionBadge execution={execution} />
+          {Array.from(execution.deposed ?? []).map(
+            ([key, progress]): React.JSX.Element => (
+              <span
+                key={key}
+                role="group"
+                aria-label={`Cleanup of deposed object ${key}`}
+                className="flex items-center gap-1.5 text-2xs text-muted-foreground"
+              >
+                <span>
+                  Previous object <code>{key}</code>
+                </span>
+                <ExecutionBadge execution={progress} />
+              </span>
+            ),
+          )}
         </div>
       </summary>
       <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={resource.name} />

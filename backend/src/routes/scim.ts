@@ -794,6 +794,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
             where: and(
               eq(organizationInvitations.emailNormalized, email.toLowerCase()),
               eq(organizationInvitations.status, "pending"),
+              gte(organizationInvitations.expiresAt, Date.now()),
             ),
           });
           if (pending !== undefined) {

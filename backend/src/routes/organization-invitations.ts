@@ -2,7 +2,7 @@ import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizationInvitations, organizationMemberships, users } from "../db/schema";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { checkOrganizationPermission, checkOrgPermission, auditLog } from "../lib/utils";
 import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
@@ -94,6 +94,20 @@ async function checkInviteConflicts(orgId: string, email: string): Promise<{ ok:
     });
     if (mem !== undefined) return { failure: inviteFailure(409, "Conflict", "User is already a member") };
   }
+  // Expiry must release the pending org/email uniqueness slot even when the
+  // recipient never attempts to accept the old token.
+  const now = Date.now();
+  await db
+    .update(organizationInvitations)
+    .set({ status: "expired", updatedAt: now })
+    .where(
+      and(
+        eq(organizationInvitations.orgId, orgId),
+        eq(organizationInvitations.emailNormalized, email),
+        eq(organizationInvitations.status, "pending"),
+        lt(organizationInvitations.expiresAt, now),
+      ),
+    );
   const pending = await db.query.organizationInvitations.findFirst({
     where: and(
       eq(organizationInvitations.orgId, orgId),
