@@ -138,6 +138,22 @@ describe("browser refresh sessions", () => {
     });
   }
 
+  test("concurrent staged-login completions redeem the handoff once", async () => {
+    const staged = await loginAs(stagedPasswordUserId, true, { "X-Terrence-Session-Mode": "staged" });
+    const commitToken = (await staged.json()).data.attributes["session-commit-token"] as string;
+    const body = { data: { attributes: { "session-commit-token": commitToken } } };
+    const results = await Promise.all([
+      request("/api/v2/users/login/complete", body),
+      request("/api/v2/users/login/complete", body),
+    ]);
+    expect(results.map((response): number => response.status).sort((a, b): number => a - b)).toEqual([200, 401]);
+    const accepted = results.find((response): boolean => response.status === 200)!;
+    const rejected = results.find((response): boolean => response.status === 401)!;
+    expect(accepted.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(rejected.headers.get("set-cookie")).toBeNull();
+    expect((await accountStatus((await accepted.json()).data.attributes.token as string)).status).toBe(200);
+  });
+
   for (const invalidation of ["expiry", "password change", "suspension", "MFA enrollment"] as const) {
     test(`a staged login invalidated by ${invalidation} cannot change an existing cookie`, async () => {
       const staged = await loginAs(username, true, { "X-Terrence-Session-Mode": "staged" });

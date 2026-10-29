@@ -212,6 +212,58 @@ test("completed deposed cleanup does not capture current-instance destruction pr
   expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
 });
 
+test("routes destruction updates by object ID when current and deposed instances destroy together", async () => {
+  const address = "null_resource.concurrent";
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          { address, type: "null_resource", change: { actions: ["delete"], before: {}, after: null } },
+        ],
+      }),
+  ) as unknown as typeof fetch;
+  const logs = [
+    `${address}: Destroying... [id=current-instance]`,
+    `${address} (deposed object 21af4693): Destroying... [id=first-old-instance]`,
+    `${address} (deposed object deadbeef): Destroying... [id=second-old-instance]`,
+    `${address}: Still destroying... [id=current-instance, 30s elapsed]`,
+    `${address}: Still destroying... [id=first-old-instance, 10s elapsed]`,
+    `${address}: Still destroying... [id=second-old-instance, 20s elapsed]`,
+  ].join("\n");
+  const view = render(<ApplyOutput runId="run-concurrent" status="applying" applyStatus="running" applyLogs={logs} />);
+  const row = await view.findByLabelText(`Apply details for ${address}`);
+  expect(row.textContent).toContain("30s");
+  expect(view.getByLabelText("Cleanup of deposed object 21af4693").textContent).toContain("10s");
+  expect(view.getByLabelText("Cleanup of deposed object deadbeef").textContent).toContain("20s");
+  expect(view.getByLabelText("Cleanup of deposed object deadbeef").textContent).not.toContain("30s");
+});
+
+test.each(["missing ID", "duplicate ID", "unmatched ID"])(
+  "does not attribute ambiguous destruction progress with %s",
+  async (scenario) => {
+    const address = "null_resource.ambiguous";
+    const currentId = scenario === "duplicate ID" ? "old-instance" : "current-instance";
+    const progress = scenario === "missing ID" ? "40s elapsed" : "id=old-instance, 40s elapsed";
+    globalThis.fetch = mock(
+      async (): Promise<Response> =>
+        json({
+          resource_changes: [
+            { address, type: "null_resource", change: { actions: ["delete"], before: {}, after: null } },
+          ],
+        }),
+    ) as unknown as typeof fetch;
+    const logs = [
+      `${address}: Destroying... [id=${currentId}]`,
+      `${address} (deposed object 21af4693): Destroying... [id=${scenario === "unmatched ID" ? "different-instance" : "old-instance"}]`,
+      `${address}: Still destroying... [${progress}]`,
+    ].join("\n");
+    const view = render(<ApplyOutput runId="run-ambiguous" status="applying" applyStatus="running" applyLogs={logs} />);
+    const row = await view.findByLabelText(`Apply details for ${address}`);
+    expect(row.textContent).not.toContain("40s");
+    expect(within(row).getAllByText("destroying…")).toHaveLength(2);
+  },
+);
+
 test("resolves duplicate provider icons by notification without per-instance intervals", async () => {
   clearProviderIconCacheForTests();
   let resolveFetch: ((response: Response) => void) | undefined;

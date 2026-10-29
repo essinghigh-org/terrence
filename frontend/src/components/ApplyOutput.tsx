@@ -57,6 +57,8 @@ type ResourceExecutionInfo = ResourceExecutionProgress & {
   deposed?: ReadonlyMap<string, ResourceExecutionProgress>;
 };
 
+const DESTRUCTION_PROGRESS = /\[(?:id=(.*), )?([^\]]+) elapsed\]/;
+
 type LoadState =
   | Readonly<{ kind: "loading" }>
   | Readonly<{ kind: "waiting" }>
@@ -207,7 +209,7 @@ function applyModificationLine(map: Map<string, ResourceExecutionInfo>, address:
 
 function applyDestructionLine(map: Map<string, ResourceExecutionInfo>, address: string, line: string): boolean {
   if (line.includes(": Destroying...")) {
-    map.set(address, { state: "destroying" });
+    map.set(address, { state: "destroying", resourceId: /\[id=([^\]]+)\]/.exec(line)?.[1] });
     return true;
   }
   if (line.includes(": Destruction complete after")) {
@@ -216,8 +218,13 @@ function applyDestructionLine(map: Map<string, ResourceExecutionInfo>, address: 
     return true;
   }
   if (line.includes(": Still destroying...")) {
-    const match = /\[(.*?) elapsed\]/.exec(line);
-    map.set(address, { state: "destroying", elapsed: match?.[1] });
+    const match = DESTRUCTION_PROGRESS.exec(line);
+    const current = map.get(address);
+    map.set(address, {
+      state: "destroying",
+      elapsed: match?.[2],
+      resourceId: match?.[1] ?? current?.resourceId,
+    });
     return true;
   }
   return false;
@@ -234,16 +241,25 @@ function applyErrorLine(map: Map<string, ResourceExecutionInfo>, address: string
 function deposedProgressKey(
   explicitKey: string | undefined,
   progress: string,
+  current: Readonly<ResourceExecutionProgress> | undefined,
   instances: ReadonlyMap<string, Readonly<ResourceExecutionProgress>> | undefined,
-): string | undefined {
-  if (explicitKey !== undefined || !progress.startsWith(": Still destroying...")) return explicitKey;
-  // OpenTofu omits the suffix on periodic cleanup updates. Completed old
-  // instances must not capture normal destruction of the current instance.
-  let activeKey: string | undefined;
-  for (const [key, execution] of instances ?? []) {
-    if (execution.state === "destroying") activeKey = key;
+): string | undefined | null {
+  if (explicitKey !== undefined || !progress.startsWith(": Still destroying...") || instances === undefined)
+    return explicitKey;
+  // Periodic updates omit the deposed suffix. Use the ID captured at the
+  // destruction start, and skip updates that could belong to multiple objects.
+  const candidates: { key: string | undefined; execution: Readonly<ResourceExecutionProgress> }[] = [];
+  if (current?.state === "destroying") candidates.push({ key: undefined, execution: current });
+  for (const [key, execution] of instances) {
+    if (execution.state === "destroying") candidates.push({ key, execution });
   }
-  return activeKey;
+  if (candidates.length === 0) return undefined;
+  const resourceId = DESTRUCTION_PROGRESS.exec(progress)?.[1];
+  const matches = candidates.filter(
+    ({ execution }): boolean =>
+      resourceId === undefined || execution.resourceId === undefined || execution.resourceId === resourceId,
+  );
+  return matches.length === 1 ? matches[0]?.key : null;
 }
 
 function applyTextLineToMap(
@@ -263,7 +279,8 @@ function applyTextLineToMap(
   let target = map;
   let key = address;
   const progress = trimmed.slice(fullAddress.length);
-  const deposedKey = deposedProgressKey(suffix?.[2], progress, deposed.get(address));
+  const deposedKey = deposedProgressKey(suffix?.[2], progress, map.get(address), deposed.get(address));
+  if (deposedKey === null) return;
   if (deposedKey !== undefined) {
     key = deposedKey;
     let instances = deposed.get(address);
