@@ -367,8 +367,9 @@ async function throwApiError(response: ReadonlyResponse, token: string | null, u
 }
 
 async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): Promise<Response> {
-  if (isBrowserLogin(endpoint, options)) {
-    return Response.json(await browserLogin(endpoint, options), {
+  // Select the cookie-safe transport; both paths authenticate on the server.
+  if (isBrowserSessionRequest(endpoint, options)) {
+    return Response.json(await requestBrowserSession(endpoint, options), {
       headers: { "Content-Type": "application/vnd.api+json" },
     });
   }
@@ -408,7 +409,7 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
   return response;
 }
 
-function isBrowserLogin(endpoint: string, options: Readonly<{ method?: string; body?: unknown }>): boolean {
+function isBrowserSessionRequest(endpoint: string, options: Readonly<{ method?: string; body?: unknown }>): boolean {
   const path = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
   if (
     (options.method ?? "GET").toUpperCase() !== "POST" ||
@@ -429,7 +430,7 @@ function loginAttributes(document: DeepReadonly<JsonValue>): JsonObject | null {
   return asRecordOrNull(asRecordOrNull(asRecordOrNull(document)?.["data"])?.["attributes"]);
 }
 
-async function browserLogin(endpoint: string, options: ReadonlyRequestInit = {}): Promise<JsonValue> {
+async function requestBrowserSession(endpoint: string, options: ReadonlyRequestInit = {}): Promise<JsonValue> {
   const generation = authGeneration;
   const url = endpoint.startsWith("/api/") ? endpoint : `${API_BASE_URL}${endpoint}`;
   const response = await sendApiRequest(url, {
