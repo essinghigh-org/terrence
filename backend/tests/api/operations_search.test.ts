@@ -90,6 +90,7 @@ describe("authorized operations search candidates", () => {
       const ids = await search(seed.token);
       // Permission work depends on the user's organizations, not on the
       // 500 unrelated organizations seeded above.
+      expect(getQueryCount()).toBeGreaterThan(0);
       expect(getQueryCount()).toBeLessThan(20);
       expect(ids).toEqual([hiddenWorkspaceId, projectId, runId, workspaceId].sort());
     } finally {
