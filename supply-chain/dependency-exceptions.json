@@ -22,6 +22,16 @@
       "reason": "Keep all frontend toolchain consumers on the reviewed esbuild release until their ranges converge.",
       "disposition": "Accepted override; run the frontend build and browser smoke suite before renewal.",
       "expiresOn": "2026-12-31"
+    },
+    {
+      "id": "override-minimatch",
+      "kind": "dependency-override",
+      "package": "minimatch",
+      "constraint": "11.0.3",
+      "owner": "platform-maintainers",
+      "reason": "Resolve GHSA-g3hv-75wg-m249 while ESLint and typescript-eslint still require vulnerable minimatch 10 releases.",
+      "disposition": "Temporary cross-major override; verify lint and typecheck, and remove when upstream ranges accept minimatch 11.",
+      "expiresOn": "2026-12-31"
     }
   ]
 }

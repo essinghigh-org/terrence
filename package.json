@@ -16,7 +16,8 @@
   },
   "overrides": {
     "brace-expansion": "5.0.12",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "minimatch": "11.0.3"
   },
   "scripts": {
     "prepare": "if test -d .git; then ln -sf ../../scripts/pre-commit .git/hooks/pre-commit; fi",
