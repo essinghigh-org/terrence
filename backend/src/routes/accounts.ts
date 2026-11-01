@@ -40,11 +40,14 @@ import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy"
 import { clearLoginFailures, isLoginLocked, recordFailedLogin } from "../lib/login-lockout";
 import { revokeUserOAuthAuthorizationCodes } from "../lib/oauth-handshake";
 import { secureRequest } from "../lib/secure-request";
+import { consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { normalizeEmail, normalizeUsername } from "../lib/identity";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE = "terrence_refresh";
+const LOGIN_COMMIT_KIND = "browser-login-commit";
+const LOGIN_COMMIT_TTL_MS = 2 * 60 * 1000;
 // Two-tab concurrency grace (todo 125-127): a presented refresh token that
 // was rotated within this window is treated as a legitimate concurrent tab,
 // not replay. Replay detection (family revocation) applies outside it.
@@ -377,6 +380,68 @@ export async function issueLoginSession(
   });
   setRefreshCookie(set, request, refreshToken, refreshExpiresAt, server);
   return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
+}
+
+async function loginSessionResponse(
+  user: Readonly<typeof users.$inferSelect>,
+  browserSession: boolean,
+  set: SetObj,
+  request: RequestInfo | undefined,
+  server: unknown,
+  mfaVerified = false,
+): Promise<unknown> {
+  if (!browserSession || request?.headers.get("X-Terrence-Session-Mode") !== "staged")
+    return issueLoginSession(user, browserSession, set, request, server, mfaVerified);
+  // Authentication does not change the cookie jar. The browser publishes a
+  // session only after checking that this login still owns its generation.
+  // Password verification may have transparently upgraded a legacy hash.
+  const credential = await db.query.users.findFirst({ where: eq(users.id, user.id), columns: { passwordHash: true } });
+  if (credential === undefined) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
+  }
+  const commitToken = opaqueToken("login");
+  await storeSsoChallenge(
+    LOGIN_COMMIT_KIND,
+    tokenHash(commitToken),
+    { userId: user.id, credentialHash: tokenHash(credential.passwordHash), mfaVerified },
+    Date.now() + LOGIN_COMMIT_TTL_MS,
+  );
+  (set.headers as Record<string, string | number>)["Cache-Control"] = "no-store";
+  return { data: { type: "users", attributes: { "session-commit-token": commitToken } } };
+}
+
+async function consumeBrowserLogin(body: unknown): Promise<Record<string, unknown> | undefined> {
+  const token = extractAttrs(body)?.["session-commit-token"];
+  if (typeof token !== "string" || token.length === 0 || token.length > 512) return undefined;
+  return consumeSsoChallenge(LOGIN_COMMIT_KIND, tokenHash(token));
+}
+
+async function completeBrowserLogin(
+  body: unknown,
+  set: SetObj,
+  request: RequestInfo | undefined,
+  server: unknown,
+): Promise<unknown> {
+  (set.headers as Record<string, string | number>)["Cache-Control"] = "no-store";
+  const pending = await consumeBrowserLogin(body);
+  const user =
+    typeof pending?.["userId"] === "string"
+      ? await db.query.users.findFirst({ where: eq(users.id, pending["userId"]) })
+      : undefined;
+  const mfa = user === undefined ? undefined : await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
+  if (
+    user === undefined ||
+    isUserLoginBlocked(user) ||
+    isLoginLocked(user) ||
+    pending?.["credentialHash"] !== tokenHash(user.passwordHash) ||
+    (mfa?.enabled === true && pending?.["mfaVerified"] !== true)
+  ) {
+    // Invalid or stale handoffs must never clear an already-established cookie.
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Login handoff expired or is invalid" }] };
+  }
+  return issueLoginSession(user, true, set, request, server, pending?.["mfaVerified"] === true);
 }
 
 type SessionFamily = {
@@ -1284,7 +1349,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const challenge = await mfaChallengeResponse(user);
     if (challenge !== null) return challenge;
 
-    return issueLoginSession(user, browserSession, set, request, server);
+    return loginSessionResponse(user, browserSession, set, request, server);
   })
   .post("/api/v2/users/login/mfa", async ({ body, request, set, server }: ReqCtx): Promise<unknown> => {
     const parsed = parseMfaChallengeRequest(body, set);
@@ -1299,8 +1364,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
     }
 
-    return issueLoginSession(user, parsed.browserSession, set, request, server, true);
+    return loginSessionResponse(user, parsed.browserSession, set, request, server, true);
   })
+  .post(
+    "/api/v2/users/login/complete",
+    async ({ body, request, set, server }: ReqCtx): Promise<unknown> =>
+      completeBrowserLogin(body, set, request, server),
+  )
   .post("/api/v2/users/refresh", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
     const candidates = refreshCookieCandidates(request);
     if (candidates.length === 0) {

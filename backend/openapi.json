@@ -3064,6 +3064,77 @@
         }
       }
     },
+    "/api/v2/users/login/complete": {
+      "post": {
+        "operationId": "post-api-v2-users-login-complete",
+        "tags": [
+          "users"
+        ],
+        "summary": "POST /api/v2/users/login/complete",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "413": {
+            "description": "Payload Too Large"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "401": {
+            "description": "Login handoff expired or is invalid"
+          }
+        },
+        "description": "Exchange a short-lived, single-use browser login handoff for an access token and HttpOnly refresh cookie. Invalid handoffs do not alter existing cookies.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.api+json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "required": [
+                      "attributes"
+                    ],
+                    "properties": {
+                      "attributes": {
+                        "type": "object",
+                        "required": [
+                          "session-commit-token"
+                        ],
+                        "properties": {
+                          "session-commit-token": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/users/login/mfa": {
       "post": {
         "operationId": "post-api-v2-users-login-mfa",

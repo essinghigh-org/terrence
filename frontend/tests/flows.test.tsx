@@ -63,7 +63,9 @@ test("logs in without persisting the access token and navigates home", async () 
   const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({});
-    if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    if (url === "/api/v2/users/login")
+      return json({ data: { attributes: { "session-commit-token": "login-handoff" } } });
+    if (url === "/api/v2/users/login/complete") return json({ data: { attributes: { token: "user-token" } } });
     {
       const phaseLogFallback = anyPhaseLog(url);
       if (phaseLogFallback !== null) return phaseLogFallback;

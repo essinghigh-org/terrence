@@ -28,6 +28,11 @@ export function makeTestDbName(prefix: string): string {
 const testDir = mkdtempSync(join(tmpdir(), "terrence-test-"));
 process.env["DATABASE_URL"] ??= `file:${join(testDir, "terrence.db")}`;
 process.env["STORAGE_DIR"] ??= join(testDir, "storage");
+// PostgreSQL installs its query counter when db is first imported below.
+// Enabling it inside a test would leave query budgets measuring zero.
+if (process.env["DATABASE_URL"].startsWith("postgres")) {
+  process.env["TERRENCE_QUERY_COUNT"] ??= "1";
+}
 
 // The production image bundles the pinned configuration inspector (the
 // `terraform-config-inspect` tool). Tests use a

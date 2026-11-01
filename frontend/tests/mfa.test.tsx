@@ -85,7 +85,9 @@ test("completes an MFA login challenge without exposing the password again", asy
     if (requestUrl === "/api/v2/ping") return json({ "signup-enabled": false });
     if (requestUrl === "/api/v2/users/login" && init?.method === "POST")
       return json({ data: { attributes: { "mfa-required": true, "mfa-challenge-token": "challenge-1" } } });
-    if (requestUrl === "/api/v2/users/login/mfa") return json({ data: { attributes: { token: "access-1" } } });
+    if (requestUrl === "/api/v2/users/login/mfa")
+      return json({ data: { attributes: { "session-commit-token": "mfa-handoff" } } });
+    if (requestUrl === "/api/v2/users/login/complete") return json({ data: { attributes: { token: "access-1" } } });
     throw new Error(`Unexpected request: ${requestUrl}`);
   }) as unknown as typeof fetch;
 
@@ -102,6 +104,7 @@ test("completes an MFA login challenge without exposing the password again", asy
   fireEvent.click(view.getByRole("button", { name: "Verify code" }));
   await waitFor((): void => {
     expect(calls.some(([requestUrl]) => requestUrl === "/api/v2/users/login/mfa")).toBeTrue();
+    expect(getAuthToken()).toBe("access-1");
   });
   expect(localStorage.getItem("tfe_token")).toBeNull();
   expect(getAuthToken()).toBe("access-1");
@@ -165,6 +168,9 @@ test("completes an MFA login challenge with oauth_state and redirects to OAuth c
       return json({ data: { attributes: { "mfa-required": true, "mfa-challenge-token": "challenge-oauth-1" } } });
     }
     if (requestUrl === "/api/v2/users/login/mfa") {
+      return json({ data: { attributes: { "session-commit-token": "mfa-oauth-handoff" } } });
+    }
+    if (requestUrl === "/api/v2/users/login/complete") {
       return json({ data: { attributes: { token: "access-oauth-1" } } });
     }
     throw new Error(`Unexpected request: ${requestUrl}`);

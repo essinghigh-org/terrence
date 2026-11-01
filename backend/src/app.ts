@@ -311,6 +311,7 @@ function isPublicJsonApiRequestPath(pathname: string): boolean {
     pathname === "/api/v2/users" ||
     pathname === "/api/v2/users/login" ||
     pathname === "/api/v2/users/login/mfa" ||
+    pathname === "/api/v2/users/login/complete" ||
     pathname === "/api/v2/users/refresh" ||
     pathname === "/api/v2/users/logout"
   );

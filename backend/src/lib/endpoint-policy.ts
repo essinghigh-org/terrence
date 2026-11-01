@@ -66,6 +66,8 @@ export const SENSITIVE_API_PATHS = [
   "/api/v2/tokens",
   "/api/v2/users",
   "/api/v2/users/login",
+  "/api/v2/users/login/mfa",
+  "/api/v2/users/login/complete",
   "/api/v2/account/mfa/verify",
   "/api/v2/account/mfa",
   "/oauth/authorization",

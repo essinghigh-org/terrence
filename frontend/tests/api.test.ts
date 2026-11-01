@@ -11,12 +11,14 @@ import {
   MAX_PAGINATED_PAGES,
   fetchApi,
   fetchApiBlob,
+  fetchRunLogTail,
   getAuthToken,
   getAuthTokenExpiry,
   isRefreshableSession,
   logoutAuthSession,
   readResponseBody,
   setAuthToken,
+  streamExplain,
 } from "../src/lib/api";
 
 function requestUrl(input: string | URL | Request): string {
@@ -263,6 +265,363 @@ test("logs out browser sessions server-side without treating API tokens as refre
     expect(calls).toEqual(["/api/v2/users/logout"]);
     expect(getAuthToken()).toBeNull();
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a refresh that finishes after logout cannot restore the browser session", async () => {
+  const originalFetch = globalThis.fetch;
+  let releaseRefresh: ((response: Response) => void) | undefined;
+  const refreshResponse = new Promise<Response>((resolve): void => {
+    releaseRefresh = resolve;
+  });
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    return requestUrl(input).endsWith("/users/refresh") ? refreshResponse : new Response(null, { status: 204 });
+  }) as typeof fetch;
+
+  try {
+    expireAuthSession();
+    const bootstrap = bootstrapAuth();
+    const logout = logoutAuthSession();
+    releaseRefresh?.(
+      Response.json({ data: { attributes: { token: "logged-out-access", "expired-at": Date.now() + 60_000 } } }),
+    );
+
+    expect(await bootstrap).toBeNull();
+    await logout;
+    expect(getAuthToken()).toBeNull();
+    expect(isRefreshableSession()).toBeFalse();
+  } finally {
+    releaseRefresh?.(new Response(null, { status: 401 }));
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a refresh from a previous login cannot overwrite the new session", async () => {
+  const originalFetch = globalThis.fetch;
+  let releaseRefresh: ((response: Response) => void) | undefined;
+  const refreshResponse = new Promise<Response>((resolve): void => {
+    releaseRefresh = resolve;
+  });
+  globalThis.fetch = (async (_input: string | URL | Request): Promise<Response> => refreshResponse) as typeof fetch;
+
+  try {
+    expireAuthSession();
+    const bootstrap = bootstrapAuth();
+    setAuthToken("new-login", Date.now() + 60_000, true);
+    releaseRefresh?.(
+      Response.json({ data: { attributes: { token: "old-login", "expired-at": Date.now() + 60_000 } } }),
+    );
+
+    expect(await bootstrap).toBeNull();
+    expect(getAuthToken()).toBe("new-login");
+    expect(isRefreshableSession()).toBeTrue();
+  } finally {
+    releaseRefresh?.(new Response(null, { status: 401 }));
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a delayed logout response cannot clear a later login", async () => {
+  const originalFetch = globalThis.fetch;
+  let releaseLogout: ((response: Response) => void) | undefined;
+  const logoutResponse = new Promise<Response>((resolve): void => {
+    releaseLogout = resolve;
+  });
+  globalThis.fetch = (async (_input: string | URL | Request): Promise<Response> => logoutResponse) as typeof fetch;
+
+  try {
+    setAuthToken("logging-out", Date.now() + 60_000, true);
+    const logout = logoutAuthSession();
+    expect(getAuthToken()).toBeNull();
+    setAuthToken("new-login", Date.now() + 60_000, true);
+    releaseLogout?.(new Response(null, { status: 204 }));
+    await logout;
+
+    expect(getAuthToken()).toBe("new-login");
+    expect(isRefreshableSession()).toBeTrue();
+  } finally {
+    releaseLogout?.(new Response(null, { status: 204 }));
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test.each(["GET", "POST"])(
+  "a superseded %s request cannot reuse its old refresh or expire a new login",
+  async (method) => {
+    const originalFetch = globalThis.fetch;
+    let releaseRefresh: ((response: Response) => void) | undefined;
+    const refreshResponse = new Promise<Response>((resolve): void => {
+      releaseRefresh = resolve;
+    });
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve): void => {
+      markStarted = resolve;
+    });
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const url = requestUrl(input);
+      calls.push(url);
+      markStarted?.();
+      return url.endsWith("/users/refresh")
+        ? refreshResponse
+        : Response.json({ errors: [{ status: "401", title: "Unauthorized" }] }, { status: 401 });
+    }) as typeof fetch;
+
+    try {
+      setAuthToken("expired-session", Date.now() - 1, true);
+      const request = fetchApi("/account/details", { method }).catch((error: unknown): unknown => error);
+      await started;
+      setAuthToken("new-personal-token", Date.now() + 60_000);
+      releaseRefresh?.(Response.json({ data: { attributes: { token: "superseded-refresh" } } }));
+
+      expect(await request).toMatchObject({ name: "AbortError" });
+      expect(calls).toEqual(["/api/v2/users/refresh"]);
+      expect(getAuthToken()).toBe("new-personal-token");
+    } finally {
+      releaseRefresh?.(new Response(null, { status: 401 }));
+      globalThis.fetch = originalFetch;
+    }
+  },
+);
+
+test.each(["api", "log", "explanation"])("a late %s 401 cannot refresh or expire another login", async (transport) => {
+  const originalFetch = globalThis.fetch;
+  let releaseResponse: ((response: Response) => void) | undefined;
+  const response = new Promise<Response>((resolve): void => {
+    releaseResponse = resolve;
+  });
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve): void => {
+    markStarted = resolve;
+  });
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    calls.push(requestUrl(input));
+    markStarted?.();
+    return response;
+  }) as typeof fetch;
+
+  try {
+    setAuthToken("old-session", Date.now() + 60_000, true);
+    const request = (
+      transport === "log"
+        ? fetchRunLogTail("run-auth", "plan", 0)
+        : transport === "explanation"
+          ? streamExplain("run-auth", "plan", false, (): undefined => undefined)
+          : fetchApi("/runs", { method: "POST", body: "{}" })
+    ).catch((error: unknown): unknown => error);
+    await started;
+    setAuthToken("new-session", Date.now() + 60_000, true);
+    releaseResponse?.(Response.json({ errors: [{ status: "401", title: "Unauthorized" }] }, { status: 401 }));
+
+    expect(await request).toMatchObject({ name: "AbortError" });
+    expect(calls).toHaveLength(1);
+    expect(getAuthToken()).toBe("new-session");
+    expect(isRefreshableSession()).toBeTrue();
+  } finally {
+    releaseResponse?.(new Response(null, { status: 401 }));
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test.each(["log", "explanation"])("%s requests keep ownership while preparing their token", async (transport) => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (async (_input: string | URL | Request): Promise<Response> => {
+    requests += 1;
+    return new Response(null, { status: 401 });
+  }) as typeof fetch;
+
+  try {
+    setAuthToken("old-session", Date.now() + 60_000, true);
+    const request = (
+      transport === "log"
+        ? fetchRunLogTail("run-auth", "plan", 0)
+        : streamExplain("run-auth", "plan", false, (): undefined => undefined)
+    ).catch((error: unknown): unknown => error);
+    // prepareAuthToken has returned a fulfilled promise, but the transport's
+    // await has not resumed yet. A new login still invalidates that snapshot.
+    setAuthToken("new-session", Date.now() + 60_000, true);
+
+    expect(await request).toMatchObject({ name: "AbortError" });
+    expect(requests).toBe(0);
+    expect(getAuthToken()).toBe("new-session");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preparing a log request clears an expired personal token before taking its ownership snapshot", async () => {
+  const originalFetch = globalThis.fetch;
+  let authorization: string | null = null;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    authorization = new Headers(init?.headers).get("Authorization");
+    return new Response("log output", { headers: { "Content-Type": "text/plain" } });
+  }) as typeof fetch;
+
+  try {
+    setAuthToken("expired-personal-token", Date.now() - 1);
+    expect((await fetchRunLogTail("run-auth", "plan", 0)).chunk).toBe("log output");
+    expect(authorization).toBeNull();
+    expect(getAuthToken()).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test.each(["/users/login", "/users/login/mfa"])(
+  "a stale %s response cannot replace the accepted refresh cookie",
+  async (endpoint) => {
+    const originalFetch = globalThis.fetch;
+    let cookieJar = "prior-cookie";
+    let releaseStale: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve): void => {
+      markStarted = resolve;
+    });
+    const commits: string[] = [];
+    const receive = (response: Response, init?: RequestInit): Response => {
+      // Browsers process Set-Cookie before resolving fetch, and ignore it when
+      // credentials is omit. Model that ordering rather than setting it in JS
+      // after the API client's generation check.
+      const cookie = response.headers.get("Set-Cookie");
+      if (init?.credentials !== "omit" && cookie !== null) cookieJar = cookie.split("=", 2)[1]?.split(";", 1)[0] ?? "";
+      return response;
+    };
+    const loginResponse = (subject: string, init?: RequestInit): Response => {
+      const staged = new Headers(init?.headers).get("X-Terrence-Session-Mode") === "staged";
+      return receive(
+        Response.json(
+          { data: { attributes: staged ? { "session-commit-token": subject } : { token: `${subject}-access` } } },
+          {
+            // Even an older/misbehaving server's header cannot affect a staged fetch.
+            headers: { "Set-Cookie": `terrence_refresh=${subject}-cookie; HttpOnly; Path=/` },
+          },
+        ),
+        init,
+      );
+    };
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = requestUrl(input);
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        data?: { attributes?: Record<string, string> };
+      };
+      const attrs = body.data?.attributes;
+      if (attrs?.["username"] === "old" || attrs?.["challenge-token"] === "old") {
+        markStarted?.();
+        return new Promise<Response>((resolve): void => {
+          releaseStale = (): void => {
+            resolve(loginResponse("old", init));
+          };
+        });
+      }
+      if (url.endsWith("/users/login/complete")) {
+        const subject = attrs?.["session-commit-token"] ?? "missing";
+        commits.push(subject);
+        return receive(
+          Response.json(
+            { data: { attributes: { token: `${subject}-access` } } },
+            {
+              headers: { "Set-Cookie": `terrence_refresh=${subject}-cookie; HttpOnly; Path=/` },
+            },
+          ),
+          init,
+        );
+      }
+      if (url.endsWith("/users/refresh"))
+        return Response.json({ data: { attributes: { token: `${cookieJar}-refreshed` } } });
+      return loginResponse("new", init);
+    }) as typeof fetch;
+    try {
+      expireAuthSession();
+      const stale = fetchApi(endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              username: "old",
+              "challenge-token": "old",
+              password: "password",
+              code: "123456",
+              "browser-session": true,
+            },
+          },
+        }),
+      }).catch((error: unknown): unknown => error);
+      await started;
+      const winner = await fetchApi<{ data: { attributes: { token: string } } }>("/users/login", {
+        method: "POST",
+        body: JSON.stringify({
+          data: { attributes: { username: "new", password: "password", "browser-session": true } },
+        }),
+      });
+      setAuthToken(winner.data.attributes.token, null, true);
+      expect(cookieJar).toBe("new-cookie");
+      releaseStale?.();
+      expect(await stale).toMatchObject({ name: "AbortError" });
+      expect(getAuthToken()).toBe("new-access");
+      expect(cookieJar).toBe("new-cookie");
+      expect(commits).toEqual(["new"]);
+      expireAuthSession();
+      expect(await bootstrapAuth()).toBe("new-cookie-refreshed");
+    } finally {
+      releaseStale?.();
+      expireAuthSession();
+      globalThis.fetch = originalFetch;
+    }
+  },
+);
+
+test("logout waits for a pending first login cookie and then clears it", async () => {
+  const originalFetch = globalThis.fetch;
+  let cookie = "";
+  let releaseCommit: (() => void) | undefined;
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve): void => {
+    markStarted = resolve;
+  });
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(input);
+    calls.push(url);
+    if (url.endsWith("/users/login"))
+      return Response.json({ data: { attributes: { "session-commit-token": "pending" } } });
+    if (url.endsWith("/users/login/complete")) {
+      markStarted?.();
+      return new Promise<Response>((resolve): void => {
+        releaseCommit = (): void => {
+          cookie = "pending-cookie";
+          resolve(Response.json({ data: { attributes: { token: "pending-access" } } }));
+        };
+      });
+    }
+    if (url.endsWith("/users/logout")) {
+      cookie = "";
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  try {
+    expireAuthSession();
+    const login = fetchApi("/users/login", {
+      method: "POST",
+      body: JSON.stringify({ data: { attributes: { username: "new", password: "test", "browser-session": true } } }),
+    }).catch((error: unknown): unknown => error);
+    await started;
+    expect(isRefreshableSession()).toBeFalse();
+    const logout = logoutAuthSession();
+    expect(calls).not.toContain("/api/v2/users/logout");
+    releaseCommit?.();
+    expect(await login).toMatchObject({ name: "AbortError" });
+    await logout;
+    expect(cookie).toBe("");
+    expect(getAuthToken()).toBeNull();
+    expect(calls.at(-1)).toBe("/api/v2/users/logout");
+  } finally {
+    releaseCommit?.();
+    expireAuthSession();
     globalThis.fetch = originalFetch;
   }
 });

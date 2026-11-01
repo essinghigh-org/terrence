@@ -9,6 +9,7 @@ describe("endpoint-policy (465-469)", () => {
     { method: "DELETE", url: "http://x/api/v2/admin/scim-settings", rate: "scim-settings" },
     { method: "POST", url: "http://x/api/v2/admin/teams/t-1/scim-group-mapping", rate: "scim-mapping" },
     { method: "POST", url: "http://x/oauth/token", rate: "sensitive" },
+    { method: "POST", url: "http://x/api/v2/users/login/complete", rate: "sensitive" },
     { method: "GET", url: "http://x/oauth/authorization", rate: "sensitive" },
     { method: "GET", url: "http://x/oauth/authorization/complete", rate: "sensitive" },
     { method: "POST", url: "http://x/api/v2/account/mfa/verify", rate: "sensitive" },

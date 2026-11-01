@@ -1,6 +1,6 @@
 import { toComparableString } from "../lib/comparable";
 import { Elysia } from "elysia";
-import { and, asc, count, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import {
@@ -32,7 +32,9 @@ import {
   notFound,
   pageRequest,
   pagination,
+  workspaceIdsForPermission,
 } from "../lib/utils";
+import { currentTokenScopes } from "../lib/request-scope";
 import { getSettings } from "../lib/settings";
 import { maintenanceSchedule } from "../lib/operations";
 import {
@@ -202,24 +204,57 @@ async function adminRequired(user: ParamCtx["user"], set: SetObject): Promise<tr
   return true;
 }
 
+async function searchOrganizationIds(
+  user: ParamCtx["user"],
+  orgId: string | null,
+  teamId: string | null,
+): Promise<readonly string[]> {
+  if (orgId !== null) return [orgId];
+  if (teamId !== null) {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId), columns: { orgId: true } });
+    return team === undefined ? [] : [team.orgId];
+  }
+  const scopes = currentTokenScopes();
+  if (scopes !== null) return scopes.orgs;
+  if (user === null || user === undefined) return [];
+  return (
+    await db.query.organizationMemberships.findMany({
+      where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+      columns: { orgId: true },
+    })
+  ).map((membership): string => membership.orgId);
+}
+
 async function visibleWorkspaces(
   user: ParamCtx["user"],
   tokenOrgId: string | null | undefined,
   tokenTeamId: string | null | undefined,
 ): Promise<readonly SafeWorkspace[]> {
-  const candidates = await db.query.workspaces.findMany({
+  const orgId = tokenOrgId ?? null;
+  const teamId = tokenTeamId ?? null;
+  const scopes = currentTokenScopes();
+  let where: SQL | undefined;
+  if (!(user?.isSiteAdmin === true && orgId === null && teamId === null && scopes === null)) {
+    const organizationIds = await searchOrganizationIds(user, orgId, teamId);
+    const conditions: SQL[] = [];
+    for (const organizationId of new Set(organizationIds)) {
+      const ids = await workspaceIdsForPermission(organizationId, user?.id, orgId, teamId, "read");
+      if (ids === null) conditions.push(eq(workspaces.orgId, organizationId));
+      else if (ids.length > 0) {
+        const condition = and(eq(workspaces.orgId, organizationId), inArray(workspaces.id, ids));
+        if (condition !== undefined) conditions.push(condition);
+      }
+    }
+    if (conditions.length === 0) return [];
+    where = or(...conditions);
+  }
+  // Authorize before the cap so unrelated tenants cannot crowd readable
+  // workspaces out of search or trigger per-tenant permission lookups.
+  return db.query.workspaces.findMany({
+    where,
     orderBy: [asc(workspaces.name), asc(workspaces.id)],
     limit: MAX_CANDIDATES,
   });
-  const checks = await Promise.all(
-    candidates.map(
-      async (workspace): Promise<SafeWorkspace | null> =>
-        (await checkWorkspacePermission(workspace, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read"))
-          ? workspace
-          : null,
-    ),
-  );
-  return checks.filter((workspace): workspace is SafeWorkspace => workspace !== null);
 }
 
 function searchMatch(value: unknown, needle: string): boolean {

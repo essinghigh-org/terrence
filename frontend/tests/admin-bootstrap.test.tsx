@@ -39,7 +39,9 @@ test("sends a temporary administrator to the password page", async () => {
   // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = mock(
     async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
-      json({ data: { attributes: { token: "temporary-token", "must-change-password": true } } }),
+      requestUrl(_input).endsWith("/users/login")
+        ? json({ data: { attributes: { "session-commit-token": "temporary-handoff" } } })
+        : json({ data: { attributes: { token: "temporary-token", "must-change-password": true } } }),
   ) as unknown as typeof fetch;
 
   const view = render(

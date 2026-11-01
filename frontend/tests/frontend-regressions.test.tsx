@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { isValidElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -114,6 +114,155 @@ test("renders the apply fallback when plan JSON responds with 204", async () => 
   });
   expect(view.queryByText("Cannot read properties of null")).toBeNull();
 });
+
+test("matches plain-text apply progress to the exact resource address", async () => {
+  const addresses = [
+    "null_resource.foo",
+    "null_resource.foobar",
+    "module.child.null_resource.foo",
+    'module.child["west: primary"].null_resource.foo["a\\\"b: Creating..."]',
+    "null_resource.other",
+  ];
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: addresses.map((address) => ({
+          address,
+          type: "null_resource",
+          change: { actions: ["create"], before: null, after: {} },
+        })),
+      }),
+  ) as unknown as typeof fetch;
+
+  const view = render(
+    <ApplyOutput
+      runId="run-addresses"
+      status="applying"
+      applyStatus="running"
+      applyLogs={[
+        "null_resource.foobar: Creation complete after 1s [id=null_resource.other]",
+        "module.child.null_resource.foo: Still creating... [10s elapsed]",
+        `${addresses[3]}: Error creating resource`,
+      ].join("\n")}
+    />,
+  );
+  await waitFor((): void => {
+    expect(view.getByLabelText(`Apply details for ${addresses[0]}`)).toBeTruthy();
+  });
+  const row = (index: number): ReturnType<typeof within> =>
+    within(view.getByLabelText(`Apply details for ${addresses[index]}`));
+  expect(row(0).getByText("Pending")).toBeTruthy();
+  expect(row(1).getByText("created")).toBeTruthy();
+  expect(row(2).getByText("creating…")).toBeTruthy();
+  expect(row(3).getByText("Failed")).toBeTruthy();
+  expect(row(4).getByText("Pending")).toBeTruthy();
+});
+
+test.each(["null_resource.foo", 'module.child["west: primary"].null_resource.foo["key (deposed object abcdef01)"]'])(
+  "keeps deposed cleanup separate from the replacement instance for %s",
+  async (address) => {
+    globalThis.fetch = mock(
+      async (): Promise<Response> =>
+        json({
+          resource_changes: [
+            { address, type: "null_resource", change: { actions: ["create", "delete"], before: {}, after: {} } },
+          ],
+        }),
+    ) as unknown as typeof fetch;
+    const logs = [
+      `${address}: Creation complete after 1s [id=new-instance]`,
+      `${address} (deposed object 21af4693): Destroying... [id=old-instance]`,
+      `${address} (deposed object deadbeef): Destruction complete after 2s`,
+      `${address}: Still destroying... [id=old-instance, 10s elapsed]`,
+    ].join("\n");
+    const view = render(<ApplyOutput runId="run-deposed" status="applying" applyStatus="running" applyLogs={logs} />);
+    await waitFor((): void => {
+      expect(view.getByLabelText(`Apply details for ${address}`)).toBeTruthy();
+    });
+    expect(view.getByText("created")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object 21af4693")).getByText("destroying…")).toBeTruthy();
+    expect(view.getByLabelText("Cleanup of deposed object 21af4693").textContent).toContain("10s");
+    expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
+
+    view.rerender(<ApplyOutput runId="run-deposed" status="errored" applyStatus="errored" applyLogs={logs} />);
+    expect(view.getByText("created")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object 21af4693")).getByText("Failed")).toBeTruthy();
+    expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
+  },
+);
+
+test("completed deposed cleanup does not capture current-instance destruction progress", async () => {
+  const address = "null_resource.deleted";
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          { address, type: "null_resource", change: { actions: ["delete"], before: {}, after: null } },
+        ],
+      }),
+  ) as unknown as typeof fetch;
+  const logs = [
+    `${address} (deposed object deadbeef): Destruction complete after 2s`,
+    `${address}: Destroying... [id=current-instance]`,
+    `${address}: Still destroying... [id=current-instance, 20s elapsed]`,
+  ].join("\n");
+  const view = render(<ApplyOutput runId="run-delete" status="applying" applyStatus="running" applyLogs={logs} />);
+  expect(await view.findByText("destroying…")).toBeTruthy();
+  expect(view.getByLabelText("Apply details for null_resource.deleted").textContent).toContain("20s");
+  expect(within(view.getByLabelText("Cleanup of deposed object deadbeef")).getByText("destroyed")).toBeTruthy();
+});
+
+test("routes destruction updates by object ID when current and deposed instances destroy together", async () => {
+  const address = "null_resource.concurrent";
+  globalThis.fetch = mock(
+    async (): Promise<Response> =>
+      json({
+        resource_changes: [
+          { address, type: "null_resource", change: { actions: ["delete"], before: {}, after: null } },
+        ],
+      }),
+  ) as unknown as typeof fetch;
+  const logs = [
+    `${address}: Destroying... [id=current-instance]`,
+    `${address} (deposed object 21af4693): Destroying... [id=first-old-instance]`,
+    `${address} (deposed object deadbeef): Destroying... [id=second-old-instance]`,
+    `${address}: Still destroying... [id=current-instance, 30s elapsed]`,
+    `${address}: Still destroying... [id=first-old-instance, 10s elapsed]`,
+    `${address}: Still destroying... [id=second-old-instance, 20s elapsed]`,
+  ].join("\n");
+  const view = render(<ApplyOutput runId="run-concurrent" status="applying" applyStatus="running" applyLogs={logs} />);
+  const row = await view.findByLabelText(`Apply details for ${address}`);
+  expect(row.textContent).toContain("30s");
+  expect(view.getByLabelText("Cleanup of deposed object 21af4693").textContent).toContain("10s");
+  expect(view.getByLabelText("Cleanup of deposed object deadbeef").textContent).toContain("20s");
+  expect(view.getByLabelText("Cleanup of deposed object deadbeef").textContent).not.toContain("30s");
+});
+
+test.each(["missing ID", "duplicate ID", "unmatched ID"])(
+  "does not attribute ambiguous destruction progress with %s",
+  async (scenario) => {
+    const address = "null_resource.ambiguous";
+    const currentId = scenario === "duplicate ID" ? "old-instance" : "current-instance";
+    const progress = scenario === "missing ID" ? "40s elapsed" : "id=old-instance, 40s elapsed";
+    globalThis.fetch = mock(
+      async (): Promise<Response> =>
+        json({
+          resource_changes: [
+            { address, type: "null_resource", change: { actions: ["delete"], before: {}, after: null } },
+          ],
+        }),
+    ) as unknown as typeof fetch;
+    const logs = [
+      `${address}: Destroying... [id=${currentId}]`,
+      `${address} (deposed object 21af4693): Destroying... [id=${scenario === "unmatched ID" ? "different-instance" : "old-instance"}]`,
+      `${address}: Still destroying... [${progress}]`,
+    ].join("\n");
+    const view = render(<ApplyOutput runId="run-ambiguous" status="applying" applyStatus="running" applyLogs={logs} />);
+    const row = await view.findByLabelText(`Apply details for ${address}`);
+    expect(row.textContent).not.toContain("40s");
+    expect(within(row).getAllByText("destroying…")).toHaveLength(2);
+  },
+);
 
 test("resolves duplicate provider icons by notification without per-instance intervals", async () => {
   clearProviderIconCacheForTests();
