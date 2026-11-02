@@ -1,11 +1,26 @@
 {
-  "_comment": "Authoritative hashicorp/tfe v0.82.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
-  "provider": "hashicorp/tfe v0.82.0",
-  "resource_count": 75,
-  "data_source_count": 44,
+  "_comment": "Authoritative hashicorp/tfe v0.83.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "provider": "hashicorp/tfe v0.83.0",
+  "resource_count": 81,
+  "data_source_count": 46,
   "resources_covered": 73,
   "data_sources_covered": 43,
   "resources": [
+    {
+      "name": "tfe_admin_banner",
+      "status": "backend-gap",
+      "schema_hash": "d938de65541b02be395b836d21925a7415b53b953581553d5c53d1b87a42dda6"
+    },
+    {
+      "name": "tfe_admin_customization_settings",
+      "status": "backend-gap",
+      "schema_hash": "54a8202b18cae4268dc92e84a42d6275a9560c1df613b9937fba0acb55782b40"
+    },
+    {
+      "name": "tfe_admin_general_settings",
+      "status": "backend-gap",
+      "schema_hash": "9eaa4eb70ffc563995cfa37e340902aadd90f702485859cbe7a8ad14e7661a1e"
+    },
     {
       "name": "tfe_admin_organization_settings",
       "status": "covered",
@@ -139,7 +154,7 @@
     {
       "name": "tfe_policy_set",
       "status": "covered",
-      "schema_hash": "1782da07f9d9fab6af54fbae32398ca43ec7df42b788b6f82ef7348b5a6945d0"
+      "schema_hash": "93308a56ea5d6dda1d781b32c465e3d717eb7456c2006fc49e7683e9281eb8bd"
     },
     {
       "name": "tfe_policy_set_parameter",
@@ -164,7 +179,7 @@
     {
       "name": "tfe_project_policy_set",
       "status": "covered",
-      "schema_hash": "5c07c2b04e2e7243b0fea96f36ad605b0403f029bca0871a28ec5fda9716d681"
+      "schema_hash": "220af3421266ce134ace24c54974773c151ab2e5bf9a384b11240cfd47b0c73a"
     },
     {
       "name": "tfe_project_policy_set_exclusion",
@@ -214,12 +229,12 @@
     {
       "name": "tfe_saml_idp_certificate",
       "status": "backend-gap",
-      "schema_hash": "15f755f59aa758c9464a3c4a69375a5ada59aa00adeeaa804702339dc6fedf3f"
+      "schema_hash": "90cc216674cf28658b5cbdaf239e2eb71b6de896c9d81b8b307d18a424d00823"
     },
     {
       "name": "tfe_saml_settings",
       "status": "covered",
-      "schema_hash": "7b234214710404c6401ffb6ff7c697d563d9b12430fa1ef7c0ec12cdb39e6ab6"
+      "schema_hash": "3d0ee935d9ede7b79d2d2416b79d7c402fdc34dd5d217b470c657bf2623f4175"
     },
     {
       "name": "tfe_scim_group_mapping",
@@ -257,6 +272,16 @@
       "schema_hash": "f7d35f7f9e0a295922b2f71c179d1022b907e0bf86d35c2e130136b084198338"
     },
     {
+      "name": "tfe_stack_policy_set",
+      "status": "backend-gap",
+      "schema_hash": "293ed80037e524fc4e26488a5274d1144004026283973122ceb0b10dda3c10a1"
+    },
+    {
+      "name": "tfe_stack_policy_set_exclusion",
+      "status": "backend-gap",
+      "schema_hash": "bcabb3b9c465b23cd5baaba70f8ced7c312b9625b8952fcdbdb151030050464f"
+    },
+    {
       "name": "tfe_stack_variable_set",
       "status": "covered",
       "schema_hash": "2e7d6e2e08e3e2cf1db418fa4c9880f2184ef869cf4c5ff41d0858037d863401"
@@ -264,12 +289,12 @@
     {
       "name": "tfe_tag_policy_set",
       "status": "covered",
-      "schema_hash": "e96a8e66b41b795302699a938452b488ecbe8e0582d5b1624b2b23aa9b270e30"
+      "schema_hash": "6db54bc6ea7a62f41d957404bfe3248bf7be92f31cfa71acd13cc910636ce29e"
     },
     {
       "name": "tfe_tag_policy_set_exclusion",
       "status": "covered",
-      "schema_hash": "93921405ce114ee4b5e3a08ec6e27512fdd61faf3010fd9559562548a7d5989e"
+      "schema_hash": "5270dc43f308824727d728c08b4ce90ba818408b1f8b842b7aaa6b6811fca4b2"
     },
     {
       "name": "tfe_team",
@@ -325,6 +350,11 @@
       "name": "tfe_test_variable",
       "status": "covered",
       "schema_hash": "3caa856adaf7c0734bdb49cfc69e97fea1a493651da4ca5c53d5021c447ae209"
+    },
+    {
+      "name": "tfe_tfpolicy_version",
+      "status": "backend-gap",
+      "schema_hash": "2f8dbfe91c04e5e2d3080a2a782f245ae68ead09a0a97bf2574399cf677c641c"
     },
     {
       "name": "tfe_variable",
@@ -481,7 +511,7 @@
     {
       "name": "tfe_policy_set",
       "status": "covered",
-      "schema_hash": "cd94d82f67b8036e2852d01ff208e30bde6fde8c88e71ab6119dce11d0769c5f"
+      "schema_hash": "91fe494c3caef1180c453dfa6ade4ab5a570c931089da185cd48b5b1e51ba773"
     },
     {
       "name": "tfe_project",
@@ -527,6 +557,16 @@
       "name": "tfe_registry_providers",
       "status": "covered",
       "schema_hash": "b2f5b23afa4a0bb24e54a4431c70379cb651c364060063b573a340e84d0ce3b5"
+    },
+    {
+      "name": "tfe_saml_idp_certificate",
+      "status": "backend-gap",
+      "schema_hash": "138eae9ced2d3737ab8cad6f36dfc26319cc66a09ea73f33c60381482d2eeb43"
+    },
+    {
+      "name": "tfe_saml_idp_certificates",
+      "status": "backend-gap",
+      "schema_hash": "1dd67ce10bece750ccfce8b11072b1e576db9bd664ef5ec9673557dae566c415"
     },
     {
       "name": "tfe_saml_settings",
