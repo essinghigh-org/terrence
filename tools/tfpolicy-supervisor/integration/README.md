@@ -112,8 +112,12 @@ allow, denial, missing runtime and evaluation crash; rejection is never called
 rollback or proof that infrastructure was not changed. Saved-plan applies copy
 the actual saved artifact from the initial native ALLOW plan, record its hash,
 and pass that artifact to the stock CLI. Inline apply is also tested separately.
-Initialization remains a setup step without policies and is not claimed as
-qualified native initialization-policy coverage. All cases require final cgroup emptiness. Output captures, hashes,
+Native init with policies has separate ALLOW, missing-runtime and Setup-error
+cases. Init can validly have Setup-only evidence for this no-module fixture;
+plan/apply still require resource evaluation. Actual stage stdout uses the
+pinned JSON UI 1.3 and Terraform 1.17.1 contract, with errors, unknown policy
+events and non-AllowResult outcomes rejected by the positive oracle. This Python
+fixture does not itself certify the separate TypeScript launcher/verifier. All cases require final cgroup emptiness. Output captures, hashes,
 raw test journal, transport status, and result JSON are retained. `admitted` is
 always false: this is a qualification test, not a production signer or apply gate.
 

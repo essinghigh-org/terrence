@@ -30,7 +30,7 @@ def write_json(path, value):
         f.write("\n")
 
 
-def journal_valid(data):
+def journal_valid(data, require_resource=True):
     """Strict test oracle only. Production admission uses its own verifier."""
     if not data or len(data) > LIMIT or not data.endswith(b"\n"):
         return False
@@ -71,7 +71,55 @@ def journal_valid(data):
                 setup |= r["method"] == "Setup"
             else:
                 return False
-        return setup and resource and not pending
+        return setup and (resource or not require_resource) and not pending
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def native_output_valid(data):
+    """Pinned stock JSON UI oracle, not the production TypeScript verifier."""
+    if not data or len(data) > LIMIT or not data.endswith(b"\n"):
+        return False
+    try:
+        events = [json.loads(line) for line in data.splitlines()]
+        first = events[0]
+        if first.get("type") != "version" or first.get("terraform") != "1.17.1" or first.get("ui") != "1.3":
+            return False
+        for event in events[1:]:
+            kind = event.get("type")
+            if not isinstance(kind, str) or kind == "version":
+                return False
+            if kind in ("diagnostic", "policy_diagnostic") and event[kind].get("severity") != "warning":
+                return False
+            if kind.startswith("policy_"):
+                if kind not in ("policy_result", "policy_diagnostic", "policy_info"):
+                    return False
+                if "result" in event and event["result"] != "AllowResult":
+                    return False
+                if kind == "policy_result" and event.get("result") != "AllowResult":
+                    return False
+        return True
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def negative_exercised(mode, data):
+    """A failed positive control is not proof of the intended negative case."""
+    if mode in ("missing", "gate-denied"):
+        return data == b""
+    try:
+        records = [json.loads(line) for line in data.splitlines()]
+        starts = {r["id"]: r for r in records if r["phase"] == "begin"}
+        if mode == "hang":
+            return any(r["method"] == "EvaluateResource" for r in starts.values())
+        method, error = {
+            "deny": ("EvaluateResource", "policy aggregate denied or unknown"),
+            "crash": ("EvaluateResource", "evaluation RPC failed"),
+            "setup-error": ("Setup", "Setup RPC failed"),
+        }[mode]
+        return any(r["phase"] == "end" and r["method"] == method and r["error"] == error
+                   and r["id"] in starts and starts[r["id"]]["method"] == method
+                   and starts[r["id"]]["requestSha256"] == r["requestSha256"] for r in records)
     except (ValueError, TypeError, KeyError):
         return False
 
@@ -212,15 +260,16 @@ def run_case(args, bins, root, output, mode, stage):
         probe_out, probe_err = probe.communicate(b"G", timeout=10)
         if probe.returncode != 0:
             raise RuntimeError("engine sandbox probe failed: " + probe_err.decode(errors="replace"))
-        init = subprocess.Popen(sandbox_args(bins["runner"], bins["terraform"], work, gate=True) + ["init", "-input=false", "-no-color"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        processes.append(init)
-        fence.add(init)
-        await_gate(init, bins["runner"])
-        init_out, init_err = init.communicate(b"G", timeout=30)
-        (out / "init.stdout").write_bytes(init_out)
-        (out / "init.stderr").write_bytes(init_err)
-        if init.returncode:
-            raise RuntimeError("stock Terraform init failed")
+        if stage != "init":
+            init = subprocess.Popen(sandbox_args(bins["runner"], bins["terraform"], work, gate=True) + ["init", "-input=false", "-no-color"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            processes.append(init)
+            fence.add(init)
+            await_gate(init, bins["runner"])
+            init_out, init_err = init.communicate(b"G", timeout=30)
+            (out / "init.stdout").write_bytes(init_out)
+            (out / "init.stderr").write_bytes(init_err)
+            if init.returncode:
+                raise RuntimeError("stock Terraform init failed")
         socket_path = private / "boot.sock"
         journal = private / "journal"
         recorder_config = private / "recorder.json"
@@ -234,7 +283,7 @@ def run_case(args, bins, root, output, mode, stage):
         command = sandbox_args(bins["runner"], bins["terraform"], work, [policy], [private, sockets], gate=True)
         # Read+execute only this exact immutable shim, never the trusted bin dir.
         command.insert(1, "--rx=" + str(bins["shim"]))
-        command += ["apply" if stage == "saved-apply" else stage, "-input=false", "-no-color", "-policies=" + str(policy)]
+        command += ["apply" if stage == "saved-apply" else stage, "-json", "-input=false", "-no-color", "-policies=" + str(policy)]
         if stage in ("apply", "saved-apply"):
             command.append("-auto-approve")
         if stage == "plan":
@@ -286,14 +335,15 @@ def run_case(args, bins, root, output, mode, stage):
         status = json.loads(status_path.read_text())
         if status.get("completed") is not False or status.get("run_nonce") != nonce:
             raise RuntimeError("invalid or falsely completed supervisor status")
-        complete = journal_valid(data)
+        complete = journal_valid(data, require_resource=stage != "init")
+        native_valid = native_output_valid((out / "engine.stdout").read_bytes())
         (out / "journal.jsonl").write_bytes(data)
         write_json(out / "transport-status.json", status)
         if mode in ("allow", "orphan"):
-            if engine.returncode != 0 or supervisor.returncode != 0 or not complete or status.get("transport") not in ("engine_shutdown_observed", "recorder_exited_cleanly"):
+            if engine.returncode != 0 or supervisor.returncode != 0 or not complete or not native_valid or status.get("transport") not in ("engine_shutdown_observed", "recorder_exited_cleanly"):
                 raise RuntimeError("native positive control did not finish with complete journal and explicit disposition")
-        elif complete:
-            raise RuntimeError("negative native case produced successful policy evidence")
+        elif complete or not negative_exercised(mode, data):
+            raise RuntimeError("negative case did not produce its expected rejected evidence")
         # Stock Terraform deliberately continues apply after policy startup errors.
         # Rejected evidence is not rollback, and exit zero is not policy success.
         if mode == "gate-denied" and data:
@@ -311,7 +361,7 @@ def run_case(args, bins, root, output, mode, stage):
             (out / "terraform.tfstate").write_bytes(state.read_bytes())
             result.update(state_retained=True, infrastructure_changed=True)
         result.update(engine_exit=engine.returncode, supervisor_exit=supervisor.returncode,
-                      disposition=status["transport"], journal_valid=complete,
+                      disposition=status["transport"], journal_valid=complete, native_output_valid=native_valid,
                       stdout_sha256=hashes[0], journal_sha256=hashlib.sha256(data).hexdigest(),
                       residual_processes_before_fence=fence.populated())
         if mode == "orphan" and not result["residual_processes_before_fence"]:
@@ -382,7 +432,8 @@ def main():
         write_json(args.output / "provenance.json", {"terraform_version": args.terraform_version, "landlock_abi": abi,
                     "executable_sha256": {k: digest(v) for k, v in bins.items()}, "admitted": False})
         results = []
-        for mode, stage in (("allow", "plan"), ("deny", "plan"), ("missing", "plan"), ("setup-error", "plan"), ("crash", "plan"),
+        for mode, stage in (("allow", "init"), ("missing", "init"), ("setup-error", "init"),
+                            ("allow", "plan"), ("deny", "plan"), ("missing", "plan"), ("setup-error", "plan"), ("crash", "plan"),
                             ("hang", "plan"), ("gate-denied", "plan"), ("orphan", "plan"), ("allow", "apply"), ("deny", "apply"),
                             ("missing", "apply"), ("setup-error", "apply"), ("crash", "apply"),
                             ("allow", "saved-apply"), ("deny", "saved-apply"), ("missing", "saved-apply"),

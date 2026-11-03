@@ -1,6 +1,6 @@
 import json
 import unittest
-from run import journal_valid
+from run import journal_valid, negative_exercised, native_output_valid
 
 
 def record(sequence, ident, method, phase, result=None, error=None):
@@ -39,6 +39,49 @@ class JournalOracleTest(unittest.TestCase):
 
     def test_setup_only_is_not_a_completed_policy_stage(self):
         self.assertFalse(journal_valid(encode(self.records[:2])))
+        self.assertTrue(journal_valid(encode(self.records[:2]), require_resource=False))
+
+
+class NegativeScenarioTest(unittest.TestCase):
+    def test_unrelated_failure_is_not_a_qualified_denial_or_crash(self):
+        for mode in ("deny", "crash", "setup-error", "hang"):
+            self.assertFalse(negative_exercised(mode, b""))
+        self.assertFalse(negative_exercised("deny", encode([
+            record(0, "setup", "Setup", "begin"),
+            record(1, "setup", "Setup", "end", error="Setup RPC failed")])))
+
+    def test_intended_error_requires_matching_started_rpc(self):
+        for mode, method, error in (("deny", "EvaluateResource", "policy aggregate denied or unknown"),
+                                    ("crash", "EvaluateResource", "evaluation RPC failed"),
+                                    ("setup-error", "Setup", "Setup RPC failed")):
+            records = [record(0, "rpc", method, "begin"), record(1, "rpc", method, "end", error=error)]
+            self.assertTrue(negative_exercised(mode, encode(records)))
+            self.assertFalse(negative_exercised(mode, encode(records[1:])))
+            records[1]["requestSha256"] = "b" * 64
+            self.assertFalse(negative_exercised(mode, encode(records)))
+
+    def test_no_execution_cases_require_empty_journal(self):
+        for mode in ("missing", "gate-denied"):
+            self.assertTrue(negative_exercised(mode, b""))
+            self.assertFalse(negative_exercised(mode, encode([record(0, "setup", "Setup", "begin")])))
+
+
+class NativeOutputTest(unittest.TestCase):
+    def test_pinned_version_and_allow_events(self):
+        events = [{"type": "version", "terraform": "1.17.1", "ui": "1.3"},
+                  {"type": "policy_result", "result": "AllowResult"}]
+        self.assertTrue(native_output_valid(encode(events)))
+        self.assertFalse(native_output_valid(encode(events)[:-1]))
+        events[0]["ui"] = "1.2"
+        self.assertFalse(native_output_valid(encode(events)))
+
+    def test_error_and_non_allow_events_reject(self):
+        version = {"type": "version", "terraform": "1.17.1", "ui": "1.3"}
+        for event in ({"type": "policy_result", "result": "DenyResult"},
+                      {"type": "policy_result"}, {"type": "policy_unrecognized"}, version,
+                      {"type": "policy_diagnostic", "policy_diagnostic": {"severity": "error"}},
+                      {"type": "diagnostic", "diagnostic": {"severity": "error"}}):
+            self.assertFalse(native_output_valid(encode([version, event])))
 
 
 if __name__ == "__main__":
