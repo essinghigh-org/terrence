@@ -27,6 +27,7 @@ Site administrators are created by the bootstrap flow or by an existing administ
 | Audit | Audit log entries |
 | Auth | OIDC, SAML, LDAP configuration |
 | SMTP | Outbound email |
+| Appearance | Site announcements, help links, footer and avatar sources |
 | SCIM | Identity provisioning |
 | Operations | Maintenance mode, apply gates, runtime log levels and remote syslog destinations |
 | Database | Export, migration, maintenance |
@@ -116,3 +117,37 @@ immediately).
 - `GET /api/v2/admin/runs`
 - `GET /api/v2/admin/provider-surface`
 - `GET/PATCH /api/v2/admin/logging-settings`
+
+## Appearance and announcements
+
+Open **Site administration → Appearance** to manage the same settings exposed by
+`tfe_admin_customization_settings` and `tfe_admin_banner`.
+
+Announcements support create, edit and confirmed deactivation. Only one
+non-deactivated announcement may exist. A banner can target signed-in users or
+everyone, including sign-in and registration pages. Scheduled publication and
+expiry fields are entered in UTC; the IANA timezone is retained with the schedule.
+The server excludes unpublished and expired banners, and open pages refresh
+presentation settings every 30 seconds. The browser also removes a displayed
+banner at its expiry time. The editor preview does not wait for publication.
+Banner bodies support `strong`, `em` and absolute HTTP/HTTPS links. Both storage
+and display exclude executable HTML; titles are plain text.
+
+Customization maps to the product as follows:
+
+- Sign-in help appears on the sign-in form; new-account help appears on registration.
+- Error help appears on the application error screen.
+- Footer text and public support links appear on public and authenticated pages.
+- Internal support, documentation and tutorial links appear only after sign-in.
+- Gravatar can be disabled. Account avatars then use initials, and the server
+  refuses proxied Gravatar requests without contacting Gravatar. VCS avatars and
+  provider icons are unaffected. Previously downloaded images may remain in a
+  browser's cache until their existing cache lifetime ends.
+
+Help and footer text are rendered as plain text. Links require HTTP/HTTPS URLs;
+a bare public support hostname is treated as HTTPS. Unsafe protocols are never
+rendered as links. The public
+`GET /api/v2/site-presentation` endpoint returns an explicit presentation-only
+allowlist, with no internal links or authenticated-only announcements for
+anonymous visitors. Its responses are not cached. Administrators can clear text
+fields and disable avatar sources without editing Terraform configuration.

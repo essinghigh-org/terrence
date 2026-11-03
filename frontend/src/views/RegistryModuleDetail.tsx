@@ -1,3 +1,4 @@
+import { RegistryArtifactTags } from "../components/RegistryArtifactTags";
 import { EmptyState } from "../components/EmptyState";
 import { AlertTriangle, Check, Copy, ExternalLink, RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -1148,6 +1149,13 @@ export function RegistryModuleDetail(): React.JSX.Element {
           }}
         />
 
+        <RegistryArtifactTags
+          key={module.id}
+          kind="modules"
+          artifactId={module.id}
+          updatePath={`/organizations/${encodeURIComponent(orgName)}/registry-modules/private/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${encodeURIComponent(provider)}`}
+          canManage={module.permissions.canDelete}
+        />
         {error !== null && <FieldError>{error}</FieldError>}
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">

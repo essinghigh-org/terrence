@@ -1,3 +1,4 @@
+import { SiteBanner, SiteFooter, useSitePresentation } from "./SitePresentation";
 import { TerrenceLogo } from "./brand/Terrence";
 import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import { Link, matchPath, type NavigateFunction, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -1091,6 +1092,12 @@ function AdminNav({
       label: "Operations",
       links: [
         {
+          active: isActivePath(pathname, "/app/admin/appearance"),
+          icon: SlidersHorizontal,
+          label: "Appearance",
+          to: "/app/admin/appearance",
+        },
+        {
           active: isActivePath(pathname, "/app/admin/operations"),
           icon: Activity,
           label: "Operations center",
@@ -1378,6 +1385,7 @@ export function Layout({ children }: Readonly<{ readonly children?: ReactNode }>
   const [mustChangePassword, setMustChangePassword] = useState<boolean | null>(null);
   const [siteAdmin, setSiteAdmin] = useState(false);
   const [accountName, setAccountName] = useState("");
+  const presentation = useSitePresentation();
   const [avatarUrl, setAvatarUrl] = useState("");
   const [organizationNames, setOrganizationNames] = useState<string[]>([]);
   const [organizationPermissions, setOrganizationPermissions] = useState<OrganizationPermissions | null>(null);
@@ -1857,6 +1865,7 @@ export function Layout({ children }: Readonly<{ readonly children?: ReactNode }>
         Skip to main content
       </a>
 
+      <SiteBanner />
       <header className="flex h-[52px] shrink-0 items-center justify-between bg-topbar px-2 text-topbar-foreground sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-4">
           <Dialog open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
@@ -1982,7 +1991,7 @@ export function Layout({ children }: Readonly<{ readonly children?: ReactNode }>
               }
             >
               <Avatar className="size-6 rounded-full">
-                {avatarUrl !== "" ? (
+                {avatarUrl !== "" && presentation["gravatar-enabled"] !== false ? (
                   <AvatarImage src={avatarUrl} alt={accountName} className="rounded-full object-cover" />
                 ) : (
                   <AvatarFallback className="rounded-full bg-topbar-foreground/15 text-topbar-foreground text-xs">
@@ -2083,6 +2092,7 @@ export function Layout({ children }: Readonly<{ readonly children?: ReactNode }>
               )}
             </CapabilitiesProvider>
           </div>
+          <SiteFooter />
         </main>
       </div>
 

@@ -1,3 +1,4 @@
+import { StackPolicySets } from "./StackPolicySets";
 import { EmptyState } from "../components/EmptyState";
 import { Select } from "../components/ui/select";
 import { useEffect, useRef, useState } from "react";
@@ -515,6 +516,7 @@ export function StackSettings(): React.JSX.Element {
   const latestLoadId = useRef(0);
   activeOrganizationName.current = orgName;
   const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
+  const [policyStack, setPolicyStack] = useState<Stack | null>(null);
   const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-projects");
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -535,6 +537,7 @@ export function StackSettings(): React.JSX.Element {
     setAgentPools([]);
     setAgentPoolsAvailable(false);
     setStackToDelete(null);
+    setPolicyStack(null);
     permissionGateFired.current = false;
   }, [orgName]);
 
@@ -838,6 +841,18 @@ export function StackSettings(): React.JSX.Element {
                         />
                       </TableCell>
                       <TableCell>
+                        {orgPermissions.has("can-read-policies") && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(): void => {
+                              setPolicyStack(stack);
+                            }}
+                            aria-label={`Policies for ${stack.attributes.name}`}
+                          >
+                            Policies
+                          </Button>
+                        )}
                         {canManage && (
                           <div className="flex items-center justify-end gap-1">
                             {stackHasVcsRemote(stack) && (
@@ -886,6 +901,18 @@ export function StackSettings(): React.JSX.Element {
           </Table>
         </CardContent>
       </Card>
+
+      {policyStack !== null && (
+        <StackPolicySets
+          key={`${orgName}/${policyStack.id}`}
+          orgName={orgName}
+          stack={policyStack}
+          canManage={orgPermissions.has("can-manage-policies")}
+          onClose={(): void => {
+            setPolicyStack(null);
+          }}
+        />
+      )}
 
       <StackFormDialog
         open={dialogOpen}

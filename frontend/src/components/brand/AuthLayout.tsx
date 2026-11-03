@@ -1,3 +1,4 @@
+import { SiteBanner, SiteHelp, SiteFooter } from "../SitePresentation";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Terrence, TerrenceLogo } from "./Terrence";
@@ -11,45 +12,50 @@ export function AuthLayout({
   mode?: "signin" | "signup";
 }>): React.JSX.Element {
   return (
-    <main className="login-page">
-      <section className="login-story" aria-label="Welcome to Terrence">
-        <Link to="/" className="login-brand" aria-label="Terrence home">
-          <TerrenceLogo wordmark />
-        </Link>
-        <div className="login-story-content">
-          <p className="login-eyebrow">A little order for your infrastructure</p>
-          <h2>
-            {mode === "signup" ? (
-              <>
-                Your next
-                <br />
-                chapter.
-              </>
-            ) : (
-              <>
-                Big plans.
-                <br />
-                Steady hands.
-              </>
-            )}
-          </h2>
-          <p className="login-story-description">
-            Your workspaces, plans, and people.
-            <br />
-            Together in one place.
-          </p>
-          <div className="login-illustration">
-            <Terrence pose="ecosystem" animated className="login-mascot" />
-            <span className="login-illustration-caption">Meet Terrence. Your infrastructure companion.</span>
+    <>
+      <SiteBanner />
+      <main className="login-page">
+        <section className="login-story" aria-label="Welcome to Terrence">
+          <Link to="/" className="login-brand" aria-label="Terrence home">
+            <TerrenceLogo wordmark />
+          </Link>
+          <div className="login-story-content">
+            <p className="login-eyebrow">A little order for your infrastructure</p>
+            <h2>
+              {mode === "signup" ? (
+                <>
+                  Your next
+                  <br />
+                  chapter.
+                </>
+              ) : (
+                <>
+                  Big plans.
+                  <br />
+                  Steady hands.
+                </>
+              )}
+            </h2>
+            <p className="login-story-description">
+              Your workspaces, plans, and people.
+              <br />
+              Together in one place.
+            </p>
+            <div className="login-illustration">
+              <Terrence pose="ecosystem" animated className="login-mascot" />
+              <span className="login-illustration-caption">Meet Terrence. Your infrastructure companion.</span>
+            </div>
           </div>
-        </div>
-        <p className="login-story-footer">Made for OpenTofu &amp; Terraform.</p>
-      </section>
-      <section className="login-form-panel" aria-label={mode === "signup" ? "Create account" : "Sign in"}>
-        <TerrenceLogo wordmark className="login-mobile-brand" />
-        {children}
-        <p className="login-form-note">Infrastructure automation, with a human touch.</p>
-      </section>
-    </main>
+          <p className="login-story-footer">Made for OpenTofu &amp; Terraform.</p>
+        </section>
+        <section className="login-form-panel" aria-label={mode === "signup" ? "Create account" : "Sign in"}>
+          <TerrenceLogo wordmark className="login-mobile-brand" />
+          {children}
+          <SiteHelp mode={mode} textOnly />
+          <p className="login-form-note">Infrastructure automation, with a human touch.</p>
+        </section>
+      </main>
+      <SiteFooter />
+    </>
   );
 }

@@ -29,6 +29,7 @@ type OAuthClient = Readonly<{
     readonly "service-provider": string;
     readonly "http-url"?: string;
     readonly "api-url"?: string;
+    readonly "ado-org-name"?: string | null;
     readonly "connect-path"?: string;
   }>;
   readonly relationships?: Readonly<{
@@ -83,6 +84,52 @@ const providerDefaults = {
 
 type ServiceProvider = keyof typeof providerDefaults;
 type VcsAccess = "allowed" | "denied" | "error";
+
+function isAzureDevOpsClient(client: OAuthClient): boolean {
+  return ["ado_services", "ado_server", "azure_devops_server"].includes(client.attributes["service-provider"]);
+}
+
+function AzureDevOpsUnavailable({ client }: Readonly<{ client: OAuthClient }>): React.JSX.Element {
+  return (
+    <div className="space-y-1">
+      <Badge variant="outline">Repository integration unavailable</Badge>
+      <p className="max-w-xs text-xs text-muted-foreground">
+        This OAuth client is stored for API compatibility. Azure DevOps repository fetching, webhooks and run statuses
+        are not implemented yet.
+      </p>
+      {isString(client.attributes["ado-org-name"]) && client.attributes["ado-org-name"] !== "" && (
+        <p className="text-xs text-muted-foreground">Organization: {client.attributes["ado-org-name"]}</p>
+      )}
+    </div>
+  );
+}
+
+function OAuthConnectionStatus({
+  client,
+  connected,
+  statusKnown,
+  providerUser,
+}: Readonly<{
+  client: OAuthClient;
+  connected: boolean;
+  statusKnown: boolean;
+  providerUser: string | undefined;
+}>): React.JSX.Element {
+  if (isAzureDevOpsClient(client)) return <AzureDevOpsUnavailable client={client} />;
+  const label = !statusKnown
+    ? "Status unavailable"
+    : connected
+      ? providerUser === undefined
+        ? "Connected"
+        : `Connected as ${providerUser}`
+      : "Not connected";
+  return (
+    <Badge variant={connected ? "secondary" : "outline"}>
+      {connected && <CheckCircle data-icon="inline-start" />}
+      {label}
+    </Badge>
+  );
+}
 
 function authorizationUrl(payload: AuthorizationDocument): string {
   const rawUrl = payload.data?.attributes?.["authorization-url"];
@@ -345,7 +392,8 @@ function OAuthClientsSection({
                 clients.map((client: OAuthClient): React.JSX.Element => {
                   const statusKnown = Object.prototype.hasOwnProperty.call(tokensByClient, client.id);
                   const tokens = tokensByClient[client.id] ?? [];
-                  const connected = statusKnown && tokens.length > 0;
+                  const azureDevOps = isAzureDevOpsClient(client);
+                  const connected = !azureDevOps && statusKnown && tokens.length > 0;
                   const providerUser = tokens
                     .map((token): string | null | undefined => token.attributes["service-provider-user"])
                     .find((value): value is string => isString(value) && value !== "");
@@ -364,23 +412,19 @@ function OAuthClientsSection({
                         </Badge>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground font-mono">
-                        {client.attributes["http-url"] ?? "https://github.com"}
+                        {client.attributes["http-url"] ?? "Not configured"}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={connected ? "secondary" : "outline"}>
-                          {connected && <CheckCircle data-icon="inline-start" />}
-                          {!statusKnown
-                            ? "Status unavailable"
-                            : connected
-                              ? providerUser === undefined
-                                ? "Connected"
-                                : `Connected as ${providerUser}`
-                              : "Not connected"}
-                        </Badge>
+                        <OAuthConnectionStatus
+                          client={client}
+                          connected={connected}
+                          statusKnown={statusKnown}
+                          providerUser={providerUser}
+                        />
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
-                          {statusKnown && !connected && (
+                          {!azureDevOps && statusKnown && !connected && (
                             <Button
                               size="sm"
                               variant="outline"

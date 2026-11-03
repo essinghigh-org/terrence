@@ -1,3 +1,4 @@
+import { SamlCertificates } from "./saml-certificates";
 import { useState } from "react";
 import { Select } from "../../components/ui/select";
 import { Disclosure } from "../../components/ui/disclosure";
@@ -256,6 +257,7 @@ function SamlAuthSection({
   userOpen: boolean;
   onToggle: (open: boolean) => void;
 }>): React.JSX.Element {
+  const [certificatesSaving, setCertificatesSaving] = useState(false);
   const {
     loading: samlLoading,
     saving: samlSaving,
@@ -552,11 +554,18 @@ function SamlAuthSection({
                   </div>
                 </dl>
               </div>
-              <Button type="submit" disabled={samlSaving}>
+              <Button type="submit" disabled={samlSaving || certificatesSaving}>
                 {samlSaving ? "Saving…" : "Save SAML settings"}
               </Button>
             </form>
           )}
+          <SamlCertificates
+            refreshKey={samlSaving}
+            onBusyChange={setCertificatesSaving}
+            onLegacyPrimaryRemoved={(): void => {
+              setSamlIdpCert("");
+            }}
+          />
         </CardContent>
       </Card>
     </Disclosure>

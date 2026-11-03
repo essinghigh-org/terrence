@@ -54381,6 +54381,33 @@
           }
         }
       }
+    },
+    "/api/v2/site-presentation": {
+      "get": {
+        "operationId": "get-api-v2-site-presentation",
+        "tags": [
+          "site-presentation"
+        ],
+        "summary": "GET /api/v2/site-presentation",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
     }
   },
   "components": {

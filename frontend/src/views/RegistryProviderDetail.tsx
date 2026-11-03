@@ -1,3 +1,5 @@
+import { RegistryArtifactTags } from "../components/RegistryArtifactTags";
+import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { EmptyState } from "../components/EmptyState";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -47,12 +49,16 @@ export function RegistryProviderDetail(): React.JSX.Element {
     namespace = "",
     name = "",
   } = useParams<{ orgName?: string; namespace?: string; name?: string }>();
+  const permissions = useOrganizationPermissions(orgName);
+  const [providerId, setProviderId] = useState("");
   const [versions, setVersions] = useState<Version[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
+    setLoading(true);
+    setError(null);
     const load = async (): Promise<void> => {
       // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const providerResponse = (await fetchApi(
@@ -88,7 +94,10 @@ export function RegistryProviderDetail(): React.JSX.Element {
           };
         }),
       );
-      if (!controller.signal.aborted) setVersions(loaded);
+      if (!controller.signal.aborted) {
+        setVersions(loaded);
+        setProviderId(providerResponse.data.id);
+      }
     };
     void load()
       .catch((caught: unknown): void => {
@@ -142,6 +151,13 @@ export function RegistryProviderDetail(): React.JSX.Element {
             private/{namespace}/{name}
           </code>
         }
+      />
+      <RegistryArtifactTags
+        key={providerId}
+        kind="providers"
+        artifactId={providerId}
+        updatePath={`/organizations/${encodeURIComponent(orgName)}/registry-providers/private/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`}
+        canManage={permissions.loaded && permissions.has("can-manage-providers")}
       />
       {versions.length === 0 ? (
         <Empty className="border">
