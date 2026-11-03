@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import { createBrowser, type BrowserPage } from "./helpers/browser";
 import { startTestServer, type TestServer } from "./helpers/server";
 import { expectNoA11yViolations } from "./helpers/axe";
@@ -13,12 +13,18 @@ const ACCESSIBILITY_TEST_TIMEOUT_MS = 30_000;
 describe("accessibility-authenticated", () => {
   beforeAll(async (): Promise<void> => {
     server = await startTestServer();
+  });
+
+  beforeEach(async (): Promise<void> => {
     page = await createBrowser();
   });
 
   afterAll(async (): Promise<void> => {
-    page?.close();
     await server?.close();
+  });
+
+  afterEach((): void => {
+    page?.close();
   });
 
   test(
