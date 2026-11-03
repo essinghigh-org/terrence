@@ -160,7 +160,10 @@ test("creates an organization-scoped PAT connection through the authenticated ba
   expect(destinations).toEqual([]);
   expect(
     requests.some(
-      (url): boolean => url.includes("/connect") || url.includes(testPat) || url.startsWith("https://dev.azure.com"),
+      (url): boolean =>
+        url.includes("/connect") ||
+        url.includes(testPat) ||
+        new URL(url, "http://terrence.test").origin !== "http://terrence.test",
     ),
   ).toBeFalse();
   expect(await view.findByRole("heading", { name: "Azure DevOps service hooks" })).toBeTruthy();
