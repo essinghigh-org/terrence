@@ -1,6 +1,7 @@
 import json
 import unittest
-from run import journal_valid, negative_exercised, native_output_valid
+from pathlib import Path
+from run import journal_valid, negative_exercised, native_output_valid, case_directory
 
 
 def record(sequence, ident, method, phase, result=None, error=None):
@@ -82,6 +83,15 @@ class NativeOutputTest(unittest.TestCase):
                       {"type": "policy_diagnostic", "policy_diagnostic": {"severity": "error"}},
                       {"type": "diagnostic", "diagnostic": {"severity": "error"}}):
             self.assertFalse(native_output_valid(encode([version, event])))
+
+
+class SocketPathBudgetTest(unittest.TestCase):
+    def test_long_case_name_and_maximum_temporary_suffix(self):
+        root = Path("/tmp/tfi-12345678")
+        base = case_directory(root, "setup-error-saved-apply")
+        self.assertLessEqual(len(str(base / "t" / "plugin-4294967295")), 60)
+        self.assertEqual(base, case_directory(root, "setup-error-saved-apply"))
+        self.assertNotEqual(base, case_directory(root, "allow-plan"))
 
 
 if __name__ == "__main__":

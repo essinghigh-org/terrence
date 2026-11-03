@@ -232,11 +232,17 @@ def wait_file(path, process, seconds=5):
     raise RuntimeError("supervisor socket timeout")
 
 
+def case_directory(root, case):
+    # Keep Unix-socket paths bounded independently of readable case labels.
+    # Go's MkdirTemp suffix can be ten digits; do not depend on its random width.
+    return root / hashlib.sha256(case.encode()).hexdigest()[:12]
+
+
 def run_case(args, bins, root, output, mode, stage):
     case = mode + "-" + stage
     out = output / case
     out.mkdir(mode=0o700)
-    base = root / case
+    base = case_directory(root, case)
     base.mkdir(mode=0o700)
     work, policy, private, sockets, temporary = [base / n for n in ("w", "p", "s", "u", "t")]
     for path in (work, policy, private, sockets, temporary):
@@ -290,7 +296,7 @@ def run_case(args, bins, root, output, mode, stage):
             command.append("-out=" + str(work / "saved.tfplan"))
         if stage == "saved-apply":
             saved = work / "saved.tfplan"
-            shutil.copyfile(root / "allow-plan" / "w" / "saved.tfplan", saved)
+            shutil.copyfile(case_directory(root, "allow-plan") / "w" / "saved.tfplan", saved)
             result["saved_plan_sha256"] = digest(saved)
             command.append(str(saved))
         engine = subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
