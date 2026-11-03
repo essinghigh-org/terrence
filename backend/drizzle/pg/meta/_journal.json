@@ -491,6 +491,13 @@
       "when": 1793726181185,
       "tag": "0069_cold_banshee",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1793742226490,
+      "tag": "0070_black_hellcat",
+      "breakpoints": true
     }
   ]
 }

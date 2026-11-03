@@ -1,0 +1,2 @@
+ALTER TABLE "registry_modules" ADD COLUMN "ingress_submodules" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "stacks" ADD COLUMN "vcs_ingress_submodules" boolean DEFAULT false NOT NULL;

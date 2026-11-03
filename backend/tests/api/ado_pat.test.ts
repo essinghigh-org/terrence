@@ -190,6 +190,21 @@ describe("Azure DevOps Services PAT integration", () => {
     expect(body.data.attributes["vcs-repo"]["repository-url"]).toBe(
       "https://dev.azure.com/fabrikam/Cloud%20Team/_git/terraform-azurerm-network",
     );
+    const modulePath = `/organizations/${orgName}/registry-modules/private/${orgName}/ado-network/azurerm`;
+    const enabled = await request("PATCH", modulePath, {
+      data: { type: "registry-modules", attributes: { "vcs-repo": { "ingress-submodules": true } } },
+    });
+    expect(enabled.status).toBe(200);
+    expect((await enabled.json()).data.attributes["vcs-repo"]["ingress-submodules"]).toBe(true);
+    const malformed = await request("PATCH", modulePath, {
+      data: { type: "registry-modules", attributes: { "vcs-repo": { "ingress-submodules": "true" } } },
+    });
+    expect(malformed.status).toBe(422);
+    const disabled = await request("PATCH", modulePath, {
+      data: { type: "registry-modules", attributes: { "vcs-repo": { "ingress-submodules": false } } },
+    });
+    expect(disabled.status).toBe(200);
+    expect((await disabled.json()).data.attributes["vcs-repo"]["ingress-submodules"]).toBe(false);
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every((url) => url.startsWith("https://dev.azure.com/fabrikam/"))).toBe(true);
     setExternalUrlTransportForTests(undefined);

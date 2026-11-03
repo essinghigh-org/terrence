@@ -100,3 +100,10 @@ The `terraform` CLI and `tofu` work without extra configuration.
 - `POST /api/v2/registry-modules/:id/versions/:version/upload`
 - `GET /api/v2/organizations/:org_name/registry-providers`
 - `POST /api/v2/registry-providers/:id/versions`
+
+
+### Azure DevOps Git submodules
+
+VCS modules may opt in to `vcs-repo.ingress-submodules` on creation or settings updates. The default is `false`. The option is supported only for Azure DevOps Services connections and appears in publication/settings UI. Only pinned gitlinks to repositories in the same Azure organization are expanded; the PAT must have read access to each repository. Unsafe or unavailable submodules fail publication rather than producing a partial module archive.
+
+Changing this setting affects future publications only. Existing versions and their archives remain immutable. This is a Terrence extension, not a field currently exposed by the upstream `tfe_registry_module` provider resource.

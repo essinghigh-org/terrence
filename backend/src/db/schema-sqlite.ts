@@ -1284,6 +1284,7 @@ export const stacks = sqliteTable("stacks", {
   vcsDisplayIdentifier: text("vcs_display_identifier"),
   vcsRepositoryHttpUrl: text("vcs_repository_http_url"),
   vcsSparseCheckoutPattern: text("vcs_sparse_checkout_pattern"),
+  vcsIngressSubmodules: integer("vcs_ingress_submodules", { mode: "boolean" }).notNull().default(false),
   vcsOAuthTokenId: text("vcs_oauth_token_id"),
   vcsGhaInstallationId: text("vcs_gha_installation_id"),
   createdAt: integer("created_at")
@@ -1912,6 +1913,7 @@ export const registryModules = sqliteTable(
     repositoryDisplayIdentifier: text("repository_display_identifier"),
     repositoryUrl: text("repository_url"),
     sourceDirectory: text("source_directory").notNull().default(""),
+    ingressSubmodules: integer("ingress_submodules", { mode: "boolean" }).notNull().default(false),
     tagPrefix: text("tag_prefix").notNull().default(""),
     branch: text("branch"),
     status: text("status").notNull().default("pending"), // 'pending', 'setup_complete', 'errored'

@@ -322,6 +322,7 @@ export async function registryModuleResource(
               "repository-url": m.repositoryUrl,
               branch: m.branch ?? "",
               "source-directory": m.sourceDirectory,
+              "ingress-submodules": m.ingressSubmodules,
               "tag-prefix": m.tagPrefix,
               ...(m.vcsConnectionType === "github-app" ? { "github-app-installation-id": m.vcsConnectionId } : {}),
               ...(m.vcsConnectionType === "oauth-token" ? { "oauth-token-id": m.vcsConnectionId } : {}),
@@ -1024,6 +1025,7 @@ type VcsModuleOptions = Readonly<{
   tagPrefix: string;
   initialVersion: string;
   identifierValid: boolean;
+  ingressSubmodules: unknown;
 }>;
 
 function parseVcsEnvelope(body: unknown): VcsModuleEnvelope {
@@ -1082,7 +1084,13 @@ function parseVcsOptions(
     (identifierParts.length === 2 &&
       identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part))) ||
     parseAzureDevOpsRepository(identifier) !== undefined;
-  return { sourceDirectory, tagPrefix, initialVersion, identifierValid };
+  return {
+    sourceDirectory,
+    tagPrefix,
+    initialVersion,
+    identifierValid,
+    ingressSubmodules: vcsRepo["ingress-submodules"] === undefined ? false : vcsRepo["ingress-submodules"],
+  };
 }
 
 function isValidSourceDirectory(sourceDirectory: string): boolean {
@@ -1098,6 +1106,7 @@ function vcsModuleFieldError(
   connection: VcsModuleConnection,
   options: VcsModuleOptions,
 ): string | null {
+  if (typeof options.ingressSubmodules !== "boolean") return "ingress-submodules must be a boolean";
   if (data["type"] !== "registry-modules" || !options.identifierValid || connection.connectionCount !== 1) {
     return "A repository identifier and exactly one VCS connection are required";
   }
@@ -1118,6 +1127,7 @@ function vcsModuleFieldError(
 
 type VcsConnectionStatus = Readonly<{
   available: boolean;
+  azureDevOps?: boolean;
   repositoryBaseUrl: string | null;
 }>;
 
@@ -1143,7 +1153,7 @@ async function resolveOauthConnection(orgId: string, oauthTokenId: unknown): Pro
     const valid =
       azureDevOpsBaseUrl(client.adoOrgName, client.apiUrl) !== undefined &&
       azureDevOpsBaseUrl(client.adoOrgName, client.httpUrl) !== undefined;
-    return { available: valid, repositoryBaseUrl: valid ? "https://dev.azure.com" : null };
+    return { available: valid, repositoryBaseUrl: valid ? "https://dev.azure.com" : null, azureDevOps: true };
   }
   return {
     available,
@@ -2276,7 +2286,7 @@ async function resolveRegistryModuleForWrite(
 function validateModulePatchFields(
   attributes: Readonly<Record<string, unknown>>,
   currentBranch: string | null,
-): Readonly<{ sourceDirectory: unknown; tagPrefix: unknown } | { error: string }> {
+): Readonly<{ sourceDirectory: unknown; tagPrefix: unknown; ingressSubmodules: unknown } | { error: string }> {
   const sourceDirectory = attributes["source-directory"];
   const tagPrefix = attributes["tag-prefix"];
   const vcsRepo =
@@ -2284,6 +2294,9 @@ function validateModulePatchFields(
       ? (attributes["vcs-repo"] as Record<string, unknown>)
       : {};
   const requestedBranch = vcsRepo["branch"];
+  const ingressSubmodules = vcsRepo["ingress-submodules"];
+  if (ingressSubmodules !== undefined && typeof ingressSubmodules !== "boolean")
+    return { error: "ingress-submodules must be a boolean" };
   if (
     sourceDirectory !== undefined &&
     (typeof sourceDirectory !== "string" ||
@@ -2299,7 +2312,21 @@ function validateModulePatchFields(
   if (requestedBranch !== undefined && requestedBranch !== currentBranch) {
     return { error: "Switching publishing workflows is not supported; create a new module instead" };
   }
-  return { sourceDirectory, tagPrefix };
+  return { sourceDirectory, tagPrefix, ingressSubmodules };
+}
+
+function submoduleFlagUpdate(value: unknown): Readonly<{ ingressSubmodules?: boolean }> {
+  return typeof value === "boolean" ? { ingressSubmodules: value } : {};
+}
+
+async function moduleSubmoduleOptionAllowed(
+  mod: Readonly<typeof registryModules.$inferSelect>,
+  value: unknown,
+): Promise<boolean> {
+  if (value !== true) return true;
+  if (mod.vcsConnectionType !== "oauth-token") return false;
+  const connection = await resolveOauthConnection(mod.orgId, mod.vcsConnectionId);
+  return connection.azureDevOps === true && connection.available;
 }
 
 type ProviderPlatformFields = Readonly<{
@@ -3119,6 +3146,18 @@ export const registryRoutes = new Elysia({ name: "registry" })
           ],
         };
       }
+      if (options.ingressSubmodules === true && connectionStatus.azureDevOps !== true) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Submodule ingress requires Azure DevOps Services",
+            },
+          ],
+        };
+      }
       const now = Date.now();
       const id = newResourceId("mod");
       const connectionRef = vcsConnectionRef(connection);
@@ -3151,6 +3190,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
           repositoryDisplayIdentifier: vcsDisplayIdentifier(envelope.vcsRepo, naming.identifier),
           repositoryUrl: urlResult.url,
           sourceDirectory: options.sourceDirectory,
+          ingressSubmodules: options.ingressSubmodules === true,
           tagPrefix: options.tagPrefix,
           branch: connection.branch,
           status: "pending",
@@ -3360,9 +3400,22 @@ export const registryRoutes = new Elysia({ name: "registry" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: validated.error }] };
       }
+      if (!(await moduleSubmoduleOptionAllowed(mod, validated.ingressSubmodules))) {
+        (set as { status: number }).status = 422;
+        return {
+          errors: [
+            {
+              status: "422",
+              title: "Unprocessable Entity",
+              detail: "Submodule ingress requires Azure DevOps Services",
+            },
+          ],
+        };
+      }
       await db
         .update(registryModules)
         .set({
+          ...submoduleFlagUpdate(validated.ingressSubmodules),
           ...(tags ? { tagBindings: replaceBindings(mod.tagBindings, tags) } : {}),
           ...(typeof validated.sourceDirectory === "string" ? { sourceDirectory: validated.sourceDirectory } : {}),
           ...(typeof validated.tagPrefix === "string" ? { tagPrefix: validated.tagPrefix } : {}),

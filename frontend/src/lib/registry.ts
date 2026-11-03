@@ -59,6 +59,7 @@ export type RegistryModule = Readonly<{
     branch?: string | null;
     sourceDirectory?: string | null;
     tagPrefix?: string | null;
+    ingressSubmodules?: boolean;
   }> | null;
   lastSuccessfulSyncAt: string | null;
   lastSyncAttemptAt: string | null;
@@ -218,6 +219,7 @@ function registryVcsRepoFrom(value: FieldMap): RegistryModule["vcsRepo"] {
     branch: isString(vcsRepo["branch"]) && vcsRepo["branch"] !== "" ? vcsRepo["branch"] : null,
     sourceDirectory: optionalText(vcsRepo, "source-directory"),
     tagPrefix: optionalText(vcsRepo, "tag-prefix"),
+    ingressSubmodules: vcsRepo["ingress-submodules"] === true,
   };
 }
 

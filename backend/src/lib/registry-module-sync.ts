@@ -1,3 +1,4 @@
+import { fetchAzureDevOpsSubmoduleArchive } from "./ado-submodules";
 import { newResourceId } from "./resource-id";
 import { open, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -199,6 +200,8 @@ async function candidatesFor(
   branchVersion?: string,
 ): Promise<RegistryModuleCandidate[]> {
   const repository = mod.repositoryIdentifier ?? "";
+  if (mod.ingressSubmodules && credentials.azure === undefined)
+    throw new Error("Submodule ingress requires Azure DevOps Services");
   if (credentials.azure !== undefined) {
     if (mod.publishingWorkflow === "branch") return branchCandidateFor(mod, credentials, "", branchVersion);
     return discoverModuleVersions(await fetchAzureDevOpsTags(credentials.azure, repository), mod.tagPrefix);
@@ -222,27 +225,49 @@ async function candidatesFor(
   return discoverModuleVersions(tags, mod.tagPrefix);
 }
 
+async function withAzureArchive<T>(
+  mod: RegistryModule,
+  credentials: AzureDevOpsCredentials,
+  sha: string,
+  use: (path: string) => Promise<T>,
+): Promise<T> {
+  const archive = await (mod.ingressSubmodules ? fetchAzureDevOpsSubmoduleArchive : fetchAzureDevOpsArchive)(
+    credentials,
+    mod.repositoryIdentifier ?? "",
+    sha,
+    {
+      maxCompressedBytes: MAX_MODULE_DOWNLOAD_BYTES,
+      maxFileBytes: MAX_MODULE_FILE_BYTES,
+    },
+  );
+  const staging = await mkdtemp(join(tmpdir(), "terrence-registry-download-"));
+  const path = join(staging, "source.tar.gz");
+  try {
+    await writeFile(path, archive, { flag: "wx", mode: 0o600 });
+    return await use(path);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
 async function withDownloadedArchive<T>(
   mod: RegistryModule,
   credentials: Credentials,
   sha: string,
   use: (path: string) => Promise<T>,
 ): Promise<T> {
+  if (credentials.azure !== undefined) return withAzureArchive(mod, credentials.azure, sha, use);
+  if (mod.ingressSubmodules) throw new Error("Submodule ingress requires Azure DevOps Services");
+  return withGithubArchive(mod, credentials, sha, use);
+}
+
+async function withGithubArchive<T>(
+  mod: RegistryModule,
+  credentials: Credentials,
+  sha: string,
+  use: (path: string) => Promise<T>,
+): Promise<T> {
   const repository = mod.repositoryIdentifier ?? "";
-  if (credentials.azure !== undefined) {
-    const archive = await fetchAzureDevOpsArchive(credentials.azure, repository, sha, {
-      maxCompressedBytes: MAX_MODULE_DOWNLOAD_BYTES,
-      maxFileBytes: MAX_MODULE_FILE_BYTES,
-    });
-    const staging = await mkdtemp(join(tmpdir(), "terrence-registry-download-"));
-    const path = join(staging, "source.tar.gz");
-    try {
-      await writeFile(path, archive, { flag: "wx", mode: 0o600 });
-      return await use(path);
-    } finally {
-      await rm(staging, { recursive: true, force: true });
-    }
-  }
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
   const response = await fetchVcsUrlStream(
     `${credentials.apiUrl}/repos/${encodedRepository}/tarball/${encodeURIComponent(sha)}`,

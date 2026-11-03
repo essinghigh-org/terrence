@@ -520,3 +520,45 @@ test("keeps legacy registry settings URLs as redirects", async () => {
   );
   await providers.findByText("/app/acme/registry?tab=providers");
 });
+
+test("Azure module settings restore and save submodule ingress without republishing existing versions", async () => {
+  let patch: JsonValue | undefined;
+  const resource = moduleResource(true);
+  const azureResource = {
+    ...resource,
+    attributes: {
+      ...resource.attributes,
+      "vcs-repo": {
+        ...resource.attributes["vcs-repo"],
+        "repository-url": "https://dev.azure.com/acme/project/_git/terraform-aws-network",
+        "ingress-submodules": true,
+      },
+    },
+  };
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/registry-modules/private/acme/network/aws") {
+      if (init?.method === "PATCH") patch = JSON.parse(init.body as string) as JsonValue;
+      return json({ data: azureResource });
+    }
+    if (url.endsWith("/tag-bindings")) return json({ data: [] });
+    if (url === "/api/v2/registry-modules/mod-network/versions")
+      return json({ data: [versionResource("v1", "1.0.0", "# Module docs")] });
+    throw new Error(`Unexpected request ${url}`);
+  }) as unknown as typeof fetch;
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/registry/modules/acme/network/aws"]}>
+      <Routes>
+        <Route path="/app/:orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(await view.findByRole("button", { name: "Settings" }));
+  const checkbox = await view.findByLabelText("Include Azure DevOps Git submodules");
+  expect(checkbox.getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(checkbox);
+  fireEvent.click(view.getByRole("button", { name: "Save" }));
+  await waitFor((): void => {
+    expect(patch).toMatchObject({ data: { attributes: { "vcs-repo": { "ingress-submodules": false } } } });
+  });
+});

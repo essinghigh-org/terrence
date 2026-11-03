@@ -304,3 +304,48 @@ test("cancelling after a failed manual upload removes the staged module", async 
     expect(deleted).toBeTrue();
   });
 });
+
+test("Azure publication exposes opt-in pinned submodules and sends the selected value", async () => {
+  let payload: JsonObject | undefined;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.endsWith("/oauth-clients"))
+      return json({ data: [{ id: "azure", attributes: { name: "Azure", "service-provider": "ado_services" } }] });
+    if (url === "/api/v2/oauth-clients/azure/oauth-tokens")
+      return json({ data: [{ id: "azure-token", attributes: {} }] });
+    if (url.includes("vcs-connections/oauth-token%3Aazure-token/repositories"))
+      return json({
+        data: [
+          {
+            attributes: {
+              identifier: "acme/project/_git/terraform-aws-network",
+              name: "terraform-aws-network",
+              owner: "acme",
+            },
+          },
+        ],
+      });
+    if (url.endsWith("/registry-modules/vcs") && init?.method === "POST") {
+      payload = JSON.parse(init.body as string) as JsonObject;
+      return json({ data: moduleResource("mod-azure", "network", "aws") }, 201);
+    }
+    const response = baseResponse(url);
+    if (response !== null) return response;
+    throw new Error(`Unexpected request ${url}`);
+  }) as unknown as typeof fetch;
+  const view = renderRegistry();
+  await openPublish(view);
+  fireEvent.change(await view.findByLabelText("VCS connection"), { target: { value: "oauth-token:azure-token" } });
+  const checkbox = await view.findByLabelText("Include Azure DevOps Git submodules");
+  expect(checkbox.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(checkbox);
+  const repository = await view.findByLabelText("Repository");
+  changeInput(repository, "acme/project/_git/terraform-aws-network");
+  changeInput(view.getByLabelText("Module name"), "network");
+  changeInput(view.getByLabelText("Provider"), "aws");
+  fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
+  await view.findByText("Module detail landing");
+  expect(payload).toMatchObject({
+    data: { attributes: { "vcs-repo": { "oauth-token-id": "azure-token", "ingress-submodules": true } } },
+  });
+});

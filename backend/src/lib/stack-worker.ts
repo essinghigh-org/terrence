@@ -1,3 +1,4 @@
+import { fetchAzureDevOpsSubmoduleArchive } from "./ado-submodules";
 import { stackPolicyExecutionError } from "./stack-policy-gate";
 import { newResourceId } from "./resource-id";
 import { createHash } from "node:crypto";
@@ -324,7 +325,13 @@ async function fetchAzureStackArchive(
   signal.throwIfAborted();
   const commit = await fetchAzureDevOpsLatestCommit(credentials, identifier, branch);
   if (commit === undefined) throw new Error("The Stack Azure DevOps branch has no resolvable commit");
-  const archive = await fetchAzureDevOpsArchive(credentials, identifier, commit, {}, signal);
+  const archive = await (stack.vcsIngressSubmodules ? fetchAzureDevOpsSubmoduleArchive : fetchAzureDevOpsArchive)(
+    credentials,
+    identifier,
+    commit,
+    {},
+    signal,
+  );
   signal.throwIfAborted();
   await writeResponseArchive(new Response(Buffer.from(archive)), destination, signal);
 }
@@ -336,6 +343,7 @@ async function fetchStackArchive(stack: Stack, destination: string, signal: Read
     await fetchAzureStackArchive(stack, credentials, destination, signal);
     return true;
   }
+  if (stack.vcsIngressSubmodules) throw new Error("Submodule ingress requires Azure DevOps Services");
   const family = providerFamily(stack.vcsServiceProvider ?? "github");
   let httpError: unknown;
   if (family === "github" || family === "gitlab") {

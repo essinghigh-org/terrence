@@ -70,13 +70,36 @@ describe("Azure DevOps API source admission", () => {
     const stackId = document.data.id as string;
     const updated = await request("PATCH", `/stacks/${stackId}`, {
       type: "stacks",
-      attributes: { "vcs-repo": { ...vcs, branch: "release" } },
+      attributes: { "vcs-repo": { ...vcs, branch: "release", "ingress-submodules": true } },
     });
     expect(updated.status).toBe(200);
     const stored = await db.query.stacks.findFirst({ where: eq(stacks.id, stackId) });
     expect(stored?.vcsServiceProvider).toBe("ado_services");
     expect(stored?.vcsBranch).toBe("release");
     expect(stored?.vcsOAuthTokenId).toBe(tokenId);
+    expect(stored?.vcsIngressSubmodules).toBe(true);
+    expect((await updated.json()).data.attributes["vcs-repo"]["ingress-submodules"]).toBe(true);
+    const invalid = await request("PATCH", `/stacks/${stackId}`, {
+      type: "stacks",
+      attributes: { "vcs-repo": { ...vcs, "ingress-submodules": "true" } },
+    });
+    expect(invalid.status).toBe(422);
+    const disabled = await request("PATCH", `/stacks/${stackId}`, {
+      type: "stacks",
+      attributes: { "vcs-repo": { ...vcs, "ingress-submodules": false } },
+    });
+    expect(disabled.status).toBe(200);
+    expect((await disabled.json()).data.attributes["vcs-repo"]["ingress-submodules"]).toBe(false);
+    await db.update(oauthClients).set({ serviceProvider: "github" }).where(eq(oauthClients.id, clientId));
+    try {
+      const unsupported = await request("PATCH", `/stacks/${stackId}`, {
+        type: "stacks",
+        attributes: { "vcs-repo": { ...vcs, "ingress-submodules": true } },
+      });
+      expect(unsupported.status).toBe(422);
+    } finally {
+      await db.update(oauthClients).set({ serviceProvider: "ado_services" }).where(eq(oauthClients.id, clientId));
+    }
   });
   test("creates and updates policy sets with Azure project names containing spaces", async () => {
     const created = await request("POST", `/organizations/${orgId}/policy-sets`, {
