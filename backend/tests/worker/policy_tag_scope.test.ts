@@ -178,26 +178,22 @@ for (const item of cases)
       await db.insert(projects).values({ id, orgId: id, name: id });
       await db.insert(workspaces).values({ id, orgId: id, name: id, projectId: id });
       await db.insert(runs).values({ id, workspaceId: id, status: "planned", logToken: id, createdAt: Date.now() });
-      await db
-        .insert(policySets)
-        .values({
-          id,
-          orgId: "foreign" in item ? otherOrg : id,
-          name: id,
-          kind: "sentinel",
-          tagMatchLogic: item.logic,
-          global: "global" in item,
-        });
-      await db
-        .insert(policies)
-        .values({
-          id,
-          orgId: "foreign" in item ? otherOrg : id,
-          policySetId: id,
-          name: id,
-          kind: "sentinel",
-          enforcementLevel: "hard-mandatory",
-        });
+      await db.insert(policySets).values({
+        id,
+        orgId: "foreign" in item ? otherOrg : id,
+        name: id,
+        kind: "sentinel",
+        tagMatchLogic: item.logic,
+        global: "global" in item,
+      });
+      await db.insert(policies).values({
+        id,
+        orgId: "foreign" in item ? otherOrg : id,
+        policySetId: id,
+        name: id,
+        kind: "sentinel",
+        enforcementLevel: "hard-mandatory",
+      });
       for (const [key, value] of item.tags) {
         if ("inherited" in item)
           await db.insert(projectTags).values({ id: crypto.randomUUID(), projectId: id, key, value });
@@ -221,6 +217,10 @@ for (const item of cases)
       const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, id) });
       expect(checks.map((check) => check.policyId)).toEqual(item.expected ? [id] : []);
     } finally {
+      // PostgreSQL can cascade through runs while SET NULL triggers from the
+      // policy/policy-set branches still touch the same checks. Remove the
+      // leaf rows first instead of relying on cross-branch cascade ordering.
+      await db.delete(policyChecks).where(eq(policyChecks.runId, id));
       await db.delete(organizations).where(eq(organizations.id, id));
       await db.delete(organizations).where(eq(organizations.id, otherOrg));
     }

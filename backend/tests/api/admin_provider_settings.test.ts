@@ -69,6 +69,35 @@ describe("TFE admin provider lifecycle", () => {
     await request("general-settings", "PATCH", payload("general-settings", { "enable-public-registration": true }));
     expect(await localSignupEnabled()).toBe(true);
   });
+  it("serializes timeout fields as Go duration strings for the strict go-tfe v2 decoder", async () => {
+    // The provider reads the entire typed model before managing registration.
+    // Numeric timeout fields reject that read even though it never changes them.
+    const result = await request(
+      "general-settings",
+      "PATCH",
+      payload("general-settings", {
+        "plan-timeout": 5400,
+        "apply-timeout": 7200,
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect((await result.json()).data.attributes).toMatchObject({
+      "plan-timeout": "5400s",
+      "apply-timeout": "7200s",
+    });
+    invalidateSettingsCache();
+    const read = await request("general-settings");
+    expect(read.status).toBe(200);
+    expect((await read.json()).data.attributes).toMatchObject({
+      "plan-timeout": "5400s",
+      "apply-timeout": "7200s",
+    });
+    // Existing settings writers/runtime consumers continue to use numeric seconds.
+    expect(await getSettingsFresh("general")).toMatchObject({
+      "plan-timeout": 5400,
+      "apply-timeout": 7200,
+    });
+  });
   it("roundtrips customization, clears values, preserves omitted settings, and reports avatar catalog", async () => {
     const attrs = {
       "support-email-address": "help@example.com",

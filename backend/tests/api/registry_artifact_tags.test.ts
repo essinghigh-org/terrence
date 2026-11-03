@@ -54,7 +54,8 @@ for (const kind of ["modules", "providers", "components"] as const) {
       );
     const payload = (tags: { key: string; value?: unknown }[]) => ({
       data: {
-        type: `registry-${kind}`,
+        // go-tfe provider/component update options serialize an empty primary type.
+        type: kind === "modules" ? "registry-modules" : "",
         relationships: { "tag-bindings": { data: tags.map((attributes) => ({ type: "tag-bindings", attributes })) } },
       },
     });
@@ -74,6 +75,9 @@ for (const kind of ["modules", "providers", "components"] as const) {
       for (const invalid of [[{ key: "" }], [{ key: "env" }, { key: "env" }], [{ key: "env", value: 42 }]]) {
         expect((await request(updatePath, "PATCH", payload(invalid))).status).toBe(422);
       }
+      const wrongType = payload([{ key: "env", value: "wrong" }]);
+      wrongType.data.type = "workspaces";
+      expect((await request(updatePath, "PATCH", wrongType)).status).toBe(422);
       expect((await (await request(readPath)).json()).data).toEqual(updated);
       expect((await request(readPath, "GET", undefined, "invalid-token")).status).toBe(404);
       expect((await request(updatePath, "PATCH", payload([]), memberToken)).status).toBe(404);

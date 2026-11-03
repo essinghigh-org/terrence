@@ -6,7 +6,11 @@ export function parseBindings(
 ): { key: string; value: string }[] | undefined {
   const data = (body as { data?: { type?: unknown; relationships?: { "tag-bindings"?: { data?: unknown } } } } | null)
     ?.data;
-  if (data?.type !== `registry-${kind}`) return undefined;
+  // go-tfe v1 RegistryProviderUpdateOptions and RegistryComponentUpdateOptions
+  // omit a jsonapi primary field, so their encoder emits an empty resource type.
+  // Module updates do declare their primary type. Keep rejecting other types.
+  const sdkUntypedUpdate = kind !== "modules" && data?.type === "";
+  if (data?.type !== `registry-${kind}` && !sdkUntypedUpdate) return undefined;
   const tags = data.relationships?.["tag-bindings"]?.data;
   if (!Array.isArray(tags)) return undefined;
   const seen = new Set<string>();

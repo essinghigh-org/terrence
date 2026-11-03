@@ -111,6 +111,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_policy.policy",
   "tfe_sentinel_policy.spolicy",
   "tfe_policy_set.ps",
+  "tfe_policy_set.tag_scoped",
   "tfe_workspace_policy_set.ws_ps",
   "tfe_project_policy_set.project_ps",
   "tfe_organization_run_task.task",
@@ -1037,14 +1038,23 @@ resource "tfe_policy_set_parameter" "p_param" {
   policy_set_id = tfe_policy_set.ps.id
 }
 
+# Tag selectors and explicit workspace/project associations are mutually
+# exclusive upstream. Keep their lifecycles on distinct policy sets so parallel
+# creation exercises valid configurations rather than racing incompatible scopes.
+resource "tfe_policy_set" "tag_scoped" {
+  organization    = tfe_organization.org.name
+  name            = "pe2e-ps-tags-${suffix}"
+  tag_match_logic = "any"
+}
+
 resource "tfe_tag_policy_set" "tag_inc" {
-  policy_set_id = tfe_policy_set.ps.id
+  policy_set_id = tfe_policy_set.tag_scoped.id
   key           = "pe2e-tag-inc-${suffix}"
   value         = "pe2e-value"
 }
 
 resource "tfe_tag_policy_set_exclusion" "tag_exc" {
-  policy_set_id = tfe_policy_set.ps.id
+  policy_set_id = tfe_policy_set.tag_scoped.id
   key           = "pe2e-tag-exc-${suffix}"
 }
 

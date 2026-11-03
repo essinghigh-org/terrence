@@ -12,6 +12,16 @@ import {
   currentSamlSettings,
   authLockoutResponse,
 } from "./helpers";
+/** The TFE wire schema uses Go durations; storage and runtime policy use seconds. */
+function generalSettingsResource(values: Record<string, unknown>, registration: boolean): Record<string, unknown> {
+  return settingResource("general-settings", {
+    ...values,
+    "plan-timeout": `${String(values["plan-timeout"])}s`,
+    "apply-timeout": `${String(values["apply-timeout"])}s`,
+    "enable-public-registration": registration,
+  });
+}
+
 function checkGeneralSettingsAttrs(
   attrs: Record<string, unknown>,
   set: ParamCtx["set"],
@@ -115,10 +125,7 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return settingResource("general-settings", {
-      ...(await getSettings("general")),
-      "enable-public-registration": await localSignupEnabled(),
-    });
+    return generalSettingsResource(await getSettings("general"), await localSignupEnabled());
   })
   .patch("/api/v2/admin/general-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
@@ -160,10 +167,7 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
       const updated = await updateSettings("general", attrs);
       await refreshTrustedClientIpHeaders();
       invalidatePingSsoCache();
-      return settingResource("general-settings", {
-        ...updated,
-        "enable-public-registration": await localSignupEnabled(),
-      });
+      return generalSettingsResource(updated, await localSignupEnabled());
     });
   })
   // --- B.2 Data Retention Policy Settings ---
