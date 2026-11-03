@@ -86,10 +86,11 @@ execs the engine in the same process identity.
 The matrix contains:
 
 1. Native ALLOW plan and apply with complete Setup/resource evaluation journal.
-2. Native DENY plan and apply with error diagnostics, a rejected journal, and no
-   managed resources in denied-apply state.
-3. Missing BYOB executable with nonzero native exit and no successful journal.
-4. BYOB process crash during resource evaluation, recorded as a failed RPC.
+2. Native DENY plan and inline/saved-plan apply with error diagnostics and rejected journal.
+   Apply-time denial retains the already-mutated local terraform_data state.
+3. Missing BYOB executable and Setup error in plan and inline/saved-plan apply with no successful journal.
+   Stock apply can exit zero after startup failure; the oracle still rejects it.
+4. BYOB process crash during plan/inline-apply/saved-apply resource evaluation, recorded as a failed RPC.
 5. Engine killed while a policy RPC blocks. Even an intentional shutdown
    disposition cannot turn incomplete/error RPC evidence into success.
 6. Rejected gate byte `X`, proving no policy code ran before authorization.
@@ -104,8 +105,15 @@ Policy trees and binaries are copied into trusted immutable test locations.
 
 A positive native case requires engine exit zero, supervisor exit zero, explicit
 `engine_shutdown_observed` or `recorder_exited_cleanly` disposition, lossless bounded
-capture, and a strict paired successful journal. Negative cases must fail those
-conditions. All cases require final cgroup emptiness. Output captures, hashes,
+capture, and a strict paired successful journal. Negative cases must never produce a complete successful journal. Stock apply
+startup failure can return zero, and apply-time policy errors happen after
+resource changes. The fixture reports and preserves changed local state for
+allow, denial, missing runtime and evaluation crash; rejection is never called
+rollback or proof that infrastructure was not changed. Saved-plan applies copy
+the actual saved artifact from the initial native ALLOW plan, record its hash,
+and pass that artifact to the stock CLI. Inline apply is also tested separately.
+Initialization remains a setup step without policies and is not claimed as
+qualified native initialization-policy coverage. All cases require final cgroup emptiness. Output captures, hashes,
 raw test journal, transport status, and result JSON are retained. `admitted` is
 always false: this is a qualification test, not a production signer or apply gate.
 

@@ -234,9 +234,16 @@ def run_case(args, bins, root, output, mode, stage):
         command = sandbox_args(bins["runner"], bins["terraform"], work, [policy], [private, sockets], gate=True)
         # Read+execute only this exact immutable shim, never the trusted bin dir.
         command.insert(1, "--rx=" + str(bins["shim"]))
-        command += [stage, "-input=false", "-no-color", "-policies=" + str(policy)]
-        if stage == "apply":
+        command += ["apply" if stage == "saved-apply" else stage, "-input=false", "-no-color", "-policies=" + str(policy)]
+        if stage in ("apply", "saved-apply"):
             command.append("-auto-approve")
+        if stage == "plan":
+            command.append("-out=" + str(work / "saved.tfplan"))
+        if stage == "saved-apply":
+            saved = work / "saved.tfplan"
+            shutil.copyfile(root / "allow-plan" / "w" / "saved.tfplan", saved)
+            result["saved_plan_sha256"] = digest(saved)
+            command.append(str(saved))
         engine = subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         processes.append(engine)
         captures += [Capture(engine.stdout, out / "engine.stdout"), Capture(engine.stderr, out / "engine.stderr")]
@@ -280,27 +287,35 @@ def run_case(args, bins, root, output, mode, stage):
         if status.get("completed") is not False or status.get("run_nonce") != nonce:
             raise RuntimeError("invalid or falsely completed supervisor status")
         complete = journal_valid(data)
+        (out / "journal.jsonl").write_bytes(data)
+        write_json(out / "transport-status.json", status)
         if mode in ("allow", "orphan"):
             if engine.returncode != 0 or supervisor.returncode != 0 or not complete or status.get("transport") not in ("engine_shutdown_observed", "recorder_exited_cleanly"):
                 raise RuntimeError("native positive control did not finish with complete journal and explicit disposition")
-        elif engine.returncode == 0 or complete:
-            raise RuntimeError("negative native case did not fail closed")
+        elif complete:
+            raise RuntimeError("negative native case produced successful policy evidence")
+        # Stock Terraform deliberately continues apply after policy startup errors.
+        # Rejected evidence is not rollback, and exit zero is not policy success.
         if mode == "gate-denied" and data:
             raise RuntimeError("policy code ran despite rejected gate")
         if mode == "hang" and not cancelled:
             raise RuntimeError("in-flight cancellation scenario never reached evaluation")
-        if stage == "apply" and mode == "deny":
+        if stage in ("apply", "saved-apply"):
             state = work / "terraform.tfstate"
-            if state.exists() and json.loads(state.read_text()).get("resources"):
-                raise RuntimeError("denied apply created managed resources")
+            resources = json.loads(state.read_text()).get("resources", []) if state.exists() else []
+            changed = any(r.get("type") == "terraform_data" and r.get("name") == "proof" and r.get("instances") for r in resources)
+            # These fixture applies mutate before policy completion, including
+            # startup errors and denial. Preserve and report the resulting state.
+            if not changed:
+                raise RuntimeError("post-apply fixture state was not retained")
+            (out / "terraform.tfstate").write_bytes(state.read_bytes())
+            result.update(state_retained=True, infrastructure_changed=True)
         result.update(engine_exit=engine.returncode, supervisor_exit=supervisor.returncode,
                       disposition=status["transport"], journal_valid=complete,
                       stdout_sha256=hashes[0], journal_sha256=hashlib.sha256(data).hexdigest(),
                       residual_processes_before_fence=fence.populated())
         if mode == "orphan" and not result["residual_processes_before_fence"]:
             raise RuntimeError("daemonized-descendant cleanup scenario was not exercised")
-        (out / "journal.jsonl").write_bytes(data)
-        write_json(out / "transport-status.json", status)
     finally:
         # Exact cgroup leaf, never the host/delegated parent, is killed and proven
         # empty. No terminal qualification is emitted until this succeeds.
@@ -367,8 +382,11 @@ def main():
         write_json(args.output / "provenance.json", {"terraform_version": args.terraform_version, "landlock_abi": abi,
                     "executable_sha256": {k: digest(v) for k, v in bins.items()}, "admitted": False})
         results = []
-        for mode, stage in (("allow", "plan"), ("deny", "plan"), ("missing", "plan"), ("crash", "plan"),
-                            ("hang", "plan"), ("gate-denied", "plan"), ("orphan", "plan"), ("allow", "apply"), ("deny", "apply")):
+        for mode, stage in (("allow", "plan"), ("deny", "plan"), ("missing", "plan"), ("setup-error", "plan"), ("crash", "plan"),
+                            ("hang", "plan"), ("gate-denied", "plan"), ("orphan", "plan"), ("allow", "apply"), ("deny", "apply"),
+                            ("missing", "apply"), ("setup-error", "apply"), ("crash", "apply"),
+                            ("allow", "saved-apply"), ("deny", "saved-apply"), ("missing", "saved-apply"),
+                            ("setup-error", "saved-apply"), ("crash", "saved-apply")):
             try:
                 results.append(run_case(args, bins, root, args.output, mode, stage))
             except Exception as e:

@@ -67,6 +67,9 @@ func (s *server) Setup(_ context.Context, r *p.PolicySetupRequest) (*p.PolicySet
 	if e = probe(s.c.ForbiddenPath); e != nil {
 		return nil, e
 	}
+	if s.c.Mode == "setup-error" {
+		return nil, errors.New("expected fixture setup failure")
+	}
 	if s.c.Mode == "orphan" {
 		child := exec.Command(os.Args[0], "orphan-child")
 		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
