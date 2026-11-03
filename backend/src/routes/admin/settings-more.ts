@@ -873,6 +873,10 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
       typeof data?.["attributes"] === "object" && data["attributes"] !== null
         ? (data["attributes"] as Record<string, unknown>)
         : {};
+    // The API treats the submitted list as the complete enabled-source set.
+    if (Array.isArray(attrs["avatar-sources"]) && attrs["avatar-sources"].length === 0) {
+      attrs["avatar-sources"] = [{ source: "gravatar", enabled: false }];
+    }
     return settingResource("customization-settings", await updateSettings("customization", attrs));
   })
   // --- B.8 OIDC Settings ---

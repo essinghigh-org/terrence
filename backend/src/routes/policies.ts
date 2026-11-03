@@ -6,6 +6,8 @@ import {
   policySetVersions,
   policySetWorkspaces,
   policySetProjects,
+  policySetStacks,
+  stacks,
   policySetExclusions,
   policySetProjectExclusions,
   policySetTagSelectors,
@@ -96,27 +98,6 @@ function policyCheckResource(
   };
 }
 
-// Extract policy reference ids from a policy-set relationships payload. Accepts
-// both go-tfe's Policies.Add shape ({ "policies": [{id}] }) and the standard
-// { data: { relationships: { policies: { data: [{id}] } } } } shape.
-function extractPolicyRefIds(body: unknown): string[] {
-  const b = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const collect = (refs: unknown): string[] => {
-    const arr = Array.isArray(refs) ? refs : [];
-    return arr
-      .map((r): string => (typeof (r as { id?: unknown })?.id === "string" ? (r as { id: string }).id : ""))
-      .filter((id: string): boolean => id !== "");
-  };
-  if (Array.isArray(b["policies"])) return collect(b["policies"]);
-  const data = b["data"] as Record<string, unknown> | undefined;
-  if (data !== null && typeof data === "object") {
-    const rels = data["relationships"] as Record<string, unknown> | undefined;
-    const pr = rels?.["policies"] as Record<string, unknown> | undefined;
-    if (pr !== null && typeof pr === "object" && Array.isArray(pr["data"])) return collect(pr["data"]);
-  }
-  return [];
-}
-
 async function policySetAttributes(policySet: PsItem): Promise<Record<string, unknown>> {
   const selectors = await db.query.policySetTagSelectors.findMany({
     where: eq(policySetTagSelectors.policySetId, policySet.id),
@@ -128,6 +109,7 @@ async function policySetAttributes(policySet: PsItem): Promise<Record<string, un
     global: policySet.global,
     overridable: policySet.overridable,
     "agent-enabled": policySet.agentEnabled ?? false,
+    "tag-selector-matching-logic": policySet.tagMatchLogic,
     "policy-tool-version": policySet.policyToolVersion,
     "policies-path": policySet.policiesPath,
     "policy-update-patterns": policySet.policyUpdatePatterns,
@@ -146,12 +128,13 @@ async function policySetAttributes(policySet: PsItem): Promise<Record<string, un
 // policy-set resources read the attached workspaces/projects back from the
 // policy-set resource, so these must be populated.
 async function policySetRelationships(policySet: PsItem): Promise<Record<string, unknown>> {
-  const [workspaceLinks, projLinks, exclLinks, projExclLinks, policyRows] = await Promise.all([
+  const [workspaceLinks, projLinks, exclLinks, projExclLinks, policyRows, stackLinks] = await Promise.all([
     db.query.policySetWorkspaces.findMany({ where: eq(policySetWorkspaces.policySetId, policySet.id) }),
     db.query.policySetProjects.findMany({ where: eq(policySetProjects.policySetId, policySet.id) }),
     db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.policySetId, policySet.id) }),
     db.query.policySetProjectExclusions.findMany({ where: eq(policySetProjectExclusions.policySetId, policySet.id) }),
     db.query.policies.findMany({ where: eq(policies.policySetId, policySet.id), columns: { id: true } }),
+    db.query.policySetStacks.findMany({ where: eq(policySetStacks.policySetId, policySet.id) }),
   ]);
   const orgName = await organizationName(policySet.orgId);
   return {
@@ -166,8 +149,84 @@ async function policySetRelationships(policySet: PsItem): Promise<Record<string,
     "project-exclusions": {
       data: projExclLinks.map((l): Record<string, string> => ({ id: l.projectId, type: "projects" })),
     },
+    stacks: { data: stackLinks.filter((l) => !l.isExclude).map((l) => ({ id: l.stackId, type: "stacks" })) },
+    "stack-exclusions": { data: stackLinks.filter((l) => l.isExclude).map((l) => ({ id: l.stackId, type: "stacks" })) },
     policies: { data: policyRows.map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
   };
+}
+
+function stackScopeIds(body: unknown): string[] | null {
+  const data = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return null;
+  const ids: string[] = [];
+  for (const item of data as unknown[]) {
+    if (!item || typeof item !== "object") return null;
+    const ref = item as { id?: unknown; type?: unknown };
+    if (ref.type !== "stacks" || typeof ref.id !== "string" || !ref.id) return null;
+    ids.push(ref.id);
+  }
+  return [...new Set(ids)];
+}
+
+function stackScopeModeError(ps: PsItem, exclusion: boolean): string | null {
+  if (ps.kind !== "tfpolicy") return "Stack scope requires a tfpolicy policy set";
+  if (ps.global !== exclusion)
+    return exclusion
+      ? "Stack exclusions require a global policy set"
+      : "Global policy sets cannot explicitly include stacks";
+  return null;
+}
+
+async function changeStackScope(ctx: ParamCtx, exclusion: boolean, remove: boolean): Promise<unknown> {
+  const { params, body, user, orgId, teamId, set } = ctx;
+  const fail = (status: number, title: string): unknown => {
+    (set as { status: number }).status = status;
+    return { errors: [{ status: String(status), title }] };
+  };
+  const policySetId = params["policy_set_id"] ?? "";
+  const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
+  if (!ps || !(await checkOrganizationPermission(ps.orgId, user?.id, orgId, teamId, "manage-policies")))
+    return fail(404, "Not Found");
+  const ids = stackScopeIds(body);
+  if (ids === null) return fail(422, "Expected an array of stack resource identifiers");
+  if (ids.length > 0) {
+    const rows = await db.query.stacks.findMany({ where: and(eq(stacks.orgId, ps.orgId), inArray(stacks.id, ids)) });
+    if (rows.length !== ids.length) return fail(404, "Stack not found");
+  }
+  if (!remove) {
+    const modeError = stackScopeModeError(ps, exclusion);
+    if (modeError !== null) return fail(422, modeError);
+    const selectors = await db.query.policySetTagSelectors.findFirst({
+      where: eq(policySetTagSelectors.policySetId, ps.id),
+    });
+    if (selectors) return fail(422, "Tag selectors and explicit stack scope are mutually exclusive");
+    if (ids.length > 0) {
+      const opposite = await db.query.policySetStacks.findFirst({
+        where: and(
+          eq(policySetStacks.policySetId, ps.id),
+          inArray(policySetStacks.stackId, ids),
+          eq(policySetStacks.isExclude, !exclusion),
+        ),
+      });
+      if (opposite) return fail(422, "A stack cannot be both included and excluded");
+      await db
+        .insert(policySetStacks)
+        .values(ids.map((stackId) => ({ id: newResourceId("psst"), policySetId, stackId, isExclude: exclusion })))
+        .onConflictDoNothing();
+    }
+  } else if (ids.length > 0) {
+    await db
+      .delete(policySetStacks)
+      .where(
+        and(
+          eq(policySetStacks.policySetId, ps.id),
+          inArray(policySetStacks.stackId, ids),
+          eq(policySetStacks.isExclude, exclusion),
+        ),
+      );
+  }
+  (set as { status: number }).status = 204;
+  return {};
 }
 
 function resolveVcsRepoIdentifier(
@@ -547,12 +606,21 @@ async function resolvePolicySetPatchLinks(
   return null;
 }
 
+function validateTFPolicySetAttributes(kind: string, attributes: Record<string, unknown>): string | null {
+  if (kind !== "tfpolicy") return null;
+  for (const attribute of ["agent-enabled", "overridable"]) {
+    if (attributes[attribute] !== undefined && attributes[attribute] !== null)
+      return `${attribute} is not supported when kind is tfpolicy`;
+  }
+  return null;
+}
+
 async function checkPolicySetKindChange(
   kind: string,
   currentKind: string,
   policySetId: string,
 ): Promise<string | null> {
-  if (!["sentinel", "opa"].includes(kind)) return "kind must be sentinel or opa";
+  if (!["sentinel", "opa", "tfpolicy"].includes(kind)) return "kind must be sentinel, opa, or tfpolicy";
   if (kind !== currentKind) {
     const attached = await db.query.policies.findFirst({
       where: eq(policies.policySetId, policySetId),
@@ -563,6 +631,54 @@ async function checkPolicySetKindChange(
   return null;
 }
 
+function isTagMatchLogic(value: unknown): value is "any" | "all" | null {
+  return value === null || value === "any" || value === "all";
+}
+
+function applyTagMatchLogic(
+  attributes: Record<string, unknown>,
+  updates: Partial<typeof policySets.$inferInsert>,
+): string | null {
+  if (attributes["tag-selector-matching-logic"] !== undefined) {
+    const logic = attributes["tag-selector-matching-logic"];
+    if (!isTagMatchLogic(logic)) return "tag-selector-matching-logic must be any, all, or null";
+    updates.tagMatchLogic = logic;
+  }
+  return null;
+}
+
+async function hasIncompatibleStackScope(
+  attributes: Record<string, unknown>,
+  ps: PsItem,
+  kind: string | undefined,
+): Promise<boolean> {
+  const links = await db.query.policySetStacks.findMany({ where: eq(policySetStacks.policySetId, ps.id) });
+  const nextKind = kind ?? ps.kind;
+  const nextGlobal = typeof attributes["global"] === "boolean" ? attributes["global"] : ps.global;
+  return links.some((link) => nextKind !== "tfpolicy" || link.isExclude !== nextGlobal);
+}
+
+function applyPolicySetPatchScalars(
+  attributes: Record<string, unknown>,
+  effectiveKind: string,
+  content: PolicySetPatchContent,
+  updates: Partial<typeof policySets.$inferInsert>,
+): void {
+  if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
+  if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
+  if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
+  if (attributes["policy-tool-version"] !== undefined)
+    updates.policyToolVersion =
+      typeof attributes["policy-tool-version"] === "string"
+        ? attributes["policy-tool-version"]
+        : effectiveKind === "tfpolicy"
+          ? "latest"
+          : null;
+  if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
+  if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
+  if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
+}
+
 async function applyPolicySetPatchFields(
   attributes: Record<string, unknown>,
   ps: PsItem,
@@ -570,6 +686,16 @@ async function applyPolicySetPatchFields(
   content: PolicySetPatchContent,
   updates: Partial<typeof policySets.$inferInsert>,
 ): Promise<string | null> {
+  const effectiveKind = typeof attributes["kind"] === "string" ? attributes["kind"] : ps.kind;
+  const attributeError = validateTFPolicySetAttributes(effectiveKind, attributes);
+  if (attributeError !== null) return attributeError;
+  if (effectiveKind === "tfpolicy") {
+    updates.agentEnabled = false;
+    updates.overridable = false;
+    if (ps.kind !== "tfpolicy" && attributes["policy-tool-version"] === undefined) updates.policyToolVersion = "latest";
+  }
+  const tagLogicError = applyTagMatchLogic(attributes, updates);
+  if (tagLogicError !== null) return tagLogicError;
   if (typeof attributes["name"] === "string") updates.name = attributes["name"];
   if (attributes["description"] !== undefined)
     updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
@@ -578,15 +704,9 @@ async function applyPolicySetPatchFields(
     if (kindError !== null) return kindError;
     updates.kind = attributes["kind"];
   }
-  if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
-  if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
-  if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
-  if (attributes["policy-tool-version"] !== undefined)
-    updates.policyToolVersion =
-      typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null;
-  if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
-  if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
-  if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
+  if (await hasIncompatibleStackScope(attributes, ps, updates.kind))
+    return "Remove incompatible stack associations before changing policy set kind or global scope";
+  applyPolicySetPatchScalars(attributes, effectiveKind, content, updates);
   return null;
 }
 
@@ -719,6 +839,7 @@ type PolicySetCreateScalars = Readonly<{
   overridable: boolean;
   agentEnabled: boolean;
   policyToolVersion: string | null;
+  tagMatchLogic: string | null;
 }>;
 
 function resolvePolicySetCreateScalars(
@@ -727,7 +848,12 @@ function resolvePolicySetCreateScalars(
   const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
   if (name === "") return { error: "Name is required" };
   const kind = typeof attributes["kind"] === "string" ? attributes["kind"] : "sentinel";
-  if (!["sentinel", "opa"].includes(kind)) return { error: "kind must be sentinel or opa" };
+  if (!["sentinel", "opa", "tfpolicy"].includes(kind)) return { error: "kind must be sentinel, opa, or tfpolicy" };
+  const kindError = validateTFPolicySetAttributes(kind, attributes);
+  if (kindError !== null) return { error: kindError };
+  const tagMatchLogic =
+    attributes["tag-selector-matching-logic"] === undefined ? "any" : attributes["tag-selector-matching-logic"];
+  if (!isTagMatchLogic(tagMatchLogic)) return { error: "tag-selector-matching-logic must be any, all, or null" };
   return {
     value: {
       name,
@@ -736,8 +862,13 @@ function resolvePolicySetCreateScalars(
       global: typeof attributes["global"] === "boolean" ? attributes["global"] : false,
       overridable: typeof attributes["overridable"] === "boolean" ? attributes["overridable"] : false,
       agentEnabled: typeof attributes["agent-enabled"] === "boolean" ? attributes["agent-enabled"] : false,
+      tagMatchLogic,
       policyToolVersion:
-        typeof attributes["policy-tool-version"] === "string" ? attributes["policy-tool-version"] : null,
+        typeof attributes["policy-tool-version"] === "string"
+          ? attributes["policy-tool-version"]
+          : kind === "tfpolicy"
+            ? "latest"
+            : null,
     },
   };
 }
@@ -790,36 +921,63 @@ async function resolvePolicySetCreateContent(
   };
 }
 
-async function attachPoliciesToSet(policyData: unknown, orgId: string, policySetId: string): Promise<void> {
-  if (!Array.isArray(policyData)) return;
-  const validPolicyIds = policyData
-    .map((ref: unknown): string =>
-      ref !== null && typeof ref === "object" && typeof (ref as { id?: unknown }).id === "string"
-        ? (ref as { id: string }).id
-        : "",
+function policyAttachmentData(body: unknown): unknown {
+  if (body === null || typeof body !== "object") return undefined;
+  const payload = body as Record<string, unknown>;
+  if (Array.isArray(payload["data"])) return payload["data"];
+  if (Array.isArray(payload["policies"])) return payload["policies"];
+  const data = payload["data"];
+  if (data === null || typeof data !== "object") return undefined;
+  return extractPolicyRelationship(data as Record<string, unknown>)["data"];
+}
+
+function validatePolicyReferenceIds(policyData: unknown): Readonly<{ ids: string[] }> | Readonly<{ error: string }> {
+  if (!Array.isArray(policyData)) return { error: "policies relationship data must be an array" };
+  const ids: string[] = [];
+  for (const ref of policyData as unknown[]) {
+    if (ref === null || typeof ref !== "object")
+      return { error: "Each policy reference must identify a policies resource" };
+    const resource = ref as Record<string, unknown>;
+    if (
+      typeof resource["id"] !== "string" ||
+      resource["id"] === "" ||
+      (resource["type"] !== undefined && resource["type"] !== "policies")
     )
-    .filter((pid: string): boolean => pid !== "");
-  const validated =
-    validPolicyIds.length === 0
-      ? []
-      : await db.query.policies.findMany({
-          where: and(eq(policies.orgId, orgId), inArray(policies.id, validPolicyIds)),
-          columns: { id: true },
-        });
-  if (validated.length > 0) {
-    await db
-      .update(policies)
-      .set({ policySetId: policySetId })
-      .where(
-        and(
-          eq(policies.orgId, orgId),
-          inArray(
-            policies.id,
-            validated.map((p): string => p.id),
-          ),
-        ),
-      );
+      return { error: "Each policy reference must identify a policies resource" };
+    ids.push(resource["id"]);
   }
+  return { ids: [...new Set(ids)] };
+}
+
+async function validatePolicyAttachments(
+  policyData: unknown,
+  orgId: string,
+  kind: string,
+): Promise<Readonly<{ ids: string[] }> | Readonly<{ error: string }>> {
+  if (!Array.isArray(policyData)) return { error: "policies relationship data must be an array" };
+  if (policyData.length > 0 && kind === "tfpolicy")
+    return { error: "tfpolicy does not support individually managed policies" };
+  const references = validatePolicyReferenceIds(policyData);
+  if ("error" in references) return references;
+  const uniqueIds = references.ids;
+  if (uniqueIds.length === 0) return { ids: uniqueIds };
+  const referenced = await db.query.policies.findMany({
+    where: and(eq(policies.orgId, orgId), inArray(policies.id, uniqueIds)),
+    columns: { id: true, kind: true },
+  });
+  if (referenced.length !== uniqueIds.length)
+    return { error: "Every policy must exist in the policy set organization" };
+  if (referenced.some((policy): boolean => policy.kind !== kind))
+    return { error: "Every policy kind must match its policy set kind" };
+  return { ids: uniqueIds };
+}
+
+async function attachPoliciesToSet(policyIds: string[], orgId: string, policySetId: string): Promise<void> {
+  if (policyIds.length === 0) return;
+  await db
+    .update(policies)
+    .set({ policySetId })
+    .where(and(eq(policies.orgId, orgId), inArray(policies.id, policyIds)));
 }
 
 type PolicyCreateScalars = Readonly<{
@@ -964,6 +1122,7 @@ function resolveSetPolicyCreateScalars(
 ): Readonly<{ value: PolicyCreateScalars }> | Readonly<{ error: string }> {
   const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
   if (name === "") return { error: "Name is required" };
+  if (setKind === "tfpolicy") return { error: "tfpolicy policies must be managed through policy set versions" };
   const kind = setKind === "opa" ? "opa" : "sentinel";
   const source =
     typeof attributes["policy"] === "string"
@@ -1005,6 +1164,82 @@ function coerceUploadText(body: unknown): string | null {
   if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
   if (body === null || body === undefined) return "";
   return null;
+}
+
+async function hasExplicitPolicyScope(policySetId: string): Promise<boolean> {
+  const links = await Promise.all([
+    db.query.policySetWorkspaces.findFirst({ where: eq(policySetWorkspaces.policySetId, policySetId) }),
+    db.query.policySetProjects.findFirst({ where: eq(policySetProjects.policySetId, policySetId) }),
+    db.query.policySetExclusions.findFirst({ where: eq(policySetExclusions.policySetId, policySetId) }),
+    db.query.policySetProjectExclusions.findFirst({ where: eq(policySetProjectExclusions.policySetId, policySetId) }),
+  ]);
+  return links.some((link) => link !== undefined);
+}
+
+async function hasTagPolicyScope(policySetId: string): Promise<boolean> {
+  return (
+    (await db.query.policySetTagSelectors.findFirst({ where: eq(policySetTagSelectors.policySetId, policySetId) })) !==
+    undefined
+  );
+}
+
+function initialWorkspaceId(entry: unknown): string | null {
+  if (entry === null || typeof entry !== "object") return null;
+  const value = entry as Record<string, unknown>;
+  if (value["type"] !== "workspaces" || typeof value["id"] !== "string" || value["id"] === "") return null;
+  return value["id"];
+}
+
+function parseInitialPolicyWorkspaceIds(
+  data: Record<string, unknown> | undefined,
+  attributes: Record<string, unknown>,
+): { ids: string[] } | { error: string } {
+  if (attributes["tag-selectors"] !== undefined)
+    return { error: "Use the tag-selectors endpoint after creating the policy set" };
+  const relationships = data?.["relationships"];
+  if (relationships === undefined) return { ids: [] };
+  if (relationships === null || typeof relationships !== "object") return { error: "relationships must be an object" };
+  const items = relationships as Record<string, unknown>;
+  for (const key of [
+    "projects",
+    "stacks",
+    "workspace-exclusions",
+    "project-exclusions",
+    "stack-exclusions",
+    "tag-selectors",
+  ]) {
+    if (items[key] !== undefined) return { error: `Use the ${key} endpoint after creating the policy set` };
+  }
+  const workspaceRelationship = items["workspaces"];
+  if (workspaceRelationship === undefined) return { ids: [] };
+  if (workspaceRelationship === null || typeof workspaceRelationship !== "object")
+    return { error: "workspaces must be a relationship object" };
+  const entries = (workspaceRelationship as Record<string, unknown>)["data"];
+  if (!Array.isArray(entries)) return { error: "workspaces.data must be an array" };
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const id = initialWorkspaceId(entry);
+    if (id === null) return { error: "Invalid workspace relationship" };
+    ids.push(id);
+  }
+  return { ids: [...new Set(ids)] };
+}
+
+async function initialPolicySetWorkspaceIds(
+  data: Record<string, unknown> | undefined,
+  attributes: Record<string, unknown>,
+  orgId: string,
+): Promise<{ ids: string[] } | { error: string }> {
+  const parsed = parseInitialPolicyWorkspaceIds(data, attributes);
+  if ("error" in parsed || parsed.ids.length === 0) return parsed;
+  const uniqueIds = parsed.ids;
+  const found = await db.query.workspaces.findMany({
+    where: and(eq(workspaces.orgId, orgId), inArray(workspaces.id, uniqueIds)),
+    columns: { id: true },
+  });
+  if (found.length !== uniqueIds.length) return { error: "Workspace not found in this organization" };
+  if (attributes["global"] === true) return { error: "Global policy sets cannot have explicit workspace associations" };
+  return { ids: uniqueIds };
 }
 
 async function upsertTagSelector(policySetId: string, item: unknown): Promise<boolean> {
@@ -1414,7 +1649,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       if (filters.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
       const psIds = filters.map((ps: PsItem): string => ps.id);
       // Batch the per-set relationships (workspaces/projects/exclusions/policies).
-      const [wsRows, projRows, exclRows, policyRows] = await Promise.all([
+      const [wsRows, projRows, exclRows, policyRows, stackRows] = await Promise.all([
         db.query.policySetWorkspaces.findMany({ where: inArray(policySetWorkspaces.policySetId, psIds) }),
         db.query.policySetProjects.findMany({ where: inArray(policySetProjects.policySetId, psIds) }),
         db.query.policySetExclusions.findMany({ where: inArray(policySetExclusions.policySetId, psIds) }),
@@ -1422,7 +1657,9 @@ export const policyRoutes = new Elysia({ name: "policies" })
           where: inArray(policies.policySetId, psIds),
           columns: { id: true, policySetId: true },
         }),
+        db.query.policySetStacks.findMany({ where: inArray(policySetStacks.policySetId, psIds) }),
       ]);
+      const stackBySet = groupByPolicySetId(stackRows);
       const projBySet = groupByPolicySetId(projRows);
       const exclBySet = groupByPolicySetId(exclRows);
       const wsBySet = groupByPolicySetId(wsRows);
@@ -1449,6 +1686,16 @@ export const policyRoutes = new Elysia({ name: "policies" })
                 data: (exclBySet.get(ps.id) ?? []).map(
                   (l): Record<string, string> => ({ id: l.workspaceId, type: "workspaces" }),
                 ),
+              },
+              stacks: {
+                data: (stackBySet.get(ps.id) ?? [])
+                  .filter((l) => !l.isExclude)
+                  .map((l) => ({ id: l.stackId, type: "stacks" })),
+              },
+              "stack-exclusions": {
+                data: (stackBySet.get(ps.id) ?? [])
+                  .filter((l) => l.isExclude)
+                  .map((l) => ({ id: l.stackId, type: "stacks" })),
               },
               policies: {
                 data: (polBySet.get(ps.id) ?? []).map((p): Record<string, string> => ({ id: p.id, type: "policies" })),
@@ -1478,6 +1725,11 @@ export const policyRoutes = new Elysia({ name: "policies" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scalars.error }] };
       }
+      const initialWorkspaces = await initialPolicySetWorkspaceIds(data, attributes, org.id);
+      if ("error" in initialWorkspaces) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: initialWorkspaces.error }] };
+      }
       const id = `polset-${Array.from(crypto.getRandomValues(new Uint8Array(8)))
         .map((b: number): string => b.toString(16).padStart(2, "0"))
         .join("")}`;
@@ -1485,6 +1737,15 @@ export const policyRoutes = new Elysia({ name: "policies" })
       if ("error" in content) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: content.error }] };
+      }
+      const attachment = await validatePolicyAttachments(
+        content.value.policyRelationship["data"] ?? [],
+        org.id,
+        scalars.value.kind,
+      );
+      if ("error" in attachment) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: attachment.error }] };
       }
       await db.insert(policySets).values({
         id,
@@ -1495,11 +1756,18 @@ export const policyRoutes = new Elysia({ name: "policies" })
         policyUpdatePatterns: content.value.patterns,
         createdAt: Date.now(),
       });
+      if (initialWorkspaces.ids.length > 0) {
+        await db
+          .insert(policySetWorkspaces)
+          .values(
+            initialWorkspaces.ids.map((workspaceId) => ({ id: newResourceId("psw"), policySetId: id, workspaceId })),
+          );
+      }
       const created = await db.query.policySets.findFirst({ where: eq(policySets.id, id) });
       if (created === undefined) throw new Error("Policy set disappeared after creation");
       // Attach any policy_ids supplied at create so the policies relationship
       // round-trips (otherwise the provider sees drift on every re-apply).
-      await attachPoliciesToSet(content.value.policyRelationship["data"], org.id, id);
+      await attachPoliciesToSet(attachment.ids, org.id, id);
       (set as { status: number }).status = 201;
       return {
         data: {
@@ -1769,7 +2037,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       orgId: tokenOrgId,
       teamId: tokenTeamId,
       set,
-    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+    }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
       const policySetId = params["policy_set_id"] ?? "";
       const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
       if (
@@ -1783,13 +2051,12 @@ export const policyRoutes = new Elysia({ name: "policies" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
       }
-      const policyIds = extractPolicyRefIds(body);
-      if (policyIds.length > 0) {
-        await db
-          .update(policies)
-          .set({ policySetId })
-          .where(and(eq(policies.orgId, ps.orgId), inArray(policies.id, policyIds)));
+      const attachment = await validatePolicyAttachments(policyAttachmentData(body), ps.orgId, ps.kind);
+      if ("error" in attachment) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: attachment.error }] };
       }
+      await attachPoliciesToSet(attachment.ids, ps.orgId, policySetId);
       (set as { status: number }).status = 204;
       return {};
     },
@@ -1817,15 +2084,17 @@ export const policyRoutes = new Elysia({ name: "policies" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
       }
-      const policyIds = extractPolicyRefIds(body);
-      if (policyIds.length === 0) {
-        // go-tfe's RemovePolicies with a set detaches everything when no ids given.
-        await db.update(policies).set({ policySetId: null }).where(eq(policies.policySetId, policySetId));
-      } else {
+      const references = validatePolicyReferenceIds(policyAttachmentData(body));
+      if ("error" in references) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      // Empty removal sets are a no-op, never shorthand for detach-all.
+      if (references.ids.length > 0) {
         await db
           .update(policies)
           .set({ policySetId: null })
-          .where(and(eq(policies.policySetId, policySetId), inArray(policies.id, policyIds)));
+          .where(and(eq(policies.policySetId, policySetId), inArray(policies.id, references.ids)));
       }
       (set as { status: number }).status = 204;
       return {};
@@ -1849,6 +2118,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (await hasTagPolicyScope(policySetId)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Remove tag selectors before adding explicit associations" }] };
       }
       const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
       const wsItems = payload["data"];
@@ -1877,6 +2150,18 @@ export const policyRoutes = new Elysia({ name: "policies" })
       return {};
     },
   )
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/stacks", async (ctx: ParamCtx) =>
+    changeStackScope(ctx, false, false),
+  )
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/stacks", async (ctx: ParamCtx) =>
+    changeStackScope(ctx, false, true),
+  )
+  .post("/api/v2/policy-sets/:policy_set_id/relationships/stack-exclusions", async (ctx: ParamCtx) =>
+    changeStackScope(ctx, true, false),
+  )
+  .delete("/api/v2/policy-sets/:policy_set_id/relationships/stack-exclusions", async (ctx: ParamCtx) =>
+    changeStackScope(ctx, true, true),
+  )
   .post(
     "/api/v2/policy-sets/:policy_set_id/relationships/projects",
     async ({
@@ -1895,6 +2180,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (await hasTagPolicyScope(policySetId)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Remove tag selectors before adding explicit associations" }] };
       }
       const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
       const projItems = payload["data"];
@@ -1979,6 +2268,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (await hasTagPolicyScope(policySetId)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Remove tag selectors before adding explicit associations" }] };
       }
       const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
       const wsItems = payload["data"];
@@ -2066,6 +2359,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      if (await hasTagPolicyScope(policySetId)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Remove tag selectors before adding explicit associations" }] };
       }
       const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
       const projItems = payload["data"];
@@ -2207,6 +2504,17 @@ export const policyRoutes = new Elysia({ name: "policies" })
       if (!Array.isArray(items)) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      }
+      if (
+        items.length > 0 &&
+        (await db.query.policySetStacks.findFirst({ where: eq(policySetStacks.policySetId, policySetId) }))
+      ) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Remove explicit stack associations before adding tag selectors" }] };
+      }
+      if (items.length > 0 && (await hasExplicitPolicyScope(policySetId))) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Remove explicit associations before adding tag selectors" }] };
       }
       for (const item of items) {
         if (!(await upsertTagSelector(policySetId, item))) {
@@ -2602,6 +2910,18 @@ export const policyRoutes = new Elysia({ name: "policies" })
       ) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      const policySet =
+        pc.policySetId === null
+          ? undefined
+          : await db.query.policySets.findFirst({
+              where: eq(policySets.id, pc.policySetId),
+            });
+      if (policySet?.kind === "tfpolicy") {
+        (set as { status: number }).status = 409;
+        return {
+          errors: [{ status: "409", title: "Conflict", detail: "Terraform policy checks cannot be overridden" }],
+        };
       }
       await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, checkId));
       return { data: { id: pc.id, type: "policy-checks", attributes: { status: "overridden", result: pc.result } } };

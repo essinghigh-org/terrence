@@ -1,3 +1,4 @@
+import { resolveWorkspacePolicySetIds } from "./lib/policy-set-scope";
 import { runConfigurationTrusted } from "./lib/run-trust";
 import { readConfinedSavedPlan, writeConfinedSavedPlan } from "./lib/saved-plan-files";
 import { integerSetting } from "./lib/runtime-config";
@@ -21,9 +22,6 @@ import {
   variableSetProjects,
   variableSetVariables,
   policySets,
-  policySetWorkspaces,
-  policySetProjects,
-  policySetExclusions,
   policySetParameters,
   policies,
   policyChecks,
@@ -4868,31 +4866,11 @@ type PlanPolicySets = {
   policySetsById: ReadonlyMap<string, Readonly<{ kind: string }>>;
   parametersBySet: ReadonlyMap<string, (typeof policySetParameters.$inferSelect)[]>;
   allSetIds: string[];
+  unsupportedSets: Readonly<{ id: string; kind: string }>[];
 };
 
 async function resolvePlanPolicySets(workspaceId: string, orgId: string): Promise<PlanPolicySets | null> {
-  const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId),
-    columns: { projectId: true },
-  });
-  const [attached, projectAttached, orgPolicySets, exclusions] = await Promise.all([
-    db.query.policySetWorkspaces.findMany({ where: eq(policySetWorkspaces.workspaceId, workspaceId) }),
-    workspace?.projectId === null || workspace?.projectId === undefined
-      ? Promise.resolve([])
-      : db.query.policySetProjects.findMany({ where: eq(policySetProjects.projectId, workspace.projectId) }),
-    db.query.policySets.findMany({ where: and(eq(policySets.orgId, orgId), eq(policySets.global, true)) }),
-    db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.workspaceId, workspaceId) }),
-  ]);
-  const excludedSetIds = new Set(
-    exclusions.map((exclusion: Readonly<{ policySetId: string }>): string => exclusion.policySetId),
-  );
-  const allSetIds = [
-    ...new Set([
-      ...attached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
-      ...projectAttached.map((link: Readonly<{ policySetId: string }>): string => link.policySetId),
-      ...orgPolicySets.map((policySet: Readonly<{ id: string }>): string => policySet.id),
-    ]),
-  ].filter((policySetId: string): boolean => !excludedSetIds.has(policySetId));
+  const allSetIds = await resolveWorkspacePolicySetIds(db, workspaceId, orgId);
   if (allSetIds.length === 0) return null;
 
   const [allPolicies, effectivePolicySets, setParameters] = await Promise.all([
@@ -4900,7 +4878,10 @@ async function resolvePlanPolicySets(workspaceId: string, orgId: string): Promis
     db.query.policySets.findMany({ where: inArray(policySets.id, allSetIds) }),
     db.query.policySetParameters.findMany({ where: inArray(policySetParameters.policySetId, allSetIds) }),
   ]);
-  if (allPolicies.length === 0) return null;
+  const unsupportedSets = effectivePolicySets.filter(
+    (policySet): boolean => !["opa", "sentinel"].includes(policySet.kind),
+  );
+  if (allPolicies.length === 0 && unsupportedSets.length === 0) return null;
   const policySetsById = new Map(
     effectivePolicySets.map(
       (policySet: Readonly<{ id: string; kind: string }>): readonly [string, Readonly<{ kind: string }>] => [
@@ -4915,7 +4896,7 @@ async function resolvePlanPolicySets(workspaceId: string, orgId: string): Promis
     current.push(parameter);
     parametersBySet.set(parameter.policySetId, current);
   }
-  return { allPolicies, policySetsById, parametersBySet, allSetIds };
+  return { allPolicies, policySetsById, parametersBySet, allSetIds, unsupportedSets };
 }
 
 async function failClosedPolicyChecks(
@@ -5375,6 +5356,23 @@ export async function runPolicyChecks(
   const resolved = await resolvePlanPolicySets(workspaceId, orgId);
   if (resolved === null) return { proceed: true, hardFailed: false, softFailed: false };
   const { allPolicies, policySetsById, parametersBySet, allSetIds } = resolved;
+  // A version-managed policy set may have no individual Policy rows. Never
+  // interpret an unimplemented engine as an empty, successfully checked set.
+  if (resolved.unsupportedSets.length > 0) {
+    for (const policySet of resolved.unsupportedSets) {
+      const error = `Policy set kind '${policySet.kind}' execution is not supported; refusing to apply`;
+      await db.insert(policyChecks).values({
+        id: newResourceId("pchk"),
+        runId,
+        policySetId: policySet.id,
+        status: "unreachable",
+        result: { error },
+        createdAt: Date.now(),
+      });
+      await writeLog(runId, "plan", `[terrence ERROR] ${error}`);
+    }
+    return { proceed: false, hardFailed: true, softFailed: false };
+  }
 
   const planTimeoutMs = await executionTimeoutMs("plan");
   const policyTimeoutMs = Math.min(planTimeoutMs, POLICY_EVALUATION_TIMEOUT_MS);

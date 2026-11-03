@@ -1,9 +1,11 @@
+import { bannersRoutes } from "./banners";
 import { Elysia } from "elysia";
 import { usersRoutes } from "./users";
 import { orgsRoutes } from "./orgs";
 import { workspacesRoutes } from "./workspaces";
 import { runsRoutes } from "./runs";
 import { versionsRoutes } from "./versions";
+import { samlCertificateRoutes } from "./saml-certificates";
 import { samlRoutes } from "./saml";
 import { settingsRoutes } from "./settings";
 import { operationsRoutes } from "./operations";
@@ -30,12 +32,14 @@ export const adminRoutes = new Elysia({ name: "admin" })
     set.status = 404;
     return { errors: [{ status: "404", title: "Not Found" }] };
   })
+  .use(bannersRoutes)
   .use(usersRoutes)
   .use(orgsRoutes)
   .use(workspacesRoutes)
   .use(runsRoutes)
   .use(versionsRoutes)
   .use(samlRoutes)
+  .use(samlCertificateRoutes)
   .use(settingsRoutes)
   .use(operationsRoutes)
   .use(settingsmoreRoutes)

@@ -59,6 +59,11 @@ export const adminTerraformVersions: typeof sqliteSchema.adminTerraformVersions 
         dbNameOf(sqliteSchema.adminTerraformVersions)
       ] as unknown as typeof sqliteSchema.adminTerraformVersions);
 
+export const adminTfpolicyVersions: typeof sqliteSchema.adminTfpolicyVersions =
+  pgTables === null
+    ? sqliteSchema.adminTfpolicyVersions
+    : (pgTables[dbNameOf(sqliteSchema.adminTfpolicyVersions)] as unknown as typeof sqliteSchema.adminTfpolicyVersions);
+
 export const agentForwardedRequests: typeof sqliteSchema.agentForwardedRequests =
   pgTables === null
     ? sqliteSchema.agentForwardedRequests
@@ -453,6 +458,11 @@ export const policySetProjects: typeof sqliteSchema.policySetProjects =
   pgTables === null
     ? sqliteSchema.policySetProjects
     : (pgTables[dbNameOf(sqliteSchema.policySetProjects)] as unknown as typeof sqliteSchema.policySetProjects);
+
+export const policySetStacks: typeof sqliteSchema.policySetStacks =
+  pgTables === null
+    ? sqliteSchema.policySetStacks
+    : (pgTables[dbNameOf(sqliteSchema.policySetStacks)] as unknown as typeof sqliteSchema.policySetStacks);
 
 export const policySetTagSelectors: typeof sqliteSchema.policySetTagSelectors =
   pgTables === null

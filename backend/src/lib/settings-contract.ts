@@ -13,7 +13,8 @@ type Rule = Readonly<{
     | "ascii"
     | "url"
     | "windows"
-    | "cidrs";
+    | "cidrs"
+    | "avatar-sources";
   nullable?: boolean;
   min?: number;
   max?: number;
@@ -110,6 +111,13 @@ export const settingsContract: Readonly<Record<string, Readonly<Record<string, R
     "from-number": privateString,
   },
   customization: {
+    "support-url-address": privateString,
+    "internal-support-url": privateString,
+    "internal-documentation-url": privateString,
+    "internal-tutorials-url": privateString,
+    error: privateString,
+    "new-user": privateString,
+    "avatar-sources": { kind: "avatar-sources" },
     "support-email-address": privateString,
     "login-help": privateString,
     footer: privateString,
@@ -293,9 +301,26 @@ function validCidrs(value: unknown): boolean {
   );
 }
 
+function validAvatarSources(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= 1 &&
+    value.every((item: unknown): boolean => {
+      if (item === null || typeof item !== "object") return false;
+      const source = item as Record<string, unknown>;
+      return source["source"] === "gravatar" && typeof source["enabled"] === "boolean";
+    })
+  );
+}
+
 function matchesRule(value: unknown, rule: Rule): boolean {
-  if (value === null) return rule.nullable === true;
+  return value === null ? rule.nullable === true : matchesNonNullRule(value, rule);
+}
+
+function matchesNonNullRule(value: unknown, rule: Rule): boolean {
   switch (rule.kind) {
+    case "avatar-sources":
+      return validAvatarSources(value);
     case "url":
       return validHttpUrl(value, rule);
     case "cidrs":

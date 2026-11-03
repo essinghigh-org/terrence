@@ -233,6 +233,10 @@
     "platform": [
       "core",
       "internal"
+    ],
+    "registry-artifact-tags": [
+      "core",
+      "provider"
     ]
   }
 }

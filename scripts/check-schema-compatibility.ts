@@ -407,6 +407,25 @@ function trackNullableExpansion(
   if (altered !== null) expansions.delete(`${table}.${altered}`);
 }
 
+/** Constraints on a table created in this migration cannot narrow old writers.
+ * Do not accept IF NOT EXISTS: that table may already contain old-writer data.
+ * Restrictive foreign keys can still break deletes in an existing parent, so
+ * only cascading deletes follow the same additive treatment as our new tables. */
+function additiveTableConstraint(statement: string, finding: Finding, newTables: StringMembership): boolean {
+  if (finding.label === "add unique index") {
+    const table = identifier(/\bON\s+(?:ONLY\s+)?(?:"?public"?\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?/i.exec(statement));
+    return table !== null && newTables.has(table);
+  }
+  const table = tableFromAlter(statement);
+  if (table === null || !newTables.has(table)) return false;
+  if (finding.label === "add foreign-key constraint") return /\bON\s+DELETE\s+CASCADE\b/i.test(statement);
+  return ["add unique constraint", "add check constraint", "add primary-key constraint"].includes(finding.label);
+}
+
+function newlyCreatedTable(statement: string): string | null {
+  return identifier(/^CREATE\s+TABLE\s+(?:"?public"?\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\(/i.exec(statement));
+}
+
 type StringMembership = Readonly<{ has: (value: string) => boolean }>;
 
 async function scanMigrations(
@@ -425,12 +444,16 @@ async function scanMigrations(
     // Exempt only columns introduced by this very migration. A column from
     // an earlier release may already be written by supported replicas.
     const nullableExpansions = new Set<string>();
+    const newTables = new Set<string>();
     const stem = migrationStem(file);
     if (register.enforcedFrom !== "" && stem.localeCompare(register.enforcedFrom) <= 0) continue;
     enforced += 1;
     for (const statement of statements(await readFile(join(MIGRATIONS_DIR, file), "utf8"))) {
+      const createdTable = newlyCreatedTable(statement);
+      if (createdTable !== null) newTables.add(createdTable);
       trackNullableExpansion(statement, nullableExpansions);
       for (const finding of detectContractions(statement)) {
+        if (additiveTableConstraint(statement, finding, newTables)) continue;
         if (finding.label === "add foreign-key constraint" && additiveForeignKey(statement, nullableExpansions))
           continue;
         const key = `${stem}|${finding.surface}`;

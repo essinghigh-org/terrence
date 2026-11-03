@@ -223,6 +223,170 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     await db.delete(oauthClients).where(eq(oauthClients.id, tokenClientId));
   });
 
+  it("validates all policy attachments before creating or mutating a set", async () => {
+    const sourceId = `source-${suffix}`;
+    const targetId = `target-${suffix}`;
+    const tfpolicyId = `tfpolicy-${suffix}`;
+    const sentinelId = `sentinel-${suffix}`;
+    const opaId = `opa-${suffix}`;
+    const otherOrgId = `other-org-${suffix}`;
+    const foreignId = `foreign-policy-${suffix}`;
+    await db.insert(organizations).values({ id: otherOrgId, name: otherOrgId });
+    await db.insert(policySets).values([
+      { id: sourceId, orgId, name: sourceId, kind: "sentinel" },
+      { id: targetId, orgId, name: targetId, kind: "sentinel" },
+      { id: tfpolicyId, orgId, name: tfpolicyId, kind: "tfpolicy" },
+    ]);
+    await db.insert(policies).values([
+      { id: sentinelId, orgId, name: sentinelId, kind: "sentinel", policySetId: sourceId },
+      { id: opaId, orgId, name: opaId, kind: "opa" },
+      { id: foreignId, orgId: otherOrgId, name: foreignId, kind: "sentinel" },
+    ]);
+    const ref = (id: string) => ({ id, type: "policies" });
+    try {
+      const invalidBatches = [
+        [ref(sentinelId), ref(opaId)],
+        [ref(sentinelId), ref("missing-policy")],
+        [ref(sentinelId), ref(foreignId)],
+        [ref(sentinelId), { id: opaId, type: "workspaces" }],
+        [ref(sentinelId), null],
+      ];
+      for (const refs of invalidBatches) {
+        const attached = await request(`/api/v2/policy-sets/${targetId}/relationships/policies`, "POST", {
+          data: refs,
+        });
+        expect(attached.status).toBe(422);
+        const before = await db.query.policySets.findMany({ where: eq(policySets.orgId, orgId) });
+        const created = await request(`/api/v2/organizations/${orgName}/policy-sets`, "POST", {
+          data: {
+            type: "policy-sets",
+            attributes: { name: "Invalid attachment", kind: "sentinel" },
+            relationships: { policies: { data: refs } },
+          },
+        });
+        expect(created.status).toBe(422);
+        expect((await db.query.policySets.findMany({ where: eq(policySets.orgId, orgId) })).length).toBe(before.length);
+        expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBe(sourceId);
+        expect((await db.query.policies.findFirst({ where: eq(policies.id, opaId) }))?.policySetId).toBeNull();
+      }
+      for (const kindId of [sentinelId, opaId]) {
+        expect(
+          (await request(`/api/v2/policy-sets/${tfpolicyId}/relationships/policies`, "POST", { data: [ref(kindId)] }))
+            .status,
+        ).toBe(422);
+        expect(
+          (
+            await request(`/api/v2/organizations/${orgName}/policy-sets`, "POST", {
+              data: {
+                attributes: { name: "Invalid tfpolicy attachment", kind: "tfpolicy" },
+                relationships: { policies: { data: [ref(kindId)] } },
+              },
+            })
+          ).status,
+        ).toBe(422);
+      }
+      expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBe(sourceId);
+      expect(
+        (await request(`/api/v2/policy-sets/${targetId}/relationships/policies`, "POST", { data: [ref(sentinelId)] }))
+          .status,
+      ).toBe(204);
+      expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBe(targetId);
+      for (const body of [{}, { data: null }, { data: [null] }, { data: [{ id: sentinelId, type: "workspaces" }] }]) {
+        expect((await request(`/api/v2/policy-sets/${targetId}/relationships/policies`, "DELETE", body)).status).toBe(
+          422,
+        );
+        expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBe(targetId);
+      }
+      expect(
+        (await request(`/api/v2/policy-sets/${targetId}/relationships/policies`, "DELETE", { data: [] })).status,
+      ).toBe(204);
+      expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBe(targetId);
+      // A standard JSON:API removal for an unrelated policy must not detach all.
+      expect(
+        (await request(`/api/v2/policy-sets/${targetId}/relationships/policies`, "DELETE", { data: [ref(opaId)] }))
+          .status,
+      ).toBe(204);
+      expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBe(targetId);
+      expect(
+        (await request(`/api/v2/policy-sets/${targetId}/relationships/policies`, "DELETE", { data: [ref(sentinelId)] }))
+          .status,
+      ).toBe(204);
+      expect((await db.query.policies.findFirst({ where: eq(policies.id, sentinelId) }))?.policySetId).toBeNull();
+      const created = await request(`/api/v2/organizations/${orgName}/policy-sets`, "POST", {
+        data: {
+          attributes: { name: "Valid initial attachment", kind: "opa" },
+          relationships: { policies: { data: [ref(opaId)] } },
+        },
+      });
+      expect(created.status).toBe(201);
+      const createdId = (await created.json()).data.id;
+      expect((await db.query.policies.findFirst({ where: eq(policies.id, opaId) }))?.policySetId).toBe(createdId);
+      await request(`/api/v2/policy-sets/${createdId}`, "DELETE");
+    } finally {
+      await db.delete(policies).where(eq(policies.id, sentinelId));
+      await db.delete(policies).where(eq(policies.id, opaId));
+      await db.delete(policies).where(eq(policies.id, foreignId));
+      await db.delete(organizations).where(eq(organizations.id, otherOrgId));
+      for (const id of [sourceId, targetId, tfpolicyId]) await db.delete(policySets).where(eq(policySets.id, id));
+    }
+  });
+
+  it("round-trips tfpolicy policy sets without falling back to Sentinel semantics", async () => {
+    const created = await request(`/api/v2/organizations/${orgName}/policy-sets`, "POST", {
+      data: { type: "policy-sets", attributes: { name: "Terraform policies", kind: "tfpolicy" } },
+    });
+    expect(created.status).toBe(201);
+    const initial = (await created.json()).data;
+    const id = initial.id;
+    expect(initial.attributes).toMatchObject({ kind: "tfpolicy", "policy-tool-version": "latest" });
+    try {
+      const updated = await request(`/api/v2/policy-sets/${id}`, "PATCH", {
+        data: {
+          type: "policy-sets",
+          attributes: { kind: "tfpolicy", "policy-tool-version": "managed", description: "Updated" },
+        },
+      });
+      expect(updated.status).toBe(200);
+      const read = await request(`/api/v2/policy-sets/${id}`);
+      expect((await read.json()).data.attributes).toMatchObject({
+        kind: "tfpolicy",
+        "policy-tool-version": "managed",
+        description: "Updated",
+      });
+      const listed = await request(`/api/v2/organizations/${orgName}/policy-sets?filter[kind]=tfpolicy`);
+      expect((await listed.json()).data.map((item: { id: string }) => item.id)).toContain(id);
+      for (const attribute of ["agent-enabled", "overridable"]) {
+        const invalid = await request(`/api/v2/policy-sets/${id}`, "PATCH", {
+          data: { attributes: { [attribute]: false } },
+        });
+        expect(invalid.status).toBe(422);
+        const invalidCreate = await request(`/api/v2/organizations/${orgName}/policy-sets`, "POST", {
+          data: { attributes: { name: "Invalid tfpolicy", kind: "tfpolicy", [attribute]: false } },
+        });
+        expect(invalidCreate.status).toBe(422);
+      }
+      const child = await request(`/api/v2/policy-sets/${id}/policies`, "POST", {
+        data: { type: "policies", attributes: { name: "Must not become Sentinel" } },
+      });
+      expect(child.status).toBe(422);
+      const runId = `run-tfpolicy-${suffix}`;
+      const checkId = `check-tfpolicy-${suffix}`;
+      await db.insert(runs).values({ id: runId, workspaceId, status: "errored", createdAt: Date.now() });
+      await db.insert(policyChecks).values({ id: checkId, runId, policySetId: id, status: "unreachable" });
+      try {
+        expect((await request(`/api/v2/policy-checks/${checkId}/actions/override`, "POST")).status).toBe(409);
+        expect((await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) }))?.status).toBe(
+          "unreachable",
+        );
+      } finally {
+        await db.delete(runs).where(eq(runs.id, runId));
+      }
+    } finally {
+      expect((await request(`/api/v2/policy-sets/${id}`, "DELETE")).status).toBe(204);
+    }
+    expect((await request(`/api/v2/policy-sets/${id}`)).status).toBe(404);
+  });
+
   it("creates, lists, updates policy sets, policies, and policy checks", async () => {
     // 1. Create policy set
     const createPsRes = await request(`/api/v2/organizations/${orgName}/policy-sets`, "POST", {

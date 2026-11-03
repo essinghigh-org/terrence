@@ -147,6 +147,21 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 // land on any replica in a multi-instance deployment. The in-memory Map this
 // supersedes was replica-local.
 
+// Keep the established storage/adapter names while honoring go-tfe's wire enum.
+const PROVIDER_STORAGE_NAMES: Record<string, string> = {
+  gitlab_hosted: "gitlab",
+  bitbucket_hosted: "bitbucket",
+  gitlab_community_edition: "gitlab_ce",
+  gitlab_enterprise_edition: "gitlab_ee",
+  ado_server: "azure_devops_server",
+};
+function storedProvider(provider: string): string {
+  return PROVIDER_STORAGE_NAMES[provider] ?? provider;
+}
+function wireProvider(provider: string): string {
+  return Object.entries(PROVIDER_STORAGE_NAMES).find(([, stored]) => stored === provider)?.[0] ?? provider;
+}
+
 const SERVICE_PROVIDERS = new Set([
   "github",
   "gitlab",
@@ -156,6 +171,8 @@ const SERVICE_PROVIDERS = new Set([
   "gitlab_ee",
   "azure_devops_server",
   "bitbucket_data_center",
+  "bitbucket_server",
+  "ado_services",
 ]);
 
 function stringQuery(query: Readonly<Record<string, unknown>> | undefined, name: string): string {
@@ -587,7 +604,8 @@ async function oauthClientResource(
     type: "oauth-clients",
     attributes: {
       name: oc.name,
-      "service-provider": oc.serviceProvider,
+      "service-provider": wireProvider(oc.serviceProvider),
+      "ado-org-name": oc.adoOrgName,
       "service-provider-display-name": serviceProviderDisplayName(oc.serviceProvider),
       "api-url": oc.apiUrl,
       "http-url": oc.httpUrl,
@@ -711,9 +729,17 @@ function applyOAuthClientFieldUpdates(
   }
   if (typeof attributes["name"] === "string") updates.name = attributes["name"];
   if (attributes["service-provider"] !== undefined) {
-    if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"]))
+    if (
+      typeof attributes["service-provider"] !== "string" ||
+      !SERVICE_PROVIDERS.has(storedProvider(attributes["service-provider"]))
+    )
       return unprocessable(set, "Unsupported service provider");
-    updates.serviceProvider = attributes["service-provider"];
+    updates.serviceProvider = storedProvider(attributes["service-provider"]);
+  }
+  if (attributes["ado-org-name"] !== undefined) {
+    if (attributes["ado-org-name"] !== null && typeof attributes["ado-org-name"] !== "string")
+      return unprocessable(set, "ado-org-name must be a string or null");
+    updates.adoOrgName = attributes["ado-org-name"];
   }
   return null;
 }
@@ -779,7 +805,8 @@ async function applyOAuthClientCredentialUpdates(
     updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
   const endpointOriginChanged =
     configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl) || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
-  const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
+  const adoOrgChanged = updates.adoOrgName !== undefined && updates.adoOrgName !== oc.adoOrgName;
+  const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged || adoOrgChanged;
   if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
   return { credentialsInvalidated };
 }
@@ -793,7 +820,7 @@ function validateOAuthClientCreate(
   const rawServiceProvider = attributes["service-provider"];
   if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string")
     return { error: unprocessable(set, "Unsupported service provider") };
-  const serviceProvider = rawServiceProvider ?? "github";
+  const serviceProvider = storedProvider(rawServiceProvider ?? "github");
   if (!SERVICE_PROVIDERS.has(serviceProvider)) return { error: unprocessable(set, "Unsupported service provider") };
   const urlError = configuredVcsUrlError(
     normalizedConfiguredUrl(attributes["api-url"]) ?? null,
@@ -803,6 +830,12 @@ function validateOAuthClientCreate(
   if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") {
     return { error: unprocessable(set, "organization-scoped must be a boolean") };
   }
+  if (
+    attributes["ado-org-name"] !== undefined &&
+    attributes["ado-org-name"] !== null &&
+    typeof attributes["ado-org-name"] !== "string"
+  )
+    return { error: unprocessable(set, "ado-org-name must be a string or null") };
   return { name, serviceProvider };
 }
 
@@ -1151,6 +1184,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
           agentPoolId,
           name,
           serviceProvider,
+          adoOrgName: typeof attributes["ado-org-name"] === "string" ? attributes["ado-org-name"] : null,
           organizationScoped,
           apiUrl,
           httpUrl,

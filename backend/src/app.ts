@@ -127,6 +127,7 @@ import { workloadIdentityRoutes } from "./routes/workload-identity";
 import { credentialDoctorRoutes } from "./routes/credential-doctor";
 import { providerIconRoutes } from "./routes/provider-icons";
 import { actionsRoutes } from "./routes/actions";
+import { registryArtifactTagsRoutes } from "./routes/registry-artifact-tags";
 import { registryComponentsRoutes } from "./routes/registry-components";
 import { platformRoutes } from "./routes/platform";
 import { availableVersions } from "./binaryManager";
@@ -1471,6 +1472,7 @@ export const app = new Elysia()
   .use(docsRoutes)
   .use(actionsRoutes)
   .use(registryComponentsRoutes)
+  .use(registryArtifactTagsRoutes)
   .use(platformRoutes);
 
 // The System API has its own listener in production; privileged diagnostics

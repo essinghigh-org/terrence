@@ -357,7 +357,10 @@ function checkSamlFormats(fields: SamlFieldValues): Readonly<{ ok: true }> | Rea
   return { ok: true };
 }
 
-function checkSamlRequirements(fields: SamlFieldValues): Readonly<{ ok: true }> | Readonly<{ error: string }> {
+function checkSamlRequirements(
+  fields: SamlFieldValues,
+  hasOtherTrustedCertificate: boolean,
+): Readonly<{ ok: true }> | Readonly<{ error: string }> {
   const {
     idpCert,
     idpEntityId,
@@ -374,14 +377,15 @@ function checkSamlRequirements(fields: SamlFieldValues): Readonly<{ ok: true }> 
   }
   if (
     enabled &&
-    (idpCert === null ||
-      idpCert === "" ||
+    ((!hasOtherTrustedCertificate && (idpCert === null || idpCert === "")) ||
       idpEntityId === null ||
       idpEntityId === "" ||
       ssoEndpointUrl === null ||
       ssoEndpointUrl === "")
   ) {
-    return { error: "idp-cert, idp-entity-id, and sso-endpoint-url are required when SAML is enabled" };
+    return {
+      error: "A trusted IdP certificate, idp-entity-id, and sso-endpoint-url are required when SAML is enabled",
+    };
   }
   return { ok: true };
 }
@@ -389,13 +393,14 @@ function checkSamlRequirements(fields: SamlFieldValues): Readonly<{ ok: true }> 
 export function samlInput(
   attributes: Readonly<Record<string, unknown>>,
   current: SamlSettings,
+  hasOtherTrustedCertificate = false,
 ): Readonly<{ values: typeof samlSettings.$inferInsert }> | Readonly<{ error: string }> {
   const types = checkSamlTypes(attributes);
   if ("error" in types) return types;
   const fields = resolveSamlFields(attributes, current);
   const formats = checkSamlFormats(fields);
   if ("error" in formats) return formats;
-  const requirements = checkSamlRequirements(fields);
+  const requirements = checkSamlRequirements(fields, hasOtherTrustedCertificate);
   if ("error" in requirements) return requirements;
   const timeout = attributes["sso-api-token-session-timeout"];
   return {

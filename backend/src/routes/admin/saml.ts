@@ -1,3 +1,4 @@
+import { samlCertificateCollection, storedSamlCertificates } from "../../lib/saml-certificates";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
@@ -103,7 +104,11 @@ export const samlRoutes = new Elysia({ name: "admin-saml" })
         attributes["link-by-email"] === undefined
           ? currentLinkSettings["link-by-email"] === true
           : attributes["link-by-email"] === true;
-      const input = samlInput(attributes, current);
+      const input = samlInput(
+        attributes,
+        current,
+        Boolean(current.oldIdpCert) || (await storedSamlCertificates()).some((c) => !c.legacy),
+      );
       if ("error" in input) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
@@ -131,12 +136,26 @@ export const samlRoutes = new Elysia({ name: "admin-saml" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      await currentSamlSettings();
-      await db
-        .update(samlSettings)
-        .set({ oldIdpCert: null, updatedAt: Date.now() })
-        .where(eq(samlSettings.id, SAML_SETTINGS_ID));
-      const [settings, linkSettings] = await Promise.all([currentSamlSettings(), getSettings("saml")]);
-      return { data: samlSettingsResource(settings, request, linkSettings["link-by-email"] === true) };
+      return withAuthSettingsLock(async () => {
+        const current = await currentSamlSettings();
+        if (current.enabled && current.oldIdpCert && (await samlCertificateCollection(current)).length <= 1) {
+          (set as { status: number }).status = 422;
+          return {
+            errors: [
+              {
+                status: "422",
+                title: "Unprocessable Entity",
+                detail: "Cannot remove the last trusted certificate while SAML is enabled",
+              },
+            ],
+          };
+        }
+        await db
+          .update(samlSettings)
+          .set({ oldIdpCert: null, updatedAt: Date.now() })
+          .where(eq(samlSettings.id, SAML_SETTINGS_ID));
+        const [settings, linkSettings] = await Promise.all([currentSamlSettings(), getSettings("saml")]);
+        return { data: samlSettingsResource(settings, request, linkSettings["link-by-email"] === true) };
+      });
     },
   );

@@ -1,3 +1,4 @@
+import { trustedSamlCertificates } from "../lib/saml-certificates";
 // SAML 2.0 service provider endpoints: SP metadata, SP-initiated SSO redirect,
 // the ACS assertion consumer, and SLO logout. The IdP configuration lives in
 // the saml_settings table (admin API + dashboard).
@@ -804,9 +805,7 @@ async function handleIdpInitiatedLogout(
   try {
     const { expectedSloUrl, expectedLogoutEndpointUrl, entityId } = resolveLogoutUrls(request);
     const xml = decodeLogoutXml(rawRequest);
-    const certificates = [settings.idpCert, settings.oldIdpCert].filter(
-      (cert): cert is string => typeof cert === "string" && cert !== "",
-    );
+    const certificates = await trustedSamlCertificates(settings);
     const logout = await verifyLogoutRequestSignatures({ request, xml, rawRequest, certificates });
     await assertLogoutFreshness(logout.issueInstant);
     await assertLogoutAudience(logout, settings, expectedSloUrl, expectedLogoutEndpointUrl);
@@ -907,9 +906,7 @@ async function verifySamlAssertionSignature(
   xml: string,
   settings: SamlRow,
 ): Promise<Extract<SignedAssertionResult, { valid: true }>> {
-  const certificates = [settings.idpCert, settings.oldIdpCert].filter(
-    (cert): cert is string => typeof cert === "string" && cert !== "",
-  );
+  const certificates = await trustedSamlCertificates(settings);
   const signature = signedAssertionResult(xml, certificates);
   if (!signature.valid) {
     await auditLog("sso-failure", "saml", null, null, null, { reason: signature.error });

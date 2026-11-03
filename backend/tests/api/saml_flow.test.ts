@@ -228,6 +228,35 @@ describe("SAML SSO flow", () => {
     }
   });
 
+  test("authenticates using a managed IdP certificate without a legacy primary", async () => {
+    const certificatePath = "/api/v2/admin/saml-settings/idp-certificates";
+    // Remove legacy trust first, then install the certificate using the provider API.
+    await db.update(samlSettings).set({ idpCert: null, oldIdpCert: null }).where(eq(samlSettings.id, "saml"));
+    let certificateId: string | undefined;
+    try {
+      const created = await request("POST", certificatePath, adminToken, {
+        data: { type: "saml-idp-certificates", attributes: { "display-name": "managed login", cert: IDP_CERT } },
+      });
+      expect(created.status).toBe(201);
+      certificateId = (await created.json()).data.id;
+      const username = `managed-saml-${suffix}`;
+      const response = await validAcs({ username, email: `${username}@example.com` });
+      expect(response.status).toBe(200);
+      const logout = await app.handle(
+        new Request("https://terrence.test/users/saml/logout", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ SAMLRequest: buildSignedLogoutRequest(username) }).toString(),
+        }),
+      );
+      expect(logout.status).toBe(302);
+    } finally {
+      await db.update(samlSettings).set({ idpCert: IDP_CERT, oldIdpCert: null }).where(eq(samlSettings.id, "saml"));
+      if (certificateId)
+        expect((await request("DELETE", `${certificatePath}/${certificateId}`, adminToken)).status).toBe(204);
+    }
+  });
+
   test("rejects an assertion delivered to a browser that did not start the flow", async () => {
     const firstAuth = await app.handle(new Request("https://terrence.test/users/saml/auth"));
     const firstLocation = new URL(firstAuth.headers.get("Location") ?? "");

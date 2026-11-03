@@ -26,6 +26,7 @@ export const adminOpaVersions = pg[dbNameOf(sqliteSchema.adminOpaVersions)];
 export const adminSentinelVersions = pg[dbNameOf(sqliteSchema.adminSentinelVersions)];
 export const adminSettings = pg[dbNameOf(sqliteSchema.adminSettings)];
 export const adminTerraformVersions = pg[dbNameOf(sqliteSchema.adminTerraformVersions)];
+export const adminTfpolicyVersions = pg[dbNameOf(sqliteSchema.adminTfpolicyVersions)];
 export const agentForwardedRequests = pg[dbNameOf(sqliteSchema.agentForwardedRequests)];
 export const agentJobs = pg[dbNameOf(sqliteSchema.agentJobs)];
 export const agentPoolAllowedProjects = pg[dbNameOf(sqliteSchema.agentPoolAllowedProjects)];

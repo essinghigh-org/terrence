@@ -1,3 +1,4 @@
+import { exerciseStackPolicyProvider } from "./provider-stack-policy-fixture";
 import { describe, expect, test, beforeAll } from "bun:test";
 import {
   existsSync,
@@ -9,6 +10,7 @@ import {
   readdirSync,
   statSync,
   readlinkSync,
+  readFileSync,
 } from "node:fs";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -104,10 +106,12 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool.pool",
   "tfe_agent_token.agent_tok",
   "tfe_oauth_client.client",
+  "tfe_oauth_client.ado",
   "tfe_project_oauth_client.proj_oc",
   "tfe_policy.policy",
   "tfe_sentinel_policy.spolicy",
   "tfe_policy_set.ps",
+  "tfe_policy_set.tag_scoped",
   "tfe_workspace_policy_set.ws_ps",
   "tfe_project_policy_set.project_ps",
   "tfe_organization_run_task.task",
@@ -126,6 +130,10 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_sentinel_version.sentver",
   "tfe_opa_version.opaver",
   "tfe_admin_smtp_settings.smtp",
+  "tfe_admin_general_settings.general",
+  "tfe_admin_customization_settings.customization",
+  "tfe_admin_banner.banner",
+  "tfe_tfpolicy_version.tfpolicy",
   "tfe_registry_provider.regprov",
   "tfe_organization_run_task_global_settings.rgs",
   "tfe_project_settings.proj_settings",
@@ -135,6 +143,8 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_agent_pool_excluded_workspaces.apexw",
   "tfe_org_max_token_ttl_policy.ottl",
   "tfe_registry_module.regmod",
+  "tfe_registry_artifact_tag.module_tags",
+  "tfe_registry_artifact_tag.provider_tags",
   "tfe_test_variable.test_var",
   "tfe_registry_gpg_key.gpg_key",
   "tfe_aws_oidc_configuration.aws_oidc",
@@ -144,6 +154,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_hyok_configuration.hyok",
   "tfe_workspace_hyok_enabled.ws_hyok",
   "tfe_saml_settings.saml",
+  "tfe_saml_idp_certificate.managed",
   "tfe_scim_settings.scim",
   "tfe_scim_token.scim_tok",
 ];
@@ -263,7 +274,11 @@ async function startBackend(workDir: string, engine: "terraform" | "tofu"): Prom
   }
 }
 
-async function startTlsProxy(backendPort: number, workDir: string): Promise<Awaited<ReturnType<typeof Bun.serve>>> {
+async function startTlsProxy(
+  backendPort: number,
+  workDir: string,
+  compatibilityVersion?: Readonly<{ value: string }>,
+): Promise<Awaited<ReturnType<typeof Bun.serve>>> {
   const port = await freeOperationalTestPort();
   const proc = Bun.spawn(
     [
@@ -310,6 +325,13 @@ async function startTlsProxy(backendPort: number, workDir: string): Promise<Awai
         .then((res) => {
           if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
             console.log(`[proxy] -> ${res.status} ${req.method} ${req.url}`);
+          }
+          if (compatibilityVersion !== undefined) {
+            const responseHeaders = new Headers(res.headers);
+            responseHeaders.set("TFE-Version", compatibilityVersion.value);
+            responseHeaders.set("X-TFE-Version", compatibilityVersion.value);
+            responseHeaders.set("X-TFE-Current-Version", compatibilityVersion.value);
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers: responseHeaders });
           }
           return res;
         })
@@ -641,6 +663,124 @@ provider "tfe" {
 `;
 }
 
+// Separate from main.tf: other family transition probes regenerate main.tf.
+// These resources require the v0.83+ provider and TFE API compatibility v2.1+.
+function adminTf(suffix: string, phase: "baseline" | "changed" | "cleared" = "baseline"): string {
+  const changed = phase === "changed";
+  const text = phase === "cleared" ? "" : changed ? "Updated provider admin content" : "Provider admin content";
+  return `resource "tfe_admin_general_settings" "general" {
+  enable_public_registration = ${!changed}
+}
+
+resource "tfe_admin_customization_settings" "customization" {
+  support_email = "${phase === "cleared" ? "" : "support@example.com"}"
+  support_url_address = "support.example.com"
+  internal_support_url = "${phase === "cleared" ? "" : "https://support.example.com"}"
+  internal_documentation_url = "${phase === "cleared" ? "" : "https://docs.example.com"}"
+  internal_tutorials_url = "${phase === "cleared" ? "" : "https://learn.example.com"}"
+  login_help = "${text}"
+  footer = "${text}"
+  error = "${text}"
+  new_user = "${text}"
+  avatar_sources = { gravatar = ${changed} }
+}
+
+resource "tfe_admin_banner" "banner" {
+  title = "${changed ? "Updated maintenance" : "Maintenance"}"
+  body = "<strong>Provider maintenance notice</strong>"
+  style = "${changed ? "warning" : "info"}"
+  audience = "${changed ? "all_users" : "authenticated_only"}"
+  scheduled_publish_at = ${changed ? '"2099-01-01T10:00:00Z"' : "null"}
+  scheduled_expire_at = ${changed ? '"2099-01-01T12:00:00Z"' : "null"}
+  timezone = ${changed ? '"Europe/London"' : "null"}
+}
+
+resource "tfe_tfpolicy_version" "tfpolicy" {
+  version = "0.1.0-pe2e-${suffix}"
+  official = false
+  enabled = ${!changed}
+  beta = ${changed}
+  deprecated = ${changed}
+  deprecated_reason = ${changed ? '"Provider lifecycle test"' : "null"}
+  archs = [{
+    os = "linux"
+    arch = "amd64"
+    url = "https://example.com/tfpolicy-plugin_linux_amd64.zip"
+    sha = "${changed ? "b".repeat(64) : "a".repeat(64)}"
+  }]
+}
+`;
+}
+
+async function adminSettingsSnapshot(port: number, token: string): Promise<Record<string, Record<string, unknown>>> {
+  const snapshot: Record<string, Record<string, unknown>> = {};
+  for (const endpoint of ["general-settings", "customization-settings"]) {
+    const response = await api(port, "GET", `/api/v2/admin/${endpoint}`, undefined, token);
+    expect(response.status).toBe(200);
+    snapshot[endpoint] = response.json["data"].attributes;
+  }
+  return snapshot;
+}
+
+async function assertAdminProviderValues(
+  port: number,
+  token: string,
+  phase: "baseline" | "changed" | "cleared",
+): Promise<string> {
+  const snapshot = await adminSettingsSnapshot(port, token);
+  expect(snapshot["general-settings"]!["enable-public-registration"]).toBe(phase !== "changed");
+  const text =
+    phase === "cleared" ? "" : phase === "changed" ? "Updated provider admin content" : "Provider admin content";
+  expect(snapshot["customization-settings"]!["footer"]).toBe(text);
+  expect(snapshot["customization-settings"]!["login-help"]).toBe(text);
+  expect(snapshot["customization-settings"]!["avatar-sources"]).toEqual([
+    { source: "gravatar", enabled: phase === "changed" },
+  ]);
+  const banners = await api(port, "GET", "/api/v2/admin/banners", undefined, token);
+  expect(banners.status).toBe(200);
+  expect(banners.json["data"]).toHaveLength(1);
+  const attrs = banners.json["data"][0].attributes;
+  expect(attrs.style).toBe(phase === "changed" ? "warning" : "info");
+  expect(attrs["scheduled-publish-at"]).toBe(phase === "changed" ? "2099-01-01T10:00:00Z" : null);
+  expect(attrs["scheduled-expire-at"]).toBe(phase === "changed" ? "2099-01-01T12:00:00Z" : null);
+  expect(attrs.timezone).toBe(phase === "changed" ? "Europe/London" : null);
+  return banners.json["data"][0].id as string;
+}
+
+async function assertAdminProviderDestroyed(
+  port: number,
+  token: string,
+  original: Record<string, Record<string, unknown>>,
+  tfpolicyId: string,
+): Promise<void> {
+  const restored = await adminSettingsSnapshot(port, token);
+  expect(restored["general-settings"]!["enable-public-registration"]).toBe(
+    original["general-settings"]!["enable-public-registration"],
+  );
+  const managedStrings = [
+    "support-email-address",
+    "support-url-address",
+    "internal-support-url",
+    "internal-documentation-url",
+    "internal-tutorials-url",
+    "login-help",
+    "footer",
+    "error",
+    "new-user",
+  ];
+  for (const key of managedStrings) {
+    // go-tfe's typed model represents unset server strings as the empty string.
+    expect(restored["customization-settings"]![key] ?? "").toBe(original["customization-settings"]![key] ?? "");
+  }
+  expect(restored["customization-settings"]!["avatar-sources"]).toEqual(
+    original["customization-settings"]!["avatar-sources"],
+  );
+  const banners = await api(port, "GET", "/api/v2/admin/banners", undefined, token);
+  expect(banners.status).toBe(200);
+  expect(banners.json["data"]).toEqual([]);
+  expect((await api(port, "GET", `/api/v2/admin/tfpolicy-versions/${tfpolicyId}`, undefined, token)).status).toBe(404);
+}
+
 function mainTf(suffix: string, username: string): string {
   const org = `pe2e-org-${suffix}`;
   return `resource "tfe_organization" "org" {
@@ -812,6 +952,16 @@ resource "tfe_oauth_client" "client" {
   service_provider = "github"
 }
 
+resource "tfe_oauth_client" "ado" {
+  organization     = tfe_organization.org.name
+  name             = "pe2e-ado-${suffix}"
+  api_url          = "https://dev.azure.com"
+  http_url         = "https://dev.azure.com"
+  oauth_token      = "pe2e-ado-${suffix}"
+  service_provider = "ado_services"
+  ado_org_name     = "pe2e-ado-org-${suffix}"
+}
+
 resource "tfe_project_oauth_client" "proj_oc" {
   project_id      = tfe_project.proj.id
   oauth_client_id = tfe_oauth_client.client.id
@@ -888,14 +1038,23 @@ resource "tfe_policy_set_parameter" "p_param" {
   policy_set_id = tfe_policy_set.ps.id
 }
 
+# Tag selectors and explicit workspace/project associations are mutually
+# exclusive upstream. Keep their lifecycles on distinct policy sets so parallel
+# creation exercises valid configurations rather than racing incompatible scopes.
+resource "tfe_policy_set" "tag_scoped" {
+  organization    = tfe_organization.org.name
+  name            = "pe2e-ps-tags-${suffix}"
+  tag_match_logic = "any"
+}
+
 resource "tfe_tag_policy_set" "tag_inc" {
-  policy_set_id = tfe_policy_set.ps.id
+  policy_set_id = tfe_policy_set.tag_scoped.id
   key           = "pe2e-tag-inc-${suffix}"
   value         = "pe2e-value"
 }
 
 resource "tfe_tag_policy_set_exclusion" "tag_exc" {
-  policy_set_id = tfe_policy_set.ps.id
+  policy_set_id = tfe_policy_set.tag_scoped.id
   key           = "pe2e-tag-exc-${suffix}"
 }
 
@@ -1019,6 +1178,16 @@ resource "tfe_registry_module" "regmod" {
   module_provider = "aws"
 }
 
+resource "tfe_registry_artifact_tag" "module_tags" {
+  artifact = { type = "registry-module", id = tfe_registry_module.regmod.id }
+  tags = [{ key = "environment", value = "provider-e2e" }, { key = "empty", value = "" }]
+}
+
+resource "tfe_registry_artifact_tag" "provider_tags" {
+  artifact = { type = "registry-provider", id = tfe_registry_provider.regprov.id }
+  tags = [{ key = "environment", value = "provider-e2e" }, { key = "empty", value = "" }]
+}
+
 resource "tfe_test_variable" "test_var" {
   organization    = tfe_organization.org.name
   module_name     = tfe_registry_module.regmod.name
@@ -1111,6 +1280,14 @@ etdW1cufqHhJK0JwAA==
 EOT
   slo_endpoint_url = "https://saml.pe2e.example.com/slo"
   sso_endpoint_url = "https://saml.pe2e.example.com/sso"
+}
+
+resource "tfe_saml_idp_certificate" "managed" {
+  display_name = "pe2e-managed-idp"
+  cert = <<-EOT
+${readFileSync(join(import.meta.dir, "../fixtures/idp-cert.pem"), "utf8")}
+EOT
+  depends_on = [tfe_saml_settings.saml]
 }
 
 resource "tfe_scim_settings" "scim" {
@@ -1260,6 +1437,16 @@ data "tfe_org_max_token_ttl_policy" "d_ottl" {
   organization = tfe_organization.org.name
   depends_on   = [tfe_org_max_token_ttl_policy.ottl]
 }
+data "tfe_registry_artifact_tags" "d_module_tags" {
+  artifact = { type = "registry-module", id = tfe_registry_module.regmod.id }
+  depends_on = [tfe_registry_artifact_tag.module_tags]
+}
+output "ds_module_tags" { value = { for tag in data.tfe_registry_artifact_tags.d_module_tags.tags : tag.key => tag.value } }
+data "tfe_registry_artifact_tags" "d_provider_tags" {
+  artifact = { type = "registry-provider", id = tfe_registry_provider.regprov.id }
+  depends_on = [tfe_registry_artifact_tag.provider_tags]
+}
+output "ds_provider_tags" { value = { for tag in data.tfe_registry_artifact_tags.d_provider_tags.tags : tag.key => tag.value } }
 data "tfe_registry_module" "d_regmod" {
   organization    = tfe_organization.org.name
   namespace       = tfe_organization.org.name
@@ -1270,6 +1457,13 @@ data "tfe_registry_module" "d_regmod" {
 }
 data "tfe_saml_settings" "d_saml" {
   depends_on = [tfe_saml_settings.saml]
+}
+data "tfe_saml_idp_certificate" "d_idp" {
+  id = tfe_saml_idp_certificate.managed.id
+}
+data "tfe_saml_idp_certificates" "d_idps" {
+  display_name_match = "PE2E-MANAGED"
+  depends_on = [tfe_saml_idp_certificate.managed]
 }
 data "tfe_scim_settings" "d_scim" {
   depends_on = [tfe_scim_settings.scim]
@@ -1308,6 +1502,8 @@ output "ds_members_count" { value = length(data.tfe_organization_members.d_membe
 output "ds_access"       { value = data.tfe_team_access.d_access.access }
 output "ds_proj_access"  { value = data.tfe_team_project_access.d_proj_access.access }
 output "ds_ps_name"      { value = data.tfe_policy_set.d_ps.name }
+output "ado_org_name" { value = tfe_oauth_client.ado.ado_org_name }
+output "ado_service_provider" { value = tfe_oauth_client.ado.service_provider }
 output "ds_oc_name"      { value = data.tfe_oauth_client.d_oc.name }
 output "ds_pool_name"    { value = data.tfe_agent_pool.d_pool.name }
 output "ds_me_username"  { value = data.tfe_current_user.d_me.username }
@@ -1320,6 +1516,9 @@ output "ds_tags_count"      { value = length(data.tfe_organization_tags.d_tags.t
 output "ds_ipr_api_count"   { value = length(data.tfe_ip_ranges.d_ipr.api) }
 output "ds_ottl_org_ttl"    { value = data.tfe_org_max_token_ttl_policy.d_ottl.org_token_max_ttl }
 output "ds_regmod_name"     { value = data.tfe_registry_module.d_regmod.name }
+output "ds_idp_name" { value = data.tfe_saml_idp_certificate.d_idp.display_name }
+output "ds_idp_role" { value = data.tfe_saml_idp_certificate.d_idp.cert_role }
+output "ds_idps_count" { value = length(data.tfe_saml_idp_certificates.d_idps.certificates) }
 output "ds_saml_enabled"    { value = data.tfe_saml_settings.d_saml.enabled }
 output "ds_scim_enabled"    { value = data.tfe_scim_settings.d_scim.enabled }
 output "ds_pset_name"       { value = data.tfe_provider_set.d_pset.name }
@@ -1636,6 +1835,8 @@ describe("tfe provider e2e", () => {
           assertCliDirFitsSocket(cfgDir);
           await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
+          const originalAdminSettings = await adminSettingsSnapshot(backend.port, auth.token);
+          await writeFile(join(cfgDir, "admin.tf"), adminTf(suffix));
           await writeFile(join(cfgDir, "outputs.tf"), outputsTf());
 
           lifecycleStage = "initial provider apply";
@@ -1644,6 +1845,54 @@ describe("tfe provider e2e", () => {
           const apply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(apply, "apply");
           expect(apply.out).toContain("Apply complete");
+
+          lifecycleStage = "admin settings, banner and TFPolicy lifecycle transitions";
+          const adminBannerId = await assertAdminProviderValues(backend.port, auth.token, "baseline");
+          const initialVersions = await api(
+            backend.port,
+            "GET",
+            "/api/v2/admin/tfpolicy-versions",
+            undefined,
+            auth.token,
+          );
+          expect(initialVersions.status).toBe(200);
+          const initialVersion = listData(initialVersions.json, "initial TFPolicy version").find(
+            (item) => (item["attributes"] as Record<string, unknown>)["version"] === `0.1.0-pe2e-${suffix}`,
+          );
+          expect(initialVersion).toBeDefined();
+          const tfpolicyId = initialVersion!["id"] as string;
+          for (const phase of ["changed", "cleared", "baseline"] as const) {
+            await writeFile(join(cfgDir, "admin.tf"), adminTf(suffix, phase));
+            cliOk(
+              await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv),
+              `admin ${phase} apply`,
+            );
+            cliOk(
+              await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv),
+              `admin ${phase} convergence`,
+            );
+            expect(await assertAdminProviderValues(backend.port, auth.token, phase)).toBe(adminBannerId);
+            const versions = await api(backend.port, "GET", "/api/v2/admin/tfpolicy-versions", undefined, auth.token);
+            expect(versions.status).toBe(200);
+            const version = listData(versions.json, "TFPolicy lifecycle").find(
+              (item) => (item["attributes"] as Record<string, unknown>)["version"] === `0.1.0-pe2e-${suffix}`,
+            );
+            expect(version).toBeDefined();
+            const attributes = version!["attributes"] as Record<string, unknown>;
+            expect(attributes["deprecated"]).toBe(phase === "changed");
+            expect(attributes["enabled"]).toBe(phase !== "changed");
+            expect(attributes["deprecated-reason"] ?? "").toBe(phase === "changed" ? "Provider lifecycle test" : "");
+            const nextId = version!["id"] as string;
+            expect(nextId).toBe(tfpolicyId);
+            expect(attributes["archs"]).toEqual([
+              {
+                os: "linux",
+                arch: "amd64",
+                url: "https://example.com/tfpolicy-plugin_linux_amd64.zip",
+                sha: (phase === "changed" ? "b" : "a").repeat(64),
+              },
+            ]);
+          }
 
           lifecycleStage = "irreversible workspace HYOK metadata lifecycle";
           const workspaceHyokPath = `/api/v2/organizations/pe2e-org-${suffix}/workspaces/pe2e-ws-${suffix}`;
@@ -1827,6 +2076,8 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
           expect(val("ds_access")).toBe("plan");
           expect(val("ds_proj_access")).toBe("write");
           expect(val("ds_ps_name")).toBe(`pe2e-ps-${suffix}`);
+          expect(val("ado_org_name")).toBe(`pe2e-ado-org-${suffix}`);
+          expect(val("ado_service_provider")).toBe("ado_services");
           expect(val("ds_oc_name")).toBe(`pe2e-oauth-${suffix}`);
           expect(val("ds_pool_name")).toBe(`pe2e-pool-${suffix}`);
           expect(val("ds_me_username")).toBe(auth.username);
@@ -1838,8 +2089,13 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
           expect(Number(val("ds_tags_count"))).toBeGreaterThanOrEqual(0);
           expect(Number(val("ds_ipr_api_count"))).toBeGreaterThanOrEqual(0);
           expect(val("ds_ottl_org_ttl")).toBe("1d");
+          expect(val("ds_module_tags")).toEqual({ environment: "provider-e2e", empty: "" });
+          expect(val("ds_provider_tags")).toEqual({ environment: "provider-e2e", empty: "" });
           expect(val("ds_regmod_name")).toBe(`pe2e-mod-${suffix}`);
           expect(val("ds_saml_enabled")).toBe(true);
+          expect(val("ds_idp_name")).toBe("pe2e-managed-idp");
+          expect(val("ds_idp_role")).toBe("managed");
+          expect(Number(val("ds_idps_count"))).toBe(1);
           expect(val("ds_scim_enabled")).toBe(true);
           expect(val("ds_pset_name")).toBe(`pe2e-pset-${suffix}`);
           expect(String(val("ds_gpg_armor"))).toContain("BEGIN PGP PUBLIC KEY BLOCK");
@@ -2186,6 +2442,50 @@ data "tfe_no_code_module" "d_ncm" {
             expect(stateList3.out).toContain("data.tfe_hyok_customer_key_version.d_hyok");
             expect(stateList3.out).toContain("data.tfe_hyok_encrypted_data_key.d_hyok_dek");
           }
+          lifecycleStage = "Stack policy provider lifecycle and minimum-version gate";
+          const stackState = await cli(bin, ["show", "-json"], cfgDir, cliEnv);
+          cliOk(stackState, "read Stack fixture state");
+          const stackResources = (
+            JSON.parse(stackState.out) as {
+              values: { root_module: { resources: { address: string; values: { id: string } }[] } };
+            }
+          ).values.root_module.resources;
+          const stack = stackResources.find((item) => item.address === "tfe_stack.stack");
+          expect(stack).toBeDefined();
+          const stackPolicyDirectory = mkdtempSync(join(workDir, "sp-"));
+          assertCliDirFitsSocket(stackPolicyDirectory);
+          const compatibilityVersion = { value: "2.0.0" };
+          const stackPolicyProxy = await startTlsProxy(backend.port, stackPolicyDirectory, compatibilityVersion);
+          try {
+            await exerciseStackPolicyProvider({
+              directory: stackPolicyDirectory,
+              providerConfiguration: providerTf(stackPolicyProxy.port!),
+              organization: `pe2e-org-${suffix}`,
+              stackId: stack!.values.id,
+              run: async (args) => cli(bin, args, stackPolicyDirectory, cliEnv),
+              readPolicySet: async (id) => {
+                const response = await api(
+                  backend.port,
+                  "GET",
+                  `/api/v2/policy-sets/${id}?include=stacks,stack-exclusions`,
+                  undefined,
+                  auth.token,
+                );
+                expect(response.status).toBe(200);
+                return response.json as {
+                  data: {
+                    attributes: { kind: string; global: boolean };
+                    relationships: Record<string, { data: { id: string; type: string }[] }>;
+                  };
+                };
+              },
+              setCompatibilityVersion: (version) => {
+                compatibilityVersion.value = version;
+              },
+            });
+          } finally {
+            await stackPolicyProxy.stop(true);
+          }
           await rm(join(cfgDir, "build-outputs.tf"), { force: true });
 
           lifecycleStage = "destroy and lifecycle evidence publication";
@@ -2195,6 +2495,7 @@ data "tfe_no_code_module" "d_ncm" {
           const emptyState = await cli(bin, ["state", "list"], cfgDir, cliEnv);
           cliOk(emptyState, "state after destroy");
           expect(emptyState.out.trim()).toBe("");
+          await assertAdminProviderDestroyed(backend.port, auth.token, originalAdminSettings, tfpolicyId);
           const version = await cli(bin, ["version", "-json"], cfgDir, cliEnv);
           cliOk(version, "version evidence");
           const versionInfo = JSON.parse(version.out) as { terraform_version: string };
@@ -2259,6 +2560,12 @@ data "tfe_no_code_module" "d_ncm" {
               familyEvidence("policies-lifecycle"),
               familyEvidence("notifications-lifecycle"),
               familyEvidence("registry-lifecycle"),
+              familyEvidence("admin-provider-lifecycle", [
+                "update",
+                "clear-optional",
+                "restore-optional",
+                "destroy-restores-settings",
+              ]),
             ],
           };
           assertLifecycleEvidence(providerLifecycleContract, lifecycleEvidence);
@@ -2300,6 +2607,19 @@ data "tfe_no_code_module" "d_ncm" {
                       "clear-description",
                       "restore-description",
                       "unchanged-plan-after-each-update",
+                    ],
+                  },
+                  {
+                    resources: ["tfe_stack_policy_set.included", "tfe_stack_policy_set_exclusion.excluded"],
+                    behaviors: [
+                      "create",
+                      "read",
+                      "refresh-twice",
+                      "no-op-plan",
+                      "second-apply-noop",
+                      "delete-association-readback",
+                      "destroy",
+                      "minimum-version-2.1.0",
                     ],
                   },
                   { resources: ["tfe_team.team"], behaviors: ["import-minimal-config", "unchanged-plan-after-import"] },

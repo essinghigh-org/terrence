@@ -11,7 +11,7 @@ describe("run-detail smoke tests", () => {
   beforeAll(async (): Promise<void> => {
     server = await startTestServer();
     page = await createBrowser();
-  });
+  }, 25_000);
 
   afterAll(async (): Promise<void> => {
     page?.close();

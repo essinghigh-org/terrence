@@ -19420,6 +19420,71 @@
             "description": "Internal Server Error"
           }
         }
+      },
+      "patch": {
+        "operationId": "patch-api-v2-organizations-org-name-registry-providers-registry-name-namespace-name",
+        "tags": [
+          "organizations"
+        ],
+        "parameters": [
+          {
+            "name": "org_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registry_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "PATCH /api/v2/organizations/{org_name}/registry-providers/{registry_name}/{namespace}/{name}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        }
       }
     },
     "/api/v2/registry-providers/{provider_id}/versions": {
@@ -53534,6 +53599,785 @@
           },
           "500": {
             "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/banners": {
+      "get": {
+        "operationId": "get-api-v2-admin-banners",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/banners",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post-api-v2-admin-banners",
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v2/admin/banners",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/banners/{id}": {
+      "patch": {
+        "operationId": "patch-api-v2-admin-banners-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "PATCH /api/v2/admin/banners/{id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete-api-v2-admin-banners-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "DELETE /api/v2/admin/banners/{id}",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/tfpolicy-versions": {
+      "get": {
+        "operationId": "get-api-v2-admin-tfpolicy-versions",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/tfpolicy-versions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post-api-v2-admin-tfpolicy-versions",
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v2/admin/tfpolicy-versions",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/tfpolicy-versions/{version_id}": {
+      "get": {
+        "operationId": "get-api-v2-admin-tfpolicy-versions-version-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/admin/tfpolicy-versions/{version_id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch-api-v2-admin-tfpolicy-versions-version-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "PATCH /api/v2/admin/tfpolicy-versions/{version_id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete-api-v2-admin-tfpolicy-versions-version-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "DELETE /api/v2/admin/tfpolicy-versions/{version_id}",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/saml-settings/idp-certificates": {
+      "get": {
+        "operationId": "get-api-v2-admin-saml-settings-idp-certificates",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/saml-settings/idp-certificates",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post-api-v2-admin-saml-settings-idp-certificates",
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v2/admin/saml-settings/idp-certificates",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/saml-settings/idp-certificates/{id}": {
+      "get": {
+        "operationId": "get-api-v2-admin-saml-settings-idp-certificates-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/admin/saml-settings/idp-certificates/{id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch-api-v2-admin-saml-settings-idp-certificates-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "PATCH /api/v2/admin/saml-settings/idp-certificates/{id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete-api-v2-admin-saml-settings-idp-certificates-id",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "DELETE /api/v2/admin/saml-settings/idp-certificates/{id}",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/policy-sets/{policy_set_id}/relationships/stacks": {
+      "post": {
+        "operationId": "post-api-v2-policy-sets-policy-set-id-relationships-stacks",
+        "tags": [
+          "policy-sets"
+        ],
+        "parameters": [
+          {
+            "name": "policy_set_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "POST /api/v2/policy-sets/{policy_set_id}/relationships/stacks",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete-api-v2-policy-sets-policy-set-id-relationships-stacks",
+        "tags": [
+          "policy-sets"
+        ],
+        "parameters": [
+          {
+            "name": "policy_set_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "DELETE /api/v2/policy-sets/{policy_set_id}/relationships/stacks",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/policy-sets/{policy_set_id}/relationships/stack-exclusions": {
+      "post": {
+        "operationId": "post-api-v2-policy-sets-policy-set-id-relationships-stack-exclusions",
+        "tags": [
+          "policy-sets"
+        ],
+        "parameters": [
+          {
+            "name": "policy_set_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "POST /api/v2/policy-sets/{policy_set_id}/relationships/stack-exclusions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete-api-v2-policy-sets-policy-set-id-relationships-stack-exclusions",
+        "tags": [
+          "policy-sets"
+        ],
+        "parameters": [
+          {
+            "name": "policy_set_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "DELETE /api/v2/policy-sets/{policy_set_id}/relationships/stack-exclusions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        }
+      }
+    },
+    "/api/v2/registry-modules/{module_id}/tag-bindings": {
+      "get": {
+        "operationId": "get-api-v2-registry-modules-module-id-tag-bindings",
+        "tags": [
+          "registry-modules"
+        ],
+        "parameters": [
+          {
+            "name": "module_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/registry-modules/{module_id}/tag-bindings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v2/registry-providers/{provider_id}/tag-bindings": {
+      "get": {
+        "operationId": "get-api-v2-registry-providers-provider-id-tag-bindings",
+        "tags": [
+          "registry-providers"
+        ],
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/registry-providers/{provider_id}/tag-bindings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v2/registry-components/{id}/tag-bindings": {
+      "get": {
+        "operationId": "get-api-v2-registry-components-id-tag-bindings",
+        "tags": [
+          "registry-components"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/registry-components/{id}/tag-bindings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v2/registry-components/{id}": {
+      "patch": {
+        "operationId": "patch-api-v2-registry-components-id",
+        "tags": [
+          "registry-components"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "PATCH /api/v2/registry-components/{id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
           }
         }
       }

@@ -23,6 +23,7 @@ async function runAgainstFixture(
   const migrationsDir = join(sandbox, "backend", "drizzle", "pg");
   const dataDir = join(sandbox, "backend", "src", "data");
   const libDir = join(sandbox, "backend", "src", "lib");
+  await rm(migrationsDir, { recursive: true, force: true });
   await Promise.all([
     mkdir(scriptsDir, { recursive: true }),
     mkdir(migrationsDir, { recursive: true }),
@@ -104,6 +105,48 @@ describe("expand/contract enforcement", () => {
       expect(result.exitCode).toBe(1);
       expect(result.output).toContain("foreign-key constraint");
     }
+  });
+
+  test("accepts generated constraints and indexes on a table introduced in the same migration", async () => {
+    const result = await runAgainstFixture({
+      "0001_expand.sql": `CREATE TABLE "assignments" ("id" text PRIMARY KEY, "run_id" text NOT NULL);
+        ALTER TABLE "assignments" ADD CONSTRAINT "assignments_run_fk" FOREIGN KEY ("run_id") REFERENCES "runs"("id") ON DELETE cascade ON UPDATE no action;
+        CREATE UNIQUE INDEX "assignments_run_idx" ON "assignments" USING btree ("run_id");`,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("does not exempt new-table constraints on existing or conditionally created tables", async () => {
+    const constraint = 'CREATE UNIQUE INDEX "assignments_run_idx" ON "assignments" USING btree ("run_id");';
+    for (const migrations of [
+      { "0001_expand.sql": 'CREATE TABLE "assignments" ("run_id" text);', "0002_index.sql": constraint },
+      { "0001_expand.sql": 'CREATE TABLE IF NOT EXISTS "assignments" ("run_id" text);' + constraint },
+      { "0001_expand.sql": 'CREATE TABLE "other" ("run_id" text);' + constraint },
+    ]) {
+      const result = await runAgainstFixture(migrations);
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("unique index");
+    }
+  });
+
+  test("new-table tracking does not exempt existing-table foreign keys or destructive changes", async () => {
+    const result = await runAgainstFixture({
+      "0001_expand.sql": `CREATE TABLE "assignments" ("run_id" text);
+        ALTER TABLE "runs" ADD CONSTRAINT "runs_assignment_fk" FOREIGN KEY ("id") REFERENCES "assignments"("run_id") ON DELETE cascade;
+        ALTER TABLE "runs" DROP COLUMN "foo";`,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("foreign-key constraint");
+    expect(result.output).toContain("drop column");
+  });
+
+  test("rejects new-table foreign keys that restrict deletes by old parent writers", async () => {
+    const result = await runAgainstFixture({
+      "0001_expand.sql": `CREATE TABLE "assignments" ("run_id" text);
+        ALTER TABLE "assignments" ADD CONSTRAINT "assignments_run_fk" FOREIGN KEY ("run_id") REFERENCES "runs"("id");`,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("foreign-key constraint");
   });
 
   test("rejects an unregistered column drop", async () => {

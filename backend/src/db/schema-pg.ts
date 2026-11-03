@@ -132,6 +132,21 @@ export const adminTerraformVersions = pgTable("admin_terraform_versions", {
 });
 pgSchema["adminTerraformVersions"] = adminTerraformVersions;
 
+export const adminTfpolicyVersions = pgTable("admin_tfpolicy_versions", {
+  id: text("id").notNull().primaryKey(),
+  version: text("version").notNull().unique(),
+  official: boolean("official").notNull().default(false),
+  enabled: boolean("enabled").notNull().default(true),
+  beta: boolean("beta").notNull().default(false),
+  deprecated: boolean("deprecated").notNull().default(false),
+  deprecatedReason: text("deprecated_reason"),
+  archs: jsonb("archs").notNull(),
+  createdAt: bigint("created_at", { mode: "number" })
+    .notNull()
+    .$defaultFn(() => sqliteSchema["adminTfpolicyVersions"]["createdAt"].defaultFn!()),
+});
+pgSchema["adminTfpolicyVersions"] = adminTfpolicyVersions;
+
 export const agentForwardedRequests = pgTable(
   "agent_forwarded_requests",
   {
@@ -1206,6 +1221,7 @@ export const oauthClients = pgTable("oauth_clients", {
   agentPoolId: text("agent_pool_id").references(() => pgSchema["agentPools"]!["id"], { onDelete: "set null" }),
   name: text("name").notNull(),
   serviceProvider: text("service_provider").notNull().default("github"),
+  adoOrgName: text("ado_org_name"),
   apiUrl: text("api_url"),
   httpUrl: text("http_url"),
   key: text("key"),
@@ -1605,6 +1621,22 @@ export const policySetProjects = pgTable(
 );
 pgSchema["policySetProjects"] = policySetProjects;
 
+export const policySetStacks = pgTable(
+  "policy_set_stacks",
+  {
+    id: text("id").notNull().primaryKey(),
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => pgSchema["policySets"]!["id"], { onDelete: "cascade" }),
+    stackId: text("stack_id")
+      .notNull()
+      .references(() => pgSchema["stacks"]!["id"], { onDelete: "cascade" }),
+    isExclude: boolean("is_exclude").notNull().default(false),
+  },
+  (table) => [uniqueIndex("policy_set_stacks_idx").on(table["policySetId"], table["stackId"])],
+);
+pgSchema["policySetStacks"] = policySetStacks;
+
 export const policySetTagSelectors = pgTable(
   "policy_set_tag_selectors",
   {
@@ -1672,6 +1704,7 @@ export const policySets = pgTable("policy_sets", {
   overridable: boolean("overridable").default(false),
   agentEnabled: boolean("agent_enabled").default(false),
   policyToolVersion: text("policy_tool_version"),
+  tagMatchLogic: text("tag_match_logic").default("any"),
   policiesPath: text("policies_path"),
   vcsRepo: jsonb("vcs_repo"),
   policyUpdatePatterns: jsonb("policy_update_patterns").notNull().default([]),
@@ -1788,6 +1821,7 @@ export const registryComponents = pgTable(
   "registry_components",
   {
     id: text("id").notNull().primaryKey(),
+    tagBindings: text("tag_bindings").notNull().default("[]"),
     orgId: text("org_id")
       .notNull()
       .references(() => pgSchema["organizations"]!["id"], { onDelete: "cascade" }),
@@ -1871,6 +1905,7 @@ export const registryModules = pgTable(
   "registry_modules",
   {
     id: text("id").notNull().primaryKey(),
+    tagBindings: text("tag_bindings").notNull().default("[]"),
     orgId: text("org_id")
       .notNull()
       .references(() => pgSchema["organizations"]!["id"], { onDelete: "cascade" }),
@@ -1973,6 +2008,7 @@ export const registryProviders = pgTable(
   "registry_providers",
   {
     id: text("id").notNull().primaryKey(),
+    tagBindings: text("tag_bindings").notNull().default("[]"),
     orgId: text("org_id")
       .notNull()
       .references(() => pgSchema["organizations"]!["id"], { onDelete: "cascade" }),

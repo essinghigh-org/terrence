@@ -1,3 +1,5 @@
+import { startWebView, withWebViewDeadline } from "./webview-lifecycle";
+
 export type BrowserOptions = {
   width?: number;
   height?: number;
@@ -111,6 +113,30 @@ export class BrowserPage {
     });
   }
 
+  startupStage = "constructing browser";
+
+  /** Verify the native transport before loading any application or test state. */
+  async initialize(): Promise<void> {
+    this.startupStage = "navigate about:blank";
+    await this.webview.navigate("about:blank");
+    this.startupStage = "enable Runtime capture";
+    await this.enableRuntimeCapture();
+    this.startupStage = "evaluate handshake";
+    const result = await this.webview.evaluate("1 + 1");
+    if (result !== 2) throw new Error("WebView startup handshake returned an unexpected result");
+  }
+
+  private async evaluateBounded(script: string): Promise<unknown> {
+    return withWebViewDeadline(
+      () => this.webview.evaluate(script),
+      `evaluate at ${this.url}: ${script.trim().slice(0, 120)}`,
+      10_000,
+      () => {
+        this.close();
+      },
+    );
+  }
+
   get url(): string {
     return this.webview.url;
   }
@@ -150,7 +176,7 @@ export class BrowserPage {
       script = fnOrScript;
     }
     this.initScripts.push(script);
-    if (this.webview.url !== "" && this.webview.url !== "about:blank") await this.webview.evaluate(script);
+    if (this.webview.url !== "" && this.webview.url !== "about:blank") await this.evaluateBounded(script);
   }
 
   private async enableRuntimeCapture(): Promise<void> {
@@ -188,7 +214,14 @@ export class BrowserPage {
   private async navigateSettled(url: string): Promise<void> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.webview.navigate(url);
+        await withWebViewDeadline(
+          () => this.webview.navigate(url),
+          `navigate to ${url}`,
+          10_000,
+          () => {
+            this.close();
+          },
+        );
         return;
       } catch (error) {
         const code = (error as { code?: unknown }).code;
@@ -217,7 +250,7 @@ export class BrowserPage {
           } catch {}
         })()
       `;
-      await this.webview.evaluate(setStorageScript);
+      await this.evaluateBounded(setStorageScript);
     }
 
     await this.navigateSettled(url);
@@ -225,11 +258,11 @@ export class BrowserPage {
 
     // Track requests started after navigation; app readiness below covers
     // bootstrap requests that began before the monitor could be installed.
-    await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
+    await this.evaluateBounded(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
 
     // Run registered init scripts
     for (const script of this.initScripts) {
-      await this.webview.evaluate(script);
+      await this.evaluateBounded(script);
     }
 
     if (options.waitUntil === "networkidle") {
@@ -245,7 +278,7 @@ export class BrowserPage {
     } else {
       while (Date.now() - start < timeout) {
         // Re-inject monitor if page changed/reloaded
-        await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
+        await this.evaluateBounded(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
 
         const readyState = await this.evaluate<string>("document.readyState").catch(() => "loading");
         if (options.waitUntil === "domcontentloaded") {
@@ -317,7 +350,7 @@ export class BrowserPage {
     } else {
       script = fnOrScript;
     }
-    const result = (await this.webview.evaluate(script)) as T;
+    const result = (await this.evaluateBounded(script)) as T;
     return result;
   }
 
@@ -474,5 +507,8 @@ export class BrowserPage {
 }
 
 export async function createBrowser(options: BrowserOptions = {}): Promise<BrowserPage> {
-  return new BrowserPage(options);
+  return startWebView(
+    () => new BrowserPage(options),
+    (page) => page.initialize(),
+  );
 }

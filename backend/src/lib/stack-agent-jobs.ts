@@ -1,3 +1,4 @@
+import { stackPolicyExecutionError } from "./stack-policy-gate";
 import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { agents, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../db/schema";
@@ -122,6 +123,19 @@ async function jobDetails(job: StackAgentJob): Promise<ClaimedStackAgentJob | un
     ),
   });
   if (configuration === undefined) return undefined;
+  const policyError = await stackPolicyExecutionError(stack);
+  if (policyError !== null) {
+    await db
+      .update(stackAgentJobs)
+      .set({ status: "errored", errorMessage: policyError, completedAt: Date.now(), updatedAt: Date.now() })
+      .where(eq(stackAgentJobs.id, job.id));
+    await enqueueDurableJob(
+      "stack-deployment",
+      { runId: deploymentRun.id },
+      { dedupeKey: `stack-run:${deploymentRun.id}`, rescheduleRunning: true },
+    );
+    return undefined;
+  }
   return { job, stack, configuration, deploymentRun, step };
 }
 
@@ -129,6 +143,11 @@ type StackAgentClaimAttempt =
   | Readonly<{ kind: "empty" }>
   | Readonly<{ kind: "retry" }>
   | Readonly<{ kind: "claimed"; details: ClaimedStackAgentJob }>;
+
+async function missingStackAgentStepError(jobId: string): Promise<string> {
+  const job = await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, jobId) });
+  return job?.errorMessage ?? "Stack deployment step no longer exists";
+}
 
 async function claimStackAgentAttempt(
   agent: StackAgent,
@@ -167,7 +186,7 @@ async function claimStackAgentAttempt(
       .update(stackAgentJobs)
       .set({
         status: "errored",
-        errorMessage: "Stack deployment step no longer exists",
+        errorMessage: await missingStackAgentStepError(job.id),
         completedAt: now,
         updatedAt: now,
       })

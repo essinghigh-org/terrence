@@ -1687,6 +1687,7 @@ export const oauthClients = sqliteTable("oauth_clients", {
   agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   serviceProvider: text("service_provider").notNull().default("github"), // 'github', 'gitlab', 'bitbucket', etc.
+  adoOrgName: text("ado_org_name"),
   apiUrl: text("api_url"),
   httpUrl: text("http_url"),
   key: text("key"),
@@ -1785,6 +1786,7 @@ export const policySets = sqliteTable("policy_sets", {
   overridable: integer("overridable", { mode: "boolean" }).default(false),
   agentEnabled: integer("agent_enabled", { mode: "boolean" }).default(false),
   policyToolVersion: text("policy_tool_version"),
+  tagMatchLogic: text("tag_match_logic").default("any"),
   policiesPath: text("policies_path"),
   vcsRepo: text("vcs_repo", { mode: "json" }).$type<{
     branch?: string;
@@ -1893,6 +1895,7 @@ export const registryModules = sqliteTable(
   "registry_modules",
   {
     id: text("id").primaryKey(),
+    tagBindings: text("tag_bindings").notNull().default("[]"),
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
@@ -2045,6 +2048,7 @@ export const registryComponents = sqliteTable(
   "registry_components",
   {
     id: text("id").primaryKey(),
+    tagBindings: text("tag_bindings").notNull().default("[]"),
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
@@ -2068,6 +2072,7 @@ export const registryProviders = sqliteTable(
   "registry_providers",
   {
     id: text("id").primaryKey(),
+    tagBindings: text("tag_bindings").notNull().default("[]"),
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
@@ -3153,4 +3158,34 @@ export const emailVerificationTokens = sqliteTable(
     usedAt: integer("used_at"),
   },
   (table) => [index("email_verification_tokens_user_idx").on(table.userId)],
+);
+
+// Terraform policy plugin catalog. Registration does not enable a policy executor.
+export const adminTfpolicyVersions = sqliteTable("admin_tfpolicy_versions", {
+  id: text("id").primaryKey(),
+  version: text("version").notNull().unique(),
+  official: integer("official", { mode: "boolean" }).notNull().default(false),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  beta: integer("beta", { mode: "boolean" }).notNull().default(false),
+  deprecated: integer("deprecated", { mode: "boolean" }).notNull().default(false),
+  deprecatedReason: text("deprecated_reason"),
+  archs: text("archs", { mode: "json" }).$type<{ os: string; arch: string; url: string; sha: string }[]>().notNull(),
+  createdAt: integer("created_at")
+    .notNull()
+    .$defaultFn(() => Date.now()),
+});
+// Inclusion and exclusion are mutually exclusive for a policy set / stack pair.
+export const policySetStacks = sqliteTable(
+  "policy_set_stacks",
+  {
+    id: text("id").primaryKey(),
+    policySetId: text("policy_set_id")
+      .notNull()
+      .references(() => policySets.id, { onDelete: "cascade" }),
+    stackId: text("stack_id")
+      .notNull()
+      .references(() => stacks.id, { onDelete: "cascade" }),
+    isExclude: integer("is_exclude", { mode: "boolean" }).notNull().default(false),
+  },
+  (table) => [uniqueIndex("policy_set_stacks_idx").on(table.policySetId, table.stackId)],
 );

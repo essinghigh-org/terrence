@@ -8,15 +8,16 @@
  *
  *   1. Resolve the target version: TFE_PROVIDER_VERSION env, else the latest
  *      stable release from the GitHub API.
- *   2. If the target equals the catalog version, exit 0 without touching files.
- *   3. Otherwise run `terraform init` + `terraform providers schema -json`
- *      against a temp config pinning the target version, and diff the schema
- *      resource/data-source names against the catalog.
+ *   2. Generate the target schema using `terraform init` and
+ *      `terraform providers schema -json` against a pinned temporary config.
+ *   3. Exit unchanged only if version and schema hashes match; otherwise compare
+ *      resource/data-source names and schemas against the catalog.
  *   4. Existing names keep their schema-inventory status (covered / planned /
  *      backend-gap / admin); NEW names are marked backend-gap; REMOVED names
  *      are dropped. Behavioral compatibility is defined separately by
  *      backend/src/data/provider_lifecycle_contract.json.
- *   5. Rewrite both catalog copies and print a summary.
+ *   5. Compare baseline schemas and upstream implementation/dependency files.
+ *      Rewrite both catalog copies and a review report used as the refresh PR body.
  *
  * Usage:
  *   bun backend/scripts/refresh-provider-surface.ts            # latest release
@@ -27,15 +28,18 @@
  * The caller (workflow or human) diffs the JSON to decide whether to commit.
  */
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fetchLatestTfeProviderVersion } from "../src/lib/provider-version";
 
+import { providerCompareUrl } from "./lib/provider-compare-url";
+import { productionFiles, renderReview, reviewEntries, schemaHash, type UpstreamFile } from "./lib/provider-drift";
+
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const SURFACE_SRC = join(REPO_ROOT, "backend", "src", "data", "provider_surface.json");
 const SURFACE_E2E = join(REPO_ROOT, "backend", "tests", "e2e", "provider_surface.json");
+const REVIEW = join(REPO_ROOT, "backend", "src", "data", "provider_refresh_review.md");
 const PLUGIN_CACHE = join(REPO_ROOT, "backend", "storage", "e2e-plugin-cache");
 const TERRAFORM_BIN = process.env.TERRAFORM_BIN ?? "terraform";
 
@@ -74,25 +78,9 @@ async function resolveTargetVersion(current: string | null): Promise<string> {
   return latest;
 }
 
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, entry]) => [key, canonical(entry)]),
-    );
-  }
-  return value;
-}
-
-function schemaHash(schema: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(canonical(schema)))
-    .digest("hex");
-}
-
 function generateSchema(version: string): { resources: Record<string, unknown>; dataSources: Record<string, unknown> } {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Invalid provider version: ${version}`);
+  mkdirSync(PLUGIN_CACHE, { recursive: true });
   const dir = mkdtempSync(join(tmpdir(), "provider-surface-"));
   try {
     writeFileSync(
@@ -125,6 +113,7 @@ function generateSchema(version: string): { resources: Record<string, unknown>; 
       env,
       encoding: "utf8",
       timeout: 120_000,
+      maxBuffer: 32 * 1024 * 1024,
     });
     if (schema.status !== 0) {
       throw new Error(`terraform providers schema failed (exit ${schema.status}):\n${schema.stderr ?? schema.stdout}`);
@@ -181,6 +170,30 @@ function commentFor(version: string): string {
   return `Authoritative hashicorp/tfe v${version} provider surface, generated from \`terraform providers schema -json\` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).`;
 }
 
+async function upstreamChanges(
+  current: string | null,
+  target: string,
+): Promise<{ files: UpstreamFile[]; truncated: boolean }> {
+  if (current === null || current === target) return { files: [], truncated: false };
+  const response = await fetch(providerCompareUrl(current, target), {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "terrence-provider-surface",
+      ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+    },
+    // Fail closed if the fixed upstream endpoint attempts to redirect.
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok)
+    throw new Error(`Upstream source comparison failed (${response.status}); refusing an incomplete refresh.`);
+  const comparison = (await response.json()) as { files?: UpstreamFile[]; status?: string };
+  if (!Array.isArray(comparison.files) || comparison.status !== "ahead") {
+    throw new Error("Upstream comparison is incomplete or target is not ahead of baseline.");
+  }
+  return { files: productionFiles(comparison.files), truncated: comparison.files.length >= 300 };
+}
+
 async function main(): Promise<void> {
   const existing = loadSurface(SURFACE_SRC);
   const current = catalogVersion(existing);
@@ -198,6 +211,16 @@ async function main(): Promise<void> {
   }
 
   const { resources, dataSources } = generated ?? generateSchema(target);
+  // Compare before writing: a failed baseline/source lookup must not silently bless an update.
+  const baseline = current !== null && current !== target ? generateSchema(current) : undefined;
+  const upstream = await upstreamChanges(current, target);
+  const review = renderReview({
+    current,
+    target,
+    resources: reviewEntries(existing.resources, resources, baseline?.resources),
+    dataSources: reviewEntries(existing.data_sources, dataSources, baseline?.dataSources),
+    ...upstream,
+  });
   const mergedResources = mergeStatuses(existing.resources, resources);
   const mergedDataSources = mergeStatuses(existing.data_sources, dataSources);
   const next: Surface = {
@@ -229,6 +252,8 @@ async function main(): Promise<void> {
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   writeFileSync(SURFACE_SRC, payload);
   writeFileSync(SURFACE_E2E, payload);
+  writeFileSync(REVIEW, review);
+  console.log(review);
   console.log(`Refreshed provider surface: v${current ?? "?"} -> v${target}`);
   console.log(`Resources: ${existing.resource_count} -> ${next.resource_count} (covered ${next.resources_covered})`);
   console.log(
