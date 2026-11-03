@@ -10,7 +10,7 @@ afterEach((): void => {
   localStorage.clear();
 });
 
-test.each(["preserve", "replace", "unavailable", "github", "unknown"] as const)(
+test.each(["preserve", "replace", "unavailable", "github", "unknown", "clear"] as const)(
   "Stack connection picker %s keeps credentials scoped and saves the selected source",
   async (scenario) => {
     let payload: JsonObject | undefined;
@@ -94,7 +94,12 @@ test.each(["preserve", "replace", "unavailable", "github", "unknown"] as const)(
       );
     }
     if (scenario === "replace") fireEvent.change(picker, { target: { value: "oauth-token:ot-replacement" } });
-    if (checkbox !== null) fireEvent.click(checkbox);
+    if (checkbox !== null && scenario !== "clear") fireEvent.click(checkbox);
+    if (scenario === "clear") {
+      fireEvent.change(picker, { target: { value: "" } });
+      expect(picker.value).toBe("");
+      expect(checkbox?.getAttribute("aria-checked")).toBe("false");
+    }
     if (scenario === "github") {
       fireEvent.change(picker, { target: { value: "github-app:gha-saved" } });
       expect(view.queryByLabelText("Include Azure DevOps Git submodules")).toBeNull();
@@ -110,13 +115,16 @@ test.each(["preserve", "replace", "unavailable", "github", "unknown"] as const)(
             scenario === "github"
               ? { "github-app-installation-id": "gha-saved", "service-provider": "github" }
               : {
-                  "oauth-token-id": scenario === "replace" ? "ot-replacement" : "ot-saved",
+                  ...(scenario === "clear"
+                    ? {}
+                    : { "oauth-token-id": scenario === "replace" ? "ot-replacement" : "ot-saved" }),
                   "ingress-submodules": scenario === "unknown",
                 },
         },
       },
     });
-    if (scenario === "github") expect(JSON.stringify(payload)).not.toContain("oauth-token-id");
+    if (scenario === "github" || scenario === "clear") expect(JSON.stringify(payload)).not.toContain("oauth-token-id");
+    if (scenario === "clear") expect(JSON.stringify(payload)).not.toContain("github-app-installation-id");
     if (scenario === "unknown") expect(JSON.stringify(payload)).not.toContain("service-provider");
   },
 );

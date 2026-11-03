@@ -68,6 +68,57 @@ describe("Azure DevOps Services PAT integration", () => {
     expect(stored?.token).not.toBe("test-pat-one");
     expect(await decryptSecret(stored!.token)).toBe("test-pat-one");
   });
+  test("provider oauth-token-string creates and rotates a PAT without leaking it", async () => {
+    const { "oauth-token": _uiToken, ...providerAttributes } = attributes;
+    const response = await request("POST", `/organizations/${orgName}/oauth-clients`, {
+      data: { attributes: { ...providerAttributes, "oauth-token-string": "provider-pat-one" } },
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    const providerClientId = body.data.id;
+    const providerTokenId = body.data.relationships["oauth-tokens"].data[0]?.id;
+    expect(providerTokenId).toMatch(/^ot-/);
+    expect(JSON.stringify(body)).not.toContain("provider-pat-one");
+    const stored = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, providerTokenId) });
+    expect(await decryptSecret(stored!.token)).toBe("provider-pat-one");
+    const patched = await request("PATCH", `/oauth-clients/${providerClientId}`, {
+      data: { attributes: { "oauth-token-string": "provider-pat-two" } },
+    });
+    expect(patched.status).toBe(200);
+    expect((await patched.json()).data.relationships["oauth-tokens"].data).toEqual([
+      { id: providerTokenId, type: "oauth-tokens" },
+    ]);
+    const rotated = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, providerTokenId) });
+    expect(await decryptSecret(rotated!.token)).toBe("provider-pat-two");
+    for (const invalid of [
+      { "oauth-token": "one", "oauth-token-string": "two" },
+      { "oauth-token-string": null },
+      { "oauth-token-string": 42 },
+      { "oauth-token-string": "" },
+      { "oauth-token-string": "bad\r\nheader" },
+    ]) {
+      expect(
+        (
+          await request("POST", `/organizations/${orgName}/oauth-clients`, {
+            data: { attributes: { ...providerAttributes, ...invalid } },
+          })
+        ).status,
+      ).toBe(422);
+      expect(
+        (await request("PATCH", `/oauth-clients/${providerClientId}`, { data: { attributes: invalid } })).status,
+      ).toBe(422);
+    }
+    const unchanged = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, providerTokenId) });
+    expect(await decryptSecret(unchanged!.token)).toBe("provider-pat-two");
+    expect(
+      (
+        await request("PATCH", `/oauth-clients/${providerClientId}`, {
+          data: { attributes: { "oauth-token": "same-pat", "oauth-token-string": "same-pat" } },
+        })
+      ).status,
+    ).toBe(200);
+    await db.delete(oauthClients).where(eq(oauthClients.id, providerClientId));
+  });
   test("rotates in place preserving token IDs and webhook secret", async () => {
     expect(
       (

@@ -517,6 +517,15 @@ for (const route of routes) {
       },
     };
   }
+  if (m === "post" && openApiPath === "/api/webhooks/azure-devops/{clientId}") {
+    operation.security = [{ azureDevOpsWebhookBasic: [] }];
+    operation.description =
+      "Azure DevOps Services service hook. Use the OAuth client ID as the Basic username and its separate webhook secret as the password, never the PAT. Configure subscriptions manually with full resource details.";
+    operation.requestBody = {
+      required: true,
+      content: { "application/json": { schema: { type: "object" } } },
+    };
+  }
   paths[openApiPath][m] = operation;
 }
 
@@ -533,6 +542,7 @@ const document = {
   components: {
     securitySchemes: {
       bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      azureDevOpsWebhookBasic: { type: "http", scheme: "basic" },
     },
   },
   security: [{ bearerAuth: [] }],

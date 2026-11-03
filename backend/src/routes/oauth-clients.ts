@@ -722,6 +722,21 @@ function oauthClientPatchDocument(body: unknown): {
   return { data, attributes };
 }
 
+/** go-tfe uses oauth-token-string for Azure PATs; the UI uses oauth-token. */
+function normalizeOAuthTokenAttributes(attributes: Record<string, unknown>): string | undefined {
+  const token = attributes["oauth-token"];
+  const tokenString = attributes["oauth-token-string"];
+  if (
+    (token !== undefined && typeof token !== "string") ||
+    (tokenString !== undefined && typeof tokenString !== "string")
+  )
+    return "oauth-token and oauth-token-string must be strings";
+  if (token !== undefined && tokenString !== undefined && token !== tokenString)
+    return "oauth-token and oauth-token-string must match when both are supplied";
+  if (tokenString !== undefined) attributes["oauth-token"] = tokenString;
+  return undefined;
+}
+
 function applyOAuthClientFieldUpdates(
   attributes: Record<string, unknown>,
   updates: Partial<typeof oauthClients.$inferInsert>,
@@ -1247,6 +1262,8 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const { data, attributes } = oauthClientPatchDocument(body);
+      const tokenError = normalizeOAuthTokenAttributes(attributes);
+      if (tokenError !== undefined) return unprocessable(set, tokenError);
       const validated = validateOAuthClientCreate(attributes, set);
       if ("error" in validated) return validated.error;
       const { name, serviceProvider } = validated;
@@ -1328,6 +1345,8 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
       const { data, attributes } = oauthClientPatchDocument(body);
+      const tokenError = normalizeOAuthTokenAttributes(attributes);
+      if (tokenError !== undefined) return unprocessable(set, tokenError);
       const updates: Partial<typeof oauthClients.$inferInsert> = {};
       const fieldError = applyOAuthClientFieldUpdates(attributes, updates, set);
       if (fieldError !== null) return fieldError;

@@ -307,7 +307,7 @@ function applyStackConnection(form: StackForm, connection: VcsConnection | undef
     vcsOAuthTokenId: connection?.kind === "oauth-token" ? connection.id : "",
     vcsGhaInstallationId: connection?.kind === "github-app" ? connection.id : "",
     vcsServiceProvider: provider,
-    vcsIngressSubmodules: provider === "ado_services" && form.vcsIngressSubmodules,
+    vcsIngressSubmodules: connection !== undefined && provider === "ado_services" && form.vcsIngressSubmodules,
   };
 }
 
