@@ -396,6 +396,25 @@ jobs:
       - name: Run browser E2E & accessibility suite (Bun.WebView)
         run: bun run test:profile -- browser
 
+  stock-tfpolicy-protocol:
+    name: Stock Terraform policy protocol (test-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: auto
+      CHECKPOINT_DISABLE: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test stock Terraform with mock BYOB recorder
+        # No secret variables, proprietary runtime, production feature switches,
+        # binary artifacts, privileged runner changes or external infrastructure.
+        run: bash backend/tests/compat/tfpolicy-stock/run.sh
+
   provider-compatibility:
     name: Provider and CLI (${{ matrix.engine }}, ${{ matrix.tier }})
     strategy:
