@@ -40,7 +40,11 @@ connections. In-memory gRPC tests independently cover callback payload forwardin
 Live cases cover a missing executable, setup error, process death during setup,
 process death during evaluation, aggregate-only denial, and allowance. The
 fixture only admits allowance, checks exact saved-plan hash and policy-scope
-identity, and rejects changed identities before applying its local-only plan.
+identity, and rejects changed identities before applying its local-only plan. A second
+matrix applies genuinely policy-enabled saved plans with the same runtime
+failure/denial/allowance cases. It asserts local resulting state is retained
+and distinguishes Terraform exit status from policy compliance. The fixture
+explicitly expects the inline provider evaluation as well as resource evaluation.
 
 The recorder tests exercise raw aggregate results that Terraform's JSON UI can
 omit, contradictory allowance/error responses, missing/duplicate expected
@@ -57,9 +61,10 @@ compatibility. It must not be used to justify bypassing an existing guard.
 
 Still required: comprehensive graph coverage, protected recorder evidence and
 process fencing, real authorized BYOB runtime acceptance, initialization policy
-coverage, post-apply state preservation, server admission and hosted/agent
+coverage, production post-apply state handling, server admission and hosted/agent
 integration. Apply-time policy checks may run after infrastructure changes;
-this harness does not establish their behavior.
+the live fixture checks that failed post-apply policy outcomes do not discard
+the local state or pretend the infrastructure change was rolled back.
 
 The harness is original test code using upstream protocol types at build time.
 Downloaded Terraform/source retains its upstream licensing. Public availability

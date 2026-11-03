@@ -24,7 +24,8 @@ def admitted(process,events,journal,plan):
     resource=[e for e in journal if e['Method']=='EvaluateResource']
     # Mock verifies exact fixture resource metadata/input and calls native GetResources.
     callbacks=[e for e in journal if e['Method']=='GetResources']
-    return len(setup)==1 and len(resource)==1 and len(callbacks)==1 and len(journal)==3 and resource[0]['Result']==3
+    providers=[e for e in journal if e['Method']=='EvaluateProvider']
+    return len(setup)==1 and len(resource)==1 and len(callbacks)==1 and len(providers)==1 and len(journal)==4 and resource[0]['Result']==3 and providers[0]['Result']==3
 
 def authorize(receipt,plan,scope):return receipt=={'plan':sha(plan),'scope':scope}
 
@@ -68,7 +69,36 @@ def main():
           apply=apply_if_admitted('scope1')
           assert apply is not None and apply.returncode==0, apply.stderr.decode() if apply else 'not admitted'
           assert (folder/'terraform.tfstate').exists()
-        report.append({'mode':mode,'terraform_exit':result.returncode,'admitted':allow,'rpc_events':len(journal)})
+        report.append({'stage':'plan','mode':mode,'terraform_exit':result.returncode,'admitted':allow,'rpc_events':len(journal)})
+      # Native apply policies run after managed-resource processing. Establish
+      # truthful failed/incomplete policy outcomes without throwing away state.
+      for mode in ('missing','setup-error','incomplete','evaluation-crash','deny','allow'):
+        folder=pathlib.Path(root,'apply-'+mode);folder.mkdir();(folder/'policies').mkdir()
+        (folder/'main.tf').write_text('resource "terraform_data" "canary" { input = "test-only" }\n')
+        (folder/'policies'/'fixture.policy.hcl').write_text('# Mock runtime fixture.\n')
+        policy_flag='-policies='+str(folder/'policies')
+        plan_env=dict(base_env,TF_POLICY_PLUGIN=harness,TFPOLICY_TEST_MODE='allow',TFPOLICY_JOURNAL=str(folder/'plan-journal.json'))
+        initialized=run([terraform,'init','-input=false','-no-color'],folder,plan_env)
+        assert initialized.returncode==0,initialized.stderr.decode()
+        planned=run([terraform,'plan','-json','-input=false',policy_flag,'-out=saved.tfplan'],folder,plan_env)
+        saved=(folder/'saved.tfplan').read_bytes()
+        assert admitted(planned,[json.loads(x) for x in planned.stdout.splitlines()],json.loads((folder/'plan-journal.json').read_text()),saved)
+        receipt={'plan':sha(saved),'scope':'scope1'}
+        assert authorize(receipt,(folder/'saved.tfplan').read_bytes(),'scope1')
+        apply_journal=folder/'apply-journal.json'
+        apply_env=dict(base_env,TF_POLICY_PLUGIN=harness if mode!='missing' else str(folder/'missing'),TFPOLICY_TEST_MODE=mode,TFPOLICY_JOURNAL=str(apply_journal))
+        applied=run([terraform,'apply','-json','-input=false','-auto-approve',policy_flag,'saved.tfplan'],folder,apply_env)
+        events=[json.loads(line) for line in applied.stdout.splitlines()]
+        journal=json.loads(apply_journal.read_text()) if apply_journal.exists() else []
+        compliant=admitted(applied,events,journal,saved)
+        assert compliant==(mode=='allow'),(mode,applied.returncode,journal,applied.stdout.decode(),applied.stderr.decode())
+        state_path=folder/'terraform.tfstate'
+        assert state_path.exists(),(mode,'post-apply state was not retained',applied.stderr.decode())
+        resulting_state=json.loads(state_path.read_text())
+        resources=resulting_state.get('resources',[])
+        assert any(r.get('type')=='terraform_data' and r.get('name')=='canary' and r.get('instances') for r in resources),(mode,resulting_state)
+        # A failed policy result is not a failed-to-mutate or rolled-back apply.
+        report.append({'stage':'apply','mode':mode,'terraform_exit':applied.returncode,'compliant':compliant,'state_retained':True,'infrastructure_changed':True,'rpc_events':len(journal)})
     print(json.dumps({'terraform':'1.17.1','results':report,'warning':'fixture inventory only; not production admission'},indent=2))
 
 if __name__=='__main__':main()

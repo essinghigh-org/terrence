@@ -182,7 +182,10 @@ func (s *mockRuntime) EvaluateResource(ctx context.Context, q *p.PolicyEvaluateR
 	}
 	return &p.PolicyEvaluateResourceResponse{Result: result}, nil
 }
-func (s *mockRuntime) EvaluateProvider(context.Context, *p.PolicyEvaluateProviderRequest) (*p.PolicyEvaluateProviderResponse, error) {
+func (s *mockRuntime) EvaluateProvider(_ context.Context, q *p.PolicyEvaluateProviderRequest) (*p.PolicyEvaluateProviderResponse, error) {
+	if q.ProviderType != "terraform" || q.Metadata == nil || q.Metadata.Name != "terraform" || q.Metadata.Source != "terraform.io/builtin/terraform" {
+		return nil, fmt.Errorf("unexpected fixture provider identity")
+	}
 	return &p.PolicyEvaluateProviderResponse{Result: p.EvaluateResult_ALLOW_EVALUATE_RESULT}, nil
 }
 func (s *mockRuntime) EvaluateModule(context.Context, *p.PolicyEvaluateModuleRequest) (*p.PolicyEvaluateModuleResponse, error) {
