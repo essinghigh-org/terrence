@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fetchLatestTfeProviderVersion } from "../src/lib/provider-version";
 
+import { providerCompareUrl } from "./lib/provider-compare-url";
 import { productionFiles, renderReview, reviewEntries, schemaHash, type UpstreamFile } from "./lib/provider-drift";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
@@ -174,17 +175,16 @@ async function upstreamChanges(
   target: string,
 ): Promise<{ files: UpstreamFile[]; truncated: boolean }> {
   if (current === null || current === target) return { files: [], truncated: false };
-  const response = await fetch(
-    `https://api.github.com/repos/hashicorp/terraform-provider-tfe/compare/v${current}...v${target}`,
-    {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "terrence-provider-surface",
-        ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
-      },
-      signal: AbortSignal.timeout(30_000),
+  const response = await fetch(providerCompareUrl(current, target), {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "terrence-provider-surface",
+      ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
     },
-  );
+    // Fail closed if the fixed upstream endpoint attempts to redirect.
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!response.ok)
     throw new Error(`Upstream source comparison failed (${response.status}); refusing an incomplete refresh.`);
   const comparison = (await response.json()) as { files?: UpstreamFile[]; status?: string };

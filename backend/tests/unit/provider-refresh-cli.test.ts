@@ -46,7 +46,7 @@ function fixture(failComparison = false) {
   const preload = join(root, "fetch.ts");
   writeFileSync(
     preload,
-    `globalThis.fetch = async (url) => { if(!String(url).endsWith('/compare/v0.82.0...v0.83.0')) throw new Error('Unexpected request '+url); return new Response(JSON.stringify({status:'ahead',files:[{filename:'internal/provider/resource_tfe_policy_set.go',status:'modified'}]}), {status:${failComparison ? 503 : 200}}); };`,
+    `globalThis.fetch = async (url, options) => { if(options?.redirect !== "error") throw new Error("Redirects must be rejected"); if(!String(url).endsWith('/compare/v0.82.0...v0.83.0')) throw new Error('Unexpected request '+url); return new Response(JSON.stringify({status:'ahead',files:[{filename:'internal/provider/resource_tfe_policy_set.go',status:'modified'}]}), {status:${failComparison ? 503 : 200}}); };`,
   );
   const result = spawnSync(
     process.execPath,
