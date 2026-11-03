@@ -1,3 +1,4 @@
+import { stackPolicyExecutionError } from "./stack-policy-gate";
 import { newResourceId } from "./resource-id";
 import { createHash } from "node:crypto";
 import { cp, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile, rename, copyFile } from "node:fs/promises";
@@ -1457,6 +1458,19 @@ async function loadStackDeploymentInputs(
         });
   if (stack === undefined || configuration === undefined) {
     if (stack !== undefined) await failStackRun(stack, run, undefined, "Stack configuration is unavailable");
+    return undefined;
+  }
+  const policyError = await stackPolicyExecutionError(stack);
+  if (policyError !== null) {
+    const step = await db.query.stackRecords.findFirst({
+      where: and(eq(stackRecords.parentId, run.id), eq(stackRecords.recordType, "stack-deployment-steps")),
+      orderBy: [desc(stackRecords.createdAt)],
+    });
+    await failStackRun(stack, run, step, policyError);
+    await db
+      .update(stackAgentJobs)
+      .set({ status: "errored", errorMessage: policyError, completedAt: Date.now(), updatedAt: Date.now() })
+      .where(and(eq(stackAgentJobs.deploymentRunId, run.id), inArray(stackAgentJobs.status, ["queued", "claimed"])));
     return undefined;
   }
   const runPayload = run.payload ?? {};

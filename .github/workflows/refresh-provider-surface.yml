@@ -32,6 +32,8 @@ jobs:
           terraform_version: v1.16.5
 
       - name: Regenerate the provider surface from the latest release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bun backend/scripts/refresh-provider-surface.ts
 
       - name: Open a pull request when the surface changed
@@ -41,7 +43,8 @@ jobs:
           set -euo pipefail
           if git diff --exit-code --quiet -- \
               backend/src/data/provider_surface.json \
-              backend/tests/e2e/provider_surface.json; then
+              backend/tests/e2e/provider_surface.json \
+              backend/src/data/provider_refresh_review.md; then
             echo "Provider surface is current; nothing to do."
             exit 0
           fi
@@ -51,13 +54,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           gh auth setup-git
           git checkout -B "$BRANCH"
-          git add backend/src/data/provider_surface.json backend/tests/e2e/provider_surface.json
+          git add backend/src/data/provider_surface.json backend/tests/e2e/provider_surface.json backend/src/data/provider_refresh_review.md
           git commit -m "chore: refresh provider surface to ${VERSION}"
           git push -u origin "$BRANCH" --force
           if gh pr list --head "$BRANCH" --json number --jq 'length' | grep -q '^[1-9]'; then
-            echo "PR for $BRANCH already exists; branch force-updated."
+            gh pr edit "$BRANCH" --body-file backend/src/data/provider_refresh_review.md
+            echo "PR for $BRANCH already exists; branch and review report updated."
           else
             gh pr create \
               --title "chore: refresh provider surface to ${VERSION}" \
-              --body "Automated refresh from the weekly provider-surface job: regenerated from \`terraform providers schema -json\` against the latest hashicorp/tfe release. New resources are marked backend-gap until implemented."
+              --body-file backend/src/data/provider_refresh_review.md
           fi

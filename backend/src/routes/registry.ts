@@ -1,3 +1,4 @@
+import { parseBindings, replaceBindings } from "../lib/registry-artifact-tags";
 import { integrationSetting } from "../lib/runtime-config";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
@@ -161,7 +162,10 @@ type ProvItem = DeepReadonly<typeof registryProviders.$inferSelect>;
 
 // go-tfe RegistryProvider carries a pointer `organization` relationship;
 // omitting it makes the provider nil-deref v.Organization.Name.
-function registryProviderResource(value: ProvItem, orgName: string): Record<string, unknown> {
+export function registryProviderResource(
+  value: Omit<ProvItem, "tagBindings">,
+  orgName: string,
+): Record<string, unknown> {
   return {
     id: value.id,
     type: "registry-providers",
@@ -276,7 +280,7 @@ function latestUsableProviderSource(moduleProvider: string, versions: readonly M
 // RegistryModule carry a pointer `organization` relationship plus attributes
 // the provider's model dereferences (status, publishing-mechanism, no-code);
 // omitting any makes the provider nil-deref or return inconsistently.
-async function registryModuleResource(
+export async function registryModuleResource(
   m: ModItem,
   orgName: string,
   canManage: boolean,
@@ -389,7 +393,7 @@ async function deleteRegistryModuleAndArchives(moduleId: string): Promise<void> 
   );
 }
 
-async function checkRegistryManagementRead(
+export async function checkRegistryManagementRead(
   userId: string | undefined,
   orgId: string,
   kind: "modules" | "providers",
@@ -3330,6 +3334,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
       const resolved = await resolveRegistryModuleForWrite(params, user?.id, tokenOrgId, teamId, set);
       if ("failure" in resolved) return resolved.failure;
       const { org, mod } = resolved;
+      const relationships = (body as { data?: { relationships?: Record<string, unknown> } } | null)?.data
+        ?.relationships;
+      const hasTags = relationships != null && Object.hasOwn(relationships, "tag-bindings");
+      const tags = hasTags ? parseBindings(body, "modules") : undefined;
+      if (hasTags && !tags) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Invalid tag bindings" }] };
+      }
       const validated = validateModulePatchFields(jsonApiAttributes(body), mod.branch);
       if ("error" in validated) {
         (set as { status: number }).status = 422;
@@ -3338,6 +3350,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       await db
         .update(registryModules)
         .set({
+          ...(tags ? { tagBindings: replaceBindings(mod.tagBindings, tags) } : {}),
           ...(typeof validated.sourceDirectory === "string" ? { sourceDirectory: validated.sourceDirectory } : {}),
           ...(typeof validated.tagPrefix === "string" ? { tagPrefix: validated.tagPrefix } : {}),
           updatedAt: Date.now(),

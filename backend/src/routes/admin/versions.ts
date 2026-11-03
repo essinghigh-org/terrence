@@ -1,3 +1,4 @@
+import { tfpolicyVersionsRoutes } from "./tfpolicy-versions";
 import { newResourceId } from "../../lib/resource-id";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
@@ -27,6 +28,7 @@ function fillVersionUpdates(attrs: Record<string, unknown>, updates: VersionUpda
 
 export const versionsRoutes = new Elysia({ name: "admin-versions" })
   .use(authPlugin)
+  .use(tfpolicyVersionsRoutes)
   .get("/api/v2/admin/terraform-versions", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
       (set as { status: number }).status = 404;

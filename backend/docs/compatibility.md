@@ -20,6 +20,21 @@ retry contract](retry-contract).
 
 The provider surface is refreshed from the provider schema and verified by provider end-to-end tests. A schema entry is not considered compatible merely because the server accepts a request: supported resources and data sources must perform their provider operations successfully.
 
+## Terraform policy (`tfpolicy`) limitation
+
+The policy-set API accepts `kind = "tfpolicy"`, preserves policy-tool versions, and
+rejects `agent_enabled` and `overridable`, matching the provider's configuration
+contract. This is **metadata compatibility, not Terraform policy execution
+support**. Terraform policy archive ingestion and its execution engine are not
+implemented yet. Individually managed Sentinel/OPA policy resources cannot be
+used to populate Terraform policy sets.
+
+An applicable Terraform policy set blocks hosted and agent runs from applying,
+even if it has no individual policy records. The run records an `unreachable`
+policy check explaining that execution is unsupported; it cannot be overridden.
+Do not attach a Terraform policy set to a workspace expecting it to evaluate or
+approve a plan until execution support is implemented and tested.
+
 ## Not a goal
 
 Terrence does not promise:

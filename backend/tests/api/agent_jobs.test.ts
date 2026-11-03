@@ -794,6 +794,10 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
       policySetParameters,
       policySets,
       policySetWorkspaces,
+      policySetTagSelectors,
+      policySetProjectExclusions,
+      projects,
+      workspaceTags,
       runs,
       workspaces,
     } = await import("./src/db/schema.ts");
@@ -817,7 +821,9 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
       name: "agent",
       status: "idle",
     });
+    await db.insert(projects).values({ id: "project", orgId: "org", name: "project" });
     await db.insert(workspaces).values({
+      projectId: "project",
       id: "workspace",
       orgId: "org",
       name: "workspace",
@@ -842,18 +848,18 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
         agentEnabled: false,
       },
     ]);
+    await db.insert(policySets).values({ id: "excluded-set", orgId: "org", name: "excluded global policies", global: true, kind: "sentinel", agentEnabled: true });
+    await db.insert(policySetProjectExclusions).values({ id: "excluded-project", policySetId: "excluded-set", projectId: "project" });
+    await db.insert(policies).values({ id: "excluded-policy", policySetId: "excluded-set", name: "must not run", enforcementLevel: "hard-mandatory", source: "main = rule { false }" });
     await db.insert(policySetWorkspaces).values([
-      {
-        id: "agent-link",
-        policySetId: "agent-set",
-        workspaceId: "workspace",
-      },
       {
         id: "platform-link",
         policySetId: "platform-set",
         workspaceId: "workspace",
       },
     ]);
+    await db.insert(workspaceTags).values({ id: "scope-tag", workspaceId: "workspace", key: "env", value: "prod" });
+    await db.insert(policySetTagSelectors).values({ id: "scope-selector", policySetId: "agent-set", key: "env", value: "prod", isExclude: false });
     await db.insert(policies).values([
       {
         id: "hard-policy",
@@ -1333,3 +1339,40 @@ test("stale sweep releases a cancel-held lock only after the heartbeat lease exp
   `);
   expect(result).toEqual({ deadLocked: false, liveLocked: true });
 }, 30_000);
+
+test("agent completion blocks unsupported tfpolicy sets with no individual policies", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, workspaces, runs, agentPools, agentPoolTokens, agents, agentJobs, policySets, policySetWorkspaces, policyChecks } = await import("./src/db/schema.ts");
+    const { hashAuthenticationToken } = await import("./src/lib/token-service.ts");
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agentPoolTokens).values({ id: "token", agentPoolId: "pool", token: hashAuthenticationToken("agent-fixture-token") });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "idle" });
+    await db.insert(workspaces).values({ id: "ws", orgId: "org", name: "ws", executionMode: "agent", agentPoolId: "pool" });
+    await db.insert(policySets).values({ id: "tfpolicy-set", orgId: "org", name: "tfpolicy", kind: "tfpolicy" });
+    await db.insert(policySetWorkspaces).values({ id: "link", policySetId: "tfpolicy-set", workspaceId: "ws" });
+    await db.insert(runs).values({ id: "run", workspaceId: "ws", agentPoolId: "pool", autoApply: true, status: "plan_queued", createdAt: 1 });
+    await db.insert(agentJobs).values({ id: "job", runId: "run", agentPoolId: "pool", phase: "plan", status: "queued" });
+    const request = (path, body, fencingToken) => app.handle(new Request("http://terrence.test/api/v2/agents/agent" + path, {
+      method: "POST", headers: { Authorization: "Bearer agent-fixture-token", "Content-Type": "application/vnd.api+json", ...(fencingToken === undefined ? {} : { "tfc-agent-fencing-token": String(fencingToken) }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }));
+    const claim = await request("/jobs/poll");
+    const claimed = (await claim.json()).data;
+    const completion = await request("/jobs/job/complete", { data: { type: "agent-jobs", attributes: {
+      status: "completed", "resource-additions": 1, result: { "plan-handle": "saved-plan" },
+    } } }, claimed.attributes["fencing-token"]);
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
+    const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, "run") });
+    const jobs = await db.query.agentJobs.findMany({ where: eq(agentJobs.runId, "run") });
+    console.log(JSON.stringify({ claim: claim.status, completion: completion.status, status: run.status, checks, phases: jobs.map(job => job.phase) }));
+  `);
+  expect(result["claim"]).toBe(200);
+  expect(result["completion"]).toBe(200);
+  expect(result["status"]).toBe("errored");
+  expect(result["phases"]).toEqual(["plan"]);
+  expect(result["checks"]).toMatchObject([{ policyId: null, policySetId: "tfpolicy-set", status: "unreachable" }]);
+});

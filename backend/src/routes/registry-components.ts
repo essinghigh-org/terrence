@@ -19,7 +19,7 @@ type Ctx = Readonly<{
   set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 }>;
 
-function componentResource(row: typeof registryComponents.$inferSelect): Record<string, unknown> {
+export function componentResource(row: typeof registryComponents.$inferSelect): Record<string, unknown> {
   return {
     id: row.id,
     type: "registry-components",

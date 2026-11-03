@@ -193,6 +193,34 @@ main = rule { secret_word == "s3cret" }
       .catch((): void => undefined);
   });
 
+  it("blocks a tfpolicy set even when it has no individual policy rows", async () => {
+    const setId = `ps-tfpolicy-${suffix}`;
+    const workspaceId = `ws-tfpolicy-${suffix}`;
+    const runId = `run-tfpolicy-${suffix}`;
+    await db.insert(workspaces).values({ id: workspaceId, name: workspaceId, orgId });
+    await db
+      .insert(runs)
+      .values({ id: runId, workspaceId, status: "planned", logToken: crypto.randomUUID(), createdAt: Date.now() });
+    await db.insert(policySets).values({ id: setId, name: setId, orgId, kind: "tfpolicy" });
+    await db.insert(policySetWorkspaces).values({ id: `psw-tfpolicy-${suffix}`, policySetId: setId, workspaceId });
+    try {
+      expect(await runPolicyChecks(runId, workspaceId, orgId, undefined, undefined, {})).toEqual({
+        proceed: false,
+        hardFailed: true,
+        softFailed: false,
+      });
+      const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({ status: "unreachable", policySetId: setId, policyId: null });
+      expect(checks[0]?.result?.["error"]).toContain("tfpolicy");
+      expect(checks[0]?.result?.["error"]).toContain("not supported");
+    } finally {
+      await db.delete(runs).where(eq(runs.id, runId));
+      await db.delete(policySets).where(eq(policySets.id, setId));
+      await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    }
+  });
+
   it("probe reports a missing engine with install guidance", async () => {
     await withEnv("OPA_BINARY_PATH", "/nonexistent/opa-xyz", async () => {
       const probed = await probePolicyEngine("opa");

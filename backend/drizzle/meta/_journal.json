@@ -512,6 +512,13 @@
       "when": 1791044918982,
       "tag": "0072_workspace_hyok_enablement",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1793726179097,
+      "tag": "0073_new_firebrand",
+      "breakpoints": true
     }
   ]
 }

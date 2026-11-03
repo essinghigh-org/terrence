@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
-import { getSettings, getSettingsFresh } from "../../lib/settings";
+import { getSettings, getSettingsFresh, localSignupEnabled } from "../../lib/settings";
 import { refreshTrustedClientIpHeaders } from "../../lib/client-ip";
 import { ldapSettings } from "../../lib/sso";
 import { invalidatePingSsoCache } from "../health";
@@ -115,7 +115,10 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    return settingResource("general-settings", await getSettings("general"));
+    return settingResource("general-settings", {
+      ...(await getSettings("general")),
+      "enable-public-registration": await localSignupEnabled(),
+    });
   })
   .patch("/api/v2/admin/general-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
@@ -129,6 +132,26 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
         typeof data?.["attributes"] === "object" && data["attributes"] !== null
           ? (data["attributes"] as Record<string, unknown>)
           : {};
+      if (Object.hasOwn(attrs, "enable-public-registration")) {
+        const value = attrs["enable-public-registration"];
+        if (
+          typeof value !== "boolean" ||
+          (Object.hasOwn(attrs, "local-signup-enabled") && attrs["local-signup-enabled"] !== value)
+        ) {
+          (set as { status: number }).status = 422;
+          return {
+            errors: [
+              {
+                status: "422",
+                title: "Unprocessable Entity",
+                detail: "enable-public-registration must be a boolean consistent with local-signup-enabled",
+              },
+            ],
+          };
+        }
+        attrs["local-signup-enabled"] = value;
+        delete attrs["enable-public-registration"];
+      }
       const current = await getSettingsFresh("general", false);
       const checked = checkGeneralSettingsAttrs(attrs, set);
       if ("error" in checked) return checked.error;
@@ -137,7 +160,10 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
       const updated = await updateSettings("general", attrs);
       await refreshTrustedClientIpHeaders();
       invalidatePingSsoCache();
-      return settingResource("general-settings", updated);
+      return settingResource("general-settings", {
+        ...updated,
+        "enable-public-registration": await localSignupEnabled(),
+      });
     });
   })
   // --- B.2 Data Retention Policy Settings ---

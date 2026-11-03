@@ -19,7 +19,8 @@
     "permission-denied",
     "normalized-state-convergence",
     "destroy-retains-enablement",
-    "recreate-already-enabled"
+    "recreate-already-enabled",
+    "destroy-restores-settings"
   ],
   "fixtures": [
     {
@@ -84,6 +85,13 @@
       "priority": true,
       "resources": ["tfe_registry_module", "tfe_registry_provider", "tfe_test_variable", "tfe_registry_gpg_key"],
       "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "admin-provider-lifecycle",
+      "label": "Admin settings, banners and TFPolicy versions",
+      "priority": true,
+      "resources": ["tfe_admin_general_settings", "tfe_admin_customization_settings", "tfe_admin_banner", "tfe_tfpolicy_version"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "update", "clear-optional", "restore-optional", "normalized-state-convergence", "destroy-restores-settings"]
     }
   ]
 }

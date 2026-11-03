@@ -484,6 +484,13 @@
       "when": 1791044919773,
       "tag": "0068_workspace_hyok_enablement",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1793726181185,
+      "tag": "0069_cold_banshee",
+      "breakpoints": true
     }
   ]
 }

@@ -2102,6 +2102,8 @@ export function serviceProviderDisplayName(provider: string): string {
     bitbucket_data_center: "Bitbucket Data Center",
     azure_devops_server: "Azure DevOps Server",
     ado_server: "Azure DevOps Server",
+    ado_services: "Azure DevOps Services",
+    bitbucket_server: "Bitbucket Server",
   };
   return map[provider] ?? provider;
 }

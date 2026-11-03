@@ -76,6 +76,43 @@ describe("Policy & policy-set list filters (POL-001)", () => {
     await db.delete(users).where(eq(users.id, userId));
   });
 
+  it("round trips and validates tag selector matching logic", async () => {
+    const path = `/api/v2/organizations/${orgName}/policy-sets`;
+    const created = await request(path, "POST", {
+      data: { type: "policy-sets", attributes: { name: `tag-logic-${suffix}`, "tag-selector-matching-logic": "all" } },
+    });
+    expect(created.status).toBe(201);
+    const body = await created.json();
+    const resourcePath = `/api/v2/policy-sets/${body.data.id}`;
+    expect(body.data.attributes["tag-selector-matching-logic"]).toBe("all");
+    for (const value of ["any", "all", null]) {
+      const response = await request(resourcePath, "PATCH", {
+        data: { type: "policy-sets", attributes: { "tag-selector-matching-logic": value } },
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).data.attributes["tag-selector-matching-logic"]).toBe(value);
+      const read = await request(resourcePath);
+      expect((await read.json()).data.attributes["tag-selector-matching-logic"]).toBe(value);
+    }
+    for (const value of ["invalid", true, 1]) {
+      expect(
+        (
+          await request(resourcePath, "PATCH", {
+            data: { type: "policy-sets", attributes: { "tag-selector-matching-logic": value } },
+          })
+        ).status,
+      ).toBe(422);
+      expect(
+        (
+          await request(path, "POST", {
+            data: { type: "policy-sets", attributes: { name: "invalid", "tag-selector-matching-logic": value } },
+          })
+        ).status,
+      ).toBe(422);
+    }
+    await request(resourcePath, "DELETE");
+  });
+
   it("policies list returns all kinds without a filter", async () => {
     const res = await request(`/api/v2/organizations/${orgName}/policies`);
     expect(res.status).toBe(200);

@@ -1,3 +1,4 @@
+import { resolveWorkspacePolicySetIds } from "./policy-set-scope";
 import { runConfigurationTrusted } from "./run-trust";
 import { integerSetting } from "./runtime-config";
 import { newResourceId } from "./resource-id";
@@ -13,11 +14,8 @@ import {
   logs,
   policies,
   policyChecks,
-  policySetExclusions,
   policySetParameters,
-  policySetProjects,
   policySets,
-  policySetWorkspaces,
   runs,
   stateVersions,
   workspaces,
@@ -158,6 +156,7 @@ function effectivePingWriteIntervalMs(): number {
 const AGENT_TOKEN_LAST_USED_INTERVAL_MS = 60_000;
 
 type AgentPolicyEvaluation = Readonly<{
+  unsupportedSets: readonly Readonly<{ id: string; kind: string }>[];
   policySets: readonly Readonly<{
     id: string;
     name: string;
@@ -233,41 +232,18 @@ async function getAgentPolicyEvaluation(
   database: Database,
   workspace: Workspace,
 ): Promise<AgentPolicyEvaluation | null> {
-  const [attached, projectAttached, globalSets, exclusions] = await Promise.all([
-    database.query.policySetWorkspaces.findMany({
-      where: eq(policySetWorkspaces.workspaceId, workspace.id),
-    }),
-    workspace.projectId === null
-      ? Promise.resolve([])
-      : database.query.policySetProjects.findMany({
-          where: eq(policySetProjects.projectId, workspace.projectId),
-        }),
-    database.query.policySets.findMany({
-      where: and(eq(policySets.orgId, workspace.orgId), eq(policySets.global, true)),
-    }),
-    database.query.policySetExclusions.findMany({
-      where: eq(policySetExclusions.workspaceId, workspace.id),
-    }),
-  ]);
-  const excludedIds = new Set(exclusions.map((exclusion): string => exclusion.policySetId));
-  const attachedIds = [
-    ...new Set([
-      ...attached.map((link): string => link.policySetId),
-      ...projectAttached.map((link): string => link.policySetId),
-      ...globalSets.map((policySet): string => policySet.id),
-    ]),
-  ].filter((policySetId): boolean => !excludedIds.has(policySetId));
+  const attachedIds = await resolveWorkspacePolicySetIds(database, workspace.id, workspace.orgId);
   if (attachedIds.length === 0) return null;
 
   const effectiveSets = await database.query.policySets.findMany({
     where: and(
       inArray(policySets.id, attachedIds),
       eq(policySets.orgId, workspace.orgId),
-      eq(policySets.kind, "sentinel"),
-      eq(policySets.agentEnabled, true),
+      or(and(eq(policySets.kind, "sentinel"), eq(policySets.agentEnabled, true)), eq(policySets.kind, "tfpolicy")),
     ),
     orderBy: [asc(policySets.createdAt), asc(policySets.id)],
   });
+  const unsupportedSets = effectiveSets.filter((policySet): boolean => policySet.kind === "tfpolicy");
   const effectiveIds = effectiveSets.map((policySet): string => policySet.id);
   if (effectiveIds.length === 0) return null;
 
@@ -283,6 +259,7 @@ async function getAgentPolicyEvaluation(
   ]);
   const policySetsWithPolicies: AgentPolicyEvaluation["policySets"][number][] = [];
   for (const policySet of effectiveSets) {
+    if (policySet.kind === "tfpolicy") continue;
     const setPolicies = effectivePolicies
       .filter((policy): boolean => policy.policySetId === policySet.id)
       .map(
@@ -320,7 +297,9 @@ async function getAgentPolicyEvaluation(
       parameters: decryptedParameters,
     });
   }
-  return policySetsWithPolicies.length === 0 ? null : { policySets: policySetsWithPolicies };
+  return policySetsWithPolicies.length === 0 && unsupportedSets.length === 0
+    ? null
+    : { policySets: policySetsWithPolicies, unsupportedSets };
 }
 
 function agentPolicyResults(
@@ -370,6 +349,20 @@ async function recordAgentPolicyChecks(
   const evaluation = await getAgentPolicyEvaluation(database, workspace);
   if (evaluation === null) {
     return { evaluated: false, hardFailed: false, softFailed: false };
+  }
+
+  if (evaluation.unsupportedSets.length > 0) {
+    for (const policySet of evaluation.unsupportedSets) {
+      await database.insert(policyChecks).values({
+        id: newResourceId("pchk"),
+        runId,
+        policySetId: policySet.id,
+        status: "unreachable",
+        result: { error: `Policy set kind '${policySet.kind}' execution is not supported; refusing to apply` },
+        createdAt: now,
+      });
+    }
+    return { evaluated: true, hardFailed: true, softFailed: false };
   }
 
   const reported = agentPolicyResults(result);

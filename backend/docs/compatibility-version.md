@@ -72,3 +72,20 @@ The weekly scheduled run selects `TERRENCE_E2E_TIER=canary`, which resolves the 
 ## Public plan projection
 
 Public plan JSON carries `public_plan_version: 1` alongside the engine's `format_version`. It excludes raw variables, configuration and state; sensitivity masks govern exposed change values. An absent value remains absent, distinct from explicit `null`. Ordered known action names are retained; unknown action names are replaced by `unsupported` rather than copied or silently dropped. The plan viewer keeps unsupported operations visible and asks the reviewer to consult the CLI plan. `forget` means removal from state without destruction; a `delete` remains destruction regardless of its reason. This is a partial compatibility contract; a complete real-engine fixture corpus and unknown-extension adapters remain tracked in issue #719.
+
+### Weekly provider refresh review
+
+`refresh-provider-surface.ts` emits `src/data/provider_refresh_review.md` alongside
+both schema catalogs. The refresh PR body is updated from this report on every
+regeneration. It lists added/removed entries, changed existing schemas and their
+JSON paths, plus upstream production Go/dependency files changed between the two
+release tags. Source comparison failure stops the refresh before catalog writes;
+GitHub's 300-file comparison cap is explicitly flagged.
+
+The inventory's `covered` status is retained only as fixture bookkeeping. It does
+not approve the new schema or upstream implementation. Review release notes and
+the complete source comparison even when no schemas changed: provider validators,
+defaults, read normalization and destroy semantics are not fully represented by
+`terraform providers schema -json`. Update real-provider lifecycle evidence and
+run the release gates above before claiming compatibility. Put implementation
+fixes on a separate branch because automation regenerates its refresh branch.

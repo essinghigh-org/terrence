@@ -215,9 +215,16 @@ Unknown fields within these groups are rejected.
 | cost.enabled | boolean | visible |
 | cost.gcp-credentials | json or null | redacted |
 | cost.infracost-api-key | string or null | redacted |
+| customization.avatar-sources | avatar-sources | visible |
+| customization.error | string or null | redacted |
 | customization.footer | string or null | redacted |
+| customization.internal-documentation-url | string or null | redacted |
+| customization.internal-support-url | string or null | redacted |
+| customization.internal-tutorials-url | string or null | redacted |
 | customization.login-help | string or null | redacted |
+| customization.new-user | string or null | redacted |
 | customization.support-email-address | string or null | redacted |
+| customization.support-url-address | string or null | redacted |
 | general.allow-speculative-plans-on-pull-requests-from-forks | boolean | visible |
 | general.api-rate-limit | integer 1–1000000 | visible |
 | general.api-rate-limiting-enabled | boolean | visible |
