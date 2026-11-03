@@ -337,6 +337,10 @@ function agentPolicyResults(
   return reported;
 }
 
+function storedAgentPolicyStatus(checkStatus: string, enforcementLevel: string, overridable: boolean): string {
+  return checkStatus === "failed" && enforcementLevel === "mandatory" && overridable ? "soft_failed" : checkStatus;
+}
+
 async function recordAgentPolicyChecks(
   // Drizzle's transaction/query client is stateful by design.
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -372,10 +376,7 @@ async function recordAgentPolicyChecks(
     for (const policy of policySet.policies) {
       const outcome = reported.get(policy.id);
       const checkStatus = outcome?.status ?? "errored";
-      const storedStatus =
-        checkStatus === "failed" && policy.enforcementLevel === "mandatory" && policySet.overridable
-          ? "soft_failed"
-          : checkStatus;
+      const storedStatus = storedAgentPolicyStatus(checkStatus, policy.enforcementLevel, policySet.overridable);
       await database.insert(policyChecks).values({
         id: newResourceId("pchk"),
         runId,

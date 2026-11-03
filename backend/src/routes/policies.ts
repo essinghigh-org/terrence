@@ -658,6 +658,27 @@ async function hasIncompatibleStackScope(
   return links.some((link) => nextKind !== "tfpolicy" || link.isExclude !== nextGlobal);
 }
 
+function applyPolicySetPatchScalars(
+  attributes: Record<string, unknown>,
+  effectiveKind: string,
+  content: PolicySetPatchContent,
+  updates: Partial<typeof policySets.$inferInsert>,
+): void {
+  if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
+  if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
+  if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
+  if (attributes["policy-tool-version"] !== undefined)
+    updates.policyToolVersion =
+      typeof attributes["policy-tool-version"] === "string"
+        ? attributes["policy-tool-version"]
+        : effectiveKind === "tfpolicy"
+          ? "latest"
+          : null;
+  if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
+  if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
+  if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
+}
+
 async function applyPolicySetPatchFields(
   attributes: Record<string, unknown>,
   ps: PsItem,
@@ -685,19 +706,7 @@ async function applyPolicySetPatchFields(
   }
   if (await hasIncompatibleStackScope(attributes, ps, updates.kind))
     return "Remove incompatible stack associations before changing policy set kind or global scope";
-  if (typeof attributes["global"] === "boolean") updates.global = attributes["global"];
-  if (typeof attributes["overridable"] === "boolean") updates.overridable = attributes["overridable"];
-  if (typeof attributes["agent-enabled"] === "boolean") updates.agentEnabled = attributes["agent-enabled"];
-  if (attributes["policy-tool-version"] !== undefined)
-    updates.policyToolVersion =
-      typeof attributes["policy-tool-version"] === "string"
-        ? attributes["policy-tool-version"]
-        : effectiveKind === "tfpolicy"
-          ? "latest"
-          : null;
-  if (attributes["policies-path"] !== undefined) updates.policiesPath = content.policiesPath;
-  if (attributes["policy-update-patterns"] !== undefined) updates.policyUpdatePatterns = content.patterns;
-  if (attributes["vcs-repo"] !== undefined) updates.vcsRepo = content.vcsRepo;
+  applyPolicySetPatchScalars(attributes, effectiveKind, content, updates);
   return null;
 }
 
