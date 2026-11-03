@@ -23,6 +23,7 @@ async function runAgainstFixture(
   const migrationsDir = join(sandbox, "backend", "drizzle", "pg");
   const dataDir = join(sandbox, "backend", "src", "data");
   const libDir = join(sandbox, "backend", "src", "lib");
+  await rm(migrationsDir, { recursive: true, force: true });
   await Promise.all([
     mkdir(scriptsDir, { recursive: true }),
     mkdir(migrationsDir, { recursive: true }),
