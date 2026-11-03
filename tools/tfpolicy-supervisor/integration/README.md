@@ -34,8 +34,13 @@ are failures and it has no skip/bypass option. `.github/workflows/tfpolicy-nativ
 uses ubuntu-latest to probe first, runs supervisor and recorder race tests plus
 pure oracle tests, builds the original fixture, and conditionally runs the real
 matrix only if all native prerequisites are present. Missing prerequisites fail
-the qualification job explicitly after the independent source tests/builds. It does not use sudo,
-sysctl, root capabilities, or create host cgroup delegation. A probe-only run is not a successful qualification and cannot turn the job green. Read `native-capabilities.json` and
+the qualification job explicitly after the independent source tests/builds. The workflow now has explicit user authorization to prepare a limited cgroup
+subtree and temporarily replace the piped core handler on the disposable
+GitHub-hosted runner only. It restores the core handler and kills/removes only
+its owned subtree in an always-run cleanup step. A root launcher places itself
+in that subtree, then drops to the ordinary runner UID before executing the
+harness; tested binaries remain non-root with zero capabilities. The standalone
+probe and harness never change host settings. A probe-only run is not a successful qualification and cannot turn the job green. Read `native-capabilities.json` and
 look for the real `native-results/summary.json` qualification result.
 
 ## Build and run

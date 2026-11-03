@@ -24,11 +24,32 @@ jobs:
         run: |
           gcc -O2 -Wall -Wextra -Werror backend/bin/landlock-runner.c -o "$RUNNER_TEMP/landlock-runner"
           chmod 0555 "$RUNNER_TEMP/landlock-runner"
-      - name: Probe existing native facilities (no sudo or host configuration)
+      - name: Prepare user-authorized ephemeral runner isolation
+        id: isolation
+        run: |
+          set -euo pipefail
+          # Explicit user authorization: this disposable GitHub-hosted job only.
+          # Do not alter the host's controller set or any existing cgroup.
+          ROOT="/sys/fs/cgroup/tfpolicy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$ROOT"
+          grep -qw pids /sys/fs/cgroup/cgroup.subtree_control
+          grep -qw memory /sys/fs/cgroup/cgroup.subtree_control
+          cat /proc/sys/kernel/core_pattern > "$RUNNER_TEMP/tfpolicy-original-core-pattern"
+          printf '%s\n' "$ROOT" > "$RUNNER_TEMP/tfpolicy-owned-cgroup"
+          sudo mkdir "$ROOT"
+          echo 512 | sudo tee "$ROOT/pids.max" >/dev/null
+          echo 3221225472 | sudo tee "$ROOT/memory.max" >/dev/null
+          echo '+pids +memory' | sudo tee "$ROOT/cgroup.subtree_control" >/dev/null
+          sudo mkdir "$ROOT/launcher"
+          sudo chown "$(id -u):$(id -g)" "$ROOT" "$ROOT/cgroup.procs" "$ROOT/cgroup.threads" "$ROOT/cgroup.subtree_control"
+          echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null
+          echo "cgroup_root=$ROOT" >> "$GITHUB_OUTPUT"
+      - name: Probe prepared native facilities
         id: facilities
         run: |
           python3 tools/tfpolicy-supervisor/integration/probe.py \
-            --runner "$RUNNER_TEMP/landlock-runner" --output "$RUNNER_TEMP/native-capabilities.json"
+            --runner "$RUNNER_TEMP/landlock-runner" --output "$RUNNER_TEMP/native-capabilities.json" \
+            --cgroup-root "${{ steps.isolation.outputs.cgroup_root }}"
       - name: Run transport and qualification-oracle unit tests
         env:
           GOTOOLCHAIN: go1.26.10
@@ -65,7 +86,12 @@ jobs:
         env:
           DELEGATED_CGROUP: ${{ steps.facilities.outputs.cgroup_root }}
         run: |
-          python3 tools/tfpolicy-supervisor/integration/run.py \
+          # Enter only our new delegated subtree as root, then immediately drop
+          # to the ordinary runner user before the harness or any binary runs.
+          # Without this, cgroup migration checks reject the outside-to-leaf move.
+          sudo bash -ec 'echo $$ > "$1/launcher/cgroup.procs"; exec runuser -u "$2" -- "${@:3}"' -- \
+            "$DELEGATED_CGROUP" "$(id -un)" \
+            python3 "$GITHUB_WORKSPACE/tools/tfpolicy-supervisor/integration/run.py" \
             --terraform "$RUNNER_TEMP/native-bin/official/terraform" \
             --terraform-sha256 "$(sha256sum "$RUNNER_TEMP/native-bin/official/terraform" | cut -d ' ' -f 1)" \
             --runner "$RUNNER_TEMP/landlock-runner" --supervisor "$RUNNER_TEMP/native-bin/supervisor" \
@@ -77,6 +103,27 @@ jobs:
         run: |
           echo "::error::Native qualification did not run. See native-capabilities.json for missing host facilities."
           exit 1
+      - name: Restore ephemeral runner settings and remove owned cgroup
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -f "$RUNNER_TEMP/tfpolicy-original-core-pattern"; then
+            sudo tee /proc/sys/kernel/core_pattern < "$RUNNER_TEMP/tfpolicy-original-core-pattern" >/dev/null
+          fi
+          if test -f "$RUNNER_TEMP/tfpolicy-owned-cgroup"; then
+            ROOT="$(cat "$RUNNER_TEMP/tfpolicy-owned-cgroup")"
+            test "$ROOT" = "/sys/fs/cgroup/tfpolicy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            if test -d "$ROOT"; then
+              echo 1 | sudo tee "$ROOT/cgroup.kill" >/dev/null
+              for n in {1..100}; do
+                grep -q '^populated 0$' "$ROOT/cgroup.events" && break
+                sleep 0.05
+              done
+              grep -q '^populated 0$' "$ROOT/cgroup.events"
+              sudo find "$ROOT" -depth -mindepth 1 -type d -exec rmdir {} \;
+              sudo rmdir "$ROOT"
+            fi
+          fi
       - name: Preserve capability report and actual qualification logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
