@@ -35,12 +35,30 @@ export const AGENT_PROTOCOL_CAPABILITIES = [
 export type AgentProtocolCapability = (typeof AGENT_PROTOCOL_CAPABILITIES)[number];
 
 /**
- * A legacy agent did not send protocol metadata.  It has the original
- * workspace execution contract, which includes all capabilities required by
- * the existing API.  This keeps old agents usable while making an explicit
- * capability offer authoritative for newer agents.
+ * Frozen pre-negotiation capability baseline. Never derive this from the
+ * current capabilities: future features must require an explicit offer, not
+ * be silently granted to agents that predate them. In particular, a policy
+ * execution capability is not evidence of a verified strict-policy runtime.
  */
-export const LEGACY_AGENT_CAPABILITIES: readonly AgentProtocolCapability[] = [...AGENT_PROTOCOL_CAPABILITIES];
+export const LEGACY_AGENT_CAPABILITIES: readonly AgentProtocolCapability[] = Object.freeze([
+  "operation.plan",
+  "operation.apply",
+  "operation.policy",
+  "operation.assessment",
+  "operation.stack",
+  "operation.source-bundle",
+  "operation.test",
+  "artifact.configuration",
+  "artifact.filesystem",
+  "artifact.log",
+  "artifact.plan-json",
+  "artifact.state-json",
+  "artifact.atomic-upload",
+  "lease.heartbeat",
+  "lease.fencing",
+  "cancellation",
+  "state.publication",
+] as const);
 
 export const AGENT_ARTIFACT_FORMATS = ["tar.gz", "json", "text"] as const;
 export type AgentArtifactFormat = (typeof AGENT_ARTIFACT_FORMATS)[number];

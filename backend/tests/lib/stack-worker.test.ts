@@ -193,16 +193,24 @@ describe("Stack deployment worker", () => {
         updatedAt: Date.now(),
       },
     ]);
+    const completedNames = async (): Promise<(string | null)[]> => {
+      const steps = await db.query.stackRecords.findMany({
+        where: and(eq(stackRecords.parentId, runId), eq(stackRecords.recordType, "stack-deployment-steps")),
+      });
+      // Row order is not execution order, particularly after PostgreSQL updates.
+      return steps.filter((step) => step.status === "completed").map((step) => step.name);
+    };
     await runStackDeploymentJob(job(runId), context);
+    expect(await completedNames()).toEqual(["a"]);
     await runStackDeploymentJob(job(runId), context);
+    expect(await completedNames()).toEqual(["a"]);
     await runStackDeploymentJob(job(runId), context);
+    expect((await completedNames()).sort()).toEqual(["a", "b"]);
     await runStackDeploymentJob(job(runId), context);
-    const steps = await db.query.stackRecords.findMany({
-      where: and(eq(stackRecords.parentId, runId), eq(stackRecords.recordType, "stack-deployment-steps")),
+    const run = await db.query.stackRecords.findFirst({
+      where: eq(stackRecords.id, runId),
     });
-    const completedNames = steps.filter((step) => step.status === "completed").map((step) => step.name);
-    const run = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, runId) });
-    expect(completedNames).toEqual(["a", "b"]);
+    expect((await completedNames()).sort()).toEqual(["a", "b"]);
     expect(run?.status).toBe("succeeded");
     expect(await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.runId, runId) })).toBeUndefined();
   });
