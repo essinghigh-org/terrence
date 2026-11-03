@@ -1,5 +1,5 @@
 import { newResourceId } from "./resource-id";
-import { open, mkdtemp, rm } from "node:fs/promises";
+import { open, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -15,7 +15,17 @@ import { decryptSecret } from "./secrets";
 import { fetchVcsUrl, fetchVcsUrlStream, getGitHubAppAccessToken } from "./webhooks";
 import { normalizeGithubApiBase } from "./github-api";
 import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
-import { ingestModuleArchive } from "./registry-module-archive";
+import { ingestModuleArchive, MAX_MODULE_FILE_BYTES } from "./registry-module-archive";
+import {
+  azureDevOpsBaseUrl,
+  azureDevOpsOrganization,
+  azureDevOpsRepositoryApiUrl,
+  fetchAzureDevOpsUrl,
+  fetchAzureDevOpsLatestCommit,
+  fetchAzureDevOpsTags,
+  fetchAzureDevOpsArchive,
+  type AzureDevOpsCredentials,
+} from "./azure-devops";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
 import { isModuleVersion, sortModuleVersionsDescending } from "./registry-version";
 import { currentModuleVersions, RegistrySyncLease } from "./registry-sync-lease";
@@ -30,7 +40,7 @@ type RegistryModuleSource = Pick<
   RegistryModule,
   "orgId" | "vcsConnectionType" | "vcsConnectionId" | "repositoryIdentifier"
 >;
-type Credentials = Readonly<{ apiUrl: string; token: string }>;
+type Credentials = Readonly<{ apiUrl: string; token: string; azure?: AzureDevOpsCredentials }>;
 export type RegistryModuleCandidate = Readonly<{ version: string; ref: string; sha: string; branch: string | null }>;
 export const REGISTRY_VERSION_IMPORT_BATCH_SIZE = 100;
 
@@ -52,6 +62,18 @@ async function oauthTokenCredentials(mod: RegistryModuleSource, connectionId: st
   const client = await db.query.oauthClients.findFirst({
     where: and(eq(oauthClients.id, tokenRow.oauthClientId), eq(oauthClients.orgId, mod.orgId)),
   });
+  if (client?.serviceProvider === "ado_services") {
+    const organization = azureDevOpsOrganization(client.adoOrgName);
+    const apiUrl = azureDevOpsBaseUrl(organization, client.apiUrl);
+    if (
+      organization === undefined ||
+      apiUrl === undefined ||
+      azureDevOpsBaseUrl(organization, client.httpUrl) === undefined
+    )
+      throw new Error("The Azure DevOps organization configuration is invalid");
+    const token = await decryptSecret(tokenRow.token);
+    return { apiUrl, token, azure: { organization, apiUrl, httpUrl: client.httpUrl, token } };
+  }
   if (client === undefined || !["github", "github_enterprise"].includes(client.serviceProvider)) {
     throw new Error("This VCS provider is not yet supported for registry module ingestion");
   }
@@ -91,8 +113,17 @@ async function githubJson<T>(credentials: Credentials, path: string): Promise<T>
 /** Validate registration independently of release tags and Terraform content. */
 export async function validateRegistryModuleRepository(mod: RegistryModuleSource): Promise<void> {
   const repository = mod.repositoryIdentifier ?? "";
-  if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
   const credentials = await credentialsFor(mod);
+  if (credentials.azure !== undefined) {
+    const url = azureDevOpsRepositoryApiUrl(repository, credentials.azure.organization);
+    if (url === undefined)
+      throw new Error("Azure DevOps repository identifier must use organization/project/_git/repository format");
+    const response = await fetchAzureDevOpsUrl(credentials.azure, `${url}?api-version=7.1`);
+    await response.body?.cancel().catch((): undefined => undefined);
+    if (!response.ok) throw new Error(`The VCS request failed with HTTP ${response.status}`);
+    return;
+  }
+  if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
   await githubJson(credentials, `/repos/${encodedRepository}`);
 }
@@ -148,6 +179,11 @@ async function branchCandidateFor(
   if (branchVersion === undefined || !isModuleVersion(branchVersion)) {
     throw new Error("Branch-based publication requires a semantic module version");
   }
+  if (credentials.azure !== undefined) {
+    const sha = await fetchAzureDevOpsLatestCommit(credentials.azure, mod.repositoryIdentifier ?? "", mod.branch);
+    if (sha === undefined) throw new Error("The selected branch has no resolvable commit");
+    return [{ version: branchVersion, ref: mod.branch, sha, branch: mod.branch }];
+  }
   const branch = await githubJson<{ commit?: { sha?: unknown } }>(
     credentials,
     `/repos/${encodedRepository}/branches/${encodeURIComponent(mod.branch)}`,
@@ -163,6 +199,10 @@ async function candidatesFor(
   branchVersion?: string,
 ): Promise<RegistryModuleCandidate[]> {
   const repository = mod.repositoryIdentifier ?? "";
+  if (credentials.azure !== undefined) {
+    if (mod.publishingWorkflow === "branch") return branchCandidateFor(mod, credentials, "", branchVersion);
+    return discoverModuleVersions(await fetchAzureDevOpsTags(credentials.azure, repository), mod.tagPrefix);
+  }
   if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
   if (mod.publishingWorkflow === "branch")
@@ -189,6 +229,20 @@ async function withDownloadedArchive<T>(
   use: (path: string) => Promise<T>,
 ): Promise<T> {
   const repository = mod.repositoryIdentifier ?? "";
+  if (credentials.azure !== undefined) {
+    const archive = await fetchAzureDevOpsArchive(credentials.azure, repository, sha, {
+      maxCompressedBytes: MAX_MODULE_DOWNLOAD_BYTES,
+      maxFileBytes: MAX_MODULE_FILE_BYTES,
+    });
+    const staging = await mkdtemp(join(tmpdir(), "terrence-registry-download-"));
+    const path = join(staging, "source.tar.gz");
+    try {
+      await writeFile(path, archive, { flag: "wx", mode: 0o600 });
+      return await use(path);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
+  }
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
   const response = await fetchVcsUrlStream(
     `${credentials.apiUrl}/repos/${encodedRepository}/tarball/${encodeURIComponent(sha)}`,
@@ -287,7 +341,13 @@ async function synchronizeRegistryModuleOnce(
         credentials,
         candidate.sha,
         async (downloaded): Promise<RegistryModuleMetadata> =>
-          ingestModuleArchive(downloaded, archivePath, mod.sourceDirectory, inspectRegistryModule),
+          ingestModuleArchive(
+            downloaded,
+            archivePath,
+            mod.sourceDirectory,
+            inspectRegistryModule,
+            credentials.azure !== undefined,
+          ),
       );
       createdArchives.push(archivePath);
       prepared.push({

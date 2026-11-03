@@ -574,7 +574,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         if (
           current === undefined ||
           current.status !== "uploaded" ||
-          ["github", "gitlab", "bitbucket"].includes(current.source ?? "")
+          ["github", "gitlab", "bitbucket", "azure_devops"].includes(current.source ?? "")
         )
           return undefined;
         const activeRun = await tx.query.runs.findFirst({

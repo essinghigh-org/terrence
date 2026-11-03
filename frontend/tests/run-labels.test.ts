@@ -12,6 +12,8 @@ test("uses the same human-readable status labels across run views", (): void => 
 
 test("recognizes legacy VCS run sources consistently", (): void => {
   expect(isVcsRunSource("github")).toBe(true);
+  expect(isVcsRunSource("azure_devops")).toBe(true);
+  expect(formatRunSource("azure_devops")).toBe("Azure DevOps Services");
   expect(isVcsRunSource("tfe-configuration-version", "push")).toBe(true);
   expect(isVcsRunSource("tfe-configuration-version", "manual")).toBe(false);
   expect(formatRunSource("tfe-configuration-version", "pull_request")).toBe("VCS");

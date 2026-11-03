@@ -69,6 +69,7 @@ function VcsSourceFields({
   vcsConnectionsError,
   orgName,
   vcsReposLoading,
+  vcsReposError,
   vcsIdentifier,
   onVcsIdentifierChange,
   vcsRepositories,
@@ -81,6 +82,7 @@ function VcsSourceFields({
   vcsConnectionsError: string;
   orgName: string;
   vcsReposLoading: boolean;
+  vcsReposError: string;
   vcsIdentifier: string;
   onVcsIdentifierChange: (value: string) => void;
   vcsRepositories: VcsRepoOption[];
@@ -122,7 +124,7 @@ function VcsSourceFields({
               to={`/app/${encodeURIComponent(orgName)}/settings?tab=vcs`}
               className="font-medium text-primary underline hover:no-underline"
             >
-              Connect GitHub, GitLab or Bitbucket
+              Connect GitHub, GitLab, Bitbucket or Azure DevOps Services
             </Link>{" "}
             to run from a repository.
           </p>
@@ -141,9 +143,14 @@ function VcsSourceFields({
           >
             Repository Identifier
           </label>
-          <HelpTooltip content="Select from accessible repositories or type a repository path (e.g. 'org/repo-name')." />
+          <HelpTooltip content="Select an accessible repository or type its path. Azure DevOps Services uses organization/project/_git/repository; other providers use organization/repository." />
         </div>
 
+        {vcsReposError !== "" && (
+          <p role="alert" className="text-xs text-destructive">
+            {vcsReposError}
+          </p>
+        )}
         {vcsReposLoading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
             <Spinner className="size-3.5" /> Loading accessible repositories…
@@ -402,6 +409,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [vcsConnectionsError, setVcsConnectionsError] = useState("");
   const [vcsRepositories, setVcsRepositories] = useState<VcsRepoOption[]>([]);
   const [vcsReposLoading, setVcsReposLoading] = useState(false);
+  const [vcsReposError, setVcsReposError] = useState("");
   const [sourceType, setSourceType] = useState("tfe-api");
 
   // Sync default engine when defaultIacBinary prop changes or modal opens
@@ -476,6 +484,8 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   // Fetch accessible repositories when a VCS connection is selected
   useEffect((): (() => void) | undefined => {
     setVcsRepositories([]);
+    setVcsReposError("");
+    setVcsReposLoading(false);
     if (!open || sourceType !== "vcs" || vcsConnectionValue === "") return undefined;
     const controller = new AbortController();
     setVcsReposLoading(true);
@@ -490,7 +500,12 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           setVcsRepositories(list.map((item) => item.attributes));
         }
       })
-      .catch((): void => undefined)
+      .catch((): void => {
+        if (!controller.signal.aborted)
+          setVcsReposError(
+            "Could not load repositories. Check the selected connection's permissions and token expiry in VCS settings.",
+          );
+      })
       .finally((): void => {
         if (!controller.signal.aborted) setVcsReposLoading(false);
       });
@@ -638,6 +653,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                 vcsConnectionsError={vcsConnectionsError}
                 orgName={orgName}
                 vcsReposLoading={vcsReposLoading}
+                vcsReposError={vcsReposError}
                 vcsIdentifier={vcsIdentifier}
                 onVcsIdentifierChange={setVcsIdentifier}
                 vcsRepositories={vcsRepositories}

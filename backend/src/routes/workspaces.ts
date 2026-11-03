@@ -1,3 +1,4 @@
+import { azureDevOpsBaseUrl, parseAzureDevOpsRepository } from "../lib/azure-devops";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db, isPostgres, rawQueryAll } from "../db";
@@ -393,6 +394,7 @@ async function checkVcsOauthToken(
   database: typeof db,
   oauthTokenId: string | undefined,
   orgId: string,
+  repository: Readonly<{ identifier: string; ingressSubmodules: unknown }>,
 ): Promise<string | null> {
   if (oauthTokenId === undefined || oauthTokenId === "") return null;
   let token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
@@ -411,6 +413,20 @@ async function checkVcsOauthToken(
           where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
         });
   if (client === undefined) return "OAuth token is not registered in this organization";
+  return azureDevOpsWorkspaceSourceError(client, repository);
+}
+
+function azureDevOpsWorkspaceSourceError(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+  repository: Readonly<{ identifier: string; ingressSubmodules: unknown }>,
+): string | null {
+  if (client.serviceProvider !== "ado_services") return null;
+  if (
+    azureDevOpsBaseUrl(client.adoOrgName, client.apiUrl) === undefined ||
+    azureDevOpsBaseUrl(client.adoOrgName, client.httpUrl) === undefined ||
+    parseAzureDevOpsRepository(repository.identifier, client.adoOrgName ?? "") === undefined
+  )
+    return "Azure DevOps repository identifier must match the connection organization (organization/project/_git/repository)";
   return null;
 }
 
@@ -475,6 +491,13 @@ function assembleVcsRepoValue(
   return value;
 }
 
+function effectiveVcsIngress(
+  raw: Readonly<Record<string, unknown>>,
+  existing: DeepReadonly<WorkspaceVcsRepo> | undefined,
+): unknown {
+  return raw["ingress-submodules"] ?? raw["ingressSubmodules"] ?? existing?.ingressSubmodules;
+}
+
 async function normalizeVcsRepo(
   input: unknown,
   orgId: string,
@@ -495,7 +518,10 @@ async function normalizeVcsRepo(
   if (pairError !== null) return { error: pairError };
   const installationError = await checkVcsInstallation(database, installation.id, orgId);
   if (installationError !== null) return { error: installationError };
-  const oauthError = await checkVcsOauthToken(database, oauth.id, orgId);
+  const oauthError = await checkVcsOauthToken(database, oauth.id, orgId, {
+    identifier: identifier.identifier,
+    ingressSubmodules: effectiveVcsIngress(raw, existing),
+  });
   if (oauthError !== null) return { error: oauthError };
 
   const branchValue = raw["branch"];

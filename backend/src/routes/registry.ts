@@ -1,3 +1,4 @@
+import { azureDevOpsBaseUrl, azureDevOpsRepositoryHttpUrl, parseAzureDevOpsRepository } from "../lib/azure-devops";
 import { parseBindings, replaceBindings } from "../lib/registry-artifact-tags";
 import { integrationSetting } from "../lib/runtime-config";
 import { newResourceId } from "../lib/resource-id";
@@ -1078,8 +1079,9 @@ function parseVcsOptions(
   const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
   const identifierParts = identifier.split("/");
   const identifierValid =
-    identifierParts.length === 2 &&
-    identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
+    (identifierParts.length === 2 &&
+      identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part))) ||
+    parseAzureDevOpsRepository(identifier) !== undefined;
   return { sourceDirectory, tagPrefix, initialVersion, identifierValid };
 }
 
@@ -1135,7 +1137,14 @@ async function resolveOauthConnection(orgId: string, oauthTokenId: unknown): Pro
       : await db.query.oauthClients.findFirst({
           where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
         });
-  const available = client !== undefined && ["github", "github_enterprise"].includes(client.serviceProvider);
+  const available =
+    client !== undefined && ["github", "github_enterprise", "ado_services"].includes(client.serviceProvider);
+  if (client?.serviceProvider === "ado_services") {
+    const valid =
+      azureDevOpsBaseUrl(client.adoOrgName, client.apiUrl) !== undefined &&
+      azureDevOpsBaseUrl(client.adoOrgName, client.httpUrl) !== undefined;
+    return { available: valid, repositoryBaseUrl: valid ? "https://dev.azure.com" : null };
+  }
   return {
     available,
     repositoryBaseUrl: client?.httpUrl ?? (client?.serviceProvider === "github" ? "https://github.com" : null),
@@ -1170,6 +1179,10 @@ function buildVcsRepositoryUrl(
   identifier: string,
 ): Readonly<{ url: string | null } | { error: string }> {
   let repositoryUrl: string | null = null;
+  if (repositoryBaseUrl === "https://dev.azure.com") {
+    const url = azureDevOpsRepositoryHttpUrl(identifier);
+    return url === undefined ? { error: "Invalid Azure DevOps repository identifier" } : { url };
+  }
   if (repositoryBaseUrl !== null) {
     try {
       const parsed = new URL(repositoryBaseUrl);

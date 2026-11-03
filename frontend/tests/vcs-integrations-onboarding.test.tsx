@@ -440,7 +440,7 @@ test("ignores integration responses after switching organizations", async () => 
   expect(view.queryByText("Acme GitHub")).toBeNull();
 });
 
-test.each(["ado_services", "ado_server", "azure_devops_server"])(
+test.each(["ado_server", "azure_devops_server"])(
   "%s does not present stored credentials as a working repository integration",
   async (provider): Promise<void> => {
     setAuthToken("spa-token");

@@ -776,12 +776,12 @@ function resolveNormalizedSource(origin?: RunOrigin): string {
     src === "tfe-configuration-version" ||
     src === "github" ||
     src === "gitlab" ||
-    src === "bitbucket"
+    src === "bitbucket" ||
+    src === "azure_devops"
   ) {
     return src;
   }
   if (src === undefined || src === null || src === "") return "tfe-api";
-  if (src === "github" || src === "gitlab" || src === "bitbucket") return src;
   return "tfe-configuration-version";
 }
 

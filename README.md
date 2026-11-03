@@ -34,14 +34,25 @@
 - State storage and version history
 - Workspace variables and variable sets
 - Sentinel and OPA policy checks ([tfpolicy runtime status](backend/docs/tfpolicy-runtime.md))
-- VCS integration (GitHub, GitLab, Bitbucket)
-  - Azure DevOps OAuth clients (`ado_services` / `ado_server`) can be stored through the TFE-compatible API, including `ado-org-name`. This is API compatibility only: Azure DevOps authorization, repository fetching, service hooks, and commit/run status reporting are not implemented. Stored credentials do not make these connections operational; the UI explicitly labels them unavailable.
-  - A complete Azure DevOps Services driver still needs organization-scoped PAT authentication (as supported by the upstream `ado_org_name` contract), repository access, authenticated push/pull-request delivery, and tested plan/status reporting. See [HashiCorp’s PAT integration requirements](https://developer.hashicorp.com/terraform/cloud-docs/vcs/azure-devops-services-pat). [Microsoft recommends Entra ID authentication](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/entra); legacy Azure DevOps OAuth no longer accepts new registrations and is scheduled for removal in 2026.
+- VCS integration (GitHub, GitLab, Bitbucket, Azure DevOps Services)
+  - Azure DevOps Services uses organization-scoped personal access tokens (PATs), with repository discovery, source archives, authenticated service hooks, and commit/run status reporting. Workspace runs, policy sets, stacks, and private registry modules can use these connections.
+  - Azure DevOps Server (`ado_server` / `azure_devops_server`) remains API-storage compatibility only. Its repository integration is unavailable.
 - SSO support (SAML, OIDC, LDAP)
 - Private module registry
 - Run tasks and notifications
 - Agent pools and cloud workload identity
 - Team and role-based access control
+
+## Azure DevOps Services
+
+1. Create a PAT scoped to the Azure DevOps organization, with **Code (Read)** and **Code (Status)**. In Terrence, open organization **Settings → VCS integrations → Add VCS Provider**, choose **Azure DevOps Services (PAT)**, and enter the organization name, PAT, and a separate random webhook secret. Use at least 32 characters for the webhook secret and keep it in your password manager.
+2. Select the saved connection in a workspace or module repository picker. VCS-backed policy sets are configured through the API. Repository identifiers use `organization/project/_git/repository`. API clients use `service-provider: ado_services`, `ado-org-name`, and `oauth-token`; only `https://dev.azure.com` or that organization's exact HTTPS base URL is accepted. PATs and webhook secrets are encrypted at rest and are never returned by the API.
+3. In each Azure DevOps project's **Service hooks**, create **Web Hooks** subscriptions for **Code pushed**, **Pull request created**, and **Pull request updated**, selecting the connected repository and full resource details. Use Terrence's **Service hook setup** instructions: POST to `https://<terrence-host>/api/webhooks/azure-devops/<oauth-client-id>` with Basic authentication username `<oauth-client-id>` and password equal to the separate webhook secret, not the PAT. Terrence must be reachable over HTTPS from Azure DevOps. Subscriptions are configured manually; saving a connection does not create them.
+4. Use **Rotate PAT** before expiry or after revocation. PATCHing `oauth-token` on the same OAuth client preserves token IDs and existing references when the organization is unchanged. The optional replacement webhook secret takes effect immediately; update all Azure subscriptions when replacing it. Never send either credential in a URL.
+
+**PAT configured** means a credential was stored, not that live Azure access was verified. Repository discovery and actual runs exercise the configured access. Existing API-only clients without tokens show **Not connected** and can be configured with **Add PAT**. Azure DevOps OAuth redirects, Entra ID token refresh, legacy `visualstudio.com` endpoints, Azure DevOps Server, and automatic service-hook provisioning are not supported. Azure permissions and PAT expiry remain the operator's responsibility.
+
+Azure workspace and VCS policy-set `ingress-submodules` supports gitlink-pinned submodules hosted in the **same Azure DevOps organization**. `.gitmodules` URLs may be canonical `https://dev.azure.com/organization/project/_git/repository` or relative URLs. The PAT must have read access to every referenced repository. Branch/update settings never override immutable gitlink commits, and custom commands are never executed. Cross-organization/external/SSH URLs, links and special files, ambiguous or unsupported Git config syntax, cycles, and incomplete API responses fail the ingestion rather than silently omit source. Limits include eight nested submodule levels, 64 tree levels, 10,000 tree members, a ten-minute deadline, and cumulative transfer/expanded-file budgets. Large repositories use more REST requests when this option is enabled. Because Azure commit diffs only show the gitlink path, recursive workspace and policy-set sources conservatively process every matching-branch push instead of skipping changes using file patterns. Stacks and registry-module archives retain their existing non-recursive source behavior.
 
 ## Quick start
 

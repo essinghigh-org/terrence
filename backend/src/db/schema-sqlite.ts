@@ -705,6 +705,7 @@ export const configurationVersions = sqliteTable(
     provisional: integer("provisional", { mode: "boolean" }).notNull().default(false),
     source: text("source").default("tfe-api"),
     ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{
+      vcsProvider?: string;
       commitSha?: string;
       commitUrl?: string;
       commitMessage?: string;

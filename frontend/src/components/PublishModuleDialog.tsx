@@ -72,8 +72,8 @@ function VcsSourceFields({
         </Select>
         {!loadingConnections && error === "" && connections.length === 0 && (
           <FieldDescription>
-            No supported GitHub connections are registered. Add a GitHub App installation or GitHub OAuth connection
-            before publishing a VCS module.
+            No supported connections are registered. Add a GitHub App installation, GitHub OAuth connection or Azure
+            DevOps Services PAT before publishing a VCS module.
           </FieldDescription>
         )}
       </Field>

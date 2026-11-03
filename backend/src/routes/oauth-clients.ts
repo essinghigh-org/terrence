@@ -1,3 +1,4 @@
+import { azureDevOpsBaseUrl, azureDevOpsOrganization, azureDevOpsPatAuthorization } from "../lib/azure-devops";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { createSign } from "node:crypto";
@@ -593,11 +594,12 @@ async function oauthClientResource(
   request: Readonly<{ url: string }>,
   orgNameOverride?: string | null,
 ): Promise<Record<string, unknown>> {
-  const [projectLinks, orgName] = await Promise.all([
+  const [projectLinks, orgName, tokenLinks] = await Promise.all([
     db.query.oauthClientProjects.findMany({
       where: eq(oauthClientProjects.oauthClientId, oc.id),
     }),
     orgNameOverride !== undefined ? Promise.resolve(orgNameOverride) : organizationName(oc.orgId),
+    db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, oc.id), columns: { id: true } }),
   ]);
   return {
     id: oc.id,
@@ -621,7 +623,10 @@ async function oauthClientResource(
       projects: {
         data: projectLinks.map((link): Record<string, string> => ({ id: link.projectId, type: "projects" })),
       },
-      "oauth-tokens": { links: { related: `/api/v2/oauth-clients/${oc.id}/oauth-tokens` } },
+      "oauth-tokens": {
+        data: tokenLinks.map((token): Record<string, string> => ({ id: token.id, type: "oauth-tokens" })),
+        links: { related: `/api/v2/oauth-clients/${oc.id}/oauth-tokens` },
+      },
       "agent-pool": {
         data: oc.agentPoolId === null ? null : { id: oc.agentPoolId, type: "agent-pools" },
         links: oc.agentPoolId === null ? {} : { related: `/api/v2/agent-pools/${oc.agentPoolId}` },
@@ -805,10 +810,91 @@ async function applyOAuthClientCredentialUpdates(
     updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
   const endpointOriginChanged =
     configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl) || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
-  const adoOrgChanged = updates.adoOrgName !== undefined && updates.adoOrgName !== oc.adoOrgName;
+  const adoOrgChanged =
+    updates.adoOrgName !== undefined &&
+    azureDevOpsOrganization(updates.adoOrgName) !== azureDevOpsOrganization(oc.adoOrgName);
   const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged || adoOrgChanged;
   if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
   return { credentialsInvalidated };
+}
+
+function azureDevOpsClientError(
+  client: Readonly<{
+    serviceProvider: string;
+    adoOrgName?: string | null;
+    apiUrl?: string | null;
+    httpUrl?: string | null;
+  }>,
+  token: unknown,
+): string | undefined {
+  if (client.serviceProvider !== "ado_services") return undefined;
+  if (token !== undefined && (typeof token !== "string" || azureDevOpsPatAuthorization(token) === undefined))
+    return "oauth-token must be a nonempty Azure DevOps personal access token";
+  // Empty compatibility records remain valid, but cannot acquire credentials until scoped.
+  if (token === undefined && (client.adoOrgName === undefined || client.adoOrgName === null)) return undefined;
+  if (
+    azureDevOpsBaseUrl(client.adoOrgName, client.apiUrl) === undefined ||
+    azureDevOpsBaseUrl(client.adoOrgName, client.httpUrl) === undefined
+  )
+    return "Azure DevOps Services requires ado-org-name and HTTPS dev.azure.com URLs for that organization";
+  return undefined;
+}
+
+async function saveAzureDevOpsPat(tx: typeof db, clientId: string, token: string): Promise<void> {
+  if (isPostgres) {
+    const database = tx as unknown as { execute: (query: unknown) => Promise<unknown> };
+    await database.execute(sql`SELECT id FROM oauth_clients WHERE id = ${clientId} FOR UPDATE`);
+  }
+  const encrypted = await encryptSecret(token);
+  const existing = await tx.query.oauthTokens.findFirst({ where: eq(oauthTokens.oauthClientId, clientId) });
+  if (existing === undefined) {
+    await tx.insert(oauthTokens).values({
+      id: newResourceId("ot"),
+      oauthClientId: clientId,
+      token: encrypted,
+      serviceProviderUser: null,
+      createdAt: Date.now(),
+    });
+  } else {
+    // Preserve every referenced token ID when rotating a PAT.
+    await tx.update(oauthTokens).set({ token: encrypted }).where(eq(oauthTokens.oauthClientId, clientId));
+  }
+}
+
+function azureDevOpsUpdateError(
+  client: OcItem,
+  updates: Partial<typeof oauthClients.$inferInsert>,
+  token: unknown,
+): string | undefined {
+  return azureDevOpsClientError(
+    {
+      serviceProvider: updates.serviceProvider ?? client.serviceProvider,
+      adoOrgName: updates.adoOrgName === undefined ? client.adoOrgName : updates.adoOrgName,
+      apiUrl: updates.apiUrl === undefined ? client.apiUrl : updates.apiUrl,
+      httpUrl: updates.httpUrl === undefined ? client.httpUrl : updates.httpUrl,
+    },
+    token,
+  );
+}
+
+function azureDevOpsCreateError(serviceProvider: string, attributes: Record<string, unknown>): string | undefined {
+  if (
+    attributes["ado-org-name"] !== undefined &&
+    attributes["ado-org-name"] !== null &&
+    typeof attributes["ado-org-name"] !== "string"
+  )
+    return "ado-org-name must be a string or null";
+  const apiUrl = normalizedConfiguredUrl(attributes["api-url"]);
+  const httpUrl = normalizedConfiguredUrl(attributes["http-url"]);
+  return azureDevOpsClientError(
+    {
+      serviceProvider,
+      adoOrgName: typeof attributes["ado-org-name"] === "string" ? attributes["ado-org-name"] : null,
+      apiUrl: typeof apiUrl === "string" ? apiUrl : null,
+      httpUrl: typeof httpUrl === "string" ? httpUrl : null,
+    },
+    attributes["oauth-token"],
+  );
 }
 
 function validateOAuthClientCreate(
@@ -830,12 +916,8 @@ function validateOAuthClientCreate(
   if (attributes["organization-scoped"] !== undefined && typeof attributes["organization-scoped"] !== "boolean") {
     return { error: unprocessable(set, "organization-scoped must be a boolean") };
   }
-  if (
-    attributes["ado-org-name"] !== undefined &&
-    attributes["ado-org-name"] !== null &&
-    typeof attributes["ado-org-name"] !== "string"
-  )
-    return { error: unprocessable(set, "ado-org-name must be a string or null") };
+  const adoError = azureDevOpsCreateError(serviceProvider, attributes);
+  if (adoError !== undefined) return { error: unprocessable(set, adoError) };
   return { name, serviceProvider };
 }
 
@@ -1193,6 +1275,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
           rsaPublicKey,
           createdAt: Date.now(),
         });
+        if (typeof attributes["oauth-token"] === "string") await saveAzureDevOpsPat(t, id, attributes["oauth-token"]);
         if (projectIds !== undefined && projectIds.length > 0) {
           await t.insert(oauthClientProjects).values(
             projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
@@ -1254,11 +1337,18 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       if ("error" in credentials) return credentials.error;
       const { projectIds } = scope;
       const { credentialsInvalidated } = credentials;
-      if (credentialsInvalidated || Object.keys(updates).length > 0) {
+      const adoError = azureDevOpsUpdateError(oc, updates, attributes["oauth-token"]);
+      if (adoError !== undefined) return unprocessable(set, adoError);
+      if (credentialsInvalidated || Object.keys(updates).length > 0 || attributes["oauth-token"] !== undefined) {
         await db.transaction(async (tx): Promise<void> => {
           if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
           if (Object.keys(updates).length > 0)
             await tx.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
+          if (
+            (updates.serviceProvider ?? oc.serviceProvider) === "ado_services" &&
+            typeof attributes["oauth-token"] === "string"
+          )
+            await saveAzureDevOpsPat(tx, ocId, attributes["oauth-token"]);
         });
       }
       if (projectIds !== undefined) await replaceProjectScope(ocId, projectIds);

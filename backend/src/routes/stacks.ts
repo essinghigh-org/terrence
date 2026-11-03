@@ -179,6 +179,7 @@ const stackServiceProviders = new Set([
   "gitlab_community_edition",
   "gitlab_enterprise_edition",
   "ado_server",
+  "ado_services",
 ]);
 
 function validRepositoryHttpUrl(url: string): boolean {

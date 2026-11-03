@@ -325,14 +325,16 @@ function parsePlanExplanationPayload(readers: JobPayloadReaders): void {
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- writes validated fields into readers.known
 function parseVcsWebhookPayload(readers: JobPayloadReaders): void {
   const provider = readers.requiredString("provider");
-  if (provider !== "github" && provider !== "gitlab" && provider !== "bitbucket") {
+  if (provider !== "github" && provider !== "gitlab" && provider !== "bitbucket" && provider !== "azure_devops") {
     persistedFailure(
       persistedContext(`${readers.context.field}.provider`, readers.rowId, readers.version),
       "field",
-      "provider must be github, gitlab, or bitbucket",
+      "provider must be github, gitlab, bitbucket, or azure_devops",
     );
   }
   readers.known["provider"] = provider;
+  if (provider === "azure_devops")
+    readers.known["authenticatedClientId"] = readers.requiredString("authenticatedClientId");
   readers.known["eventName"] = readers.requiredString("eventName");
   const payload = persistedRecord(
     readers.record["payload"],

@@ -1,3 +1,5 @@
+import { azureDevOpsBaseUrl } from "./azure-devops";
+
 /**
  * Bind Git HTTP credentials to the configured VCS origin.
  *
@@ -21,7 +23,12 @@ export function vcsCredentialOrigin(
   serviceProvider: string,
   apiUrl: string | null | undefined,
   httpUrl: string | null | undefined,
+  adoOrgName?: string | null,
 ): string | null {
+  if (serviceProvider === "ado_services") {
+    if (azureDevOpsBaseUrl(adoOrgName, apiUrl) === undefined) return null;
+    return azureDevOpsBaseUrl(adoOrgName, httpUrl) ?? null;
+  }
   const candidate = configured(httpUrl) ?? hostedHttpUrl(serviceProvider) ?? configured(apiUrl);
   if (candidate === null) return null;
   try {
@@ -38,7 +45,8 @@ export function gitExtraHeaderConfigKey(
   serviceProvider: string,
   apiUrl: string | null | undefined,
   httpUrl: string | null | undefined,
+  adoOrgName?: string | null,
 ): string | null {
-  const origin = vcsCredentialOrigin(serviceProvider, apiUrl, httpUrl);
+  const origin = vcsCredentialOrigin(serviceProvider, apiUrl, httpUrl, adoOrgName);
   return origin === null ? null : `http.${origin}/.extraHeader`;
 }

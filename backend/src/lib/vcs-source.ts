@@ -2,13 +2,15 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { githubAppInstallations, oauthClients, oauthTokens } from "../db/schema";
 import { getGitHubAppApiUrl } from "./github-app-config";
+import { azureDevOpsBaseUrl, azureDevOpsSourceOrganization } from "./azure-devops";
 
-export type VcsProvider = "github" | "gitlab" | "bitbucket";
+export type VcsProvider = "github" | "gitlab" | "bitbucket" | "azure_devops";
 
 export type VcsSourceIdentity = Readonly<{
   provider: VcsProvider;
   host: string;
   installationId?: number;
+  organization?: string;
 }>;
 
 function configuredValue(value: string | null | undefined): string | undefined {
@@ -37,6 +39,7 @@ export function providerForServiceProvider(serviceProvider: string): VcsProvider
   if (serviceProvider === "gitlab" || serviceProvider === "gitlab_ce" || serviceProvider === "gitlab_ee")
     return "gitlab";
   if (serviceProvider === "bitbucket") return "bitbucket";
+  if (serviceProvider === "ado_services") return "azure_devops";
   return undefined;
 }
 
@@ -48,6 +51,19 @@ export function vcsSourceIdentity(
 ): VcsSourceIdentity | undefined {
   const configured = configuredValue(sourceUrl);
   if (configured === undefined) return undefined;
+  if (provider === "azure_devops") {
+    const organization = azureDevOpsSourceOrganization(configured);
+    return organization === undefined ? undefined : { provider, host: "dev.azure.com", organization };
+  }
+  return ordinaryVcsSourceIdentity(provider, configured, installationId, requireHttps);
+}
+
+function ordinaryVcsSourceIdentity(
+  provider: VcsProvider,
+  configured: string,
+  installationId: number | undefined,
+  requireHttps: boolean,
+): VcsSourceIdentity | undefined {
   try {
     const url = new URL(configured);
     if (
@@ -77,7 +93,13 @@ export function configuredVcsSourceIdentity(
   httpUrl: string | null | undefined,
   installationId?: number,
   requireHttps = false,
+  adoOrgName?: string | null,
 ): VcsSourceIdentity | undefined {
+  if (provider === "azure_devops") {
+    if (azureDevOpsBaseUrl(adoOrgName, apiUrl) === undefined || azureDevOpsBaseUrl(adoOrgName, httpUrl) === undefined)
+      return undefined;
+    return vcsSourceIdentity(provider, azureDevOpsBaseUrl(adoOrgName), undefined, true);
+  }
   const configured =
     firstConfiguredValue(httpUrl, apiUrl) ??
     (provider === "github"
@@ -99,6 +121,8 @@ export function configuredVcsSourceIdentity(
  */
 export function vcsSourceMatchesConnection(configured: VcsSourceIdentity, incoming: VcsSourceIdentity): boolean {
   if (configured.provider !== incoming.provider || configured.host !== incoming.host) return false;
+  if (configured.provider === "azure_devops")
+    return configured.organization !== undefined && configured.organization === incoming.organization;
   return configured.installationId === undefined || configured.installationId === incoming.installationId;
 }
 
@@ -129,11 +153,19 @@ export async function sourceIdentityForConnection(
   if (token === undefined) return undefined;
   const client = await db.query.oauthClients.findFirst({
     where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
-    columns: { serviceProvider: true, apiUrl: true, httpUrl: true },
+    columns: { serviceProvider: true, apiUrl: true, httpUrl: true, adoOrgName: true },
   });
   if (client === undefined) return undefined;
   const provider = providerForServiceProvider(client.serviceProvider);
   return provider === undefined
     ? undefined
-    : configuredVcsSourceIdentity(provider, client.serviceProvider, client.apiUrl, client.httpUrl);
+    : configuredVcsSourceIdentity(
+        provider,
+        client.serviceProvider,
+        client.apiUrl,
+        client.httpUrl,
+        undefined,
+        false,
+        client.adoOrgName,
+      );
 }

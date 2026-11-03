@@ -195,7 +195,7 @@ type ParamCtx = Readonly<{
 
 type RunItem = DeepReadonly<typeof runs.$inferSelect>;
 type ConfigurationVersionItem = DeepReadonly<typeof configurationVersions.$inferSelect>;
-const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
+const VCS_RUN_SOURCES = new Set(["bitbucket", "github", "gitlab", "azure_devops"]);
 type RunOrigin = Readonly<{
   source: string;
   triggerReason: string;
@@ -1093,7 +1093,7 @@ async function resolveRunConfigurationVersion(
     }
     const pendingVcs =
       configurationVersion.status === "pending" &&
-      ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
+      ["github", "gitlab", "bitbucket", "azure_devops"].includes(configurationVersion.source ?? "");
     if (configurationVersion.status !== "uploaded" && !pendingVcs) {
       await abandonReservedIdempotency(begin);
       (set as { status: number }).status = 409;

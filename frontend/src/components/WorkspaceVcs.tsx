@@ -79,9 +79,10 @@ export type VcsConnection = Readonly<{
   kind: "github-app" | "oauth-token";
   label: string;
   value: string;
+  serviceProvider?: string;
 }>;
 
-export const REGISTRY_SUPPORTED_VCS_PROVIDERS = ["github", "github_enterprise"] as const;
+export const REGISTRY_SUPPORTED_VCS_PROVIDERS = ["github", "github_enterprise", "ado_services"] as const;
 
 // oxlint-disable-next-line react/only-export-components -- shared by the create and settings forms without adding a third file
 export async function loadOrganizationVcsConnections(
@@ -98,8 +99,9 @@ export async function loadOrganizationVcsConnections(
   const installations = Array.isArray(githubResponse.data) ? githubResponse.data : [];
   const clients = (Array.isArray(oauthResponse.data) ? oauthResponse.data : []).filter(
     (client): boolean =>
-      options?.supportedProviders === undefined ||
-      options.supportedProviders.includes(client.attributes["service-provider"] ?? ""),
+      !["ado_server", "azure_devops_server"].includes(client.attributes["service-provider"] ?? "") &&
+      (options?.supportedProviders === undefined ||
+        options.supportedProviders.includes(client.attributes["service-provider"] ?? "")),
   );
   const oauthConnections = await Promise.all(
     clients.map(async (client: OAuthClient): Promise<VcsConnection[]> => {
@@ -120,6 +122,9 @@ export async function loadOrganizationVcsConnections(
           kind: "oauth-token",
           label: `${client.attributes.name} — ${provider}${isString(user) && user !== "" ? ` (${user})` : ""}`,
           value: `oauth-token:${token.id}`,
+          ...(client.attributes["service-provider"] === undefined
+            ? {}
+            : { serviceProvider: client.attributes["service-provider"] }),
         };
       });
     }),
@@ -158,6 +163,7 @@ function VcsConnectionFields({
   onIdentifierChange,
   vcsRepositories,
   vcsRepositoriesLoading,
+  vcsRepositoriesError,
 }: Readonly<{
   connectionValue: string;
   onConnectionChange: (value: string) => void;
@@ -169,6 +175,7 @@ function VcsConnectionFields({
   onIdentifierChange: (value: string) => void;
   vcsRepositories: { identifier: string; name: string; owner?: string }[];
   vcsRepositoriesLoading: boolean;
+  vcsRepositoriesError: string;
 }>): React.JSX.Element {
   return (
     <>
@@ -200,7 +207,7 @@ function VcsConnectionFields({
           <FieldDescription>
             {displayedConnections.length === 0 && !connectionsLoading
               ? "No registered connections are available. Add one in organization VCS settings."
-              : "Choose a registered GitHub App or OAuth connection."}
+              : "Choose a registered GitHub App, OAuth or Azure DevOps Services PAT connection."}
           </FieldDescription>
         )}
       </Field>
@@ -218,8 +225,14 @@ function VcsConnectionFields({
           placeholder="e.g. organization/repository"
         />
         <FieldDescription>
-          Search by organization or repository name, then select the full repository path.
+          Search by organization or repository name, then select the full repository path. Azure DevOps Services uses
+          organization/project/_git/repository.
         </FieldDescription>
+        {vcsRepositoriesError !== "" && (
+          <p role="alert" className="text-sm text-destructive">
+            {vcsRepositoriesError}
+          </p>
+        )}
       </Field>
     </>
   );
@@ -347,6 +360,7 @@ function VcsRunBehaviorFields({
   onAutoApplyChange,
   ingressSubmodules,
   onIngressSubmodulesChange,
+  submodulesSupported,
 }: Readonly<{
   canUpdate: boolean;
   speculativeEnabled: boolean;
@@ -355,6 +369,7 @@ function VcsRunBehaviorFields({
   onAutoApplyChange: (enabled: boolean) => void;
   ingressSubmodules: boolean;
   onIngressSubmodulesChange: (enabled: boolean) => void;
+  submodulesSupported: boolean;
 }>): React.JSX.Element {
   return (
     <FieldSet disabled={!canUpdate} className="border-t border-border/60 pt-5">
@@ -382,13 +397,17 @@ function VcsRunBehaviorFields({
         <Field orientation="horizontal" data-disabled={!canUpdate}>
           <Checkbox
             id="vcs-submodules"
-            checked={ingressSubmodules}
+            checked={submodulesSupported && ingressSubmodules}
             onCheckedChange={onIngressSubmodulesChange}
-            disabled={!canUpdate}
+            disabled={!canUpdate || !submodulesSupported}
           />
           <FieldContent>
             <FieldLabel htmlFor="vcs-submodules">Include submodules when cloning</FieldLabel>
-            <FieldDescription>Recursively fetch Git submodules with the repository.</FieldDescription>
+            <FieldDescription>
+              {submodulesSupported
+                ? "Recursively fetch Git submodules with the repository."
+                : "Azure DevOps Services archives do not include Git submodules."}
+            </FieldDescription>
           </FieldContent>
         </Field>
       </FieldGroup>
@@ -535,12 +554,18 @@ export function WorkspaceVcs({
   const [saved, setSaved] = useState(false);
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
   const displayedConnections = displayedVcsConnections(initialConnection, connections);
+  const selectedConnection = displayedConnections.find(
+    (connection: VcsConnection): boolean => connection.value === connectionValue,
+  );
+  const azureDevOps = selectedConnection?.serviceProvider === "ado_services";
 
   const [vcsRepositories, setVcsRepositories] = useState<{ identifier: string; name: string; owner?: string }[]>([]);
   const [vcsRepositoriesLoading, setVcsRepositoriesLoading] = useState(false);
+  const [vcsRepositoriesError, setVcsRepositoriesError] = useState("");
 
   useEffect((): (() => void) | undefined => {
     setVcsRepositories([]);
+    setVcsRepositoriesError("");
     setVcsRepositoriesLoading(false);
     if (!canUpdate || orgName === "" || connectionValue === "") return undefined;
     const controller = new AbortController();
@@ -554,7 +579,12 @@ export function WorkspaceVcs({
         const list = res.data;
         if (Array.isArray(list)) setVcsRepositories(list.map((item) => item.attributes));
       })
-      .catch((): void => undefined)
+      .catch((): void => {
+        if (!controller.signal.aborted)
+          setVcsRepositoriesError(
+            "Could not load repositories. Check the selected connection's permissions and token expiry in VCS settings.",
+          );
+      })
       .finally((): void => {
         if (!controller.signal.aborted) setVcsRepositoriesLoading(false);
       });
@@ -591,9 +621,6 @@ export function WorkspaceVcs({
     event.preventDefault();
     if (!canUpdate) return;
     const normalizedIdentifier = identifier.trim();
-    const selectedConnection = displayedConnections.find(
-      (connection: VcsConnection): boolean => connection.value === connectionValue,
-    );
     if (normalizedIdentifier === "") {
       setError("Repository identifier is required.");
       return;
@@ -620,7 +647,7 @@ export function WorkspaceVcs({
                 branch: branch.trim() === "" ? null : branch.trim(),
                 "github-app-installation-id": selectedConnection.kind === "github-app" ? selectedConnection.id : null,
                 "oauth-token-id": selectedConnection.kind === "oauth-token" ? selectedConnection.id : null,
-                "ingress-submodules": ingressSubmodules,
+                "ingress-submodules": !azureDevOps && ingressSubmodules,
                 "tags-regex": tagsRegex.trim() === "" ? null : tagsRegex.trim(),
               },
               "working-directory": workingDirectory.trim(),
@@ -698,6 +725,7 @@ export function WorkspaceVcs({
                   onIdentifierChange={setIdentifier}
                   vcsRepositories={vcsRepositories}
                   vcsRepositoriesLoading={vcsRepositoriesLoading}
+                  vcsRepositoriesError={vcsRepositoriesError}
                 />
 
                 <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
@@ -763,6 +791,7 @@ export function WorkspaceVcs({
               onAutoApplyChange={setAutoApply}
               ingressSubmodules={ingressSubmodules}
               onIngressSubmodulesChange={setIngressSubmodules}
+              submodulesSupported={!azureDevOps}
             />
             <FieldError>{error}</FieldError>
           </FieldGroup>

@@ -72,3 +72,35 @@ describe("VCS source identity", () => {
     expect(vcsSourceMatchesConnection(github, gitlab)).toBe(false);
   });
 });
+
+test("Azure DevOps source identity isolates organizations on the shared HTTPS origin", () => {
+  const source = configuredVcsSourceIdentity(
+    "azure_devops",
+    "ado_services",
+    "https://dev.azure.com",
+    null,
+    undefined,
+    false,
+    "Acme",
+  );
+  expect(source).toEqual({ provider: "azure_devops", host: "dev.azure.com", organization: "acme" });
+  if (source === undefined) throw new Error("Missing valid Azure source");
+  expect(
+    vcsSourceMatchesConnection(source, { provider: "azure_devops", host: "dev.azure.com", organization: "other" }),
+  ).toBe(false);
+  expect(vcsSourceMatchesConnection(source, { provider: "azure_devops", host: "dev.azure.com" })).toBe(false);
+  expect(
+    vcsSourceMatchesConnection(source, { provider: "azure_devops", host: "dev.azure.com", organization: "acme" }),
+  ).toBe(true);
+  expect(
+    configuredVcsSourceIdentity(
+      "azure_devops",
+      "ado_services",
+      "https://dev.azure.com/other",
+      null,
+      undefined,
+      false,
+      "acme",
+    ),
+  ).toBeUndefined();
+});

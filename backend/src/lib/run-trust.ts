@@ -12,7 +12,7 @@ export async function runConfigurationTrusted(
   });
   if (configuration === undefined) return false;
   const ingress = configuration.ingressAttributes as Readonly<Record<string, unknown>> | null;
-  const vcs = ["github", "gitlab", "bitbucket"].includes(configuration.source ?? "");
+  const vcs = ["github", "gitlab", "bitbucket", "azure_devops"].includes(configuration.source ?? "");
   if (!vcs || (!configuration.speculative && ingress?.["pullRequestNumber"] === undefined)) return true;
   // Legacy queued PRs have no verified repository identity. Fail closed before
   // decrypting variables, seeding state, or honoring their existing run tokens.

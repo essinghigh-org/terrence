@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { newResourceId } from "./resource-id";
 import { mkdir, mkdtemp, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
@@ -9,8 +10,9 @@ import type { policySets } from "../db/schema";
 import type { DeepReadonly } from "./utils";
 import { extractSafeTarArchive } from "./archive";
 
-export type PolicyVcsProvider = "github" | "gitlab" | "bitbucket";
+export type PolicyVcsProvider = "github" | "gitlab" | "bitbucket" | "azure_devops";
 export type PolicyWebhookDetails = {
+  readonly deliveryId?: string;
   readonly branch?: string;
   readonly tag?: string;
   readonly commitSha: string;
@@ -326,6 +328,29 @@ async function parseManifest(
   return { manifest: relative(root, manifestPath).split(sep).join("/"), policies: parsed };
 }
 
+function policyDeliveryVersionId(
+  policySetId: string,
+  provider: PolicyVcsProvider,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- details retain immutable ReadonlySet
+  details: DeepReadonly<PolicyWebhookDetails>,
+): string {
+  return provider === "azure_devops" && details.deliveryId !== undefined
+    ? `polsetver-${createHash("sha256")
+        .update(
+          JSON.stringify([
+            details.deliveryId,
+            policySetId,
+            details.repoFullName,
+            details.branch,
+            details.tag,
+            details.commitSha,
+          ]),
+        )
+        .digest("hex")
+        .slice(0, 32)}`
+    : newResourceId("polsetver");
+}
+
 export async function synchronizeVcsPolicySet(
   policySet: DeepReadonly<typeof policySets.$inferSelect>,
   provider: PolicyVcsProvider,
@@ -335,7 +360,10 @@ export async function synchronizeVcsPolicySet(
   fetchArchive: () => Promise<Uint8Array>,
 ): Promise<void> {
   const now = Date.now();
-  const versionId = newResourceId("polsetver");
+  const versionId = policyDeliveryVersionId(policySet.id, provider, details);
+  const existing = await db.query.policySetVersions.findFirst({ where: eq(policySetVersions.id, versionId) });
+  // A retried multi-target delivery must not reapply an older ready version.
+  if (existing?.status === "ready" || existing?.status === "errored") return;
   const baseIngress = {
     provider,
     repository: details.repoFullName,
@@ -343,17 +371,20 @@ export async function synchronizeVcsPolicySet(
     ...(details.branch === undefined ? {} : { branch: details.branch }),
     ...(details.tag === undefined ? {} : { tag: details.tag }),
   };
-  await db.insert(policySetVersions).values({
-    id: versionId,
-    policySetId: policySet.id,
-    source: provider,
-    status: "pending",
-    statusTimestamps: {},
-    statusMetadataSchemaVersion: 1,
-    ingressAttributes: baseIngress,
-    createdAt: now,
-    updatedAt: now,
-  });
+  await db
+    .insert(policySetVersions)
+    .values({
+      id: versionId,
+      policySetId: policySet.id,
+      source: provider,
+      status: "pending",
+      statusTimestamps: {},
+      statusMetadataSchemaVersion: 1,
+      ingressAttributes: baseIngress,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing();
 
   const stagingDirectory = await mkdtemp(join(tmpdir(), "terrence-policy-sync-"));
   const extractionDirectory = join(stagingDirectory, "repository");
@@ -387,7 +418,7 @@ export async function synchronizeVcsPolicySet(
       .where(eq(policySetVersions.id, versionId));
 
     await extractArchive(archivePath, extractionDirectory);
-    const root = await repositoryRoot(extractionDirectory);
+    const root = provider === "azure_devops" ? extractionDirectory : await repositoryRoot(extractionDirectory);
     const parsed = await parseManifest(policySet, root);
     const readyAt = new Date().toISOString();
     await db.transaction(async (tx): Promise<void> => {

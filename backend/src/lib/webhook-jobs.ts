@@ -20,19 +20,20 @@ import { and, count, eq, inArray, min } from "drizzle-orm";
 import { db } from "../db";
 import { durableJobs, githubWebhookDeliveries } from "../db/schema";
 import { DURABLE_MAX_ATTEMPTS, enqueueDurableJob, type DurableJob } from "./durable-jobs";
-import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "./webhooks";
+import { handleAzureDevOpsWebhook, handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "./webhooks";
 import { log } from "./log";
 import { recordFailure } from "./process-metrics";
 import { parsePersistedJobPayload } from "./validation";
 import type { DeepReadonly } from "./types";
 
-export type VcsWebhookProvider = "github" | "gitlab" | "bitbucket";
+export type VcsWebhookProvider = "github" | "gitlab" | "bitbucket" | "azure_devops";
 
 const VCS_WEBHOOK_KIND = "vcs-webhook" as const;
 
 export type VcsWebhookJobPayload = Readonly<{
   provider: VcsWebhookProvider;
   eventName: string;
+  authenticatedClientId?: string;
   payload: Record<string, unknown>;
   /** Delivery-row id when the provider/request carried a usable identity. */
   deliveryId: string | null;
@@ -143,6 +144,7 @@ export async function enqueueVcsWebhookJob(
   input: DeepReadonly<{
     provider: VcsWebhookProvider;
     eventName: string;
+    authenticatedClientId?: string;
     payload: Record<string, unknown>;
     deliveryId: string | null;
     /** Re-arm a terminal/running job (admin retry or failed-delivery redelivery). */
@@ -154,6 +156,7 @@ export async function enqueueVcsWebhookJob(
     eventName: input.eventName,
     payload: input.payload,
     deliveryId: input.deliveryId,
+    ...(input.authenticatedClientId === undefined ? {} : { authenticatedClientId: input.authenticatedClientId }),
   };
   await enqueueDurableJob(
     VCS_WEBHOOK_KIND,
@@ -179,7 +182,13 @@ async function dispatch(
   provider: VcsWebhookProvider,
   eventName: string,
   payload: Readonly<Record<string, unknown>>,
+  authenticatedClientId?: string,
 ): Promise<void> {
+  if (provider === "azure_devops") {
+    if (authenticatedClientId === undefined) throw new Error("Azure DevOps webhook has no authenticated connection");
+    await handleAzureDevOpsWebhook(eventName, payload, authenticatedClientId);
+    return;
+  }
   if (provider === "github") {
     await handleGithubWebhook(eventName, payload);
     return;
@@ -202,8 +211,22 @@ export async function processVcsWebhookPayload(body: DeepReadonly<VcsWebhookJobP
   const deliveryId = body.deliveryId;
   const payload = body.payload;
   try {
-    if (deliveryId !== null) await setDeliveryStatus(deliveryId, "processing");
-    await dispatch(provider, eventName, payload);
+    if (provider === "azure_devops" && deliveryId !== null) {
+      const claimed = await db
+        .update(githubWebhookDeliveries)
+        .set({ status: "processing" })
+        .where(
+          and(
+            eq(githubWebhookDeliveries.id, deliveryId),
+            attempts > 1
+              ? inArray(githubWebhookDeliveries.status, ["queued", "processing"])
+              : eq(githubWebhookDeliveries.status, "queued"),
+          ),
+        )
+        .returning({ id: githubWebhookDeliveries.id });
+      if (claimed.length === 0) return;
+    } else if (deliveryId !== null) await setDeliveryStatus(deliveryId, "processing");
+    await dispatch(provider, eventName, payload, body.authenticatedClientId);
     if (deliveryId !== null) await setDeliveryStatus(deliveryId, "processed", { processedAt: Date.now() });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -213,6 +236,7 @@ export async function processVcsWebhookPayload(body: DeepReadonly<VcsWebhookJobP
       // Dead-letter only once the durable queue has exhausted its attempts;
       // earlier failures stay claimable for the next retry pass.
       if (attempts >= DURABLE_MAX_ATTEMPTS) await setDeliveryStatus(deliveryId, "failed");
+      else if (provider === "azure_devops") await setDeliveryStatus(deliveryId, "queued");
     }
     throw error;
   }
@@ -277,6 +301,7 @@ export async function retryFailedVcsWebhookDelivery(deliveryId: string): Promise
     existing.id,
   ) as unknown as VcsWebhookJobPayload;
   await enqueueVcsWebhookJob({
+    ...(body.authenticatedClientId === undefined ? {} : { authenticatedClientId: body.authenticatedClientId }),
     provider: body.provider,
     eventName: body.eventName,
     payload: body.payload,

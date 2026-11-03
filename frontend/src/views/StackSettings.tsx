@@ -374,7 +374,8 @@ function StackFormDialog({
                 <option value="gitlab_hosted">GitLab</option>
                 <option value="gitlab_community_edition">GitLab Community Edition</option>
                 <option value="gitlab_enterprise_edition">GitLab Enterprise Edition</option>
-                <option value="ado_server">Azure DevOps Server</option>
+                <option value="ado_services">Azure DevOps Services (PAT)</option>
+                <option value="ado_server">Azure DevOps Server (unavailable)</option>
               </Select>
             </div>
             <div className="space-y-1.5">

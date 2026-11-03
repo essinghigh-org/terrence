@@ -109,10 +109,24 @@ test("offers only registry-supported VCS connections with an honest provider bou
             id: "gitlab-client",
             attributes: { name: "GitLab", "service-provider": "gitlab", "service-provider-display-name": "GitLab" },
           },
+          {
+            id: "azure-client",
+            attributes: {
+              name: "Azure DevOps",
+              "service-provider": "ado_services",
+              "service-provider-display-name": "Azure DevOps Services",
+            },
+          },
+          {
+            id: "azure-server-client",
+            attributes: { name: "Azure Server", "service-provider": "ado_server" },
+          },
         ],
       });
     if (url === "/api/v2/oauth-clients/github-client/oauth-tokens")
       return json({ data: [{ id: "github-token", attributes: { "service-provider-user": "octocat" } }] });
+    if (url === "/api/v2/oauth-clients/azure-client/oauth-tokens")
+      return json({ data: [{ id: "azure-token", attributes: {} }] });
     if (url === "/api/v2/oauth-clients/github-token/oauth-tokens") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/vcs-connections/oauth-token%3Agithub-token/repositories")
       return json({ data: [] });
@@ -127,7 +141,9 @@ test("offers only registry-supported VCS connections with an honest provider bou
   expect(connectionLabels.some((label): boolean => label.includes("GitHub"))).toBeTrue();
   expect(connectionLabels.some((label): boolean => label.includes("octocat"))).toBeTrue();
   expect(connectionLabels.some((label): boolean => label.includes("GitLab"))).toBeFalse();
-  expect(view.queryByText(/No supported GitHub connections/)).toBeNull();
+  expect(connectionLabels.some((label): boolean => label.includes("Azure DevOps Services"))).toBeTrue();
+  expect(connectionLabels.some((label): boolean => label.includes("Azure Server"))).toBeFalse();
+  expect(view.queryByText(/No supported connections/)).toBeNull();
 });
 
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
