@@ -31,12 +31,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/landlock.h>
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <stddef.h>
 #include <linux/prctl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -52,7 +57,7 @@
 #endif
 
 /* Version reported by --version. Bump on user-visible runner changes. */
-#define LANDLOCK_RUNNER_VERSION "1.2.0"
+#define LANDLOCK_RUNNER_VERSION "1.3.0"
 
 #ifndef LANDLOCK_CREATE_RULESET_VERSION
 #define LANDLOCK_CREATE_RULESET_VERSION (1U << 0)
@@ -122,6 +127,8 @@ static long landlock_abi(void) {
 }
 
 static int add_path_rule(int ruleset_fd, long abi, uint64_t access, const char *path) {
+    /* A socket-only grant has no mediated right on kernels before ABI 9. */
+    if (access == 0) return 0;
     int dir_fd = open(path, O_PATH | O_CLOEXEC);
     if (dir_fd < 0) {
         fprintf(stderr, "landlock-runner: cannot open '%s': %s\\n",
@@ -164,6 +171,62 @@ static int add_path_rule(int ruleset_fd, long abi, uint64_t access, const char *
     return 0;
 }
 
+/* Native policy bootstrap relies on the engine's private AutoMTLS key. A
+ * provider in the same Landlock domain must not inspect/modify engine memory
+ * or steal another process's descriptors. Filters are inherited across exec. */
+static int install_no_debug(void) {
+#if defined(__x86_64__)
+#define POLICY_AUDIT_ARCH AUDIT_ARCH_X86_64
+#elif defined(__aarch64__)
+#define POLICY_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#elif defined(__s390x__)
+#define POLICY_AUDIT_ARCH AUDIT_ARCH_S390X
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+#ifdef POLICY_AUDIT_ARCH
+#define DENY_SYSCALL(nr) BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (nr), 0, 1), BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM)
+    struct sock_filter filter[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, POLICY_AUDIT_ARCH, 1, 0),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+#if defined(__x86_64__)
+        /* Refuse x32 ABI rather than allow a syscall-number alias bypass. */
+        BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x40000000U, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
+#endif
+#ifdef __NR_ptrace
+        DENY_SYSCALL(__NR_ptrace),
+#endif
+#ifdef __NR_process_vm_readv
+        DENY_SYSCALL(__NR_process_vm_readv),
+#endif
+#ifdef __NR_process_vm_writev
+        DENY_SYSCALL(__NR_process_vm_writev),
+#endif
+#ifdef __NR_pidfd_getfd
+        DENY_SYSCALL(__NR_pidfd_getfd),
+#endif
+#ifdef __NR_kcmp
+        DENY_SYSCALL(__NR_kcmp),
+#endif
+#ifdef __NR_perf_event_open
+        DENY_SYSCALL(__NR_perf_event_open),
+#endif
+#ifdef __NR_bpf
+        DENY_SYSCALL(__NR_bpf),
+#endif
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program = { .len = (unsigned short)(sizeof(filter) / sizeof(filter[0])), .filter = filter };
+    return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program);
+#undef DENY_SYSCALL
+#undef POLICY_AUDIT_ARCH
+#endif
+}
+
 static int probe(void) {
     long abi = landlock_abi();
     if (abi < 1) {
@@ -177,7 +240,7 @@ static int probe(void) {
 static void usage(void) {
     fprintf(stderr,
         "usage: landlock-runner --probe\n"
-        "   or: landlock-runner (--rwx=PATH | --rw=PATH | --rw-files=PATH | --rx=PATH | --ro=PATH)* [--deny-net] [--cwd=DIR] -- CMD [ARGS...]\n");
+        "   or: landlock-runner (--rwx=PATH | --rw=PATH | --rw-files=PATH | --rx=PATH | --ro=PATH | --connect-unix=PATH)* [--deny-net] [--deny-debug] [--gate-stdin] [--cwd=DIR] -- CMD [ARGS...]\n");
 }
 
 int main(int argc, char **argv) {
@@ -197,6 +260,8 @@ int main(int argc, char **argv) {
 
     const char *cwd = NULL;
     int deny_net = 0;
+    int deny_debug = 0;
+    int gate_stdin = 0;
 
     /* First pass: collect rules (no restrictions applied yet). */
     struct { const char *path; uint64_t access; } rules[64];
@@ -213,6 +278,14 @@ int main(int argc, char **argv) {
             cmd_start = i + 1;
             break;
         }
+        if (strcmp(arg, "--gate-stdin") == 0) {
+            gate_stdin = 1;
+            continue;
+        }
+        if (strcmp(arg, "--deny-debug") == 0) {
+            deny_debug = 1;
+            continue;
+        }
         if (strcmp(arg, "--deny-net") == 0) {
             deny_net = 1;
             continue;
@@ -228,6 +301,7 @@ int main(int argc, char **argv) {
         else if (strncmp(arg, "--rw-files=", 11) == 0) { path = arg + 11; access = LL_READ | LL_WRITE_FILE; }
         else if (strncmp(arg, "--rx=", 5) == 0) { path = arg + 5; access = LL_EXEC; }
         else if (strncmp(arg, "--ro=", 5) == 0) { path = arg + 5; access = LL_READ; }
+        else if (strncmp(arg, "--connect-unix=", 15) == 0) { path = arg + 15; access = LL_RESOLVE_UNIX; }
         else {
             fprintf(stderr, "landlock-runner: unknown option: %s\n", arg);
             usage();
@@ -302,6 +376,36 @@ int main(int argc, char **argv) {
     if (cwd != NULL && chdir(cwd) != 0) {
         fprintf(stderr, "landlock-runner: chdir '%s': %s\n", cwd, strerror(errno));
         return 126;
+    }
+
+    /* A child must not extract engine mTLS keys by forcing a core dump.
+     * Both limits are zero so descendants cannot raise the soft limit. */
+    const struct rlimit no_core = { .rlim_cur = 0, .rlim_max = 0 };
+    if (deny_debug && setrlimit(RLIMIT_CORE, &no_core) != 0) {
+        fprintf(stderr, "landlock-runner: required core dump restriction: %s\n", strerror(errno));
+        return 2;
+    }
+    if (deny_debug && install_no_debug() != 0) {
+        fprintf(stderr, "landlock-runner: required no-debug seccomp filter: %s\n", strerror(errno));
+        return 2;
+    }
+
+    /* Supervisor learns this PID/start time and creates its private bootstrap
+     * socket before allowing any engine or provider code to execute. */
+    if (gate_stdin) {
+        char release = 0;
+        ssize_t received;
+        do { received = read(STDIN_FILENO, &release, 1); } while (received < 0 && errno == EINTR);
+        if (received != 1 || release != 'G') {
+            fprintf(stderr, "landlock-runner: execution gate not released\n");
+            return 2;
+        }
+        int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (null_fd < 0 || dup2(null_fd, STDIN_FILENO) < 0) {
+            if (null_fd >= 0) close(null_fd);
+            return 2;
+        }
+        close(null_fd);
     }
 
     execvp(argv[cmd_start], &argv[cmd_start]);
