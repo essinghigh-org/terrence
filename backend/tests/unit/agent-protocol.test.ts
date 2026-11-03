@@ -24,6 +24,32 @@ describe("agent protocol compatibility contract", () => {
     expect(negotiated.unsupportedCapabilities).toEqual([]);
   });
 
+  test("pins the immutable pre-negotiation baseline independently of future features", () => {
+    expect(LEGACY_AGENT_CAPABILITIES).toEqual([
+      "operation.plan",
+      "operation.apply",
+      "operation.policy",
+      "operation.assessment",
+      "operation.stack",
+      "operation.source-bundle",
+      "operation.test",
+      "artifact.configuration",
+      "artifact.filesystem",
+      "artifact.log",
+      "artifact.plan-json",
+      "artifact.state-json",
+      "artifact.atomic-upload",
+      "lease.heartbeat",
+      "lease.fencing",
+      "cancellation",
+      "state.publication",
+    ]);
+    expect(Object.isFrozen(LEGACY_AGENT_CAPABILITIES)).toBe(true);
+    const offer = parseAgentProtocolOffer({ protocol_version: "1" }, headers({}));
+    expect(offer.capabilities).toEqual(LEGACY_AGENT_CAPABILITIES);
+    expect(offer.capabilities).not.toBe(LEGACY_AGENT_CAPABILITIES);
+  });
+
   test("selects v1 from a multi-version offer and ignores an unknown future capability", () => {
     const offer = parseAgentProtocolOffer(
       {
