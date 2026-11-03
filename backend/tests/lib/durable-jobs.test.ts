@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { eq, inArray } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
+import { databaseUrl } from "../../src/db/driver";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { durableJobs } from "../../src/db/schema";
 import {
   DurableJobBudgetError,
@@ -28,10 +31,24 @@ async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs 
   }
 }
 
+// Admission and dispatch budgets cover every durable kind, so kind-scoped
+// cleanup leaves unrelated queued/running fixtures consuming this suite's slots.
+// Only clear the disposable database created by tests/setup.ts, never a caller's
+// explicitly supplied SQLite database or a non-test PostgreSQL database.
+async function clearTestJobs(): Promise<void> {
+  const isolated = databaseUrl.startsWith("postgres")
+    ? /^\/terrence_test_[a-f0-9]{12}$/.test(new URL(databaseUrl).pathname)
+    : databaseUrl.startsWith(`file:${join(tmpdir(), "terrence-test-")}`) && databaseUrl.endsWith("/terrence.db");
+  if (!isolated) throw new Error("Durable job tests require the disposable test database");
+  await db.delete(durableJobs);
+}
+
+beforeEach(clearTestJobs);
+
 afterEach(async (): Promise<void> => {
   stopDurableJobWorker();
   await waitUntil((): boolean => activeDurableJobCount() === 0).catch((): void => undefined);
-  await db.delete(durableJobs).where(inArray(durableJobs.kind, [kind, criticalKind]));
+  await clearTestJobs();
   if (previousBudget === undefined) Reflect.deleteProperty(process.env, RESOURCE_BUDGET_ENV);
   else process.env[RESOURCE_BUDGET_ENV] = previousBudget;
   if (previousDisableWorker === undefined) Reflect.deleteProperty(process.env, "TERRENCE_DISABLE_WORKER");
