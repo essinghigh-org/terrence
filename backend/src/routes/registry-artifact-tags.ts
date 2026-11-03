@@ -19,6 +19,27 @@ type Context = {
 };
 const notFound = { errors: [{ status: "404", title: "Not Found" }] };
 
+async function providerArtifact(params: Record<string, string>, org: typeof organizations.$inferSelect | undefined) {
+  const row = await db.query.registryProviders.findFirst({
+    where: org
+      ? and(
+          eq(registryProviders.orgId, org.id),
+          eq(registryProviders.namespace, params["namespace"] ?? ""),
+          eq(registryProviders.type, params["name"] ?? ""),
+          eq(registryProviders.registryName, params["registry_name"] ?? ""),
+        )
+      : eq(registryProviders.id, params["provider_id"] ?? ""),
+  });
+  if (!row) return undefined;
+  return {
+    ...row,
+    save: async (tags: string) => {
+      await db.update(registryProviders).set({ tagBindings: tags }).where(eq(registryProviders.id, row.id));
+    },
+    resource: async () => registryProviderResource(row, org?.name ?? row.orgId),
+  };
+}
+
 async function artifact(kind: Kind, params: Record<string, string>) {
   const org = params["org_name"]
     ? await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"]) })
@@ -37,26 +58,7 @@ async function artifact(kind: Kind, params: Record<string, string>) {
       resource: async () => registryModuleResource(row, org?.name ?? row.orgId, true),
     };
   }
-  if (kind === "providers") {
-    const row = await db.query.registryProviders.findFirst({
-      where: org
-        ? and(
-            eq(registryProviders.orgId, org.id),
-            eq(registryProviders.namespace, params["namespace"] ?? ""),
-            eq(registryProviders.type, params["name"] ?? ""),
-            eq(registryProviders.registryName, params["registry_name"] ?? ""),
-          )
-        : eq(registryProviders.id, params["provider_id"] ?? ""),
-    });
-    if (!row) return undefined;
-    return {
-      ...row,
-      save: async (tags: string) => {
-        await db.update(registryProviders).set({ tagBindings: tags }).where(eq(registryProviders.id, row.id));
-      },
-      resource: async () => registryProviderResource(row, org?.name ?? row.orgId),
-    };
-  }
+  if (kind === "providers") return providerArtifact(params, org);
   const row = await db.query.registryComponents.findFirst({
     where: eq(registryComponents.id, params["id"] ?? ""),
   });
@@ -70,22 +72,33 @@ async function artifact(kind: Kind, params: Record<string, string>) {
   };
 }
 
+async function canAccessArtifact(
+  kind: Kind,
+  write: boolean,
+  artifactOrgId: string,
+  user: Context["user"],
+  orgId: Context["orgId"],
+  teamId: Context["teamId"],
+): Promise<boolean> {
+  if (write) {
+    return checkOrganizationPermission(
+      artifactOrgId,
+      user?.id,
+      orgId,
+      teamId ?? null,
+      kind === "providers" ? "manage-providers" : "manage-modules",
+    );
+  }
+  if (kind === "components") {
+    return checkOrgPermission(user?.id, artifactOrgId, "member", orgId ?? null, teamId ?? null, "registry:read");
+  }
+  return checkRegistryManagementRead(user?.id, artifactOrgId, kind, orgId, teamId ?? null);
+}
+
 function handle(kind: Kind, write: boolean) {
   return async ({ params, body, user, orgId, teamId, set }: Context): Promise<unknown> => {
     const row = await artifact(kind, params);
-    const permitted =
-      row &&
-      (write
-        ? await checkOrganizationPermission(
-            row.orgId,
-            user?.id,
-            orgId,
-            teamId ?? null,
-            kind === "providers" ? "manage-providers" : "manage-modules",
-          )
-        : kind === "components"
-          ? await checkOrgPermission(user?.id, row.orgId, "member", orgId ?? null, teamId ?? null, "registry:read")
-          : await checkRegistryManagementRead(user?.id, row.orgId, kind, orgId, teamId ?? null));
+    const permitted = row && (await canAccessArtifact(kind, write, row.orgId, user, orgId, teamId));
     if (!row || !permitted) {
       set.status = 404;
       return notFound;
