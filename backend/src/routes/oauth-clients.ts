@@ -737,6 +737,14 @@ function normalizeOAuthTokenAttributes(attributes: Record<string, unknown>): str
   return undefined;
 }
 
+function hasOAuthClientUpdates(
+  credentialsInvalidated: boolean,
+  updates: Readonly<Partial<typeof oauthClients.$inferInsert>>,
+  token: unknown,
+): boolean {
+  return credentialsInvalidated || Object.keys(updates).length > 0 || token !== undefined;
+}
+
 function applyOAuthClientFieldUpdates(
   attributes: Record<string, unknown>,
   updates: Partial<typeof oauthClients.$inferInsert>,
@@ -1358,7 +1366,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       const { credentialsInvalidated } = credentials;
       const adoError = azureDevOpsUpdateError(oc, updates, attributes["oauth-token"]);
       if (adoError !== undefined) return unprocessable(set, adoError);
-      if (credentialsInvalidated || Object.keys(updates).length > 0 || attributes["oauth-token"] !== undefined) {
+      if (hasOAuthClientUpdates(credentialsInvalidated, updates, attributes["oauth-token"])) {
         await db.transaction(async (tx): Promise<void> => {
           if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
           if (Object.keys(updates).length > 0)
