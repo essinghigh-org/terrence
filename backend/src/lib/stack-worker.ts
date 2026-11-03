@@ -1,3 +1,4 @@
+import { fetchAzureDevOpsSubmoduleArchive } from "./ado-submodules";
 import { stackPolicyExecutionError } from "./stack-policy-gate";
 import { newResourceId } from "./resource-id";
 import { createHash } from "node:crypto";
@@ -29,6 +30,13 @@ import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { runBoundedProcess } from "./bounded-process";
 import { gitExtraHeaderConfigKey } from "./vcs-credential-scope";
+import {
+  azureDevOpsOrganization,
+  fetchAzureDevOpsArchive,
+  fetchAzureDevOpsDefaultBranch,
+  fetchAzureDevOpsLatestCommit,
+  type AzureDevOpsCredentials,
+} from "./azure-devops";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
 import {
   captureProcessOutput,
@@ -56,6 +64,7 @@ type SourceCredentials = Readonly<{
   apiUrl: string | null;
   httpUrl: string | null;
   token: string | null;
+  adoOrgName?: string | null;
 }>;
 
 function timeoutSeconds(value: unknown, fallback: number): number {
@@ -94,7 +103,8 @@ async function credentialsFor(stack: Stack): Promise<SourceCredentials> {
     });
     if (client === undefined) throw new Error("The Stack VCS connection is unavailable");
     return {
-      provider: stack.vcsServiceProvider ?? client.serviceProvider,
+      provider: client.serviceProvider,
+      adoOrgName: client.adoOrgName,
       apiUrl: client.apiUrl,
       httpUrl: client.httpUrl,
       token: await decryptSecret(token.token),
@@ -258,7 +268,12 @@ async function fetchGitArchive(stack: Stack, destination: string, signal: Readon
       family === "ado"
         ? `Basic ${Buffer.from(`:${credentials.token}`).toString("base64")}`
         : `Bearer ${credentials.token}`;
-    const configKey = gitExtraHeaderConfigKey(credentials.provider, credentials.apiUrl, credentials.httpUrl);
+    const configKey = gitExtraHeaderConfigKey(
+      credentials.provider,
+      credentials.apiUrl,
+      credentials.httpUrl,
+      credentials.adoOrgName,
+    );
     if (configKey === null) throw new Error("The Stack VCS credential origin is unavailable");
     env["GIT_CONFIG_COUNT"] = "1";
     env["GIT_CONFIG_KEY_0"] = configKey;
@@ -286,13 +301,55 @@ async function fetchGitArchive(stack: Stack, destination: string, signal: Readon
   }
 }
 
-async function fetchStackArchive(stack: Stack, destination: string, signal: Readonly<AbortSignal>): Promise<void> {
+async function fetchAzureStackArchive(
+  stack: Stack,
+  source: SourceCredentials,
+  destination: string,
+  signal: Readonly<AbortSignal>,
+): Promise<void> {
+  const organization = azureDevOpsOrganization(source.adoOrgName);
+  if (organization === undefined || source.token === null)
+    throw new Error("The Stack Azure DevOps credentials are unavailable");
+  const credentials: AzureDevOpsCredentials = {
+    organization,
+    token: source.token,
+    apiUrl: source.apiUrl,
+    httpUrl: source.httpUrl,
+  };
+  const identifier = stack.vcsIdentifier ?? "";
+  const branch =
+    stack.vcsBranch === null || stack.vcsBranch === ""
+      ? await fetchAzureDevOpsDefaultBranch(credentials, identifier)
+      : stack.vcsBranch;
+  if (branch === undefined) throw new Error("The Stack Azure DevOps default branch is unavailable");
+  signal.throwIfAborted();
+  const commit = await fetchAzureDevOpsLatestCommit(credentials, identifier, branch);
+  if (commit === undefined) throw new Error("The Stack Azure DevOps branch has no resolvable commit");
+  const archive = await (stack.vcsIngressSubmodules ? fetchAzureDevOpsSubmoduleArchive : fetchAzureDevOpsArchive)(
+    credentials,
+    identifier,
+    commit,
+    {},
+    signal,
+  );
+  signal.throwIfAborted();
+  await writeResponseArchive(new Response(Buffer.from(archive)), destination, signal);
+}
+
+async function fetchStackArchive(stack: Stack, destination: string, signal: Readonly<AbortSignal>): Promise<boolean> {
+  const credentials = await credentialsFor(stack);
+  if (credentials.provider === "ado_services") {
+    // PATs never enter Git's redirect/submodule transports or a caller-provided clone URL.
+    await fetchAzureStackArchive(stack, credentials, destination, signal);
+    return true;
+  }
+  if (stack.vcsIngressSubmodules) throw new Error("Submodule ingress requires Azure DevOps Services");
   const family = providerFamily(stack.vcsServiceProvider ?? "github");
   let httpError: unknown;
   if (family === "github" || family === "gitlab") {
     try {
       await fetchHttpArchive(stack, destination, signal);
-      return;
+      return false;
     } catch (error: unknown) {
       signal.throwIfAborted();
       if (stack.vcsRepositoryHttpUrl === null) throw error;
@@ -301,6 +358,7 @@ async function fetchStackArchive(stack: Stack, destination: string, signal: Read
   }
   try {
     await fetchGitArchive(stack, destination, signal);
+    return false;
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
     const cause = httpError instanceof Error ? ` (archive download failed first: ${httpError.message})` : "";
@@ -332,6 +390,7 @@ type StackComponent = Readonly<{
 }>;
 type StackDeployment = Readonly<{ name: string; destroy: boolean }>;
 type PreparedDeployment = Readonly<{
+  rootlessArchive?: boolean;
   name: string;
   destroy: boolean;
   components: readonly StoredComponent[];
@@ -1660,7 +1719,7 @@ async function executeStackComponentFromArchive(
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-step-"));
   try {
     await extractValidatedModuleArchive(archivePath, staging, context.signal);
-    const root = await findArchiveRoot(staging);
+    const root = (run.payload ?? {})["rootlessArchive"] === true ? staging : await findArchiveRoot(staging);
     const directory = resolve(root, component.directory);
     const relativeDirectory = relative(root, directory);
     const insideRoot =
@@ -1851,6 +1910,7 @@ type ComponentPayload = Readonly<{
 }>;
 
 type PreparedStackConfiguration = Readonly<{
+  rootlessArchive: boolean;
   componentPayload: readonly ComponentPayload[];
   preparedDeployments: readonly PreparedDeployment[];
 }>;
@@ -1899,7 +1959,13 @@ async function removedDeploymentForGroup(
     return { name };
   return {
     name,
-    deployment: { name, destroy: true, components: [...previousComponents].reverse(), archivePath: previousArchive },
+    deployment: {
+      name,
+      destroy: true,
+      components: [...previousComponents].reverse(),
+      archivePath: previousArchive,
+      rootlessArchive: (previousConfiguration.payload ?? {})["rootlessArchive"] === true,
+    },
   };
 }
 
@@ -1930,12 +1996,15 @@ async function prepareStackConfiguration(
   context: DurableJobContext,
 ): Promise<PreparedStackConfiguration | undefined> {
   if (!isStackStoragePath(archivePath)) throw new Error("The Stack configuration archive path is invalid");
-  if (initialPayload["source"] === "fetch") await fetchStackArchive(stack, archivePath, context.signal);
+  const rootlessArchive =
+    initialPayload["source"] === "fetch"
+      ? await fetchStackArchive(stack, archivePath, context.signal)
+      : initialPayload["rootlessArchive"] === true;
   if (!(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-config-"));
   try {
     await extractValidatedModuleArchive(archivePath, staging, context.signal);
-    const root = await findArchiveRoot(staging);
+    const root = rootlessArchive ? staging : await findArchiveRoot(staging);
     const components = orderComponents(await componentDirectories(root));
     const deployments = await deploymentDefinitions(root);
     const componentPayload: ComponentPayload[] = components.map((component) => ({
@@ -1953,13 +2022,14 @@ async function prepareStackConfiguration(
           destroy: deployment.destroy,
           components: componentPayload,
           archivePath,
+          rootlessArchive,
         }),
       ),
       ...removedDeployments,
     ];
     if (await context.canceled()) return undefined;
     if (components[0] === undefined) throw new Error("Stack configuration contains no components");
-    return { componentPayload, preparedDeployments };
+    return { componentPayload, preparedDeployments, rootlessArchive };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
@@ -2062,6 +2132,7 @@ async function insertPreparedDeployment(
       configurationId: configuration.id,
       components: deployment.components,
       archivePath: deployment.archivePath,
+      rootlessArchive: deployment.rootlessArchive ?? false,
       "plan-mode": initialPayload["speculative"] === true ? "speculative" : "normal",
       component: deploymentFirst.name,
       componentIndex: 0,
@@ -2139,6 +2210,7 @@ export async function runStackConfigurationJob(job: Job, context: DurableJobCont
           ...initialPayload,
           archivePath,
           components: prepared.componentPayload,
+          rootlessArchive: prepared.rootlessArchive,
           deployments: prepared.preparedDeployments.map(({ name, destroy }) => ({ name, destroy })),
         },
         updatedAt: Date.now(),

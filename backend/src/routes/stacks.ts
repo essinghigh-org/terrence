@@ -66,6 +66,7 @@ function stackResource(stack: StackItem, _projectName: string | null): Record<st
     vcsRepo["branch"] = stack.vcsBranch ?? "";
     vcsRepo["tags-regex"] = stack.vcsTagsRegex;
     vcsRepo["sparse-checkout-pattern"] = stack.vcsSparseCheckoutPattern ?? "";
+    vcsRepo["ingress-submodules"] = stack.vcsIngressSubmodules;
     vcsRepo["display-identifier"] = stack.vcsDisplayIdentifier ?? stack.vcsIdentifier;
     vcsRepo["repository-http-url"] = stack.vcsRepositoryHttpUrl;
     vcsRepo["service-provider"] = stack.vcsServiceProvider;
@@ -115,6 +116,8 @@ type StackVcsAttributes = Readonly<{
   vcsDisplayIdentifier: string | null;
   vcsRepositoryHttpUrl: string | null;
   vcsSparseCheckoutPattern: string | null;
+  vcsIngressSubmodules: boolean;
+  ingressSubmodulesValid: boolean;
   vcsOAuthTokenId: string | null;
   vcsGhaInstallationId: string | null;
   triggerDisabled: boolean;
@@ -140,6 +143,8 @@ function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAt
       vcsDisplayIdentifier: null,
       vcsRepositoryHttpUrl: null,
       vcsSparseCheckoutPattern: null,
+      vcsIngressSubmodules: false,
+      ingressSubmodulesValid: true,
       vcsOAuthTokenId: null,
       vcsGhaInstallationId: null,
       triggerDisabled: attributes["trigger-disabled"] === true,
@@ -166,6 +171,8 @@ function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAt
     vcsDisplayIdentifier: nullIfEmpty(displayIdentifier),
     vcsRepositoryHttpUrl: nullIfEmpty(repositoryHttpUrl),
     vcsSparseCheckoutPattern: nullIfEmpty(sparseCheckoutPattern),
+    vcsIngressSubmodules: repo["ingress-submodules"] === true,
+    ingressSubmodulesValid: repo["ingress-submodules"] === undefined || typeof repo["ingress-submodules"] === "boolean",
     vcsOAuthTokenId: nullIfEmpty(oauthTokenId),
     vcsGhaInstallationId: nullIfEmpty(ghaId),
     triggerDisabled: repo["trigger-disabled"] === true || attributes["trigger-disabled"] === true,
@@ -179,6 +186,7 @@ const stackServiceProviders = new Set([
   "gitlab_community_edition",
   "gitlab_enterprise_edition",
   "ado_server",
+  "ado_services",
 ]);
 
 function validRepositoryHttpUrl(url: string): boolean {
@@ -190,7 +198,25 @@ function validRepositoryHttpUrl(url: string): boolean {
   }
 }
 
+async function stackOauthError(vcs: StackVcsAttributes, orgId: string): Promise<string | null> {
+  if (vcs.vcsOAuthTokenId === null) return null;
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.vcsOAuthTokenId) });
+  const client =
+    token === undefined
+      ? undefined
+      : await db.query.oauthClients.findFirst({
+          where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
+        });
+  if (client === undefined) return "OAuth token is not registered in this organization";
+  if (vcs.vcsIngressSubmodules && client.serviceProvider !== "ado_services")
+    return "Submodule ingress requires an Azure DevOps Services connection";
+  return null;
+}
+
 async function validStackVcs(vcs: StackVcsAttributes, orgId: string): Promise<string | null> {
+  if (!vcs.ingressSubmodulesValid) return "ingress-submodules must be a boolean";
+  if (vcs.vcsIngressSubmodules && vcs.vcsOAuthTokenId === null)
+    return "Submodule ingress requires an Azure DevOps Services connection";
   if (vcs.vcsServiceProvider !== null && !stackServiceProviders.has(vcs.vcsServiceProvider))
     return "Invalid Stack VCS service provider";
   if (vcs.vcsRepositoryHttpUrl !== null && !validRepositoryHttpUrl(vcs.vcsRepositoryHttpUrl))
@@ -200,16 +226,8 @@ async function validStackVcs(vcs: StackVcsAttributes, orgId: string): Promise<st
   }
   if (vcs.vcsOAuthTokenId !== null && vcs.vcsGhaInstallationId !== null)
     return "oauth-token-id and github-app-installation-id are mutually exclusive";
-  if (vcs.vcsOAuthTokenId !== null) {
-    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, vcs.vcsOAuthTokenId) });
-    const client =
-      token === undefined
-        ? undefined
-        : await db.query.oauthClients.findFirst({
-            where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
-          });
-    if (client === undefined) return "OAuth token is not registered in this organization";
-  }
+  const oauthError = await stackOauthError(vcs, orgId);
+  if (oauthError !== null) return oauthError;
   if (vcs.vcsGhaInstallationId !== null) {
     const installation = await db.query.githubAppInstallations.findFirst({
       where: and(eq(githubAppInstallations.id, vcs.vcsGhaInstallationId), eq(githubAppInstallations.orgId, orgId)),
@@ -669,6 +687,7 @@ async function applyStackVcsUpdate(
   updates.vcsDisplayIdentifier = v.vcsDisplayIdentifier;
   updates.vcsRepositoryHttpUrl = v.vcsRepositoryHttpUrl;
   updates.vcsSparseCheckoutPattern = v.vcsSparseCheckoutPattern;
+  updates.vcsIngressSubmodules = v.vcsIngressSubmodules;
   updates.vcsOAuthTokenId = v.vcsOAuthTokenId;
   updates.vcsGhaInstallationId = v.vcsGhaInstallationId;
   updates.triggerDisabled = v.triggerDisabled;
@@ -826,6 +845,7 @@ function buildStackInsert(
     vcsDisplayIdentifier: vcs.vcsDisplayIdentifier,
     vcsRepositoryHttpUrl: vcs.vcsRepositoryHttpUrl,
     vcsSparseCheckoutPattern: vcs.vcsSparseCheckoutPattern,
+    vcsIngressSubmodules: vcs.vcsIngressSubmodules,
     vcsOAuthTokenId: vcs.vcsOAuthTokenId,
     vcsGhaInstallationId: vcs.vcsGhaInstallationId,
     createdAt: now,

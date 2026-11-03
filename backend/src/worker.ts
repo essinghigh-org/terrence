@@ -1835,6 +1835,7 @@ export async function executionVariables(
 type ArchiveExtractionContext = Readonly<{
   runId?: string;
   phase?: string;
+  preserveRepositoryRoot?: boolean;
 }>;
 
 async function extractTarArchive(
@@ -1868,7 +1869,7 @@ async function extractTarArchive(
       "*/.terraform/*",
     ];
     await extractSafeTarArchive(archivePath, destDir, {}, executionArtifactExcludes);
-    await unnestArchiveDirectory(destDir, workingDirectory);
+    if (context?.preserveRepositoryRoot !== true) await unnestArchiveDirectory(destDir, workingDirectory);
     return true;
   } catch (error: unknown) {
     log.error("Configuration archive extraction failed", {
@@ -2307,7 +2308,7 @@ async function waitForTaskSettlement(
   return undefined;
 }
 
-const VCS_CONFIGURATION_SOURCES = ["github", "gitlab", "bitbucket"] as const;
+const VCS_CONFIGURATION_SOURCES = ["github", "gitlab", "bitbucket", "azure_devops"] as const;
 type VcsConfigurationSource = (typeof VCS_CONFIGURATION_SOURCES)[number];
 
 /** Bound for waiting on a push-webhook configuration download to settle. */
@@ -3080,6 +3081,7 @@ async function restoreApplyConfigurationArchive(
       archiveRestored = await extractTarArchive(configurationArchivePath, workDir, workspace.workingDirectory, {
         runId,
         phase: "apply",
+        preserveRepositoryRoot: configuration?.ingressAttributes?.vcsProvider === "azure_devops",
       });
       if (!archiveRestored) {
         await writeRunDiagnostic(
@@ -3306,7 +3308,7 @@ async function waitForPlanConfigurationArchive(
 
   if (
     cv !== undefined &&
-    ["github", "gitlab", "bitbucket"].includes(cv.source ?? "") &&
+    ["github", "gitlab", "bitbucket", "azure_devops"].includes(cv.source ?? "") &&
     ["archived", "backing_data_soft_deleted"].includes(cv.status) &&
     (typeof cv.archivePath !== "string" || cv.archivePath === "" || !(await exists(cv.archivePath)))
   ) {
@@ -3334,7 +3336,11 @@ async function extractPlanConfigurationArchive(
     (await exists(cv.archivePath))
   ) {
     await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
-    const ok = await extractTarArchive(cv.archivePath, workDir, workspace.workingDirectory, { runId, phase: "plan" });
+    const ok = await extractTarArchive(cv.archivePath, workDir, workspace.workingDirectory, {
+      runId,
+      phase: "plan",
+      preserveRepositoryRoot: cv.ingressAttributes?.vcsProvider === "azure_devops",
+    });
     if (!ok) {
       await writeRunDiagnostic(
         runId,
@@ -5953,7 +5959,12 @@ async function prepareAssessmentExecutionDir(
     throw new Error("Applied configuration archive is unavailable.");
 
   await mkdir(workDir, { recursive: true, mode: 0o700 });
-  if (!(await extractTarArchive(configuration.archivePath, workDir, undefined, { phase: "assessment" }))) {
+  if (
+    !(await extractTarArchive(configuration.archivePath, workDir, undefined, {
+      phase: "assessment",
+      preserveRepositoryRoot: configuration.ingressAttributes?.vcsProvider === "azure_devops",
+    }))
+  ) {
     throw new Error("Configuration archive extraction failed or contained invalid path components.");
   }
   const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);

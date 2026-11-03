@@ -2180,7 +2180,7 @@ function addSourceFilter(
     return [...conditions, sql`false`];
   }
   if (wantsApi === wantsVcs) return conditions;
-  const vcsSources = ["github", "gitlab", "bitbucket"];
+  const vcsSources = ["github", "gitlab", "bitbucket", "azure_devops"];
   const vcsRuns = exists(
     db
       .select({ id: configurationVersions.id })

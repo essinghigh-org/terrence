@@ -519,6 +519,13 @@
       "when": 1793726179097,
       "tag": "0073_new_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "6",
+      "when": 1793742224427,
+      "tag": "0074_fast_red_skull",
+      "breakpoints": true
     }
   ]
 }

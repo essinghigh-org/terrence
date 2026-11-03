@@ -1503,6 +1503,7 @@ output "ds_access"       { value = data.tfe_team_access.d_access.access }
 output "ds_proj_access"  { value = data.tfe_team_project_access.d_proj_access.access }
 output "ds_ps_name"      { value = data.tfe_policy_set.d_ps.name }
 output "ado_org_name" { value = tfe_oauth_client.ado.ado_org_name }
+output "ado_oauth_token_id" { value = tfe_oauth_client.ado.oauth_token_id }
 output "ado_service_provider" { value = tfe_oauth_client.ado.service_provider }
 output "ds_oc_name"      { value = data.tfe_oauth_client.d_oc.name }
 output "ds_pool_name"    { value = data.tfe_agent_pool.d_pool.name }
@@ -2078,6 +2079,7 @@ data "tfe_hyok_encrypted_data_key" "d_hyok_dek" {
           expect(val("ds_ps_name")).toBe(`pe2e-ps-${suffix}`);
           expect(val("ado_org_name")).toBe(`pe2e-ado-org-${suffix}`);
           expect(val("ado_service_provider")).toBe("ado_services");
+          expect(String(val("ado_oauth_token_id"))).toMatch(/^ot-/);
           expect(val("ds_oc_name")).toBe(`pe2e-oauth-${suffix}`);
           expect(val("ds_pool_name")).toBe(`pe2e-pool-${suffix}`);
           expect(val("ds_me_username")).toBe(auth.username);

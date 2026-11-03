@@ -37,6 +37,7 @@ const RUN_STATUS_LABELS = {
 } as const;
 
 const RUN_SOURCE_LABELS = {
+  azure_devops: "Azure DevOps Services",
   bitbucket: "Bitbucket",
   github: "GitHub",
   gitlab: "GitLab",
@@ -47,7 +48,7 @@ const RUN_SOURCE_LABELS = {
   "tfe-ui": "UI",
 } as const;
 
-const VCS_SOURCES = new Set(["bitbucket", "github", "gitlab"]);
+const VCS_SOURCES = new Set(["azure_devops", "bitbucket", "github", "gitlab"]);
 const VCS_TRIGGER_REASONS = new Set(["vcs", "push", "pull_request", "tag"]);
 
 export function formatRunStatus(status: string): string {

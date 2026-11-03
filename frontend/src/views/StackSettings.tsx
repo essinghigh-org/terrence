@@ -1,3 +1,4 @@
+import { loadOrganizationVcsConnections, type VcsConnection } from "../components/WorkspaceVcs";
 import { StackPolicySets } from "./StackPolicySets";
 import { EmptyState } from "../components/EmptyState";
 import { Select } from "../components/ui/select";
@@ -34,6 +35,9 @@ type VcsRepo = {
   "tags-regex"?: string | null;
   "sparse-checkout-pattern"?: string | null;
   "trigger-disabled"?: boolean;
+  "ingress-submodules"?: boolean;
+  "oauth-token-id"?: string | null;
+  "github-app-installation-id"?: string | null;
 } | null;
 
 type Stack = {
@@ -45,6 +49,9 @@ type Stack = {
     "working-directory"?: string | null;
     "speculative-enabled"?: boolean;
     "trigger-disabled"?: boolean;
+    "ingress-submodules"?: boolean;
+    "oauth-token-id"?: string | null;
+    "github-app-installation-id"?: string | null;
     "debugging-mode"?: boolean;
     "execution-mode"?: "remote" | "agent";
     "created-at"?: string;
@@ -70,6 +77,9 @@ type StackForm = {
   vcsRepositoryHttpUrl: string;
   vcsTagsRegex: string;
   vcsSparseCheckoutPattern: string;
+  vcsIngressSubmodules: boolean;
+  vcsOAuthTokenId: string;
+  vcsGhaInstallationId: string;
   triggerDisabled: boolean;
   debuggingMode: boolean;
   executionMode: "remote" | "agent";
@@ -89,6 +99,9 @@ const emptyForm: StackForm = {
   vcsRepositoryHttpUrl: "",
   vcsTagsRegex: "",
   vcsSparseCheckoutPattern: "",
+  vcsIngressSubmodules: false,
+  vcsOAuthTokenId: "",
+  vcsGhaInstallationId: "",
   triggerDisabled: false,
   debuggingMode: false,
   executionMode: "remote",
@@ -104,6 +117,11 @@ function stackHasVcsRemote(stack: Stack): boolean {
   return (repo?.identifier ?? "").trim() !== "" || (repo?.["repository-http-url"] ?? "").trim() !== "";
 }
 
+function savedStackProvider(repo: Exclude<VcsRepo, null>): string {
+  if (repo["service-provider"] != null) return repo["service-provider"];
+  return (repo["oauth-token-id"] ?? "") !== "" ? "" : "github";
+}
+
 function stackVcsFormFields(
   repo: VcsRepo,
 ): Pick<
@@ -115,15 +133,22 @@ function stackVcsFormFields(
   | "vcsRepositoryHttpUrl"
   | "vcsTagsRegex"
   | "vcsSparseCheckoutPattern"
+  | "vcsIngressSubmodules"
+  | "vcsOAuthTokenId"
+  | "vcsGhaInstallationId"
 > {
+  const source = repo ?? {};
   return {
-    vcsIdentifier: repo?.identifier ?? "",
-    vcsBranch: repo?.branch ?? "",
-    vcsServiceProvider: repo?.["service-provider"] ?? "github",
-    vcsDisplayIdentifier: repo?.["display-identifier"] ?? "",
-    vcsRepositoryHttpUrl: repo?.["repository-http-url"] ?? "",
-    vcsTagsRegex: repo?.["tags-regex"] ?? "",
-    vcsSparseCheckoutPattern: repo?.["sparse-checkout-pattern"] ?? "",
+    vcsIdentifier: source.identifier ?? "",
+    vcsBranch: source.branch ?? "",
+    vcsServiceProvider: savedStackProvider(source),
+    vcsDisplayIdentifier: source["display-identifier"] ?? "",
+    vcsRepositoryHttpUrl: source["repository-http-url"] ?? "",
+    vcsTagsRegex: source["tags-regex"] ?? "",
+    vcsSparseCheckoutPattern: source["sparse-checkout-pattern"] ?? "",
+    vcsIngressSubmodules: source["ingress-submodules"] === true,
+    vcsOAuthTokenId: source["oauth-token-id"] ?? "",
+    vcsGhaInstallationId: source["github-app-installation-id"] ?? "",
   };
 }
 
@@ -149,6 +174,21 @@ function validateStackForm(form: StackForm, isEditing: boolean): string | null {
   return null;
 }
 
+function stackConnectionPayload(form: StackForm): Record<string, string> {
+  const tokenId = form.vcsOAuthTokenId.trim();
+  if (tokenId !== "") return { "oauth-token-id": tokenId };
+  const installationId = form.vcsGhaInstallationId.trim();
+  if (installationId !== "" && form.vcsServiceProvider !== "ado_services")
+    return { "github-app-installation-id": installationId };
+  return {};
+}
+
+function stackSubmodulePayload(form: StackForm): Record<string, boolean> {
+  if (form.vcsServiceProvider === "ado_services" || (form.vcsServiceProvider === "" && form.vcsIngressSubmodules))
+    return { "ingress-submodules": form.vcsIngressSubmodules };
+  return {};
+}
+
 function stackVcsPayload(form: StackForm): Record<string, unknown> | undefined {
   const vcsIdentifier = form.vcsIdentifier.trim();
   const vcsBranch = form.vcsBranch.trim();
@@ -169,6 +209,8 @@ function stackVcsPayload(form: StackForm): Record<string, unknown> | undefined {
     ...(vcsTagsRegex === "" ? undefined : { "tags-regex": vcsTagsRegex }),
     ...(vcsSparseCheckoutPattern === "" ? undefined : { "sparse-checkout-pattern": vcsSparseCheckoutPattern }),
     "trigger-disabled": form.triggerDisabled,
+    ...stackSubmodulePayload(form),
+    ...stackConnectionPayload(form),
   };
 }
 
@@ -243,7 +285,124 @@ function StackLatestCell({
   );
 }
 
+const STACK_CONNECTION_PROVIDERS = [
+  "github",
+  "github_enterprise",
+  "gitlab_hosted",
+  "gitlab_community_edition",
+  "gitlab_enterprise_edition",
+  "ado_services",
+] as const;
+
+function stackConnectionValue(form: StackForm): string {
+  if (form.vcsOAuthTokenId !== "") return `oauth-token:${form.vcsOAuthTokenId}`;
+  return form.vcsGhaInstallationId === "" ? "" : `github-app:${form.vcsGhaInstallationId}`;
+}
+
+function applyStackConnection(form: StackForm, connection: VcsConnection | undefined): StackForm {
+  const provider =
+    connection?.kind === "github-app" ? "github" : (connection?.serviceProvider ?? form.vcsServiceProvider);
+  return {
+    ...form,
+    vcsOAuthTokenId: connection?.kind === "oauth-token" ? connection.id : "",
+    vcsGhaInstallationId: connection?.kind === "github-app" ? connection.id : "",
+    vcsServiceProvider: provider,
+    vcsIngressSubmodules: connection !== undefined && provider === "ado_services" && form.vcsIngressSubmodules,
+  };
+}
+
+function StackConnectionPicker({
+  orgName,
+  open,
+  form,
+  saving,
+  updateForm,
+}: Readonly<{
+  orgName: string;
+  open: boolean;
+  form: StackForm;
+  saving: boolean;
+  updateForm: (updater: (previous: StackForm) => StackForm) => void;
+}>): React.JSX.Element {
+  const [connections, setConnections] = useState<VcsConnection[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  useEffect((): (() => void) | undefined => {
+    if (!open || orgName === "") return undefined;
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    setConnections([]);
+    void loadOrganizationVcsConnections(orgName, controller.signal, { supportedProviders: STACK_CONNECTION_PROVIDERS })
+      .then((available): void => {
+        if (controller.signal.aborted) return;
+        setConnections(available);
+        updateForm((previous): StackForm => {
+          const saved = available.find((candidate): boolean => candidate.value === stackConnectionValue(previous));
+          return saved === undefined ? previous : applyStackConnection(previous, saved);
+        });
+      })
+      .catch((caught: unknown): void => {
+        if (!controller.signal.aborted)
+          setError(caught instanceof Error ? caught.message : "VCS connections could not be loaded.");
+      })
+      .finally((): void => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return (): void => {
+      controller.abort();
+    };
+  }, [orgName, open, updateForm]);
+  const selected = stackConnectionValue(form);
+  const missing = selected !== "" && !connections.some((candidate): boolean => candidate.value === selected);
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="stack-vcs-connection">VCS connection</Label>
+      <Select
+        id="stack-vcs-connection"
+        value={selected}
+        disabled={loading || saving}
+        onChange={(event): void => {
+          const value = event.target.value;
+          if (value === "") {
+            updateForm((previous): StackForm => applyStackConnection(previous, undefined));
+            return;
+          }
+          const connection = connections.find((candidate): boolean => candidate.value === value);
+          if (connection !== undefined) updateForm((previous): StackForm => applyStackConnection(previous, connection));
+        }}
+      >
+        <option value="">{loading ? "Loading connections…" : "No saved connection"}</option>
+        {missing && <option value={selected}>Saved connection{loading ? " (loading…)" : " (not listed)"}</option>}
+        {connections.map(
+          (connection): React.JSX.Element => (
+            <option key={connection.value} value={connection.value}>
+              {connection.label}
+            </option>
+          ),
+        )}
+      </Select>
+      {error !== "" && (
+        <p role="alert" className="text-xs text-destructive">
+          {error} The saved connection has not been changed.
+        </p>
+      )}
+      {!loading && error === "" && connections.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          Add a supported connection in organization VCS settings to use a private repository.
+        </p>
+      )}
+      {missing && !loading && error === "" && (
+        <p className="text-xs text-muted-foreground">
+          The existing connection is retained. Select another connection only if you want to replace it.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function StackFormDialog({
+  orgName,
   open,
   onOpenChange,
   editingStack,
@@ -257,6 +416,7 @@ function StackFormDialog({
   onSubmit,
   onCancel,
 }: Readonly<{
+  orgName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editingStack: Stack | null;
@@ -364,17 +524,22 @@ function StackFormDialog({
             <div className="space-y-1.5">
               <Label htmlFor="stack-provider">VCS service provider</Label>
               <Select
+                disabled={stackConnectionValue(form) !== ""}
                 id="stack-provider"
                 name="service-provider"
                 value={form.vcsServiceProvider}
                 onChange={onField("vcsServiceProvider")}
               >
+                <option value="" disabled>
+                  From saved connection
+                </option>
                 <option value="github">GitHub</option>
                 <option value="github_enterprise">GitHub Enterprise</option>
                 <option value="gitlab_hosted">GitLab</option>
                 <option value="gitlab_community_edition">GitLab Community Edition</option>
                 <option value="gitlab_enterprise_edition">GitLab Enterprise Edition</option>
-                <option value="ado_server">Azure DevOps Server</option>
+                <option value="ado_services">Azure DevOps Services (PAT)</option>
+                <option value="ado_server">Azure DevOps Server (unavailable)</option>
               </Select>
             </div>
             <div className="space-y-1.5">
@@ -435,6 +600,25 @@ function StackFormDialog({
               />
             </div>
           </div>
+          <StackConnectionPicker orgName={orgName} open={open} form={form} saving={saving} updateForm={updateForm} />
+          {form.vcsServiceProvider === "ado_services" && (
+            <div className="space-y-1.5">
+              <label htmlFor="stack-submodules" className="flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox
+                  id="stack-submodules"
+                  checked={form.vcsIngressSubmodules}
+                  onCheckedChange={(checked): void => {
+                    updateForm((prev): StackForm => ({ ...prev, vcsIngressSubmodules: checked }));
+                  }}
+                />
+                Include Azure DevOps Git submodules
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Fetch immutable gitlink commits from the same Azure organization. The PAT must read each repository.
+                Unsafe or unavailable submodules fail the source fetch.
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="stack-sparse-checkout">Sparse checkout pattern</Label>
             <Input
@@ -915,6 +1099,7 @@ export function StackSettings(): React.JSX.Element {
       )}
 
       <StackFormDialog
+        orgName={orgName}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         editingStack={editingStack}

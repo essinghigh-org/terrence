@@ -42925,6 +42925,65 @@
         }
       }
     },
+    "/api/webhooks/azure-devops/{clientId}": {
+      "post": {
+        "operationId": "post-api-webhooks-azure-devops-clientId",
+        "tags": [
+          "api"
+        ],
+        "parameters": [
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "POST /api/webhooks/azure-devops/{clientId}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "azureDevOpsWebhookBasic": []
+          }
+        ],
+        "description": "Azure DevOps Services service hook. Use the OAuth client ID as the Basic username and its separate webhook secret as the password, never the PAT. Configure subscriptions manually with full resource details.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/webhooks/bitbucket": {
       "post": {
         "operationId": "post-api-webhooks-bitbucket",
@@ -54416,6 +54475,10 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT"
+      },
+      "azureDevOpsWebhookBasic": {
+        "type": "http",
+        "scheme": "basic"
       }
     }
   },

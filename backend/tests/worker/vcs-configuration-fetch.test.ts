@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { db } from "../../src/db";
@@ -94,99 +94,101 @@ async function makeTarball(archivePath: string): Promise<void> {
   expect(await tar.exited).toBe(0);
 }
 
-test("legacy PR configurations fail before preparing execution files or credentials", async () => {
-  const { orgId, workspaceId, cvId, runId } = await seedVcsFixtures();
-  await db.insert(configurationVersions).values({
-    id: cvId,
-    workspaceId,
-    source: "github",
-    speculative: true,
-    status: "uploaded",
-    ingressAttributes: { pullRequestNumber: 1 },
+describe.each(["github", "azure_devops"])("%s configuration admission and archive readiness", (source) => {
+  test("legacy PR configurations fail before preparing execution files or credentials", async () => {
+    const { orgId, workspaceId, cvId, runId } = await seedVcsFixtures();
+    await db.insert(configurationVersions).values({
+      id: cvId,
+      workspaceId,
+      source,
+      speculative: true,
+      status: "uploaded",
+      ingressAttributes: { pullRequestNumber: 1 },
+    });
+    await createRun(runId, workspaceId, cvId);
+    try {
+      const failure = await executeRun(runId).catch((error: unknown): unknown => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain("Pull-request configuration lacks trusted repository admission");
+      expect((await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status).toBe("errored");
+      expect(await db.query.runTokens.findMany({ where: eq(runTokens.runId, runId) })).toEqual([]);
+      expect(await waitForPlanLog(runId, "trusted repository admission")).toBe(true);
+    } finally {
+      await db.delete(organizations).where(eq(organizations.id, orgId));
+    }
   });
-  await createRun(runId, workspaceId, cvId);
-  try {
-    const failure = await executeRun(runId).catch((error: unknown): unknown => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toContain("Pull-request configuration lacks trusted repository admission");
-    expect((await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status).toBe("errored");
-    expect(await db.query.runTokens.findMany({ where: eq(runTokens.runId, runId) })).toEqual([]);
-    expect(await waitForPlanLog(runId, "trusted repository admission")).toBe(true);
-  } finally {
-    await db.delete(organizations).where(eq(organizations.id, orgId));
-  }
-});
 
-test("a run whose VCS configuration download errored fails loudly instead of planning empty", async () => {
-  const { workspaceId, cvId, runId } = await seedVcsFixtures();
-  await db.insert(configurationVersions).values({
-    id: cvId,
-    workspaceId,
-    status: "errored",
-    source: "github",
-    error: "tarball fetch rejected: 401",
+  test("a run whose VCS configuration download errored fails loudly instead of planning empty", async () => {
+    const { workspaceId, cvId, runId } = await seedVcsFixtures();
+    await db.insert(configurationVersions).values({
+      id: cvId,
+      workspaceId,
+      status: "errored",
+      source,
+      error: "tarball fetch rejected: 401",
+    });
+    await createRun(runId, workspaceId, cvId);
+
+    expect(executeRun(runId)).rejects.toThrow("VCS configuration download failed: tarball fetch rejected: 401");
+
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    expect(run?.status).toBe("errored");
+
+    // The plan log must surface the underlying download error (and the run must
+    // never reach a terminal "planned" state with zero configuration).
+    expect(await waitForPlanLog(runId, "VCS configuration download failed: tarball fetch rejected: 401")).toBe(true);
   });
-  await createRun(runId, workspaceId, cvId);
 
-  expect(executeRun(runId)).rejects.toThrow("VCS configuration download failed: tarball fetch rejected: 401");
+  test("a run claimed while the VCS tarball is still pending waits for the archive, then plans", async () => {
+    const { workspaceId, cvId, runId } = await seedVcsFixtures();
+    await db.insert(configurationVersions).values({
+      id: cvId,
+      workspaceId,
+      status: "pending",
+      source,
+      error: null,
+    });
+    await createRun(runId, workspaceId, cvId);
 
-  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  expect(run?.status).toBe("errored");
+    // Start the run; the worker must be observably inside the pending-wait
+    // (marker log) before the simulated download settles, so this test fails
+    // if the wait logic is removed.
+    const running = executeRun(runId);
+    expect(await waitForPlanLog(runId, "Waiting for VCS configuration download to complete")).toBe(true);
 
-  // The plan log must surface the underlying download error (and the run must
-  // never reach a terminal "planned" state with zero configuration).
-  expect(await waitForPlanLog(runId, "VCS configuration download failed: tarball fetch rejected: 401")).toBe(true);
-});
+    // The webhook download "settles" mid-flight: real tarball lands on disk
+    // and the CV transitions to uploaded.
+    const archivePath = join(process.env["TEST_DIR"] ?? "/tmp", `vcs-config-${Date.now()}.tar.gz`);
+    await makeTarball(archivePath);
+    await db
+      .update(configurationVersions)
+      .set({ status: "uploaded", archivePath })
+      .where(eq(configurationVersions.id, cvId));
 
-test("a run claimed while the VCS tarball is still pending waits for the archive, then plans", async () => {
-  const { workspaceId, cvId, runId } = await seedVcsFixtures();
-  await db.insert(configurationVersions).values({
-    id: cvId,
-    workspaceId,
-    status: "pending",
-    source: "github",
-    error: null,
+    await running;
+
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    // Simulated plan (test mode) reports 1 addition, so the run reaches
+    // "planned" - it must NOT have errored from a missing configuration.
+    expect(run?.status).toBe("planned");
   });
-  await createRun(runId, workspaceId, cvId);
 
-  // Start the run; the worker must be observably inside the pending-wait
-  // (marker log) before the simulated download settles, so this test fails
-  // if the wait logic is removed.
-  const running = executeRun(runId);
-  expect(await waitForPlanLog(runId, "Waiting for VCS configuration download to complete")).toBe(true);
+  test("a settled configuration version without a readable archive fails loudly", async () => {
+    const { workspaceId, cvId, runId } = await seedVcsFixtures();
+    await db.insert(configurationVersions).values({
+      id: cvId,
+      workspaceId,
+      status: "uploaded",
+      source,
+      archivePath: join(process.env["TEST_DIR"] ?? "/tmp", "does-not-exist.tar.gz"),
+      error: null,
+    });
+    await createRun(runId, workspaceId, cvId);
 
-  // The webhook download "settles" mid-flight: real tarball lands on disk
-  // and the CV transitions to uploaded.
-  const archivePath = join(process.env["TEST_DIR"] ?? "/tmp", `vcs-config-${Date.now()}.tar.gz`);
-  await makeTarball(archivePath);
-  await db
-    .update(configurationVersions)
-    .set({ status: "uploaded", archivePath })
-    .where(eq(configurationVersions.id, cvId));
+    expect(executeRun(runId)).rejects.toThrow("completed without a readable archive");
 
-  await running;
-
-  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  // Simulated plan (test mode) reports 1 addition, so the run reaches
-  // "planned" - it must NOT have errored from a missing configuration.
-  expect(run?.status).toBe("planned");
-});
-
-test("a settled configuration version without a readable archive fails loudly", async () => {
-  const { workspaceId, cvId, runId } = await seedVcsFixtures();
-  await db.insert(configurationVersions).values({
-    id: cvId,
-    workspaceId,
-    status: "uploaded",
-    source: "github",
-    archivePath: join(process.env["TEST_DIR"] ?? "/tmp", "does-not-exist.tar.gz"),
-    error: null,
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    expect(run?.status).toBe("errored");
+    expect(await waitForPlanLog(runId, "completed without a readable archive")).toBe(true);
   });
-  await createRun(runId, workspaceId, cvId);
-
-  expect(executeRun(runId)).rejects.toThrow("completed without a readable archive");
-
-  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-  expect(run?.status).toBe("errored");
-  expect(await waitForPlanLog(runId, "completed without a readable archive")).toBe(true);
 });

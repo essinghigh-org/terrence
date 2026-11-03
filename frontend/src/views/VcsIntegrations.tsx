@@ -1,6 +1,15 @@
 import { Select } from "../components/ui/select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import type { RefObject } from "react";
+import {
+  AzureDevOpsCredentialFields,
+  AzureDevOpsHookDialog,
+  AzureDevOpsPatDialog,
+  azureDevOpsSaveError,
+  clearAzureDevOpsCredentials,
+  takeAzureDevOpsCredentials,
+} from "../components/AzureDevOpsConnection";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -80,13 +89,51 @@ const providerDefaults = {
     httpUrl: "https://bitbucket.org",
     apiUrl: "https://api.bitbucket.org/2.0",
   },
+  ado_services: {
+    httpUrl: "https://dev.azure.com",
+    apiUrl: "https://dev.azure.com",
+  },
 } as const;
 
 type ServiceProvider = keyof typeof providerDefaults;
 type VcsAccess = "allowed" | "denied" | "error";
 
-function isAzureDevOpsClient(client: OAuthClient): boolean {
-  return ["ado_services", "ado_server", "azure_devops_server"].includes(client.attributes["service-provider"]);
+function hasOAuthToken(tokensByClient: Readonly<Record<string, readonly OAuthToken[]>>, clientId: string): boolean {
+  return (tokensByClient[clientId]?.length ?? 0) > 0;
+}
+
+function createProviderAttributes(
+  input: Readonly<{
+    name: string;
+    serviceProvider: ServiceProvider;
+    httpUrl: string;
+    apiUrl: string;
+    key: string;
+    secret: string;
+    adoOrgName: string;
+    patRef: RefObject<HTMLInputElement | null>;
+    webhookSecretRef: RefObject<HTMLInputElement | null>;
+  }>,
+): Readonly<Record<string, string>> {
+  if (input.httpUrl.trim() === "" || input.apiUrl.trim() === "") {
+    clearAzureDevOpsCredentials(input);
+    throw new Error("HTTP URL and API URL are required.");
+  }
+  const azureDevOps = input.serviceProvider === "ado_services";
+  const credentials = azureDevOps
+    ? takeAzureDevOpsCredentials(input.adoOrgName, input, true)
+    : { key: input.key.trim(), secret: input.secret.trim() };
+  return {
+    name: input.name.trim() !== "" ? input.name.trim() : `${input.serviceProvider.toUpperCase()} Provider`,
+    "service-provider": input.serviceProvider,
+    "http-url": azureDevOps ? providerDefaults.ado_services.httpUrl : input.httpUrl.trim(),
+    "api-url": azureDevOps ? providerDefaults.ado_services.apiUrl : input.apiUrl.trim(),
+    ...credentials,
+  };
+}
+
+function isAzureDevOpsServerClient(client: OAuthClient): boolean {
+  return ["ado_server", "azure_devops_server"].includes(client.attributes["service-provider"]);
 }
 
 function AzureDevOpsUnavailable({ client }: Readonly<{ client: OAuthClient }>): React.JSX.Element {
@@ -94,8 +141,8 @@ function AzureDevOpsUnavailable({ client }: Readonly<{ client: OAuthClient }>): 
     <div className="space-y-1">
       <Badge variant="outline">Repository integration unavailable</Badge>
       <p className="max-w-xs text-xs text-muted-foreground">
-        This OAuth client is stored for API compatibility. Azure DevOps repository fetching, webhooks and run statuses
-        are not implemented yet.
+        This OAuth client is stored for API compatibility. Azure DevOps Server repository fetching, webhooks and run
+        statuses are not implemented yet.
       </p>
       {isString(client.attributes["ado-org-name"]) && client.attributes["ado-org-name"] !== "" && (
         <p className="text-xs text-muted-foreground">Organization: {client.attributes["ado-org-name"]}</p>
@@ -115,7 +162,20 @@ function OAuthConnectionStatus({
   statusKnown: boolean;
   providerUser: string | undefined;
 }>): React.JSX.Element {
-  if (isAzureDevOpsClient(client)) return <AzureDevOpsUnavailable client={client} />;
+  if (isAzureDevOpsServerClient(client)) return <AzureDevOpsUnavailable client={client} />;
+  if (client.attributes["service-provider"] === "ado_services") {
+    return (
+      <div className="space-y-1">
+        <Badge variant={connected ? "secondary" : "outline"}>
+          {!statusKnown ? "Status unavailable" : connected ? "PAT configured" : "Not connected"}
+        </Badge>
+        {connected && <p className="text-xs text-muted-foreground">Live access not verified.</p>}
+        <p className="text-xs text-muted-foreground">
+          Organization: {client.attributes["ado-org-name"] ?? "Not configured"}
+        </p>
+      </div>
+    );
+  }
   const label = !statusKnown
     ? "Status unavailable"
     : connected
@@ -339,6 +399,8 @@ function OAuthClientsSection({
   tokensByClient,
   connectingClientId,
   onConnect,
+  onManagePat,
+  onHookSetup,
   onDeleteRequest,
   onAdd,
 }: Readonly<{
@@ -347,6 +409,8 @@ function OAuthClientsSection({
   tokensByClient: Readonly<Record<string, readonly OAuthToken[]>>;
   connectingClientId: string;
   onConnect: (client: OAuthClient) => void;
+  onManagePat: (client: OAuthClient) => void;
+  onHookSetup: (client: OAuthClient) => void;
   onDeleteRequest: (client: OAuthClient) => void;
   onAdd: () => void;
 }>): React.JSX.Element {
@@ -354,8 +418,10 @@ function OAuthClientsSection({
     <div>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="font-heading text-xl font-semibold">OAuth Clients (Legacy)</h2>
-          <p className="text-sm text-muted-foreground">Legacy OAuth VCS providers.</p>
+          <h2 className="font-heading text-xl font-semibold">VCS provider connections</h2>
+          <p className="text-sm text-muted-foreground">
+            OAuth applications and Azure DevOps Services personal access tokens.
+          </p>
         </div>
         <Button onClick={onAdd}>
           <Plus className="mr-1.5 size-4" /> Add VCS Provider
@@ -392,8 +458,9 @@ function OAuthClientsSection({
                 clients.map((client: OAuthClient): React.JSX.Element => {
                   const statusKnown = Object.prototype.hasOwnProperty.call(tokensByClient, client.id);
                   const tokens = tokensByClient[client.id] ?? [];
-                  const azureDevOps = isAzureDevOpsClient(client);
-                  const connected = !azureDevOps && statusKnown && tokens.length > 0;
+                  const unsupportedServer = isAzureDevOpsServerClient(client);
+                  const azureDevOps = client.attributes["service-provider"] === "ado_services";
+                  const connected = !unsupportedServer && statusKnown && tokens.length > 0;
                   const providerUser = tokens
                     .map((token): string | null | undefined => token.attributes["service-provider-user"])
                     .find((value): value is string => isString(value) && value !== "");
@@ -424,7 +491,7 @@ function OAuthClientsSection({
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
-                          {!azureDevOps && statusKnown && !connected && (
+                          {!unsupportedServer && !azureDevOps && statusKnown && !connected && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -439,6 +506,28 @@ function OAuthClientsSection({
                                 <ExternalLink data-icon="inline-start" />
                               )}
                               {connecting ? "Opening…" : "Connect"}
+                            </Button>
+                          )}
+                          {azureDevOps && statusKnown && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(): void => {
+                                onManagePat(client);
+                              }}
+                            >
+                              {connected ? "Rotate PAT" : "Add PAT"}
+                            </Button>
+                          )}
+                          {azureDevOps && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(): void => {
+                                onHookSetup(client);
+                              }}
+                            >
+                              Service hook setup
                             </Button>
                           )}
                           <Button
@@ -480,6 +569,10 @@ function CreateProviderDialog({
   onKeyChange,
   secret,
   onSecretChange,
+  adoOrgName,
+  onAdoOrgNameChange,
+  patRef,
+  webhookSecretRef,
   formError,
   creating,
   onSubmit,
@@ -498,6 +591,10 @@ function CreateProviderDialog({
   onKeyChange: (value: string) => void;
   secret: string;
   onSecretChange: (value: string) => void;
+  adoOrgName: string;
+  onAdoOrgNameChange: (value: string) => void;
+  patRef: RefObject<HTMLInputElement | null>;
+  webhookSecretRef: RefObject<HTMLInputElement | null>;
   formError: string;
   creating: boolean;
   onSubmit: (e: React.SyntheticEvent) => Promise<void>;
@@ -508,7 +605,7 @@ function CreateProviderDialog({
         <DialogHeader>
           <DialogTitle>Add VCS Provider</DialogTitle>
           <DialogDescription>
-            Configure an OAuth App on GitHub, GitLab, or Bitbucket to connect repositories.
+            Connect with an OAuth app, or an organization-scoped Azure DevOps Services PAT.
           </DialogDescription>
         </DialogHeader>
 
@@ -525,125 +622,149 @@ function CreateProviderDialog({
           noValidate
           className="space-y-4 py-2"
         >
-          <div className="space-y-1.5">
-            <label htmlFor="vcs-name" className="text-sm font-medium">
-              Name
-            </label>
-            <Input
-              id="vcs-name"
-              name="vcs-integration-name"
-              autoComplete="off"
-              spellCheck={false}
-              value={name}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                onNameChange(event.target.value);
-              }}
-              placeholder="GitHub Commercial"
-              required
-            />
-          </div>
+          <fieldset disabled={creating} className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="vcs-name" className="text-sm font-medium">
+                Name
+              </label>
+              <Input
+                id="vcs-name"
+                name="vcs-integration-name"
+                autoComplete="off"
+                spellCheck={false}
+                value={name}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                  onNameChange(event.target.value);
+                }}
+                placeholder="GitHub Commercial"
+                required
+              />
+            </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="vcs-provider" className="text-sm font-medium">
-              VCS Type
-            </label>
-            <Select
-              id="vcs-provider"
-              name="service-provider"
-              value={serviceProvider}
-              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-                // SAFETY: the select options are generated from the same union; the change event carries one of them.
-                const provider = event.target.value as ServiceProvider;
-                onProviderChange(provider);
+            <div className="space-y-1.5">
+              <label htmlFor="vcs-provider" className="text-sm font-medium">
+                VCS Type
+              </label>
+              <Select
+                id="vcs-provider"
+                name="service-provider"
+                value={serviceProvider}
+                onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+                  // SAFETY: the select options are generated from the same union; the change event carries one of them.
+                  const provider = event.target.value as ServiceProvider;
+                  onProviderChange(provider);
+                }}
+              >
+                <option value="github">GitHub.com</option>
+                <option value="github_enterprise">GitHub Enterprise Server</option>
+                <option value="gitlab">GitLab.com / GitLab EE</option>
+                <option value="bitbucket">Bitbucket Cloud</option>
+                <option value="ado_services">Azure DevOps Services (PAT)</option>
+              </Select>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor="vcs-http-url" className="text-xs font-medium">
+                  HTTP URL
+                </label>
+                <Input
+                  id="vcs-http-url"
+                  name="http-url"
+                  readOnly={serviceProvider === "ado_services"}
+                  autoComplete="url"
+                  value={httpUrl}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                    onHttpUrlChange(event.target.value);
+                  }}
+                  placeholder={
+                    serviceProvider === "github_enterprise"
+                      ? "https://github.example.com"
+                      : providerDefaults[serviceProvider].httpUrl
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="vcs-api-url" className="text-xs font-medium">
+                  API URL
+                </label>
+                <Input
+                  id="vcs-api-url"
+                  name="api-url"
+                  readOnly={serviceProvider === "ado_services"}
+                  autoComplete="url"
+                  value={apiUrl}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                    onApiUrlChange(event.target.value);
+                  }}
+                  placeholder={
+                    serviceProvider === "github_enterprise"
+                      ? "https://github.example.com/api/v3"
+                      : providerDefaults[serviceProvider].apiUrl
+                  }
+                  required
+                />
+              </div>
+            </div>
+
+            {serviceProvider === "ado_services" ? (
+              <AzureDevOpsCredentialFields
+                organization={adoOrgName}
+                onOrganizationChange={onAdoOrgNameChange}
+                patRef={patRef}
+                webhookSecretRef={webhookSecretRef}
+              />
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <label htmlFor="vcs-key" className="text-sm font-medium">
+                    OAuth Application Client ID
+                  </label>
+                  <Input
+                    id="vcs-key"
+                    name="client-id"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={oauthKey}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                      onKeyChange(event.target.value);
+                    }}
+                    placeholder="Client ID or Application ID"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="vcs-secret" className="text-sm font-medium">
+                    OAuth Client Secret
+                  </label>
+                  <Input
+                    id="vcs-secret"
+                    name="client-secret"
+                    autoComplete="new-password"
+                    type="password"
+                    value={secret}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                      onSecretChange(event.target.value);
+                    }}
+                    placeholder="Client Secret"
+                    required
+                  />
+                </div>
+              </>
+            )}
+          </fieldset>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={(): void => {
+                onOpenChange(false);
               }}
             >
-              <option value="github">GitHub.com</option>
-              <option value="github_enterprise">GitHub Enterprise Server</option>
-              <option value="gitlab">GitLab.com / GitLab EE</option>
-              <option value="bitbucket">Bitbucket Cloud</option>
-            </Select>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label htmlFor="vcs-http-url" className="text-xs font-medium">
-                HTTP URL
-              </label>
-              <Input
-                id="vcs-http-url"
-                name="http-url"
-                autoComplete="url"
-                value={httpUrl}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                  onHttpUrlChange(event.target.value);
-                }}
-                placeholder={
-                  serviceProvider === "github_enterprise"
-                    ? "https://github.example.com"
-                    : providerDefaults[serviceProvider].httpUrl
-                }
-                required
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="vcs-api-url" className="text-xs font-medium">
-                API URL
-              </label>
-              <Input
-                id="vcs-api-url"
-                name="api-url"
-                autoComplete="url"
-                value={apiUrl}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                  onApiUrlChange(event.target.value);
-                }}
-                placeholder={
-                  serviceProvider === "github_enterprise"
-                    ? "https://github.example.com/api/v3"
-                    : providerDefaults[serviceProvider].apiUrl
-                }
-                required
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="vcs-key" className="text-sm font-medium">
-              OAuth Application Client ID
-            </label>
-            <Input
-              id="vcs-key"
-              name="client-id"
-              autoComplete="off"
-              spellCheck={false}
-              value={oauthKey}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                onKeyChange(event.target.value);
-              }}
-              placeholder="Client ID or Application ID"
-              required
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="vcs-secret" className="text-sm font-medium">
-              OAuth Client Secret
-            </label>
-            <Input
-              id="vcs-secret"
-              name="client-secret"
-              autoComplete="new-password"
-              type="password"
-              value={secret}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                onSecretChange(event.target.value);
-              }}
-              placeholder="Client Secret"
-              required
-            />
-          </div>
-
-          <DialogFooter className="pt-4">
+              Cancel
+            </Button>
             <Button type="submit" disabled={creating}>
               {creating && <Spinner data-icon="inline-start" className="size-4" />}
               {creating ? "Connecting VCS provider…" : "Connect VCS Provider"}
@@ -796,6 +917,12 @@ export function VcsIntegrations({
   const [secret, setSecret] = useState("");
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
+  const [adoOrgName, setAdoOrgName] = useState("");
+  const patRef = useRef<HTMLInputElement>(null);
+  const webhookSecretRef = useRef<HTMLInputElement>(null);
+  const createRequest = useRef<AbortController | null>(null);
+  const [clientToManagePat, setClientToManagePat] = useState<OAuthClient | null>(null);
+  const [clientForHookSetup, setClientForHookSetup] = useState<OAuthClient | null>(null);
 
   const loadIntegrations = useCallback(async (): Promise<void> => {
     loadRequest.current?.abort();
@@ -838,6 +965,12 @@ export function VcsIntegrations({
 
   useEffect((): (() => void) => {
     setDialogOpen(false);
+    setClientToManagePat(null);
+    setClientForHookSetup(null);
+    setAdoOrgName("");
+    clearAzureDevOpsCredentials({ patRef, webhookSecretRef });
+    createRequest.current?.abort();
+    createRequest.current = null;
     setFormError("");
     setConnectingClientId("");
     setStartingGitHubSetup(false);
@@ -855,6 +988,7 @@ export function VcsIntegrations({
     void loadIntegrations();
     return (): void => {
       loadRequest.current?.abort();
+      createRequest.current?.abort();
     };
   }, [loadIntegrations]);
 
@@ -867,7 +1001,12 @@ export function VcsIntegrations({
   };
 
   const handleConnect = async (client: OAuthClient): Promise<void> => {
-    if (!canManageVcsSettings) return;
+    if (
+      !canManageVcsSettings ||
+      client.attributes["service-provider"] === "ado_services" ||
+      isAzureDevOpsServerClient(client)
+    )
+      return;
     const actionOrgName = currentOrgName;
     setConnectingClientId(client.id);
     setError("");
@@ -957,54 +1096,93 @@ export function VcsIntegrations({
     }
   };
 
+  const closeCreateDialog = (): void => {
+    if (createRequest.current !== null) {
+      setError(
+        "The save was interrupted. Refresh connections before trying again; the server may already have saved the credentials.",
+      );
+    }
+    createRequest.current?.abort();
+    createRequest.current = null;
+    clearAzureDevOpsCredentials({ patRef, webhookSecretRef });
+    setSecret("");
+    setKey("");
+    setFormError("");
+    setCreating(false);
+    setDialogOpen(false);
+  };
+
   const handleCreate = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
-    if (!canManageVcsSettings || currentOrgName === "") return;
-    if (httpUrl.trim() === "" || apiUrl.trim() === "") {
-      setFormError("HTTP URL and API URL are required.");
+    if (!canManageVcsSettings || currentOrgName === "" || createRequest.current !== null) return;
+    const azureDevOps = serviceProvider === "ado_services";
+    let attributes: Readonly<Record<string, string>>;
+    try {
+      attributes = createProviderAttributes({
+        name,
+        serviceProvider,
+        httpUrl,
+        apiUrl,
+        key,
+        secret,
+        adoOrgName,
+        patRef,
+        webhookSecretRef,
+      });
+    } catch (caught: unknown) {
+      setFormError(caught instanceof Error ? caught.message : "Check the organization and re-enter your credentials.");
       return;
     }
     const actionOrgName = currentOrgName;
+    const controller = new AbortController();
+    createRequest.current = controller;
+    const requestIsCurrent = (): boolean => !controller.signal.aborted && createRequest.current === controller;
     setCreating(true);
     setFormError("");
+    setSecret("");
     try {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const res = (await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/oauth-clients`, {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({
           data: {
             type: "oauth-clients",
-            attributes: {
-              name: name.trim() !== "" ? name.trim() : `${serviceProvider.toUpperCase()} Provider`,
-              "service-provider": serviceProvider,
-              "http-url": httpUrl.trim(),
-              "api-url": apiUrl.trim(),
-              key: key.trim(),
-              secret: secret.trim(),
-            },
+            attributes,
           },
         }),
       })) as { data: OAuthClient };
-      if (currentOrgNameRef.current !== actionOrgName) return;
+      if (!requestIsCurrent()) return;
       setClients((prev: readonly OAuthClient[]): OAuthClient[] => [...prev, res.data]);
-      setOauthTokensByClient(
-        (previous): Record<string, readonly OAuthToken[]> => ({
-          ...previous,
-          [res.data.id]: [],
-        }),
-      );
       setDialogOpen(false);
       setName("");
       setKey("");
-      setSecret("");
-      await handleConnect(res.data);
-    } catch (err: unknown) {
-      if (currentOrgNameRef.current === actionOrgName) {
-        const msg = err instanceof Error ? err.message : "Failed to create VCS OAuth client";
-        setFormError(msg);
+      setAdoOrgName("");
+      if (azureDevOps) {
+        // Read persisted token metadata; saving a PAT never initiates an OAuth redirect.
+        setClientForHookSetup(res.data);
+        void loadIntegrations();
+      } else {
+        setOauthTokensByClient(
+          (previous): Record<string, readonly OAuthToken[]> => ({ ...previous, [res.data.id]: [] }),
+        );
+        await handleConnect(res.data);
+      }
+    } catch (caught: unknown) {
+      if (requestIsCurrent()) {
+        setFormError(
+          azureDevOps
+            ? azureDevOpsSaveError(caught)
+            : caught instanceof Error
+              ? caught.message
+              : "Failed to create VCS OAuth client",
+        );
       }
     } finally {
-      if (currentOrgNameRef.current === actionOrgName) setCreating(false);
+      if (requestIsCurrent()) {
+        createRequest.current = null;
+        setCreating(false);
+      }
     }
   };
 
@@ -1043,7 +1221,7 @@ export function VcsIntegrations({
           { label: "VCS integrations" },
         ]}
         title="VCS integrations"
-        description="Connect GitHub, GitLab or Bitbucket so pushing to a branch starts a run automatically, and pull requests get a plan posted back."
+        description="Connect GitHub, GitLab, Bitbucket or Azure DevOps Services so pushing to a branch starts a run automatically, and pull requests get a plan posted back."
       />
 
       {accessStatus === "loading" && (
@@ -1123,6 +1301,8 @@ export function VcsIntegrations({
             onConnect={(client: OAuthClient): void => {
               void handleConnect(client);
             }}
+            onManagePat={setClientToManagePat}
+            onHookSetup={setClientForHookSetup}
             onDeleteRequest={(client: OAuthClient): void => {
               const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
               if (isTestEnv) {
@@ -1136,29 +1316,68 @@ export function VcsIntegrations({
             }}
           />
 
-          <CreateProviderDialog
-            open={dialogOpen}
-            onOpenChange={setDialogOpen}
-            name={name}
-            onNameChange={setName}
-            serviceProvider={serviceProvider}
-            onProviderChange={(provider: ServiceProvider): void => {
-              setServiceProvider(provider);
-              setHttpUrl(providerDefaults[provider].httpUrl);
-              setApiUrl(providerDefaults[provider].apiUrl);
-            }}
-            httpUrl={httpUrl}
-            onHttpUrlChange={setHttpUrl}
-            apiUrl={apiUrl}
-            onApiUrlChange={setApiUrl}
-            oauthKey={key}
-            onKeyChange={setKey}
-            secret={secret}
-            onSecretChange={setSecret}
-            formError={formError}
-            creating={creating}
-            onSubmit={handleCreate}
-          />
+          {dialogOpen && (
+            <CreateProviderDialog
+              open={dialogOpen}
+              onOpenChange={(open): void => {
+                if (!open) closeCreateDialog();
+              }}
+              name={name}
+              onNameChange={setName}
+              serviceProvider={serviceProvider}
+              onProviderChange={(provider: ServiceProvider): void => {
+                clearAzureDevOpsCredentials({ patRef, webhookSecretRef });
+                setSecret("");
+                setKey("");
+                setFormError("");
+                setServiceProvider(provider);
+                setHttpUrl(providerDefaults[provider].httpUrl);
+                setApiUrl(providerDefaults[provider].apiUrl);
+              }}
+              httpUrl={httpUrl}
+              onHttpUrlChange={setHttpUrl}
+              apiUrl={apiUrl}
+              onApiUrlChange={setApiUrl}
+              oauthKey={key}
+              onKeyChange={setKey}
+              secret={secret}
+              onSecretChange={setSecret}
+              adoOrgName={adoOrgName}
+              onAdoOrgNameChange={setAdoOrgName}
+              patRef={patRef}
+              webhookSecretRef={webhookSecretRef}
+              formError={formError}
+              creating={creating}
+              onSubmit={handleCreate}
+            />
+          )}
+
+          {clientToManagePat !== null && (
+            <AzureDevOpsPatDialog
+              key={`${currentOrgName}/${clientToManagePat.id}`}
+              client={clientToManagePat}
+              configured={hasOAuthToken(oauthTokensByClient, clientToManagePat.id)}
+              onClose={(interrupted): void => {
+                setClientToManagePat(null);
+                if (interrupted)
+                  setError(
+                    "The save was interrupted. Refresh connections before trying again; the server may already have saved the credentials.",
+                  );
+              }}
+              onSaved={(): void => {
+                setClientToManagePat(null);
+                void loadIntegrations();
+              }}
+            />
+          )}
+          {clientForHookSetup !== null && (
+            <AzureDevOpsHookDialog
+              client={clientForHookSetup}
+              onClose={(): void => {
+                setClientForHookSetup(null);
+              }}
+            />
+          )}
 
           <VcsConfirmDialogs
             installationToDelete={installationToDelete}

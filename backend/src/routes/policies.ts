@@ -1,3 +1,4 @@
+import { parseAzureDevOpsRepository } from "../lib/azure-devops";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
@@ -239,8 +240,9 @@ function resolveVcsRepoIdentifier(
   const identifier = typeof rawIdentifier === "string" ? rawIdentifier.trim() : (existing?.identifier ?? "");
   const repositoryParts = identifier.split("/");
   if (
-    repositoryParts.length < 2 ||
-    repositoryParts.some((part: string): boolean => !/^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part))
+    parseAzureDevOpsRepository(identifier) === undefined &&
+    (repositoryParts.length < 2 ||
+      repositoryParts.some((part: string): boolean => !/^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part)))
   )
     return { error: "vcs-repo.identifier must identify a repository as namespace/name" };
   return { value: identifier };
@@ -322,7 +324,9 @@ async function verifyVcsCredentialRefs(orgId: string, refs: VcsCredentialRefs): 
           });
     if (
       client === undefined ||
-      !["github", "github_enterprise", "gitlab", "gitlab_ce", "gitlab_ee", "bitbucket"].includes(client.serviceProvider)
+      !["github", "github_enterprise", "gitlab", "gitlab_ce", "gitlab_ee", "bitbucket", "ado_services"].includes(
+        client.serviceProvider,
+      )
     )
       return "vcs-repo OAuth token is not available in this organization";
   }

@@ -1,3 +1,5 @@
+import { fetchAzureDevOpsSubmoduleArchive } from "./ado-submodules";
+import { createHash } from "node:crypto";
 import { newResourceId } from "./resource-id";
 import { copyFile, link, mkdir, open, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -41,11 +43,31 @@ import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
 import { newRunId } from "./run-id";
 import { assembleRunProvenance, provenanceInsert } from "./run-provenance-capture";
 import { log } from "./log";
+import {
+  azureDevOpsBaseUrl,
+  azureDevOpsOrganization,
+  azureDevOpsRepositoryApiUrl,
+  azureDevOpsRepositoryHttpUrl,
+  parseAzureDevOpsRepository,
+  fetchAzureDevOpsArchive,
+  fetchAzureDevOpsDefaultBranch,
+  fetchAzureDevOpsLatestCommit,
+  fetchAzureDevOpsUrl,
+  type AzureDevOpsCredentials,
+} from "./azure-devops";
+import {
+  azureDevOpsWebhookDeliveryId,
+  parseAzureDevOpsWebhook,
+  type AzureDevOpsWebhookDetails,
+  type AzureDevOpsWebhook,
+} from "./ado-webhooks";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = DeepReadonly<NonNullable<typeof workspaces.$inferSelect.vcsRepo>>;
 type WebhookDetails = Readonly<{
+  readonly deliveryId?: string;
   readonly branch?: string;
+  readonly beforeCommitSha?: string;
   readonly targetBranch?: string;
   readonly cloneUrl: string;
   readonly commitMessage: string;
@@ -61,7 +83,7 @@ type WebhookDetails = Readonly<{
   readonly sourceIdentity: VcsSourceIdentity;
   readonly tag?: string;
 }>;
-type OAuthProvider = "gitlab" | "bitbucket";
+type OAuthProvider = "gitlab" | "bitbucket" | "azure_devops";
 type ParsedProviderWebhook = Readonly<{
   details: WebhookDetails;
   kind: "push" | "pull_request";
@@ -72,12 +94,15 @@ type ProviderCredentials = Readonly<{
   token: string;
   /** The bound oauth-clients.id that authorized this integration (if OAuth). */
   oauthClientId?: string;
+  azureDevOps?: AzureDevOpsCredentials;
+  ingressSubmodules?: boolean;
 }>;
 type VcsCredentialSubject = Readonly<{
   orgId: string;
   vcsRepo: Readonly<{
     githubAppInstallationId?: string;
     oauthTokenId?: string;
+    ingressSubmodules?: boolean;
   }> | null;
 }>;
 
@@ -1096,6 +1121,41 @@ async function githubAppApiUrl(): Promise<string | undefined> {
   return (await getGitHubAppRuntimeConfiguration())?.apiUrl;
 }
 
+async function azureDevOpsProviderCredentials(
+  client: DeepReadonly<typeof oauthClients.$inferSelect>,
+  encryptedToken: string,
+): Promise<ProviderCredentials | undefined> {
+  const organization = azureDevOpsOrganization(client.adoOrgName);
+  const apiUrl = azureDevOpsBaseUrl(client.adoOrgName, client.apiUrl);
+  if (
+    organization === undefined ||
+    apiUrl === undefined ||
+    azureDevOpsBaseUrl(organization, client.httpUrl) === undefined
+  )
+    return undefined;
+  const secret = await decryptSecret(encryptedToken).catch((): undefined => undefined);
+  if (secret === undefined) return undefined;
+  return {
+    apiUrl,
+    provider: "azure_devops",
+    token: secret,
+    oauthClientId: client.id,
+    azureDevOps: { organization, token: secret, apiUrl: client.apiUrl, httpUrl: client.httpUrl },
+  };
+}
+
+async function azureDevOpsManualRevision(
+  workspace: DeepReadonly<VcsCredentialSubject>,
+  identifier: string,
+  branch?: string,
+): Promise<string | undefined> {
+  const credentials = (await oauthProviderCredentials(workspace, "azure_devops"))?.azureDevOps;
+  if (credentials === undefined) return undefined;
+  return branch === undefined
+    ? fetchAzureDevOpsDefaultBranch(credentials, identifier)
+    : fetchAzureDevOpsLatestCommit(credentials, identifier, branch);
+}
+
 async function oauthProviderCredentials(
   workspace: DeepReadonly<VcsCredentialSubject>,
   provider: VcsProvider,
@@ -1108,6 +1168,12 @@ async function oauthProviderCredentials(
     where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
   });
   if (client === undefined || providerForServiceProvider(client.serviceProvider) !== provider) return undefined;
+  if (provider === "azure_devops") {
+    const credentials = await azureDevOpsProviderCredentials(client, token.token);
+    return credentials === undefined
+      ? undefined
+      : { ...credentials, ingressSubmodules: workspace.vcsRepo?.ingressSubmodules === true };
+  }
   const apiUrl = providerApiUrl(
     client.apiUrl,
     provider === "github"
@@ -1194,6 +1260,7 @@ function vcsStatus(runStatus: string): "pending" | "success" | "failure" | undef
 }
 
 function validRepository(repoFullName: string, provider: VcsProvider): boolean {
+  if (provider === "azure_devops") return parseAzureDevOpsRepository(repoFullName) !== undefined;
   const parts = repoFullName.split("/");
   return (
     parts.length >= 2 &&
@@ -1601,7 +1668,7 @@ type GithubStatusDetails = Readonly<{
 }>;
 
 function vcsProviderFromSource(source: string | null): VcsProvider | undefined {
-  if (source === "github" || source === "gitlab" || source === "bitbucket") return source;
+  if (source === "github" || source === "gitlab" || source === "bitbucket" || source === "azure_devops") return source;
   return undefined;
 }
 
@@ -1803,6 +1870,27 @@ async function postVcsStatus(
   status: GithubStatusDetails,
   runStatus: string,
 ): Promise<Response> {
+  if (context.provider === "azure_devops") {
+    const credentials = context.credentials.azureDevOps;
+    const base =
+      credentials === undefined
+        ? undefined
+        : azureDevOpsRepositoryApiUrl(context.repoFullName, credentials.organization);
+    if (credentials === undefined || base === undefined) throw new Error("Invalid Azure DevOps status target");
+    return fetchAzureDevOpsUrl(
+      credentials,
+      `${base}/commits/${encodeURIComponent(context.commitSha)}/statuses?api-version=7.1`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          state: status.state === "success" ? "succeeded" : status.state === "failure" ? "failed" : "pending",
+          context: { name: context.baseContext, genre: "terrence" },
+          description: status.description,
+          ...(context.targetUrl === undefined ? {} : { targetUrl: context.targetUrl }),
+        }),
+      },
+    );
+  }
   if (context.provider === "github") return postGithubStatus(context, status);
   if (context.provider === "gitlab") return postGitlabStatus(context, status.state);
   return postBitbucketStatus(context, status.state, runStatus);
@@ -1844,7 +1932,7 @@ function validateRefetchConfiguration(
 }
 
 function resolveRefetchProvider(source: string | null | undefined): VcsProvider | undefined {
-  if (source === "github" || source === "gitlab" || source === "bitbucket") return source;
+  if (source === "github" || source === "gitlab" || source === "bitbucket" || source === "azure_devops") return source;
   return undefined;
 }
 
@@ -1929,6 +2017,7 @@ async function oauthDefaultBranch(
   });
   if (client === undefined) return undefined;
   const provider = providerForServiceProvider(client.serviceProvider);
+  if (provider === "azure_devops") return azureDevOpsManualRevision(workspace, identifier);
   const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
   if (apiUrl === undefined || provider === undefined) return undefined;
   const secret = await decryptSecret(oauthToken.token).catch((): undefined => undefined);
@@ -2030,6 +2119,7 @@ async function oauthLatestCommit(
   });
   if (client === undefined) return undefined;
   const provider = providerForServiceProvider(client.serviceProvider);
+  if (provider === "azure_devops") return azureDevOpsManualRevision(workspace, identifier, branch);
   const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
   if (apiUrl === undefined || provider === undefined) return undefined;
   const secret = await decryptSecret(token.token).catch((): undefined => undefined);
@@ -2092,6 +2182,10 @@ function buildVcsCommitUrl(
   sha: string,
 ): string | undefined {
   if (identity === undefined) return undefined;
+  if (identity.provider === "azure_devops") {
+    const url = azureDevOpsRepositoryHttpUrl(vcsIdentifier, identity.organization);
+    return url === undefined ? undefined : `${url}/commit/${encodeURIComponent(sha)}`;
+  }
   const repositoryPath = vcsIdentifier.split("/").map(encodeURIComponent).join("/");
   const commitPath =
     identity.provider === "gitlab" ? "-/commit" : identity.provider === "bitbucket" ? "commits" : "commit";
@@ -2103,7 +2197,11 @@ export async function createConfigurationVersionFromVcs(
 ): Promise<string | { error: string }> {
   const vcs = workspace.vcsRepo;
   if (vcs?.identifier === undefined) return { error: "Workspace is not connected to a VCS provider" };
-  const branch = vcs.branch ?? (await fetchDefaultBranch(workspace)) ?? "main";
+  const identity = await configuredVcsSource(workspace);
+  const resolvedBranch = vcs.branch ?? (await fetchDefaultBranch(workspace));
+  if (resolvedBranch === undefined && identity?.provider === "azure_devops")
+    return { error: "Failed to retrieve the Azure DevOps default branch. Check VCS credentials." };
+  const branch = resolvedBranch ?? "main";
 
   const sha = await latestCommitSha(workspace, branch);
   if (sha === undefined) return { error: "Failed to retrieve the latest commit from VCS. Check VCS credentials." };
@@ -2111,7 +2209,6 @@ export async function createConfigurationVersionFromVcs(
   // Determine the VCS source
   const source = await resolveVcsSource(workspace, vcs);
 
-  const identity = await configuredVcsSource(workspace);
   const commitUrl = buildVcsCommitUrl(identity, vcs.identifier, sha);
 
   const cvId = newResourceId("cv");
@@ -2126,6 +2223,7 @@ export async function createConfigurationVersionFromVcs(
       commitUrl,
       branch,
       manualTrigger: true,
+      ...(source === "azure_devops" ? { vcsProvider: "azure_devops" } : {}),
     } as (typeof configurationVersions.$inferInsert)["ingressAttributes"],
     statusTimestamps: {},
     statusMetadataSchemaVersion: 1,
@@ -2228,6 +2326,7 @@ async function providerChangedFiles(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: Readonly<WebhookDetails>,
 ): Promise<ReadonlySet<string> | undefined> {
+  if (provider === "azure_devops") return details.filesChanged;
   const needsLookup = kind === "pull_request" || (provider === "bitbucket" && details.tag === undefined);
   if (!needsLookup) return undefined;
   for (const workspace of candidates) {
@@ -2296,6 +2395,7 @@ function webhookIngressAttributes(
   credentials: ProviderCredentials | undefined,
 ): Record<string, unknown> {
   return {
+    ...(provider === "azure_devops" ? { vcsProvider: "azure_devops" } : {}),
     commitSha: details.commitSha,
     commitUrl: details.commitUrl,
     commitMessage: details.commitMessage,
@@ -2349,7 +2449,7 @@ async function persistWebhookRun(
   runId: string,
   isSpeculative: boolean,
 ): Promise<void> {
-  await db.insert(configurationVersions).values({
+  const insertConfiguration = db.insert(configurationVersions).values({
     id: configurationVersionId,
     workspaceId: workspace.id,
     status: "pending",
@@ -2359,6 +2459,10 @@ async function persistWebhookRun(
     statusTimestamps: {},
     statusMetadataSchemaVersion: 1,
   });
+  if (provider === "azure_devops" && details.deliveryId !== undefined) await insertConfiguration.onConflictDoNothing();
+  else await insertConfiguration;
+  // Resume a configuration inserted just before a process crash.
+  if (await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { id: true } })) return;
   const [configuration, organization] = await Promise.all([
     db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, configurationVersionId) }),
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
@@ -2376,7 +2480,7 @@ async function persistWebhookRun(
     null,
   );
   await db.transaction(async (transaction) => {
-    await transaction.insert(runs).values({
+    const insertRun = transaction.insert(runs).values({
       id: runId,
       workspaceId: workspace.id,
       configurationVersionId,
@@ -2391,6 +2495,10 @@ async function persistWebhookRun(
       logToken: crypto.randomUUID(),
       createdAt,
     });
+    if (provider === "azure_devops" && details.deliveryId !== undefined) {
+      const inserted = await insertRun.onConflictDoNothing().returning({ id: runs.id });
+      if (inserted.length === 0) return;
+    } else await insertRun;
     await transaction.insert(runProvenanceCapsules).values(provenanceInsert(runId, createdAt, provenance));
   });
   await auditLog(
@@ -2401,6 +2509,33 @@ async function persistWebhookRun(
     workspace.orgId,
     webhookAuditAttributes(provider, kind, details, workspace, credentials),
   );
+}
+
+/** Stable effect identities let durable retries resume instead of creating duplicate runs. */
+function webhookRunIds(
+  provider: VcsProvider,
+  kind: "push" | "pull_request",
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- immutable changed-file set
+  details: DeepReadonly<WebhookDetails>,
+  workspaceId: string,
+): Readonly<{ configurationVersionId: string; runId: string; replayable: boolean }> {
+  if (provider !== "azure_devops" || details.deliveryId === undefined)
+    return { configurationVersionId: newResourceId("cv"), runId: newRunId(), replayable: false };
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        details.deliveryId,
+        workspaceId,
+        kind,
+        details.repoFullName,
+        details.branch ?? null,
+        details.tag ?? null,
+        details.pullRequestNumber ?? null,
+        details.commitSha,
+      ]),
+    )
+    .digest("hex");
+  return { configurationVersionId: `cv-${digest}`, runId: `run-${digest.slice(0, 14)}`, replayable: true };
 }
 
 async function createWebhookRun(
@@ -2422,8 +2557,7 @@ async function createWebhookRun(
   if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
   if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
   const credentials = await resolveCredentials();
-  const configurationVersionId = newResourceId("cv");
-  const runId = newRunId();
+  const { configurationVersionId, runId, replayable } = webhookRunIds(provider, kind, details, workspace.id);
   await persistWebhookRun(
     provider,
     kind,
@@ -2434,6 +2568,13 @@ async function createWebhookRun(
     runId,
     isSpeculative,
   );
+  if (replayable) {
+    const existing = await db.query.configurationVersions.findFirst({
+      where: eq(configurationVersions.id, configurationVersionId),
+      columns: { status: true },
+    });
+    if (existing?.status !== "pending") return undefined;
+  }
   if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
   return { configurationVersionId, credentials };
 }
@@ -2470,7 +2611,7 @@ function addOAuthWebhookDownload(
   repoFullName: string,
   commitSha: string,
 ): void {
-  const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}\u0000${repoFullName}\u0000${commitSha}`;
+  const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}\u0000${repoFullName}\u0000${commitSha}\u0000${String(credentials.ingressSubmodules === true)}`;
   const group = downloads.get(downloadKey);
   if (group === undefined) {
     downloads.set(downloadKey, {
@@ -2493,6 +2634,7 @@ async function handleOAuthProviderWebhook(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- accumulates revision groups across one bounded delivery
   deliveryDownloads?: OAuthWebhookDownloads,
   admittedWorkspaces?: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
+  authenticatedClientId?: string,
 ): Promise<boolean> {
   const branchMatchedWorkspaces = admittedWorkspaces ?? (await matchingWebhookWorkspaces(provider, details));
   // PR/MR payloads carry no changed-file list (kanban 1.6). Bitbucket push
@@ -2504,7 +2646,9 @@ async function handleOAuthProviderWebhook(
   if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
   const matchedWorkspaces = branchMatchedWorkspaces.filter(
     (workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean =>
-      details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged),
+      details.tag !== undefined ||
+      (provider === "azure_devops" && workspace.vcsRepo?.ingressSubmodules === true) ||
+      matchesFileTriggers(workspace, triggerDetails.filesChanged),
   );
 
   const downloads: OAuthWebhookDownloads = deliveryDownloads ?? new Map<string, OAuthWebhookDownload>();
@@ -2531,7 +2675,7 @@ async function handleOAuthProviderWebhook(
     );
   }
   if (deliveryDownloads !== undefined) {
-    await synchronizeVcsPolicySets(provider, kind, details);
+    await synchronizeVcsPolicySets(provider, kind, details, authenticatedClientId);
     return true;
   }
   await Promise.all([
@@ -2545,9 +2689,311 @@ async function handleOAuthProviderWebhook(
         );
       }),
     ),
-    synchronizeVcsPolicySets(provider, kind, details),
+    synchronizeVcsPolicySets(provider, kind, details, authenticatedClientId),
   ]);
   return true;
+}
+
+async function usesOAuthClient(
+  subject: DeepReadonly<VcsCredentialSubject>,
+  clientId: string | undefined,
+): Promise<boolean> {
+  if (clientId === undefined) return true;
+  const tokenId = subject.vcsRepo?.oauthTokenId;
+  if (tokenId === undefined) return false;
+  const token = await db.query.oauthTokens.findFirst({
+    where: and(eq(oauthTokens.id, tokenId), eq(oauthTokens.oauthClientId, clientId)),
+    columns: { id: true },
+  });
+  return token !== undefined;
+}
+
+function azureDevOpsChangePaths(value: unknown): readonly string[] | undefined {
+  const paths: string[] = [];
+  const change = asRecord(value);
+  const item = asRecord(change?.["item"]);
+  const path = item?.["path"];
+  if (typeof path !== "string" || !path.startsWith("/")) return undefined;
+  if (item?.["isFolder"] !== true) paths.push(path.slice(1));
+  const oldPath = change?.["originalPath"];
+  if (typeof oldPath === "string") paths.push(oldPath.replace(/^\//u, ""));
+  return paths;
+}
+
+function azureDevOpsDiffPage(body: unknown): Readonly<{ paths: readonly string[]; done: boolean }> | undefined {
+  const value = asRecord(body);
+  const changes = value?.["changes"];
+  const done = value?.["allChangesIncluded"];
+  if (!Array.isArray(changes) || changes.length > 100 || typeof done !== "boolean") return undefined;
+  if (!done && changes.length === 0) return undefined;
+  const paths: string[] = [];
+  for (const value of changes) {
+    const changed = azureDevOpsChangePaths(value);
+    if (changed === undefined) return undefined;
+    paths.push(...changed);
+  }
+  return { paths, done };
+}
+
+async function azureDevOpsDiffFiles(
+  credentials: AzureDevOpsCredentials,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- details contains an immutable ReadonlySet
+  details: DeepReadonly<WebhookDetails>,
+): Promise<ReadonlySet<string> | undefined> {
+  if (details.beforeCommitSha === undefined || /^0{40}$/u.test(details.beforeCommitSha)) return undefined;
+  const base = azureDevOpsRepositoryApiUrl(details.repoFullName, credentials.organization);
+  if (base === undefined) return undefined;
+  const files = new Set<string>();
+  try {
+    for (let page = 0; page < 10; page++) {
+      const query = new URLSearchParams({
+        "api-version": "7.1",
+        baseVersion: details.beforeCommitSha,
+        baseVersionType: "commit",
+        targetVersion: details.commitSha,
+        targetVersionType: "commit",
+        diffCommonCommit: details.pullRequestNumber === undefined ? "false" : "true",
+        $top: "100",
+        $skip: String(page * 100),
+      });
+      const response = await fetchAzureDevOpsUrl(credentials, `${base}/diffs/commits?${query}`, {
+        maxResponseBytes: 1024 * 1024,
+      });
+      if (!response.ok) {
+        await cancelResponseBody(response);
+        return undefined;
+      }
+      const result = azureDevOpsDiffPage(await response.json());
+      if (result === undefined) return undefined;
+      for (const path of result.paths) files.add(path);
+      if (result.done) return files;
+    }
+  } catch {
+    /* An incomplete file list must trigger all matching workspaces. */
+  }
+  return undefined;
+}
+
+function azureDevOpsPullRequestMatches(
+  value: unknown,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- details contains an immutable ReadonlySet
+  details: DeepReadonly<AzureDevOpsWebhookDetails>,
+): boolean {
+  const body = asRecord(value);
+  const repository = asRecord(body?.["repository"]);
+  return (
+    body !== undefined &&
+    body["pullRequestId"] === details.pullRequestNumber &&
+    body["status"] === "active" &&
+    body["isDraft"] !== true &&
+    body["forkSource"] == null &&
+    repository?.["id"] === details.repositoryId &&
+    body["sourceRefName"] === `refs/heads/${details.branch ?? ""}` &&
+    body["targetRefName"] === `refs/heads/${details.targetBranch ?? ""}` &&
+    asRecord(body["lastMergeSourceCommit"])?.["commitId"] === details.commitSha
+  );
+}
+
+async function azureDevOpsTrustedPullRequest(
+  credentials: AzureDevOpsCredentials,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- details contains an immutable ReadonlySet
+  details: DeepReadonly<AzureDevOpsWebhookDetails>,
+): Promise<boolean> {
+  const base = azureDevOpsRepositoryApiUrl(details.repoFullName, credentials.organization);
+  if (base === undefined || details.pullRequestNumber === undefined) return false;
+  const response = await fetchAzureDevOpsUrl(
+    credentials,
+    `${base}/pullrequests/${details.pullRequestNumber}?api-version=7.1`,
+    { maxResponseBytes: 1024 * 1024 },
+  );
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    throw new Error("Azure DevOps pull request could not be verified");
+  }
+  return azureDevOpsPullRequestMatches(await response.json(), details);
+}
+
+/** Peel immutable tag object IDs, rather than resolving a mutable tag name after delivery. */
+async function azureDevOpsTagCommit(
+  credentials: AzureDevOpsCredentials,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- details contains an immutable ReadonlySet
+  details: DeepReadonly<AzureDevOpsWebhookDetails>,
+): Promise<string> {
+  const base = azureDevOpsRepositoryApiUrl(details.repoFullName, credentials.organization);
+  if (base === undefined) throw new Error("Invalid Azure DevOps repository");
+  let sha = details.commitSha;
+  for (let depth = 0; depth < 5; depth++) {
+    const commit = await fetchAzureDevOpsUrl(credentials, `${base}/commits/${sha}?api-version=7.1`, {
+      maxResponseBytes: 1024 * 1024,
+    });
+    if (commit.ok) {
+      const body = asRecord(await commit.json());
+      if (body?.["commitId"] === sha) return sha;
+      throw new Error("Azure DevOps commit response does not match the tag revision");
+    }
+    await cancelResponseBody(commit);
+    if (commit.status !== 404) throw new Error("Azure DevOps tag commit could not be resolved");
+    const response = await fetchAzureDevOpsUrl(credentials, `${base}/annotatedtags/${sha}?api-version=7.1`, {
+      maxResponseBytes: 1024 * 1024,
+    });
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      throw new Error("Azure DevOps annotated tag could not be resolved");
+    }
+    const body = asRecord(await response.json());
+    const taggedObject = asRecord(body?.["taggedObject"]);
+    const target = taggedObject?.["objectId"];
+    if (
+      body?.["objectId"] !== sha ||
+      typeof target !== "string" ||
+      !/^[0-9a-f]{40}$/iu.test(target) ||
+      /^0{40}$/u.test(target)
+    )
+      throw new Error("Invalid Azure DevOps annotated tag");
+    sha = target;
+  }
+  throw new Error("Azure DevOps annotated tag nesting exceeds the limit");
+}
+
+async function admitAzureDevOpsTargets(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- webhook details contain an immutable ReadonlySet
+  parsed: readonly AzureDevOpsWebhook[],
+  client: DeepReadonly<typeof oauthClients.$inferSelect>,
+  organization: string | undefined,
+): Promise<
+  readonly Readonly<{
+    event: AzureDevOpsWebhook;
+    workspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[];
+  }>[]
+> {
+  const admitted: {
+    event: AzureDevOpsWebhook;
+    workspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[];
+  }[] = [];
+  let workspaceCount = 0;
+  for (const event of parsed) {
+    if (organization === undefined || event.details.sourceIdentity.organization !== organization) return [];
+    const targets = await matchingWebhookWorkspaces("azure_devops", event.details);
+    const scoped: DeepReadonly<typeof workspaces.$inferSelect>[] = [];
+    for (const workspace of targets)
+      if (workspace.orgId === client.orgId && (await usesOAuthClient(workspace, client.id))) scoped.push(workspace);
+    workspaceCount += scoped.length;
+    if (workspaceCount > MAX_BITBUCKET_DELIVERY_WORKSPACES)
+      throw new Error("Azure DevOps delivery exceeds the workspace target limit");
+    admitted.push({ event, workspaces: scoped });
+  }
+  return admitted;
+}
+
+export async function handleAzureDevOpsWebhook(
+  eventName: string,
+  payload: WebhookPayload,
+  authenticatedClientId: string,
+): Promise<boolean> {
+  const parsed = parseAzureDevOpsWebhook(eventName, payload);
+  const deliveryId = azureDevOpsWebhookDeliveryId(payload, authenticatedClientId);
+  if (parsed === undefined || parsed.length === 0 || deliveryId === undefined) return false;
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, authenticatedClientId), eq(oauthClients.serviceProvider, "ado_services")),
+  });
+  if (client === undefined) return false;
+  const organization = azureDevOpsOrganization(client.adoOrgName);
+  const admitted = await admitAzureDevOpsTargets(parsed, client, organization);
+  const downloads: OAuthWebhookDownloads = new Map();
+  for (const { event, workspaces: targets } of admitted) {
+    let details: AzureDevOpsWebhookDetails & Readonly<{ deliveryId?: string }> = {
+      ...event.details,
+      deliveryId,
+    };
+    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.oauthClientId, client.id) });
+    const credentials =
+      token === undefined
+        ? undefined
+        : await oauthProviderCredentials({ orgId: client.orgId, vcsRepo: { oauthTokenId: token.id } }, "azure_devops");
+    if (credentials?.azureDevOps === undefined) continue;
+    if (event.kind === "pull_request") {
+      if (!(await azureDevOpsTrustedPullRequest(credentials.azureDevOps, details))) continue;
+      details = { ...details, trustedPullRequest: true };
+    }
+    if (details.tag !== undefined) {
+      const commitSha = await azureDevOpsTagCommit(credentials.azureDevOps, details);
+      details = { ...details, commitSha, commitUrl: `${details.cloneUrl}/commit/${commitSha}` };
+    } else {
+      const filesChanged = await azureDevOpsDiffFiles(credentials.azureDevOps, details);
+      if (filesChanged !== undefined) details = { ...details, filesChanged };
+    }
+    await handleOAuthProviderWebhook("azure_devops", event.kind, details, downloads, targets, client.id);
+    if (details.tag !== undefined)
+      await syncRegistryModulesForTag(details.repoFullName, details.tag, details.sourceIdentity, client.id);
+  }
+  const budget = { remainingBytes: MAX_TARBALL_BYTES };
+  for (const group of downloads.values())
+    await fetchAndSaveProviderTarball(
+      group.configurationVersionIds,
+      group.credentials,
+      group.repoFullName,
+      group.commitSha,
+      budget,
+    );
+  return true;
+}
+
+async function fetchAndSaveAzureDevOpsArchive(
+  configurationVersionIds: readonly string[],
+  credentials: ProviderCredentials,
+  repoFullName: string,
+  commitSha: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- per-delivery mutable byte budget
+  budget?: WebhookDownloadBudget,
+): Promise<void> {
+  const storageDirectory = resolve(
+    process.env["STORAGE_DIR"] ?? join(process.cwd(), "storage"),
+    "configuration_versions",
+  );
+  const temporaryPath = join(storageDirectory, `.azure_devops-${crypto.randomUUID()}.tar.gz`);
+  try {
+    if (credentials.azureDevOps === undefined) throw new Error("Azure DevOps credentials are unavailable");
+    const maxBytes = Math.min(MAX_TARBALL_BYTES, budget?.remainingBytes ?? MAX_TARBALL_BYTES);
+    if (maxBytes <= 0) throw new Error("Webhook delivery download byte budget exhausted");
+    const archive = await (credentials.ingressSubmodules === true
+      ? fetchAzureDevOpsSubmoduleArchive
+      : fetchAzureDevOpsArchive)(
+      credentials.azureDevOps,
+      repoFullName,
+      commitSha,
+      { maxCompressedBytes: maxBytes },
+      undefined,
+      budget,
+    );
+    await mkdir(storageDirectory, { recursive: true });
+    const file = await open(temporaryPath, "wx", 0o600);
+    try {
+      await file.writeFile(archive);
+    } finally {
+      await file.close();
+    }
+    for (const id of configurationVersionIds) {
+      const archivePath = join(storageDirectory, `${id}.tar.gz`);
+      await rm(archivePath, { force: true });
+      await link(temporaryPath, archivePath);
+      await db
+        .update(configurationVersions)
+        .set({
+          status: "uploaded",
+          archivePath,
+          statusTimestamps: { uploadedAt: new Date().toISOString() },
+          ingressAttributes: jsonSet(configurationVersions.ingressAttributes, "vcsProvider", sql`${"azure_devops"}`),
+        })
+        .where(eq(configurationVersions.id, id));
+    }
+  } catch (error: unknown) {
+    await markConfigurationVersionsErrored(
+      configurationVersionIds,
+      error instanceof Error ? error.message : "Azure DevOps archive download failed",
+    );
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
 }
 
 export async function handleGitlabWebhook(eventName: string, payload: WebhookPayload): Promise<boolean> {
@@ -2595,10 +3041,20 @@ export async function handleBitbucketWebhook(eventName: string, payload: Webhook
  * fire-and-forget. The source identity is required so a repository with the
  * same owner/name on another provider host cannot trigger this module.
  */
+async function registryModuleUsesClient(
+  mod: DeepReadonly<typeof registryModules.$inferSelect>,
+  clientId: string | undefined,
+): Promise<boolean> {
+  if (clientId === undefined) return true;
+  if (mod.vcsConnectionType !== "oauth-token" || mod.vcsConnectionId === null) return false;
+  return usesOAuthClient({ orgId: mod.orgId, vcsRepo: { oauthTokenId: mod.vcsConnectionId } }, clientId);
+}
+
 export async function syncRegistryModulesForTag(
   repoFullName: string,
   tag: string,
   sourceIdentity: VcsSourceIdentity,
+  authenticatedClientId?: string,
 ): Promise<void> {
   const modules = await db.query.registryModules.findMany({
     where: and(
@@ -2608,6 +3064,7 @@ export async function syncRegistryModulesForTag(
     ),
   });
   for (const mod of modules) {
+    if (!(await registryModuleUsesClient(mod, authenticatedClientId))) continue;
     if (mod.tagPrefix !== "" && !tag.startsWith(mod.tagPrefix)) continue;
     const moduleSource = await sourceIdentityForConnection(mod.orgId, mod.vcsConnectionType, mod.vcsConnectionId);
     if (moduleSource === undefined || !vcsSourceMatchesConnection(moduleSource, sourceIdentity)) continue;
@@ -2767,6 +3224,10 @@ async function fetchAndSaveProviderTarball(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- shared aggregate download budget is debited during streaming
   budget?: WebhookDownloadBudget,
 ): Promise<void> {
+  if (credentials.provider === "azure_devops") {
+    await fetchAndSaveAzureDevOpsArchive(configurationVersionIds, credentials, repoFullName, commitSha, budget);
+    return;
+  }
   const request = providerTarballRequest(credentials, repoFullName, commitSha);
   if (request === undefined) {
     await markConfigurationVersionsErrored(configurationVersionIds, "Invalid repository or commit SHA");
@@ -2808,6 +3269,17 @@ async function fetchProviderPolicyArchive(
   repoFullName: string,
   commitSha: string,
 ): Promise<Uint8Array> {
+  if (credentials.provider === "azure_devops") {
+    if (credentials.azureDevOps === undefined) throw new Error("Azure DevOps credentials are unavailable");
+    return (credentials.ingressSubmodules === true ? fetchAzureDevOpsSubmoduleArchive : fetchAzureDevOpsArchive)(
+      credentials.azureDevOps,
+      repoFullName,
+      commitSha,
+      {
+        maxCompressedBytes: 20 * 1024 * 1024,
+      },
+    );
+  }
   const request = providerTarballRequest(credentials, repoFullName, commitSha);
   if (request === undefined) throw new Error("Invalid repository or commit SHA");
   const response = await fetchVcsUrlStream(request.url, {
@@ -2857,6 +3329,7 @@ async function synchronizeVcsPolicySets(
   // ReadonlySet is intentionally preserved by DeepReadonly.
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
+  authenticatedClientId?: string,
 ): Promise<void> {
   if (kind !== "push") return;
   const candidates = await db.query.policySets.findMany({
@@ -2864,19 +3337,17 @@ async function synchronizeVcsPolicySets(
   });
   const matched: DeepReadonly<typeof policySets.$inferSelect>[] = [];
   for (const policySet of candidates) {
-    const vcsRepo = policySet.vcsRepo;
-    const connectionType =
-      vcsRepo?.githubAppInstallationId !== undefined && vcsRepo.githubAppInstallationId !== ""
-        ? "github-app"
-        : vcsRepo?.oauthTokenId !== undefined && vcsRepo.oauthTokenId !== ""
-          ? "oauth-token"
-          : undefined;
-    const connectionId = connectionType === "github-app" ? vcsRepo?.githubAppInstallationId : vcsRepo?.oauthTokenId;
-    const configuredSource = await sourceIdentityForConnection(policySet.orgId, connectionType, connectionId);
+    if (!(await usesOAuthClient(policySet, authenticatedClientId))) continue;
+    const configuredSource = await configuredVcsSource(policySet);
     if (
       configuredSource !== undefined &&
       vcsSourceMatchesConnection(configuredSource, details.sourceIdentity) &&
-      matchesPolicySetWebhook(policySet, details)
+      matchesPolicySetWebhook(
+        policySet,
+        provider === "azure_devops" && policySet.vcsRepo?.ingressSubmodules === true
+          ? { ...details, filesChanged: new Set<string>() }
+          : details,
+      )
     ) {
       matched.push(policySet);
     }

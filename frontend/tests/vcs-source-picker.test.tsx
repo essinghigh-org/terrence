@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { setAuthToken } from "../src/lib/api";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
-import { WorkspaceVcs } from "../src/components/WorkspaceVcs";
+import { WorkspaceVcs, loadOrganizationVcsConnections } from "../src/components/WorkspaceVcs";
 import { isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
@@ -267,4 +267,45 @@ test("keeps local workspace creation independent from VCS connections", async ()
   ).data.attributes;
   expect(attributes["source"]).toBe("local");
   expect(Object.hasOwn(attributes, "vcs-repo")).toBe(false);
+});
+
+test("offers Azure Services PAT connections to workspace selectors while hiding unsupported Server clients", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = mock(async (request: string | URL | Request): Promise<Response> => {
+    const url = requestUrl(request);
+    requests.push(url);
+    if (url.endsWith("/github-app/installations")) return json({ data: [] });
+    if (url.endsWith("/oauth-clients"))
+      return json({
+        data: [
+          {
+            id: "oc-ado",
+            attributes: {
+              name: "Azure team",
+              "service-provider": "ado_services",
+              "service-provider-display-name": "Azure DevOps Services",
+            },
+          },
+          { id: "oc-server", attributes: { name: "Azure Server", "service-provider": "ado_server" } },
+          {
+            id: "oc-server-alias",
+            attributes: { name: "Azure Server alias", "service-provider": "azure_devops_server" },
+          },
+          { id: "oc-empty", attributes: { name: "No PAT yet", "service-provider": "ado_services" } },
+        ],
+      });
+    if (url === "/api/v2/oauth-clients/oc-ado/oauth-tokens") return json({ data: [{ id: "ot-ado", attributes: {} }] });
+    if (url === "/api/v2/oauth-clients/oc-empty/oauth-tokens") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as unknown as typeof fetch;
+  expect(await loadOrganizationVcsConnections("acme")).toEqual([
+    {
+      id: "ot-ado",
+      kind: "oauth-token",
+      label: "Azure team — Azure DevOps Services",
+      value: "oauth-token:ot-ado",
+      serviceProvider: "ado_services",
+    },
+  ]);
+  expect(requests.some((url): boolean => url.includes("oc-server"))).toBeFalse();
 });

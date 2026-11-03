@@ -5,8 +5,10 @@ import { envFlag } from "../lib/env";
 import { db } from "../db";
 import {
   runTriggers,
+  oauthClients,
   auditLogs,
   githubWebhookDeliveries,
+  durableJobs,
   workspaces,
   workspaceVariables,
   users,
@@ -39,6 +41,14 @@ import {
   type CostEstimateStatus,
   type CostEstimateTimestamps,
 } from "../lib/cost-estimate";
+import { decryptSecret } from "../lib/secrets";
+import { azureDevOpsOrganization } from "../lib/azure-devops";
+import {
+  azureDevOpsWebhookDeliveryId,
+  azureDevOpsWebhookEvent,
+  parseAzureDevOpsWebhook,
+  verifyAzureDevOpsWebhook,
+} from "../lib/ado-webhooks";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -206,6 +216,7 @@ async function durableWebhookEnqueue(
     eventName: string;
     payload: Record<string, unknown>;
     deliveryId: string | null;
+    authenticatedClientId?: string;
   }>,
 ): Promise<void> {
   if (input.deliveryId !== null) {
@@ -221,6 +232,7 @@ async function durableWebhookEnqueue(
       eventName: input.eventName,
       payload: input.payload,
       deliveryId: input.deliveryId,
+      ...(input.authenticatedClientId === undefined ? {} : { authenticatedClientId: input.authenticatedClientId }),
     });
     return;
   }
@@ -229,7 +241,31 @@ async function durableWebhookEnqueue(
     eventName: input.eventName,
     payload: input.payload,
     deliveryId: input.deliveryId,
+    ...(input.authenticatedClientId === undefined ? {} : { authenticatedClientId: input.authenticatedClientId }),
   });
+}
+
+/** Recover a claim/enqueue crash gap without dispatching an existing delivery twice. */
+async function claimAzureDevOpsDelivery(deliveryId: string): Promise<boolean> {
+  const claimed = await db
+    .insert(githubWebhookDeliveries)
+    .values({ id: deliveryId, status: "queued", receivedAt: Date.now() })
+    .onConflictDoNothing()
+    .returning({ id: githubWebhookDeliveries.id });
+  if (claimed.length === 0) {
+    const delivery = await db.query.githubWebhookDeliveries.findFirst({
+      where: eq(githubWebhookDeliveries.id, deliveryId),
+      columns: { status: true },
+    });
+    if (delivery?.status !== "queued") return false;
+    const job = await db.query.durableJobs.findFirst({
+      where: and(eq(durableJobs.kind, "vcs-webhook"), eq(durableJobs.dedupeKey, deliveryId)),
+      columns: { id: true },
+    });
+    if (job !== undefined) return false;
+    // A crash after claiming but before enqueue must not strand the delivery.
+  }
+  return true;
 }
 
 function webhookPayload(body: unknown): { payload: Record<string, unknown>; rawBody: string } | undefined {
@@ -809,6 +845,51 @@ export const miscRoutes = new Elysia({ name: "misc" })
       return webhookAcknowledged;
     },
   )
+  .post("/api/webhooks/azure-devops/:clientId", async ({ request, body, params, set }): Promise<unknown> => {
+    const client = await db.query.oauthClients.findFirst({
+      where: and(eq(oauthClients.id, params.clientId), eq(oauthClients.serviceProvider, "ado_services")),
+    });
+    const secret =
+      client?.secret == null ? undefined : await decryptSecret(client.secret).catch((): undefined => undefined);
+    if (
+      client === undefined ||
+      secret === undefined ||
+      !verifyAzureDevOpsWebhook(request.headers.get("authorization"), client.id, secret)
+    )
+      return webhookUnauthorized(set, "Invalid Azure DevOps webhook credentials");
+    const parsed = webhookPayload(body);
+    if (parsed === undefined) return webhookUnprocessable(set, "Invalid webhook payload");
+    const eventName = azureDevOpsWebhookEvent(parsed.payload);
+    const deliveryId = azureDevOpsWebhookDeliveryId(parsed.payload, client.id);
+    if (eventName === undefined || deliveryId === undefined)
+      return webhookUnprocessable(set, "Invalid Azure DevOps event or delivery ID");
+    const events = parseAzureDevOpsWebhook(eventName, parsed.payload);
+    if (events === undefined) return webhookUnprocessable(set, "Invalid Azure DevOps event resource");
+    if (
+      events.some(
+        (event): boolean => event.details.sourceIdentity.organization !== azureDevOpsOrganization(client.adoOrgName),
+      )
+    )
+      return webhookUnauthorized(set, "Azure DevOps webhook organization does not match the connection");
+    if (!(await claimAzureDevOpsDelivery(deliveryId))) return webhookAcknowledged;
+    try {
+      await durableWebhookEnqueue({
+        provider: "azure_devops",
+        eventName,
+        payload: parsed.payload,
+        deliveryId,
+        authenticatedClientId: client.id,
+      });
+    } catch (error: unknown) {
+      // Permit a retry if enqueue failed before dispatch began. A processing
+      // delivery is retained because its effects may already have happened.
+      await db
+        .delete(githubWebhookDeliveries)
+        .where(and(eq(githubWebhookDeliveries.id, deliveryId), eq(githubWebhookDeliveries.status, "queued")));
+      throw error;
+    }
+    return webhookAcknowledged;
+  })
   // --- External Apply Approval Webhook (kanban 21.8) ---
   // Lets a ServiceNow/Jira/other workflow unblock an apply that the site
   // has gated behind external approval (admin `approval-webhook` settings).

@@ -68,8 +68,12 @@ async function repositoryRoot(directory: string): Promise<string> {
     : directory;
 }
 
-export async function moduleRootPath(directory: string, sourceDirectory = ""): Promise<string> {
-  const root = await repositoryRoot(directory);
+export async function moduleRootPath(
+  directory: string,
+  sourceDirectory = "",
+  preserveRepositoryRoot = false,
+): Promise<string> {
+  const root = preserveRepositoryRoot ? directory : await repositoryRoot(directory);
   const source = sourceDirectory.trim().replace(/^\.\//, "").replace(/\/$/, "");
   if (source !== "" && !safeRelativePath(source)) throw new Error("Source directory must be a safe relative path");
   const selected = resolve(root, source);
@@ -92,13 +96,14 @@ export async function ingestModuleArchive<T>(
   destinationPath: string,
   sourceDirectory: string,
   inspect: (moduleRoot: string) => Promise<T>,
+  preserveRepositoryRoot = false,
 ): Promise<T> {
   const staging = await mkdtemp(join(tmpdir(), "terrence-registry-module-"));
   const temporaryArchive = `${destinationPath}.${crypto.randomUUID()}.tmp`;
   try {
     const extracted = join(staging, "source");
     await extractValidatedModuleArchive(inputPath, extracted);
-    const moduleRoot = await moduleRootPath(extracted, sourceDirectory);
+    const moduleRoot = await moduleRootPath(extracted, sourceDirectory, preserveRepositoryRoot);
     const metadata = await inspect(moduleRoot);
     await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 });
     await tarOutput(["-czf", temporaryArchive, "-C", moduleRoot, "."]);

@@ -1,3 +1,4 @@
+import { Checkbox } from "../components/ui/checkbox";
 import { RegistryArtifactTags } from "../components/RegistryArtifactTags";
 import { EmptyState } from "../components/EmptyState";
 import { AlertTriangle, Check, Copy, ExternalLink, RefreshCw, Settings2 } from "lucide-react";
@@ -732,6 +733,8 @@ function SettingsDialog({
   busy,
   sourceDirectory,
   tagPrefix,
+  ingressSubmodules,
+  onIngressSubmodulesChange,
   onOpenChange,
   onSourceDirectoryChange,
   onTagPrefixChange,
@@ -742,6 +745,8 @@ function SettingsDialog({
   busy: boolean;
   sourceDirectory: string;
   tagPrefix: string;
+  ingressSubmodules: boolean;
+  onIngressSubmodulesChange: (value: boolean) => void;
   onOpenChange: (open: boolean) => void;
   onSourceDirectoryChange: (value: string) => void;
   onTagPrefixChange: (value: string) => void;
@@ -772,6 +777,25 @@ function SettingsDialog({
               disabled={module.publishingMechanism !== "vcs"}
             />
           </Field>
+          {module.vcsRepo?.repositoryUrl?.startsWith("https://dev.azure.com/") === true && (
+            <Field>
+              <label htmlFor="detail-submodules" className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  id="detail-submodules"
+                  checked={ingressSubmodules}
+                  disabled={busy}
+                  onCheckedChange={(checked): void => {
+                    onIngressSubmodulesChange(checked);
+                  }}
+                />
+                Include Azure DevOps Git submodules
+              </label>
+              <FieldDescription>
+                Applies to future publications. Existing versions remain immutable. Only same-organization pinned
+                commits are permitted.
+              </FieldDescription>
+            </Field>
+          )}
           {module.publishingWorkflow === "tag" && (
             <Field>
               <FieldLabel htmlFor="detail-tag-prefix">Tag prefix</FieldLabel>
@@ -873,6 +897,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
   const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sourceDirectory, setSourceDirectory] = useState("");
+  const [ingressSubmodules, setIngressSubmodules] = useState(false);
   const [tagPrefix, setTagPrefix] = useState("");
   const registryPath = `/app/${encodeURIComponent(orgName)}/registry`;
 
@@ -905,6 +930,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
         setModule(loadedModule);
         setVersions(loadedVersions);
         setSourceDirectory(loadedModule.vcsRepo?.sourceDirectory ?? "");
+        setIngressSubmodules(loadedModule.vcsRepo?.ingressSubmodules === true);
         setTagPrefix(loadedModule.vcsRepo?.tagPrefix ?? "");
         const requested = searchParams.get("version");
         if (requested === null && loadedVersions[0] !== undefined) {
@@ -1079,7 +1105,11 @@ export function RegistryModuleDetail(): React.JSX.Element {
           body: JSON.stringify({
             data: {
               type: "registry-modules",
-              attributes: { "source-directory": sourceDirectory, "tag-prefix": tagPrefix },
+              attributes: {
+                "source-directory": sourceDirectory,
+                "tag-prefix": tagPrefix,
+                "vcs-repo": { "ingress-submodules": ingressSubmodules },
+              },
             },
           }),
         },
@@ -1213,6 +1243,8 @@ export function RegistryModuleDetail(): React.JSX.Element {
         module={module}
         open={settingsOpen}
         busy={busy}
+        ingressSubmodules={ingressSubmodules}
+        onIngressSubmodulesChange={setIngressSubmodules}
         sourceDirectory={sourceDirectory}
         tagPrefix={tagPrefix}
         onOpenChange={setSettingsOpen}

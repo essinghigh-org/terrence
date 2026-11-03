@@ -1,3 +1,4 @@
+import { discoverAzureDevOpsRepositories } from "../lib/ado-repositories";
 import { newResourceId } from "../lib/resource-id";
 import { integrationSetting } from "../lib/runtime-config";
 import { Elysia } from "elysia";
@@ -888,6 +889,14 @@ async function discoverOAuthRepositories(
   token: string,
   serviceProviderUser: string | null,
 ): Promise<RepositoryResource[]> {
+  if (client.serviceProvider === "ado_services") {
+    return discoverAzureDevOpsRepositories({
+      organization: client.adoOrgName ?? "",
+      token,
+      apiUrl: client.apiUrl,
+      httpUrl: client.httpUrl,
+    });
+  }
   const target = repositoryApiTarget(client);
   if (target === null) return [];
   if (target.provider === "bitbucket") return discoverBitbucketRepositories(target.base, token, serviceProviderUser);
@@ -1304,6 +1313,8 @@ async function discoverInstallationRepositories(installationId: number): Promise
   }
 }
 
+class AzureDevOpsDiscoveryError extends Error {}
+
 async function discoverConnectionRepositories(
   connectionId: string,
   orgId: string,
@@ -1328,8 +1339,8 @@ async function discoverConnectionRepositories(
       oauthToken.serviceProviderUser,
     );
   } catch {
-    // Preserve the existing discovery behavior for provider/decryption
-    // failures: the connection is valid, but currently has no results.
+    if (oauthClient.serviceProvider === "ado_services") throw new AzureDevOpsDiscoveryError();
+    // Preserve the existing discovery behavior for other providers.
     return [];
   }
 }
@@ -1384,7 +1395,22 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       if (installation !== undefined) {
         return { data: await discoverInstallationRepositories(installation.installationId) };
       }
-      const discovered = await discoverConnectionRepositories(connectionId, org.id);
+      let discovered: RepositoryResource[] | null;
+      try {
+        discovered = await discoverConnectionRepositories(connectionId, org.id);
+      } catch (error) {
+        if (!(error instanceof AzureDevOpsDiscoveryError)) throw error;
+        (set as { status: number }).status = 502;
+        return {
+          errors: [
+            {
+              status: "502",
+              title: "Azure DevOps discovery failed",
+              detail: "Check the PAT expiration, repository permissions, and organization configuration.",
+            },
+          ],
+        };
+      }
       if (discovered === null) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };

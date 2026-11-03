@@ -109,10 +109,24 @@ test("offers only registry-supported VCS connections with an honest provider bou
             id: "gitlab-client",
             attributes: { name: "GitLab", "service-provider": "gitlab", "service-provider-display-name": "GitLab" },
           },
+          {
+            id: "azure-client",
+            attributes: {
+              name: "Azure DevOps",
+              "service-provider": "ado_services",
+              "service-provider-display-name": "Azure DevOps Services",
+            },
+          },
+          {
+            id: "azure-server-client",
+            attributes: { name: "Azure Server", "service-provider": "ado_server" },
+          },
         ],
       });
     if (url === "/api/v2/oauth-clients/github-client/oauth-tokens")
       return json({ data: [{ id: "github-token", attributes: { "service-provider-user": "octocat" } }] });
+    if (url === "/api/v2/oauth-clients/azure-client/oauth-tokens")
+      return json({ data: [{ id: "azure-token", attributes: {} }] });
     if (url === "/api/v2/oauth-clients/github-token/oauth-tokens") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/vcs-connections/oauth-token%3Agithub-token/repositories")
       return json({ data: [] });
@@ -127,7 +141,9 @@ test("offers only registry-supported VCS connections with an honest provider bou
   expect(connectionLabels.some((label): boolean => label.includes("GitHub"))).toBeTrue();
   expect(connectionLabels.some((label): boolean => label.includes("octocat"))).toBeTrue();
   expect(connectionLabels.some((label): boolean => label.includes("GitLab"))).toBeFalse();
-  expect(view.queryByText(/No supported GitHub connections/)).toBeNull();
+  expect(connectionLabels.some((label): boolean => label.includes("Azure DevOps Services"))).toBeTrue();
+  expect(connectionLabels.some((label): boolean => label.includes("Azure Server"))).toBeFalse();
+  expect(view.queryByText(/No supported connections/)).toBeNull();
 });
 
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
@@ -286,5 +302,50 @@ test("cancelling after a failed manual upload removes the staged module", async 
   fireEvent.click(view.getByRole("button", { name: "Cancel" }));
   await waitFor((): void => {
     expect(deleted).toBeTrue();
+  });
+});
+
+test("Azure publication exposes opt-in pinned submodules and sends the selected value", async () => {
+  let payload: JsonObject | undefined;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.endsWith("/oauth-clients"))
+      return json({ data: [{ id: "azure", attributes: { name: "Azure", "service-provider": "ado_services" } }] });
+    if (url === "/api/v2/oauth-clients/azure/oauth-tokens")
+      return json({ data: [{ id: "azure-token", attributes: {} }] });
+    if (url.includes("vcs-connections/oauth-token%3Aazure-token/repositories"))
+      return json({
+        data: [
+          {
+            attributes: {
+              identifier: "acme/project/_git/terraform-aws-network",
+              name: "terraform-aws-network",
+              owner: "acme",
+            },
+          },
+        ],
+      });
+    if (url.endsWith("/registry-modules/vcs") && init?.method === "POST") {
+      payload = JSON.parse(init.body as string) as JsonObject;
+      return json({ data: moduleResource("mod-azure", "network", "aws") }, 201);
+    }
+    const response = baseResponse(url);
+    if (response !== null) return response;
+    throw new Error(`Unexpected request ${url}`);
+  }) as unknown as typeof fetch;
+  const view = renderRegistry();
+  await openPublish(view);
+  fireEvent.change(await view.findByLabelText("VCS connection"), { target: { value: "oauth-token:azure-token" } });
+  const checkbox = await view.findByLabelText("Include Azure DevOps Git submodules");
+  expect(checkbox.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(checkbox);
+  const repository = await view.findByLabelText("Repository");
+  changeInput(repository, "acme/project/_git/terraform-aws-network");
+  changeInput(view.getByLabelText("Module name"), "network");
+  changeInput(view.getByLabelText("Provider"), "aws");
+  fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
+  await view.findByText("Module detail landing");
+  expect(payload).toMatchObject({
+    data: { attributes: { "vcs-repo": { "oauth-token-id": "azure-token", "ingress-submodules": true } } },
   });
 });

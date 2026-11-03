@@ -22,6 +22,16 @@ describe("openapi contract", () => {
     expect(typeof paths).toBe("object");
   });
 
+  it("documents Azure service-hook Basic authentication instead of bearer tokens", () => {
+    const operation = paths["/api/webhooks/azure-devops/{clientId}"]?.["post"] as Record<string, unknown>;
+    expect(operation["security"]).toEqual([{ azureDevOpsWebhookBasic: [] }]);
+    expect(operation["description"]).toContain("never the PAT");
+    expect(operation["requestBody"]).toEqual({
+      required: true,
+      content: { "application/json": { schema: { type: "object" } } },
+    });
+  });
+
   it("covers every registered route", () => {
     type Route = Readonly<{ method: string; path: string }>;
     // Static assets served from frontend/dist register one GET route per

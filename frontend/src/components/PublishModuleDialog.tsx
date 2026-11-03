@@ -1,3 +1,4 @@
+import { Checkbox } from "./ui/checkbox";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { FileArchive, GitBranch } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -72,8 +73,8 @@ function VcsSourceFields({
         </Select>
         {!loadingConnections && error === "" && connections.length === 0 && (
           <FieldDescription>
-            No supported GitHub connections are registered. Add a GitHub App installation or GitHub OAuth connection
-            before publishing a VCS module.
+            No supported connections are registered. Add a GitHub App installation, GitHub OAuth connection or Azure
+            DevOps Services PAT before publishing a VCS module.
           </FieldDescription>
         )}
       </Field>
@@ -138,6 +139,7 @@ export function PublishModuleDialog({
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("");
   const [sourceDirectory, setSourceDirectory] = useState("");
+  const [ingressSubmodules, setIngressSubmodules] = useState(false);
   const [tagPrefix, setTagPrefix] = useState("");
   const [branch, setBranch] = useState("main");
   const [version, setVersion] = useState("1.0.0");
@@ -230,6 +232,7 @@ export function PublishModuleDialog({
     setName("");
     setProvider("");
     setSourceDirectory("");
+    setIngressSubmodules(false);
     setTagPrefix("");
     setBranch("main");
     setVersion("1.0.0");
@@ -268,6 +271,7 @@ export function PublishModuleDialog({
     }
     const vcsRepo = {
       identifier: repository.trim(),
+      ...(selectedConnection.serviceProvider === "ado_services" ? { "ingress-submodules": ingressSubmodules } : {}),
       "display-identifier": repository.trim(),
       ...(selectedConnection.kind === "github-app"
         ? { "github-app-installation-id": selectedConnection.id }
@@ -496,6 +500,25 @@ export function PublishModuleDialog({
                 />
                 <FieldDescription>Leave empty when the module is at repository root.</FieldDescription>
               </Field>
+              {selectedConnection?.serviceProvider === "ado_services" && (
+                <Field>
+                  <label htmlFor="module-submodules" className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      id="module-submodules"
+                      checked={ingressSubmodules}
+                      disabled={publishing}
+                      onCheckedChange={(checked): void => {
+                        setIngressSubmodules(checked);
+                      }}
+                    />
+                    Include Azure DevOps Git submodules
+                  </label>
+                  <FieldDescription>
+                    Fetch pinned commits from the same Azure organization. Missing access or unsafe submodules fail
+                    publication.
+                  </FieldDescription>
+                </Field>
+              )}
               {workflow === "tag" ? (
                 <Field>
                   <FieldLabel htmlFor="module-tag-prefix">Tag prefix</FieldLabel>
