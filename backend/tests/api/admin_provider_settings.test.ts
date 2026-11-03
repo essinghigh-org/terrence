@@ -1,3 +1,4 @@
+import { AvatarService } from "../../src/lib/avatars";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -197,5 +198,57 @@ describe("TFE admin provider lifecycle", () => {
         ).status,
       ).toBe(404);
     }
+  });
+  it("serves only audience-appropriate presentation and never exposes internal links anonymously", async () => {
+    await request(
+      "customization-settings",
+      "PATCH",
+      payload("customization-settings", {
+        footer: "Public footer",
+        "internal-support-url": "https://internal.example.test",
+        "login-help": "Public help",
+      }),
+    );
+    await db
+      .update(adminSettings)
+      .set({ values: { active: null } })
+      .where(eq(adminSettings.id, "admin-banners"));
+    invalidateSettingsCache();
+    await request(
+      "banners",
+      "POST",
+      payload("admin-banners", {
+        title: "Internal announcement",
+        body: "Private text",
+        audience: "authenticated_only",
+      }),
+    );
+    const presentation = (auth?: string) =>
+      app.handle(
+        new Request("http://terrence.test/api/v2/site-presentation", {
+          headers: auth === undefined ? {} : { Authorization: `Bearer ${auth}` },
+        }),
+      );
+    const anonymous = await presentation();
+    expect(anonymous.status).toBe(200);
+    expect(anonymous.headers.get("Cache-Control")).toBe("no-store");
+    const anonymousAttrs = (await anonymous.json()).data.attributes;
+    expect(anonymousAttrs.footer).toBe("Public footer");
+    expect(anonymousAttrs["internal-support-url"]).toBeUndefined();
+    expect(anonymousAttrs.banner).toBeNull();
+    const authenticatedAttrs = (await (await presentation(ordinaryToken)).json()).data.attributes;
+    expect(authenticatedAttrs.banner.attributes.title).toBe("Internal announcement");
+    expect(authenticatedAttrs["internal-support-url"]).toBe("https://internal.example.test");
+  });
+  it("blocks proxied Gravatar requests when the source is disabled", async () => {
+    await request("customization-settings", "PATCH", payload("customization-settings", { "avatar-sources": [] }));
+    const path = AvatarService.resolveUrl(
+      "user-gravatar",
+      "https://www.gravatar.com/avatar/00000000000000000000000000000000",
+    );
+    expect(path).not.toBeNull();
+    const result = await app.handle(new Request(`http://terrence.test${path}`));
+    expect(result.status).toBe(404);
+    expect(result.headers.get("Cache-Control")).toBe("no-store");
   });
 });

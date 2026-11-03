@@ -1,3 +1,4 @@
+import { SitePresentationProvider } from "./components/SitePresentation";
 import { lazy, Suspense, useEffect, type ComponentType, type JSX, type ReactNode } from "react";
 import { UnsavedChangesProvider } from "./lib/use-unsaved-changes";
 import { isFunction } from "./lib/type-guards";
@@ -97,6 +98,7 @@ const AdminGitHubApp = lazyView(() => import("./views/AdminGitHubApp"), "AdminGi
 const AdminLoggingSettings = lazyView(() => import("./views/AdminLoggingSettings"), "AdminLoggingSettings");
 const AdminMaintenanceWindows = lazyView(() => import("./views/AdminMaintenanceWindows"), "AdminMaintenanceWindows");
 const AdminApprovalWebhook = lazyView(() => import("./views/AdminApprovalWebhook"), "AdminApprovalWebhook");
+const AdminAppearance = lazyView(() => import("./views/AdminAppearance"), "AdminAppearance");
 const AdminPlanExplainer = lazyView(() => import("./views/AdminPlanExplainer"), "AdminPlanExplainer");
 const AdminDatabaseMigration = lazyView(() => import("./views/AdminDatabaseMigration"), "AdminDatabaseMigration");
 const Docs = lazyView(() => import("./views/Docs"), "Docs");
@@ -254,6 +256,7 @@ function AppRoutes(): JSX.Element {
         <Route path="admin/maintenance" element={<AdminMaintenanceWindows />} />
         <Route path="admin/approval-webhook" element={<AdminApprovalWebhook />} />
         <Route path="admin/plan-explainer" element={<AdminPlanExplainer />} />
+        <Route path="admin/appearance" element={<AdminAppearance />} />
         <Route path="admin/smtp" element={<AdminSmtpSettings />} />
         <Route path="admin/operations" element={<AdminOperationsCenter />} />
         <Route path="admin/database" element={<AdminDatabaseMigration />} />
@@ -381,17 +384,19 @@ function App(): JSX.Element {
   useDisplayTimezone();
 
   return (
-    <ErrorBoundary>
-      <RunSandboxGate>
-        <UnsavedChangesProvider>
-          <AuthSessionManager />
-          <Suspense fallback={<RouteFallback />}>
-            <AppRoutes />
-            <Toaster />
-          </Suspense>
-        </UnsavedChangesProvider>
-      </RunSandboxGate>
-    </ErrorBoundary>
+    <SitePresentationProvider>
+      <ErrorBoundary>
+        <RunSandboxGate>
+          <UnsavedChangesProvider>
+            <AuthSessionManager />
+            <Suspense fallback={<RouteFallback />}>
+              <AppRoutes />
+              <Toaster />
+            </Suspense>
+          </UnsavedChangesProvider>
+        </RunSandboxGate>
+      </ErrorBoundary>
+    </SitePresentationProvider>
   );
 }
 

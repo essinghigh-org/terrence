@@ -1,3 +1,4 @@
+import { workspacePolicyExecutionError } from "./workspace-policy-gate";
 import { resolveWorkspacePolicySetIds } from "./policy-set-scope";
 import { runConfigurationTrusted } from "./run-trust";
 import { integerSetting } from "./runtime-config";
@@ -819,6 +820,25 @@ async function validateCandidateRun(
       .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
     notifyRunStatus(run.id, "errored");
     return null;
+  }
+  if (candidate.phase === "apply") {
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    const policyError =
+      workspace === undefined
+        ? "Apply blocked: workspace no longer exists"
+        : await workspacePolicyExecutionError(db, workspace);
+    if (policyError !== null) {
+      await db
+        .update(agentJobs)
+        .set({ status: "errored", completedAt: Date.now(), errorMessage: policyError })
+        .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+      await db
+        .update(runs)
+        .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
+        .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+      notifyRunStatus(run.id, "errored");
+      return null;
+    }
   }
   return { run, expectedRunStatus, nextRunStatus };
 }

@@ -1,3 +1,5 @@
+import { getSettings } from "../lib/settings";
+import { gravatarEnabled } from "../lib/site-presentation";
 import { notFound, type JsonApiErrorBody } from "../lib/utils";
 import { AVATAR_CLIENT_CACHE, PROVIDER_ICON_REVALIDATE_MS, AvatarService, type AvatarMeta } from "../lib/avatars";
 
@@ -123,6 +125,11 @@ export const avatarHandler = async ({
   const s = set;
   const resolved = await resolveAvatarMeta(key, s);
   if ("response" in resolved) return resolved.response;
+  if (resolved.meta.providerId === "user-gravatar" && !gravatarEnabled(await getSettings("customization"))) {
+    s.status = 404;
+    s.headers["Cache-Control"] = "no-store";
+    return notFound();
+  }
   const refreshed = await refreshAvatarMeta(key, resolved.meta, s);
   if ("response" in refreshed) return refreshed.response;
   return serveAvatar(key, refreshed.current, request, s);

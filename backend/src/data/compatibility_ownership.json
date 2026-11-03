@@ -237,6 +237,10 @@
     "registry-artifact-tags": [
       "core",
       "provider"
+    ],
+    "site-presentation": [
+      "core",
+      "internal"
     ]
   }
 }

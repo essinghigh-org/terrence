@@ -1,3 +1,4 @@
+import { workspacePolicyExecutionError } from "./lib/workspace-policy-gate";
 import { resolveWorkspacePolicySetIds } from "./lib/policy-set-scope";
 import { runConfigurationTrusted } from "./lib/run-trust";
 import { readConfinedSavedPlan, writeConfinedSavedPlan } from "./lib/saved-plan-files";
@@ -4609,6 +4610,16 @@ async function executeApplyImpl(runId: string): Promise<void> {
   const scope = await loadApplyExecutionScope(runId);
   if (scope === null) return;
   const { run, workspace, org } = scope;
+
+  // A policy attached after a successful plan must not be bypassed by apply.
+  const policyError = await workspacePolicyExecutionError(db, workspace);
+  if (policyError !== null) {
+    await updateRunStatus(runId, "errored");
+    await writeLog(runId, "apply", `[terrence ERROR] ${policyError}`);
+    queueRunNotification(runId, "run:errored", "errored");
+    void reportRunVcsStatus(runId, "errored");
+    return;
+  }
 
   // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
   if (!(await enforceApplyExecutorPolicy(workspace, org, run, runId))) return;

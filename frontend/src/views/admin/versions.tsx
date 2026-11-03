@@ -1,3 +1,4 @@
+import { TfpolicyVersionsAdmin } from "./tfpolicy-versions";
 import { Plus, Trash2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -30,6 +31,7 @@ export function VersionsAdmin(
   } = props;
   return (
     <div className="space-y-6">
+      <TfpolicyVersionsAdmin />
       <Card>
         <CardHeader variant="section">
           <CardTitle className="text-lg">Register a Terraform version</CardTitle>

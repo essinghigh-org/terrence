@@ -69,6 +69,14 @@ Providers follow the same registry model. Publish provider versions with metadat
 
 Provider versions are verified with the organization's GPG keys when configured.
 
+## Artifact tags
+
+Module and provider detail pages include an **Artifact tags** card for key/value metadata. These tags describe the artifact, not a particular version, and are separate from Git tags used to publish module releases.
+
+Users who can read the artifact can see its tags. Module managers (`manage-modules`) and provider managers (`manage-providers`) can select **Edit tags** to add, change, or remove tags. Keys must be unique and nonempty; values are optional. **Save tags** replaces the artifact's tag set, including clearing all tags when every row is removed. **Cancel** discards unsaved edits. Publication settings and versions are unaffected.
+
+The same bindings are available through `tfe_registry_artifact_tag` and `tfe_registry_artifact_tags`. If Terraform manages the tags, reconcile UI edits with that configuration to avoid the next apply reverting them. Registry component tag bindings remain API/provider-managed because components do not currently have a detail page in the registry UI.
+
 ## Resolution in runs
 
 During a run, Terraform resolves registry references against the instance hostname. The run token authenticates the resolution. Private modules and providers are available only to runs and users with access.

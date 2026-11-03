@@ -1,24 +1,24 @@
 {
-  "_comment": "Authoritative hashicorp/tfe v0.83.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "_comment": "Authoritative hashicorp/tfe v0.83.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (declared in the main/admin or stack-policy provider fixtures; does not imply full lifecycle, UI, or policy-engine runtime support), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
   "provider": "hashicorp/tfe v0.83.0",
   "resource_count": 81,
   "data_source_count": 46,
-  "resources_covered": 73,
-  "data_sources_covered": 43,
+  "resources_covered": 81,
+  "data_sources_covered": 46,
   "resources": [
     {
       "name": "tfe_admin_banner",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "d938de65541b02be395b836d21925a7415b53b953581553d5c53d1b87a42dda6"
     },
     {
       "name": "tfe_admin_customization_settings",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "54a8202b18cae4268dc92e84a42d6275a9560c1df613b9937fba0acb55782b40"
     },
     {
       "name": "tfe_admin_general_settings",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "9eaa4eb70ffc563995cfa37e340902aadd90f702485859cbe7a8ad14e7661a1e"
     },
     {
@@ -203,7 +203,7 @@
     },
     {
       "name": "tfe_registry_artifact_tag",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "c7411ed2474a5bee84e09e750eb81b51909996af3292a0d463158cc672f6c535"
     },
     {
@@ -228,7 +228,7 @@
     },
     {
       "name": "tfe_saml_idp_certificate",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "90cc216674cf28658b5cbdaf239e2eb71b6de896c9d81b8b307d18a424d00823"
     },
     {
@@ -273,12 +273,12 @@
     },
     {
       "name": "tfe_stack_policy_set",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "293ed80037e524fc4e26488a5274d1144004026283973122ceb0b10dda3c10a1"
     },
     {
       "name": "tfe_stack_policy_set_exclusion",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "bcabb3b9c465b23cd5baaba70f8ced7c312b9625b8952fcdbdb151030050464f"
     },
     {
@@ -353,7 +353,7 @@
     },
     {
       "name": "tfe_tfpolicy_version",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "2f8dbfe91c04e5e2d3080a2a782f245ae68ead09a0a97bf2574399cf677c641c"
     },
     {
@@ -530,7 +530,7 @@
     },
     {
       "name": "tfe_registry_artifact_tags",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "12ca624d66114e639397a9badab96d60e6a77150c4688988bc469616890652dd"
     },
     {
@@ -560,12 +560,12 @@
     },
     {
       "name": "tfe_saml_idp_certificate",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "138eae9ced2d3737ab8cad6f36dfc26319cc66a09ea73f33c60381482d2eeb43"
     },
     {
       "name": "tfe_saml_idp_certificates",
-      "status": "backend-gap",
+      "status": "covered",
       "schema_hash": "1dd67ce10bece750ccfce8b11072b1e576db9bd664ef5ec9673557dae566c415"
     },
     {

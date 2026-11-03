@@ -33,8 +33,10 @@
 - Plan review and controlled applies
 - State storage and version history
 - Workspace variables and variable sets
-- Sentinel and OPA policy checks
+- Sentinel and OPA policy checks ([tfpolicy runtime status](backend/docs/tfpolicy-runtime.md))
 - VCS integration (GitHub, GitLab, Bitbucket)
+  - Azure DevOps OAuth clients (`ado_services` / `ado_server`) can be stored through the TFE-compatible API, including `ado-org-name`. This is API compatibility only: Azure DevOps authorization, repository fetching, service hooks, and commit/run status reporting are not implemented. Stored credentials do not make these connections operational; the UI explicitly labels them unavailable.
+  - A complete Azure DevOps Services driver still needs organization-scoped PAT authentication (as supported by the upstream `ado_org_name` contract), repository access, authenticated push/pull-request delivery, and tested plan/status reporting. See [HashiCorp’s PAT integration requirements](https://developer.hashicorp.com/terraform/cloud-docs/vcs/azure-devops-services-pat). [Microsoft recommends Entra ID authentication](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/entra); legacy Azure DevOps OAuth no longer accepts new registrations and is scheduled for removal in 2026.
 - SSO support (SAML, OIDC, LDAP)
 - Private module registry
 - Run tasks and notifications

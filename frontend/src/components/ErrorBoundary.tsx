@@ -1,3 +1,4 @@
+import { SiteHelp } from "./SitePresentation";
 import { Terrence } from "./brand/Terrence";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
@@ -32,6 +33,7 @@ export class ErrorBoundary extends Component<Readonly<{ children: ReactNode }>, 
               Reload the page to try again. Any unsaved changes on this page may be lost.
             </p>
           </div>
+          <SiteHelp mode="error" />
           <Button
             onClick={(): void => {
               window.location.reload();

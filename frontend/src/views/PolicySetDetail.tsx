@@ -55,6 +55,8 @@ type PolicySet = {
     name: string;
     description?: string | null;
     kind?: string;
+    "policy-tool-version"?: string | null;
+    "tag-selector-matching-logic"?: "any" | "all" | null;
     global?: boolean;
     overridable?: boolean;
     "policy-update-patterns"?: string[];
@@ -119,8 +121,31 @@ async function fetchPolicySetBundle(
   };
 }
 
+function hasSupportedPolicyEditor(kind: string): kind is "opa" | "sentinel" {
+  return kind === "opa" || kind === "sentinel";
+}
+
+function PolicyEngineNotice({ policySet }: Readonly<{ policySet: PolicySet }>): React.JSX.Element | null {
+  const kind = policySet.attributes.kind ?? "sentinel";
+  if (hasSupportedPolicyEditor(kind)) return null;
+  return (
+    <div role="alert" className="rounded-md border border-destructive p-4 text-sm">
+      <p className="font-medium">
+        {kind === "tfpolicy" ? "Terraform policy execution is not supported" : "Unsupported policy engine"}
+      </p>
+      <p>
+        This policy set's configuration is stored for API compatibility. Terrence cannot evaluate these policies;
+        affected runs are blocked rather than treated as passing. The Sentinel and OPA policy editors do not apply.
+      </p>
+      <p>Configured version: {policySet.attributes["policy-tool-version"] ?? "Not specified"}</p>
+    </div>
+  );
+}
+
 function policySetDerived(policySet: PolicySet): Readonly<{
-  policyKind: "opa" | "sentinel";
+  policyKind: string;
+  matchingLogic: "any" | "all" | null;
+  enforcementOptions: readonly { readonly value: string; readonly label: string }[];
   isVcsBacked: boolean;
   isGlobal: boolean;
   attachedWorkspaceIds: string[];
@@ -133,7 +158,9 @@ function policySetDerived(policySet: PolicySet): Readonly<{
   const attrs = policySet.attributes;
   const relationship = policySet.relationships ?? {};
   return {
-    policyKind: attrs.kind === "opa" ? "opa" : "sentinel",
+    policyKind: attrs.kind ?? "sentinel",
+    matchingLogic: attrs["tag-selector-matching-logic"] === undefined ? "any" : attrs["tag-selector-matching-logic"],
+    enforcementOptions: attrs.kind === "opa" ? OPA_ENFORCEMENTS : SENTINEL_ENFORCEMENTS,
     isVcsBacked: attrs["vcs-repo"] !== null && attrs["vcs-repo"] !== undefined,
     isGlobal: attrs.global === true,
     attachedWorkspaceIds: (relationship.workspaces?.data ?? []).map((r): string => r.id),
@@ -328,6 +355,8 @@ function OverviewTab({
 
 function TagsTab({
   tagSelectors,
+  matchingLogic,
+  onMatchingLogicChange,
   isVcsBacked,
   canManage,
   savingSelector,
@@ -342,6 +371,8 @@ function TagsTab({
   onRemoveSelector,
 }: Readonly<{
   tagSelectors: readonly TagSelector[];
+  matchingLogic: "any" | "all" | null;
+  onMatchingLogicChange: (value: "any" | "all" | null) => void;
   isVcsBacked: boolean;
   canManage: boolean;
   savingSelector: boolean;
@@ -361,11 +392,41 @@ function TagsTab({
         <CardHeader>
           <CardTitle>Tag selectors</CardTitle>
           <CardDescription>
-            Apply this policy set to workspaces and projects that match these tags. Include rules match all specified
-            tags; exclude rules remove matching resources regardless of include rules.
+            Match workspace tags, including inherited project tags. The matching mode applies separately to include and
+            exclude selectors. Matching excludes take precedence over global, direct, and tag-based inclusion.
           </CardDescription>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="tag-matching-logic" className="text-sm font-medium">
+              Tag matching mode
+            </label>
+            <Select
+              id="tag-matching-logic"
+              value={matchingLogic ?? "disabled"}
+              disabled={!canManage || savingSelector}
+              onValueChange={(value): void => {
+                if (value === "any" || value === "all" || value === "disabled")
+                  onMatchingLogicChange(value === "disabled" ? null : value);
+              }}
+            >
+              <SelectItem value="any">Match any selector</SelectItem>
+              <SelectItem value="all">Match all selectors</SelectItem>
+              <SelectItem value="disabled">Disable tag-based scoping</SelectItem>
+            </Select>
+            <p className="text-sm text-muted-foreground">
+              {matchingLogic === null
+                ? "Tag selectors are ignored. Global scope and direct attachments still apply."
+                : matchingLogic === "all"
+                  ? "All include selectors must match to include a workspace; all exclude selectors must match to exclude it."
+                  : "Any include selector can include a workspace; any exclude selector can exclude it."}
+            </p>
+            {selectorError !== "" && (
+              <p role="alert" className="text-sm text-destructive">
+                {selectorError}
+              </p>
+            )}
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -394,7 +455,9 @@ function TagsTab({
                       key={`${selector["tag-key"]}-${selector["tag-value"] ?? "*"}-${selector["is-exclude"]}-${index}`}
                     >
                       <TableCell className="font-medium">{selector["tag-key"]}</TableCell>
-                      <TableCell className="text-muted-foreground">{selector["tag-value"] ?? <em>any</em>}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {selector["tag-value"] ?? <em>key-only</em>}
+                      </TableCell>
                       <TableCell>
                         <Badge variant={selector["is-exclude"] ? "destructive" : "secondary"}>
                           {selector["is-exclude"] ? "Exclude" : "Include"}
@@ -472,7 +535,9 @@ function TagsTab({
                     }}
                     placeholder="production"
                   />
-                  <p className="text-xs text-muted-foreground">Leave empty to match any value for the key.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to match only a key-only tag, not arbitrary values.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <span className="text-sm font-medium">Behavior</span>
@@ -487,11 +552,7 @@ function TagsTab({
                   </label>
                 </div>
               </div>
-              {selectorError !== "" && (
-                <div role="alert" className="text-sm text-destructive">
-                  {selectorError}
-                </div>
-              )}
+
               <div className="flex justify-end">
                 <Button type="submit" disabled={savingSelector || selectorKey.trim() === ""}>
                   {savingSelector && <Spinner data-icon="inline-start" className="size-4" />}
@@ -517,13 +578,14 @@ function PoliciesTab({
   onDeleteRequest,
 }: Readonly<{
   policies: readonly Policy[];
-  policyKind: "opa" | "sentinel";
+  policyKind: string;
   isVcsBacked: boolean;
   canManage: boolean;
   onAddPolicy: () => void;
   onEditPolicy: (policy: Policy) => void;
   onDeleteRequest: (policy: Policy) => void;
-}>): React.JSX.Element {
+}>): React.JSX.Element | null {
+  if (!hasSupportedPolicyEditor(policyKind)) return null;
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -1502,7 +1564,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
 
   const derived = policySetDerived(policySet);
   const policyKind = derived.policyKind;
-  const enforcementOptions = policyKind === "opa" ? OPA_ENFORCEMENTS : SENTINEL_ENFORCEMENTS;
+  const hasPolicyEditor = hasSupportedPolicyEditor(policyKind);
+  const enforcementOptions = derived.enforcementOptions;
   const attachedWorkspaceIds = derived.attachedWorkspaceIds;
   const attachedProjectIds = derived.attachedProjectIds;
   const attachedExclusionIds = derived.attachedExclusionIds;
@@ -1585,15 +1648,15 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   const addTagSelector = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
     if (!canManage) return;
-    const key = selectorKey.trim().toLowerCase();
+    const key = selectorKey.trim();
     if (key === "") {
       setSelectorError("Tag key is required.");
       return;
     }
     const duplicate = tagSelectors.some(
       (selector): boolean =>
-        selector["tag-key"].toLowerCase() === key &&
-        (selector["tag-value"] ?? "") === (selectorValue.trim() === "" ? null : selectorValue.trim()) &&
+        selector["tag-key"] === key &&
+        selector["tag-value"] === (selectorValue.trim() === "" ? null : selectorValue.trim()) &&
         selector["is-exclude"] === selectorExclude,
     );
     if (duplicate) {
@@ -1664,6 +1727,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     <PageShell variant="standard">
       <PolicySetHeader policySet={policySet} orgPath={orgPath} isGlobal={isGlobal} isVcsBacked={isVcsBacked} />
 
+      <PolicyEngineNotice policySet={policySet} />
+
       <PolicySetTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} />
 
       {error !== "" && (
@@ -1713,6 +1778,10 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
       {activeTab === "tags" && (
         <TagsTab
           tagSelectors={tagSelectors}
+          matchingLogic={derived.matchingLogic}
+          onMatchingLogicChange={(value): void => {
+            void updateMatchingLogic(value);
+          }}
           isVcsBacked={isVcsBacked}
           canManage={canManage}
           savingSelector={savingSelector}
@@ -1776,28 +1845,30 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
         />
       )}
 
-      <PolicyDialog
-        open={policyDialogOpen}
-        onClose={(): void => {
-          setPolicyDialogOpen(false);
-        }}
-        savingPolicy={savingPolicy}
-        editingNull={editingPolicy === null}
-        policyKind={policyKind}
-        enforcementOptions={enforcementOptions}
-        policyName={policyName}
-        onPolicyNameInput={setPolicyName}
-        policyDescription={policyDescription}
-        onPolicyDescriptionInput={setPolicyDescription}
-        policyEnforcement={policyEnforcement}
-        onPolicyEnforcementChange={setPolicyEnforcement}
-        policySource={policySource}
-        onPolicySourceInput={setPolicySource}
-        policyQuery={policyQuery}
-        onPolicyQueryInput={setPolicyQuery}
-        policyFormError={policyFormError}
-        onSubmit={submitPolicy}
-      />
+      {hasPolicyEditor && (
+        <PolicyDialog
+          open={policyDialogOpen}
+          onClose={(): void => {
+            setPolicyDialogOpen(false);
+          }}
+          savingPolicy={savingPolicy}
+          editingNull={editingPolicy === null}
+          policyKind={policyKind}
+          enforcementOptions={enforcementOptions}
+          policyName={policyName}
+          onPolicyNameInput={setPolicyName}
+          policyDescription={policyDescription}
+          onPolicyDescriptionInput={setPolicyDescription}
+          policyEnforcement={policyEnforcement}
+          onPolicyEnforcementChange={setPolicyEnforcement}
+          policySource={policySource}
+          onPolicySourceInput={setPolicySource}
+          policyQuery={policyQuery}
+          onPolicyQueryInput={setPolicyQuery}
+          policyFormError={policyFormError}
+          onSubmit={submitPolicy}
+        />
+      )}
 
       <ParamDialog
         open={paramDialogOpen}
@@ -1850,6 +1921,24 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     </PageShell>
   );
 
+  async function updateMatchingLogic(value: "any" | "all" | null): Promise<void> {
+    if (!canManage) return;
+    setSavingSelector(true);
+    setSelectorError("");
+    try {
+      await fetchApi(`/api/v2/policy-sets/${encodeURIComponent(setId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ data: { type: "policy-sets", attributes: { "tag-selector-matching-logic": value } } }),
+      });
+      if (requestedSet.current !== setId) return;
+      reload();
+    } catch (err: unknown) {
+      setSelectorError(err instanceof Error ? err.message : "Failed to update tag matching mode.");
+    } finally {
+      setSavingSelector(false);
+    }
+  }
+
   async function updateOverview(): Promise<void> {
     if (!canManage || policySet === null) return;
     setSavingOverview(true);
@@ -1885,6 +1974,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   }
 
   function openCreatePolicy(): void {
+    if (!hasPolicyEditor) return;
     setEditingPolicy(null);
     setPolicyName("");
     setPolicyDescription("");
@@ -1896,6 +1986,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   }
 
   function openEditPolicy(pol: Policy): void {
+    if (!hasPolicyEditor) return;
     setEditingPolicy(pol);
     setPolicyName(pol.attributes.name);
     setPolicyDescription(pol.attributes.description ?? "");
@@ -1911,6 +2002,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
   async function submitPolicy(e: React.SyntheticEvent): Promise<void> {
     e.preventDefault();
     if (!canManage) return;
+    if (!hasPolicyEditor) return;
     setSavingPolicy(true);
     setPolicyFormError("");
     try {

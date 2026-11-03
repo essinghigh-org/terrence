@@ -439,3 +439,43 @@ test("ignores integration responses after switching organizations", async () => 
   expect(view.getByText("Platform GitLab")).toBeTruthy();
   expect(view.queryByText("Acme GitHub")).toBeNull();
 });
+
+test.each(["ado_services", "ado_server", "azure_devops_server"])(
+  "%s does not present stored credentials as a working repository integration",
+  async (provider): Promise<void> => {
+    setAuthToken("spa-token");
+    // SAFETY: the mock mirrors the API response shapes consumed by the component.
+    globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url === "/api/v2/organizations/acme") return organization(true);
+      if (url === "/api/v2/organizations/acme/github-app/installations") return json({ data: [] });
+      if (url === "/api/v2/organizations/acme/oauth-clients") {
+        return json({
+          data: [
+            {
+              id: "oc-ado",
+              type: "oauth-clients",
+              attributes: { name: "Azure client", "service-provider": provider, "ado-org-name": "acme-ado" },
+            },
+          ],
+        });
+      }
+      if (url === "/api/v2/oauth-clients/oc-ado/oauth-tokens") {
+        return json({ data: [{ id: "ot-ado", attributes: { "service-provider-user": "test-user" } }] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }) as unknown as typeof fetch;
+    const view = render(
+      <MemoryRouter initialEntries={["/app/acme/settings/vcs"]}>
+        <Routes>
+          <Route path="/app/:orgName/settings/vcs" element={<VcsIntegrations />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await view.findByText("Repository integration unavailable")).toBeTruthy();
+    expect(view.getByText("Organization: acme-ado")).toBeTruthy();
+    expect(view.queryByText("Connected as test-user")).toBeNull();
+    expect(view.queryByRole("button", { name: /^Connect$/ })).toBeNull();
+    expect(view.getByRole("button", { name: /^Delete$/ })).toBeTruthy();
+  },
+);

@@ -1,3 +1,4 @@
+import { sitePresentationRoutes } from "./routes/site-presentation";
 import { requestHostAllowed } from "./lib/request-host";
 import { SettingsValidationError } from "./lib/settings-contract";
 import { databaseConstraint } from "./lib/database-errors";
@@ -1439,6 +1440,7 @@ export const app = new Elysia()
   .use(tokenTtlRoutes)
   .use(oidcConfigRoutes)
   .use(hyokRoutes)
+  .use(sitePresentationRoutes)
   .use(adminRoutes)
   .use(scimAdminRoutes)
   .use(adminRegistrySharingRoutes)

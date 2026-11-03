@@ -403,6 +403,10 @@ test("renders version-specific module documentation, usage, lifecycle, and keybo
     requests.push({ method, url });
     if (url === "/api/v2/organizations/acme/registry-modules/private/acme/network/aws")
       return json({ data: moduleResource(true) });
+    if (url.endsWith("/registry-modules/mod-network/tag-bindings"))
+      return json({
+        data: [{ id: "tagb-team", type: "tag-bindings", attributes: { key: "team", value: "platform" } }],
+      });
     if (url === "/api/v2/registry-modules/mod-network/versions")
       return json({
         data: [
@@ -426,6 +430,8 @@ test("renders version-specific module documentation, usage, lifecycle, and keybo
   expect(view.getByText(/localhost\/acme\/network\/aws/)).toBeTruthy();
   expect(view.getByText(/<TERRAFORM_API_TOKEN>/)).toBeTruthy();
   expect(view.getByRole("button", { name: "Settings" })).toBeTruthy();
+  await view.findByText("team: platform");
+  expect(view.getByRole("button", { name: "Edit tags" })).toBeTruthy();
 
   fireEvent.click(view.getByRole("tab", { name: /Inputs/ }));
   expect(view.getByText("Required")).toBeTruthy();
@@ -466,6 +472,10 @@ test("keeps module management hidden from a read-only detail viewer", async () =
     const url = urlOf(input);
     if (url.endsWith("/organizations/acme/registry-modules/private/acme/network/aws"))
       return json({ data: moduleResource(false) });
+    if (url.endsWith("/registry-modules/mod-network/tag-bindings"))
+      return json({
+        data: [{ id: "tagb-team", type: "tag-bindings", attributes: { key: "team", value: "platform" } }],
+      });
     if (url.endsWith("/registry-modules/mod-network/versions"))
       return json({ data: [versionResource("version-1", "1.0.0", "# Root docs")] });
     throw new Error(`Unexpected request: ${url}`);
@@ -478,6 +488,8 @@ test("keeps module management hidden from a read-only detail viewer", async () =
     </MemoryRouter>,
   );
   await view.findByRole("heading", { name: "Root docs" });
+  await view.findByText("team: platform");
+  expect(view.queryByRole("button", { name: "Edit tags" })).toBeNull();
   expect(view.queryByRole("button", { name: "Settings" })).toBeNull();
   expect(view.queryByRole("button", { name: "Add version" })).toBeNull();
   expect(view.queryByText("Manage version")).toBeNull();
