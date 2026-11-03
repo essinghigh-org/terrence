@@ -13,7 +13,7 @@ let page: BrowserPage;
 beforeAll(async (): Promise<void> => {
   server = await startStaticServer();
   page = await createBrowser();
-});
+}, 25_000);
 
 afterAll(async (): Promise<void> => {
   page?.close();

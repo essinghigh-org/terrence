@@ -126,3 +126,42 @@ test("application errors are preserved without retry", async () => {
   ).toBe(failure);
   expect(closed).toBe(false);
 });
+
+// A cold browser may legitimately take more than the previous two-second budget.
+test("cold browser startup is allowed to complete without restarting it", async () => {
+  let created = 0;
+  let closed = 0;
+  await startWebView(
+    () => {
+      created++;
+      return {
+        close(): void {
+          closed++;
+        },
+      };
+    },
+    () => Bun.sleep(2100),
+  );
+  expect(created).toBe(1);
+  expect(closed).toBe(0);
+});
+
+test("timeout identifies the startup stage that stalled", async () => {
+  const page = {
+    startupStage: "navigate about:blank",
+    close(): void {
+      /* No native resources in this test. */
+    },
+  };
+  const error: unknown = await startWebView(
+    () => page,
+    () =>
+      new Promise<void>(() => {
+        /* Deliberately stalled startup. */
+      }),
+    10,
+  ).catch((error: unknown) => error);
+  expect(error).toMatchObject({
+    message: "WebView startup handshake (navigate about:blank) timed out after 10ms",
+  });
+});

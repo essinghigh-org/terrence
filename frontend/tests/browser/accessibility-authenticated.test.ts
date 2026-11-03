@@ -17,7 +17,7 @@ describe("accessibility-authenticated", () => {
 
   beforeEach(async (): Promise<void> => {
     page = await createBrowser();
-  });
+  }, 25_000);
 
   afterAll(async (): Promise<void> => {
     await server?.close();

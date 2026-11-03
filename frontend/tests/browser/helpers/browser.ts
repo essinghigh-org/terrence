@@ -113,10 +113,15 @@ export class BrowserPage {
     });
   }
 
+  startupStage = "constructing browser";
+
   /** Verify the native transport before loading any application or test state. */
   async initialize(): Promise<void> {
+    this.startupStage = "navigate about:blank";
     await this.webview.navigate("about:blank");
+    this.startupStage = "enable Runtime capture";
     await this.enableRuntimeCapture();
+    this.startupStage = "evaluate handshake";
     const result = await this.webview.evaluate("1 + 1");
     if (result !== 2) throw new Error("WebView startup handshake returned an unexpected result");
   }

@@ -10,7 +10,7 @@ let page: BrowserPage;
 beforeAll(async () => {
   server = await startTestServer();
   page = await createBrowser();
-});
+}, 25_000);
 afterAll(async () => {
   page?.close();
   await server?.close();

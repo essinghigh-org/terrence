@@ -8,7 +8,7 @@ export class WebViewTimeoutError extends Error {
 
 export async function withWebViewDeadline<T>(
   operation: () => Promise<T>,
-  label: string,
+  label: string | (() => string),
   timeout: number,
   retire: () => void,
 ): Promise<T> {
@@ -20,7 +20,7 @@ export async function withWebViewDeadline<T>(
         timer = setTimeout(() => {
           // A timed-out WebView can retain a pending native operation. Never
           // reuse it, and attach the race handler before close rejects it.
-          reject(new WebViewTimeoutError(label, timeout));
+          reject(new WebViewTimeoutError(typeof label === "function" ? label() : label, timeout));
           retire();
         }, timeout);
       }),
@@ -30,18 +30,22 @@ export async function withWebViewDeadline<T>(
   }
 }
 
-/** Only retry the empty browser handshake, before any application is loaded. */
-export async function startWebView<T extends { close(): void }>(
+/**
+ * Only retry the empty browser handshake, before any application is loaded.
+ * Bun launches Chrome asynchronously: the first navigation includes cold process
+ * startup, not just navigation. Keep that budget separate from app assertions.
+ */
+export async function startWebView<T extends { close(): void; startupStage?: string }>(
   create: () => T,
   initialize: (page: T) => Promise<void>,
-  timeout = 2000,
+  timeout = 10_000,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     const page = create();
     try {
       await withWebViewDeadline(
         () => initialize(page),
-        "startup handshake",
+        () => `startup handshake${page.startupStage ? ` (${page.startupStage})` : ""}`,
         timeout,
         () => {
           page.close();
