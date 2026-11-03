@@ -126,7 +126,9 @@ export class BrowserPage {
       () => this.webview.evaluate(script),
       `evaluate at ${this.url}: ${script.trim().slice(0, 120)}`,
       10_000,
-      () => { this.close(); },
+      () => {
+        this.close();
+      },
     );
   }
 
@@ -207,7 +209,14 @@ export class BrowserPage {
   private async navigateSettled(url: string): Promise<void> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await withWebViewDeadline(() => this.webview.navigate(url), `navigate to ${url}`, 10_000, () => { this.close(); });
+        await withWebViewDeadline(
+          () => this.webview.navigate(url),
+          `navigate to ${url}`,
+          10_000,
+          () => {
+            this.close();
+          },
+        );
         return;
       } catch (error) {
         const code = (error as { code?: unknown }).code;
@@ -493,5 +502,8 @@ export class BrowserPage {
 }
 
 export async function createBrowser(options: BrowserOptions = {}): Promise<BrowserPage> {
-  return startWebView(() => new BrowserPage(options), (page) => page.initialize());
+  return startWebView(
+    () => new BrowserPage(options),
+    (page) => page.initialize(),
+  );
 }

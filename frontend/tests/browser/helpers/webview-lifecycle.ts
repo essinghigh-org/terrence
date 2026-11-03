@@ -39,7 +39,14 @@ export async function startWebView<T extends { close(): void }>(
   for (let attempt = 0; ; attempt++) {
     const page = create();
     try {
-      await withWebViewDeadline(() => initialize(page), "startup handshake", timeout, () => { page.close(); });
+      await withWebViewDeadline(
+        () => initialize(page),
+        "startup handshake",
+        timeout,
+        () => {
+          page.close();
+        },
+      );
       return page;
     } catch (error) {
       page.close();
