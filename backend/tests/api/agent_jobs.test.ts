@@ -849,7 +849,7 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
       },
     ]);
     await db.insert(policySets).values({ id: "excluded-set", orgId: "org", name: "excluded global policies", global: true, kind: "sentinel", agentEnabled: true });
-    await db.insert(policySetProjectExclusions).values({ id: "excluded-project", policySetId: "excluded-set", projectId: "project" });
+    await db.insert(policySetProjectExclusions).values([{ id: "excluded-project", policySetId: "excluded-set", projectId: "project" }, { id: "platform-exclusion", policySetId: "platform-set", projectId: "project" }]);
     await db.insert(policies).values({ id: "excluded-policy", policySetId: "excluded-set", name: "must not run", enforcementLevel: "hard-mandatory", source: "main = rule { false }" });
     await db.insert(policySetWorkspaces).values([
       {
@@ -980,7 +980,9 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
       completedRunStatus: completedRun?.status,
       statusKeys: Object.keys(completedRun?.statusTimestamps ?? {}),
       completedJobs: completedJobs.map(job => [job.phase, job.status]),
-      checks: checks.map(check => [check.policyId, check.status, check.result]),
+      checks: checks.filter(check => !check.result?.["policy-evaluation-checkpoint"]).map(check => { const { policyEvaluationId, ...result } = check.result ?? {}; return [check.policyId, check.status, result]; }),
+      checkpointStatus: checks.find(check => check.result?.["policy-evaluation-checkpoint"])?.status,
+      outcomesBound: checks.filter(check => check.policyId !== null).every(check => check.result?.policyEvaluationId === checks.find(row => row.result?.["policy-evaluation-checkpoint"])?.id),
       completedAgentStatus: completedAgent?.status,
     }));
     process.exit(0);
@@ -992,7 +994,7 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
     policySetIds: ["agent-set"],
     policyToolVersion: "0.40.0",
     policyIds: ["hard-policy", "soft-policy"],
-    policyLevels: ["mandatory", "mandatory"],
+    policyLevels: ["hard-mandatory", "soft-mandatory"],
     parameters: [
       {
         key: "environment",
@@ -1011,6 +1013,8 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
       ["soft-policy", "passed", { passed: true }],
     ],
     completedAgentStatus: "idle",
+    checkpointStatus: "passed",
+    outcomesBound: true,
   });
 }, 30_000);
 
@@ -1368,7 +1372,7 @@ test("agent completion blocks unsupported tfpolicy sets with no individual polic
     const run = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
     const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, "run") });
     const jobs = await db.query.agentJobs.findMany({ where: eq(agentJobs.runId, "run") });
-    console.log(JSON.stringify({ claim: claim.status, completion: completion.status, status: run.status, checks, phases: jobs.map(job => job.phase) }));
+    console.log(JSON.stringify({ claim: claim.status, completion: completion.status, status: run.status, checks: checks.filter(check => !check.result?.["policy-evaluation-checkpoint"]), phases: jobs.map(job => job.phase) }));
   `);
   expect(result["claim"]).toBe(200);
   expect(result["completion"]).toBe(200);
@@ -1376,3 +1380,216 @@ test("agent completion blocks unsupported tfpolicy sets with no individual polic
   expect(result["phases"]).toEqual(["plan"]);
   expect(result["checks"]).toMatchObject([{ policyId: null, policySetId: "tfpolicy-set", status: "unreachable" }]);
 });
+
+test("agent policy results fail closed while preserving advisory and authorized override semantics", async () => {
+  const cases = [
+    { name: "passed", level: "advisory", status: "passed", result: { passed: true }, expected: "apply_queued" },
+    {
+      name: "advisory-denial",
+      level: "advisory",
+      status: "failed",
+      result: { passed: false },
+      expected: "apply_queued",
+    },
+    {
+      name: "soft-denial",
+      level: "soft-mandatory",
+      status: "failed",
+      result: { passed: false },
+      expected: "policy_soft_failed",
+    },
+    { name: "hard-denial", level: "hard-mandatory", status: "failed", result: { passed: false }, expected: "errored" },
+    {
+      name: "explicit-hard-override",
+      level: "hard-mandatory",
+      overridable: true,
+      status: "failed",
+      result: { passed: false },
+      expected: "policy_soft_failed",
+    },
+    {
+      name: "engine-error",
+      level: "advisory",
+      status: "errored",
+      result: { error: "runtime failed" },
+      expected: "errored",
+    },
+    {
+      name: "contradictory-pass",
+      level: "advisory",
+      status: "passed",
+      result: { passed: true, error: "runtime failed" },
+      expected: "errored",
+    },
+    { name: "missing-denial", level: "advisory", status: "failed", result: {}, expected: "errored" },
+    {
+      name: "contradictory-decision",
+      level: "advisory",
+      status: "passed",
+      result: { passed: false },
+      expected: "errored",
+    },
+    {
+      name: "duplicate-result",
+      level: "advisory",
+      duplicate: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "omitted-result",
+      level: "advisory",
+      omit: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "changed-in-flight",
+      level: "advisory",
+      changed: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "opa-on-agent",
+      kind: "opa",
+      level: "advisory",
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "platform-sentinel-on-agent",
+      agentEnabled: false,
+      level: "advisory",
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "changed-before-apply-claim",
+      level: "advisory",
+      changedBeforeApply: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "malformed-duplicate",
+      level: "advisory",
+      malformedDuplicate: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "invalid-settings-before-dispatch",
+      level: "advisory",
+      invalidSettingsBeforeApply: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "errored",
+    },
+    {
+      name: "changed-after-admission",
+      level: "advisory",
+      changedAfterAdmission: true,
+      status: "passed",
+      result: { passed: true },
+      expected: "applying",
+    },
+  ];
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, workspaces, runs, agentPools, agentPoolTokens, agents, agentJobs, policies, policySets, policySetWorkspaces, policyChecks, adminSettings } = await import("./src/db/schema.ts");
+    const { hashAuthenticationToken } = await import("./src/lib/token-service.ts");
+    const cases = ${JSON.stringify(cases)};
+    const results = [];
+    for (const entry of cases) {
+      const id = entry.name;
+      await db.insert(organizations).values({ id, name: id });
+      await db.insert(agentPools).values({ id, orgId: id, name: id, organizationScoped: true });
+      await db.insert(agentPoolTokens).values({ id, agentPoolId: id, token: hashAuthenticationToken("agent-policy-fixture-" + id) });
+      await db.insert(agents).values({ id, agentPoolId: id, name: id, status: "idle" });
+      await db.insert(workspaces).values({ id, orgId: id, name: id, executionMode: "agent", agentPoolId: id });
+      await db.insert(policySets).values({ id, orgId: id, name: id, kind: entry.kind ?? "sentinel", agentEnabled: entry.agentEnabled !== false, overridable: entry.overridable === true });
+      await db.insert(policySetWorkspaces).values({ id, policySetId: id, workspaceId: id });
+      await db.insert(policies).values({ id, orgId: id, policySetId: id, name: id, kind: entry.kind ?? "sentinel", enforcementLevel: entry.level, source: "main = rule { true }" });
+      await db.insert(runs).values({ id, workspaceId: id, agentPoolId: id, autoApply: true, status: "plan_queued", createdAt: 1 });
+      await db.insert(agentJobs).values({ id, runId: id, agentPoolId: id, phase: "plan", status: "queued" });
+      const request = (path, body, fencingToken) => app.handle(new Request("http://terrence.test/api/v2/agents/" + id + path, {
+        method: "POST", headers: { Authorization: "Bearer agent-policy-fixture-" + id, "Content-Type": "application/vnd.api+json", ...(fencingToken === undefined ? {} : { "tfc-agent-fencing-token": String(fencingToken) }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }));
+      const claimedResponse = await request("/jobs/poll");
+      const claimBody = await claimedResponse.json();
+      const claim = claimBody.data;
+      if (!claim) throw new Error(entry.name + " claim failed: " + claimedResponse.status + " " + JSON.stringify(claimBody));
+      if (entry.changed) await db.update(policies).set({ source: "main = rule { false }" }).where(eq(policies.id, id));
+      const check = { "policy-id": id, status: entry.status, result: entry.result };
+      const checks = entry.omit ? [] : entry.malformedDuplicate ? [{ "policy-id": id, status: "skipped", result: {} }, check] : entry.duplicate ? [check, check] : [check];
+      const completion = await request("/jobs/" + id + "/complete", { data: { type: "agent-jobs", attributes: {
+        status: "completed", "resource-additions": 1, result: { "plan-handle": "saved-plan", "policy-checks": checks },
+      } } }, claim.attributes["fencing-token"]);
+      let applyClaimStatus;
+      let firstApplyClaimStatus;
+      if (entry.invalidSettingsBeforeApply) {
+        await db.insert(adminSettings).values({ id: "policy-enforcement", values: { revision: 0, opa: "invalid", sentinel: true } }).onConflictDoUpdate({ target: adminSettings.id, set: { values: { revision: 0, opa: "invalid", sentinel: true } } });
+        firstApplyClaimStatus = (await request("/jobs/poll")).status;
+        await db.delete(adminSettings).where(eq(adminSettings.id, "policy-enforcement"));
+        applyClaimStatus = (await request("/jobs/poll")).status;
+      }
+      if (entry.changedAfterAdmission) {
+        firstApplyClaimStatus = (await request("/jobs/poll")).status;
+        await db.update(policies).set({ source: "main = rule { false }" }).where(eq(policies.id, id));
+        applyClaimStatus = (await request("/jobs/poll")).status;
+      }
+      if (entry.changedBeforeApply) {
+        await db.update(policies).set({ source: "main = rule { false }" }).where(eq(policies.id, id));
+        applyClaimStatus = (await request("/jobs/poll")).status;
+      }
+      const run = await db.query.runs.findFirst({ where: eq(runs.id, id) });
+      const jobs = await db.query.agentJobs.findMany({ where: eq(agentJobs.runId, id) });
+      const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
+      results.push({ name: id, claim: claimedResponse.status, completion: completion.status, status: run.status, applyClaimStatus, firstApplyClaimStatus, locked: workspace.locked, lockOwnerId: workspace.lockOwnerId, activeApplyJobs: jobs.filter(job => job.phase === "apply" && ["queued", "claimed"].includes(job.status)).length });
+    }
+    console.log(JSON.stringify({ results }));
+  `);
+  const results = result["results"] as {
+    name: string;
+    claim: number;
+    completion: number;
+    status: string;
+    applyClaimStatus?: number;
+    firstApplyClaimStatus?: number;
+    locked: boolean;
+    lockOwnerId: string | null;
+    activeApplyJobs: number;
+  }[];
+  expect(results).toHaveLength(cases.length);
+  for (const [index, row] of results.entries()) {
+    expect(row.name).toBe(cases[index]!.name);
+    expect(row.claim).toBe(200);
+    expect(row.completion).toBe(200);
+    expect(row.status).toBe(cases[index]!.expected);
+    if (!["apply_queued", "applying"].includes(row.status)) expect(row.activeApplyJobs).toBe(0);
+    if (row.name === "changed-before-apply-claim") expect(row.applyClaimStatus).toBe(204);
+    if (row.name === "invalid-settings-before-dispatch") {
+      expect(row.firstApplyClaimStatus).toBe(204);
+      expect(row.applyClaimStatus).toBe(204);
+      expect(row.locked).toBe(false);
+    }
+    if (row.name === "changed-after-admission") {
+      expect(row.firstApplyClaimStatus).toBe(200);
+      expect(row.applyClaimStatus).toBe(200);
+      expect(row.locked).toBe(true);
+      expect(row.lockOwnerId).toBe(row.name);
+      expect(row.activeApplyJobs).toBe(1);
+    }
+  }
+}, 30_000);

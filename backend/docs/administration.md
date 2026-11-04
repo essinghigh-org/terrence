@@ -25,6 +25,7 @@ Site administrators are created by the bootstrap flow or by an existing administ
 | Versions | Installed binaries and versions |
 | Compatibility | Provider compatibility surface |
 | Audit | Audit log entries |
+| Policy enforcement | Audited site-wide OPA and Sentinel enforcement controls |
 | Auth | OIDC, SAML, LDAP configuration |
 | SMTP | Outbound email |
 | Appearance | Site announcements, help links, footer and avatar sources |
@@ -63,13 +64,61 @@ The audit section queries the audit log. See [Audit trail](audit-trail).
 
 ## Settings updates
 
-Site-admin settings are stored as one JSON object per settings group. Every
-read-modify-write update is serialized by group: SQLite uses an in-process
+Site-admin settings are stored as one JSON object per settings group. Ordinary
+read-modify-write updates are serialized by group: SQLite uses an in-process
 queue, and PostgreSQL also uses the shared lease-backed `locks` table so the
 same guarantee holds across backend replicas. Different keys in concurrent
 PATCH requests are merged from the latest committed group state. If concurrent
 requests change the same key, the last request to acquire the group lock wins.
 Cache invalidation occurs after the group write commits.
+
+## Policy enforcement
+
+Open **Site administration → Policy enforcement** to see and change OPA and
+Sentinel enforcement independently. Both engines enforce by default. These
+controls apply site-wide and are separate from policy enforcement levels:
+valid advisory denials remain non-blocking; an engine error is not an advisory
+denial. Disabling an engine is an intentional administrator bypass, not a
+successful evaluation or a conversion of policies to advisory mode.
+
+Every change requires a site administrator, a non-blank reason (up to 2,000
+characters), and the current `revision`. The change and its immutable audit
+record commit together. The audit records the administrator, reason, previous
+and new engine flags, and revisions. If the audit cannot be saved, the change
+is rolled back. Site auditors, organization owners, and other non-admin users
+cannot read or change this control.
+
+Unlike ordinary last-writer-wins settings, a stale or concurrent update returns
+`409 Conflict`. Reload, review the latest settings, and explicitly reapply the
+intended change. A fresh database read at each policy gate applies changes
+without restarting workers or waiting for a process-local settings cache.
+Changing enforcement after a plan has been evaluated requires a new plan before
+apply. Completed applies are not reversed. Invalid persisted control values
+fail closed.
+
+`GET /api/v2/admin/policy-enforcement` returns the `policy-enforcement` JSON:API
+resource, whose attributes are `revision`, `opa`, and `sentinel`. To update it,
+`PATCH` the same endpoint with the current revision, reason, and at least one
+engine boolean:
+
+```json
+{
+  "data": {
+    "type": "policy-enforcement",
+    "attributes": {
+      "revision": 0,
+      "reason": "Incident response: OPA maintenance, restore after verification",
+      "opa": false
+    }
+  }
+}
+```
+
+A successful response returns the next revision and both effective flags.
+Re-enable enforcement through the same audited workflow when maintenance ends.
+The existing `site.opa-enabled` and `site.sentinel-enabled` feature settings do
+not authorize this enforcement bypass. No `tfpolicy` switch or runtime is
+introduced by these controls; see [tfpolicy runtime status](tfpolicy-runtime).
 
 ## Logging and remote syslog
 
@@ -117,6 +166,7 @@ immediately).
 - `GET /api/v2/admin/runs`
 - `GET /api/v2/admin/provider-surface`
 - `GET/PATCH /api/v2/admin/logging-settings`
+- `GET/PATCH /api/v2/admin/policy-enforcement`
 
 ## Appearance and announcements
 

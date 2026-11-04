@@ -1,3 +1,10 @@
+import {
+  isPolicyEvaluationCheckpoint,
+  overridableWorkspacePolicyChecks,
+  workspacePolicyExecutionError,
+  policyFailureIsOverridable,
+} from "../lib/workspace-policy-gate";
+import { auditLogValues } from "../lib/audit-trail";
 import { parseAzureDevOpsRepository } from "../lib/azure-devops";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
@@ -15,6 +22,7 @@ import {
   policySetParameters,
   policies,
   policyChecks,
+  auditLogs,
   projects,
   runs,
   workspaces,
@@ -487,13 +495,35 @@ type PolicyRow = Readonly<{
 }>;
 
 function requestedPolicyEnforcementLevel(attributes: Record<string, unknown>): string | undefined {
-  if (typeof attributes["enforcement-level"] === "string") return attributes["enforcement-level"];
-  const { enforce_mode: enforceMode, enforce } = attributes;
-  if (typeof enforceMode === "string") return enforceMode;
-  if (!Array.isArray(enforce) || enforce.length === 0 || enforce[0] === null || typeof enforce[0] !== "object")
-    return undefined;
-  const { mode } = enforce[0] as Record<string, unknown>;
-  return typeof mode === "string" ? mode : undefined;
+  const levels: unknown[] = [];
+  for (const key of ["enforcement-level", "enforce_mode"]) {
+    if (attributes[key] !== undefined) levels.push(attributes[key]);
+  }
+  const enforce = attributes["enforce"];
+  if (enforce !== undefined) {
+    if (!Array.isArray(enforce) || enforce.length !== 1 || enforce[0] === null || typeof enforce[0] !== "object") {
+      return ""; // Invalid explicit input must not silently select a default.
+    }
+    levels.push((enforce[0] as Record<string, unknown>)["mode"]);
+  }
+  if (levels.length === 0) return undefined;
+  const level = levels[0];
+  if (typeof level !== "string" || levels.some((value): boolean => value !== level)) return "";
+  return level;
+}
+
+function policyQueryError(kind: string, attributes: Record<string, unknown>): string | null {
+  if (kind !== "opa" || attributes["query"] === undefined) return null;
+  const query = attributes["query"];
+  return typeof query === "string" && /^[a-zA-Z0-9_.]+$/.test(query.trim())
+    ? null
+    : "OPA query must be a nonempty policy data path";
+}
+
+function policyQueryValue(kind: string, attributes: Record<string, unknown>): string | null {
+  if (kind !== "opa") return null;
+  const query = attributes["query"];
+  return typeof query === "string" && query.trim() !== "" ? query.trim() : "data";
 }
 
 function policyEnforcementLevels(kind: string): readonly string[] {
@@ -821,6 +851,9 @@ function resolvePolicyPatchEnforcement(
   if (ps !== undefined && policyKind !== ps.kind) {
     return "A policy kind must match its policy set kind";
   }
+  const queryError = policyQueryError(policyKind, attributes);
+  if (queryError !== null) return queryError;
+  if (policyKind === "opa" && typeof updates.query === "string") updates.query = updates.query.trim();
   applyPolicyQueryDefaults(policyKind, attributes, pol.query, updates);
   if (requestedEnforcementLevel !== undefined) {
     const lev = requestedEnforcementLevel;
@@ -1006,12 +1039,9 @@ function resolvePolicyCreateScalars(
       : typeof attributes["source"] === "string"
         ? attributes["source"]
         : null;
-  const query =
-    kind === "opa"
-      ? typeof attributes["query"] === "string" && attributes["query"].trim() !== ""
-        ? attributes["query"].trim()
-        : "data"
-      : null;
+  const query = policyQueryValue(kind, attributes);
+  const queryError = policyQueryError(kind, attributes);
+  if (queryError !== null) return { error: queryError };
   const enforcementLevel =
     requestedPolicyEnforcementLevel(attributes) ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
   const allowedLevels = policyEnforcementLevels(kind);
@@ -1134,12 +1164,9 @@ function resolveSetPolicyCreateScalars(
       : typeof attributes["source"] === "string"
         ? attributes["source"]
         : null;
-  const query =
-    kind === "opa"
-      ? typeof attributes["query"] === "string" && attributes["query"].trim() !== ""
-        ? attributes["query"].trim()
-        : "data"
-      : null;
+  const query = policyQueryValue(kind, attributes);
+  const queryError = policyQueryError(kind, attributes);
+  if (queryError !== null) return { error: queryError };
   const enforcementLevel =
     requestedPolicyEnforcementLevel(attributes) ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
   const allowedLevels = policyEnforcementLevels(kind);
@@ -1316,7 +1343,7 @@ function policyListWhere(orgId: string, kind: string | null, searchName: string 
 }
 
 async function resolvePolicyCheckContext(
-  pc: Pick<typeof policyChecks.$inferSelect, "policyId" | "policySetId">,
+  pc: Pick<typeof policyChecks.$inferSelect, "policyId" | "policySetId" | "status">,
 ): Promise<Readonly<{ policy: typeof policies.$inferSelect | undefined; isOverridable: boolean }>> {
   const policy =
     pc.policyId === null ? undefined : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
@@ -1324,8 +1351,15 @@ async function resolvePolicyCheckContext(
   const pset =
     setId === null
       ? undefined
-      : await db.query.policySets.findFirst({ where: eq(policySets.id, setId), columns: { overridable: true } });
-  return { policy, isOverridable: pset?.overridable === true };
+      : await db.query.policySets.findFirst({
+          where: eq(policySets.id, setId),
+          columns: { kind: true, overridable: true },
+        });
+  return {
+    policy,
+    isOverridable:
+      policy !== undefined && ["failed", "soft_failed"].includes(pc.status) && policyFailureIsOverridable(policy, pset),
+  };
 }
 
 export const policyRoutes = new Elysia({ name: "policies" })
@@ -2779,7 +2813,9 @@ export const policyRoutes = new Elysia({ name: "policies" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const pcList = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
+      const pcList = (await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) })).filter(
+        (check) => !isPolicyEvaluationCheckpoint(check),
+      );
       const policyIds = [
         ...new Set(pcList.flatMap((check): string[] => (check.policyId === null ? [] : [check.policyId]))),
       ];
@@ -2799,9 +2835,9 @@ export const policyRoutes = new Elysia({ name: "policies" })
           ? []
           : await db.query.policySets.findMany({
               where: inArray(policySets.id, setIds),
-              columns: { id: true, overridable: true },
+              columns: { id: true, kind: true, overridable: true },
             });
-      const overridableBySet = new Map(setList.map((row): [string, boolean] => [row.id, row.overridable === true]));
+      const setsById = new Map(setList.map((row) => [row.id, row]));
       const canOverride = await checkWorkspacePermission(
         ws,
         user?.id,
@@ -2814,8 +2850,11 @@ export const policyRoutes = new Elysia({ name: "policies" })
           const policy = check.policyId === null ? undefined : policiesById.get(check.policyId);
           const setId = check.policySetId ?? policy?.policySetId ?? null;
           return policyCheckResource(check, policy, {
-            isOverridable: setId === null ? false : (overridableBySet.get(setId) ?? false),
-            canOverride,
+            isOverridable:
+              policy !== undefined &&
+              ["failed", "soft_failed"].includes(check.status) &&
+              policyFailureIsOverridable(policy, setsById.get(setId ?? "")),
+            canOverride: canOverride && ["failed", "soft_failed"].includes(check.status),
           });
         }),
       };
@@ -2826,7 +2865,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
       const checkId = params["check_id"] ?? "";
       const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
-      if (pc === undefined) {
+      if (pc === undefined || isPolicyEvaluationCheckpoint(pc)) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -2863,7 +2902,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       // evaluation outcome. Same read gate as the check itself.
       const checkId = params["check_id"] ?? "";
       const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
-      if (pc === undefined) {
+      if (pc === undefined || isPolicyEvaluationCheckpoint(pc)) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -2898,7 +2937,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
       const checkId = params["check_id"] ?? "";
       const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
-      if (pc === undefined) {
+      if (pc === undefined || isPolicyEvaluationCheckpoint(pc)) {
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
@@ -2915,20 +2954,75 @@ export const policyRoutes = new Elysia({ name: "policies" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const policySet =
-        pc.policySetId === null
-          ? undefined
-          : await db.query.policySets.findFirst({
-              where: eq(policySets.id, pc.policySetId),
-            });
-      if (policySet?.kind === "tfpolicy") {
+      const overridden = await db.transaction(async (transaction) => {
+        const database = transaction as unknown as typeof db;
+        const locked = await database
+          .update(runs)
+          .set({ status: "policy_soft_failed" })
+          .where(and(eq(runs.id, run.id), eq(runs.status, "policy_soft_failed")))
+          .returning();
+        if (locked.length === 0) return undefined;
+        const checks = await overridableWorkspacePolicyChecks(database, ws, run.id, checkId);
+        const check = checks[0];
+        if (check === undefined) return undefined;
+        const now = Date.now();
+        const result = {
+          ...check.result,
+          overrideEvaluationId: check.result?.["policyEvaluationId"],
+          overrideActorId: user?.id ?? null,
+          overriddenAt: now,
+        };
+        const changed = await database
+          .update(policyChecks)
+          .set({ status: "overridden", result })
+          .where(and(eq(policyChecks.id, checkId), eq(policyChecks.status, check.status)))
+          .returning();
+        if (changed.length !== 1) throw new Error("Policy check changed during override");
+        await database.insert(auditLogs).values(
+          auditLogValues({
+            orgId: ws.orgId,
+            userId: user?.id ?? null,
+            action: "override-policy",
+            resourceType: "policy-checks",
+            resourceId: checkId,
+            details: {
+              runId: run.id,
+              workspaceId: ws.id,
+              policyEvaluationId: check.result?.["policyEvaluationId"],
+              fromStatus: check.status,
+              toStatus: "overridden",
+              ...(tokenTeamId === null ? {} : { teamId: tokenTeamId }),
+            },
+            createdAt: now,
+          }) as typeof auditLogs.$inferInsert,
+        );
+        if ((await workspacePolicyExecutionError(database, ws, run.id)) === null) {
+          await database
+            .update(runs)
+            .set({ status: "planned" })
+            .where(and(eq(runs.id, run.id), eq(runs.status, "policy_soft_failed")));
+        }
+        return changed[0];
+      });
+      if (overridden === undefined) {
         (set as { status: number }).status = 409;
         return {
-          errors: [{ status: "409", title: "Conflict", detail: "Terraform policy checks cannot be overridden" }],
+          errors: [
+            {
+              status: "409",
+              title: "Conflict",
+              detail: "Only current, explicitly overridable policy denials can be overridden",
+            },
+          ],
         };
       }
-      await db.update(policyChecks).set({ status: "overridden" }).where(eq(policyChecks.id, checkId));
-      return { data: { id: pc.id, type: "policy-checks", attributes: { status: "overridden", result: pc.result } } };
+      return {
+        data: {
+          id: overridden.id,
+          type: "policy-checks",
+          attributes: { status: overridden.status, result: overridden.result },
+        },
+      };
     },
   )
   // --- Policy Set Parameters ---

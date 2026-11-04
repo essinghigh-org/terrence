@@ -493,7 +493,7 @@ describe("VCS-backed policy set synchronization", () => {
     expect(row).toMatchObject({
       name: "deny-public",
       description: "No public resources",
-      enforcementLevel: "hard-mandatory",
+      enforcementLevel: "mandatory",
       query: "data.terraform.deny_public.deny",
     });
     expect(row?.source).toContain("package terraform.deny_public");
@@ -505,6 +505,57 @@ describe("VCS-backed policy set synchronization", () => {
         })
       )?.status,
     ).toBe("ready");
+  });
+
+  test("rejects Sentinel-only OPA enforcement levels without replacing active policies", async () => {
+    const previousArchive = opaArchive;
+    const id = `polset-sync-invalid-opa-${suffix}`;
+    await db.insert(policySets).values({
+      id,
+      orgId,
+      name: id,
+      kind: "opa",
+      policiesPath: "/opa",
+      policyUpdatePatterns: ["opa/**"],
+      vcsRepo: { identifier: "platform/invalid-opa-policies", branch: "main", oauthTokenId: providers[1].tokenId },
+    });
+    const oldPolicyId = `pol-invalid-opa-old-${suffix}`;
+    await db.insert(policies).values({
+      id: oldPolicyId,
+      orgId,
+      policySetId: id,
+      name: "existing-policy",
+      kind: "opa",
+      enforcementLevel: "mandatory",
+      query: "data.deny",
+    });
+    try {
+      for (const [index, level] of ["soft-mandatory", "hard-mandatory"].entries()) {
+        opaArchive = await archiveWith(
+          {
+            "opa/policies.hcl": `policy "invalid" {\n query = "data.deny"\n enforcement_level = "${level}"\n }`,
+            "opa/deny.rego": "package test\ndeny := []\n",
+          },
+          `invalid-opa-${index}`,
+        );
+        await handleGitlabWebhook(
+          "Push Hook",
+          gitlabPayload("platform/invalid-opa-policies", String(index + 7).repeat(40), "opa/deny.rego"),
+        );
+        const versions = await db.query.policySetVersions.findMany({ where: eq(policySetVersions.policySetId, id) });
+        expect(versions).toHaveLength(index + 1);
+        expect(
+          versions.every(
+            (version) => version.status === "errored" && version.error?.includes("invalid enforcement level"),
+          ),
+        ).toBe(true);
+        expect(
+          (await db.query.policies.findMany({ where: eq(policies.policySetId, id) })).map((row) => row.id),
+        ).toEqual([oldPolicyId]);
+      }
+    } finally {
+      opaArchive = previousArchive;
+    }
   });
 
   test("records an errored version and leaves existing policies untouched for an unsafe archive", async () => {

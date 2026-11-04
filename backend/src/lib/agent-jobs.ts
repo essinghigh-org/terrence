@@ -1,5 +1,12 @@
-import { workspacePolicyExecutionError } from "./workspace-policy-gate";
-import { resolveWorkspacePolicySetIds } from "./policy-set-scope";
+import {
+  workspacePolicyExecutionError,
+  captureWorkspacePolicyEvaluation,
+  latestWorkspacePolicyEvaluation,
+  loadWorkspacePolicySnapshot,
+  completeWorkspacePolicyEvaluation,
+  policyFailureIsOverridable,
+  type WorkspacePolicySnapshot,
+} from "./workspace-policy-gate";
 import { runConfigurationTrusted } from "./run-trust";
 import { integerSetting } from "./runtime-config";
 import { newResourceId } from "./resource-id";
@@ -13,10 +20,7 @@ import {
   agents,
   configurationVersions,
   logs,
-  policies,
   policyChecks,
-  policySetParameters,
-  policySets,
   runs,
   stateVersions,
   workspaces,
@@ -228,39 +232,15 @@ function notifyRunStatus(runId: string, status: string): void {
 }
 
 async function getAgentPolicyEvaluation(
-  // Drizzle's transaction/query client is stateful by design.
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-  database: Database,
-  workspace: Workspace,
+  snapshot: DeepReadonly<WorkspacePolicySnapshot>,
 ): Promise<AgentPolicyEvaluation | null> {
-  const attachedIds = await resolveWorkspacePolicySetIds(database, workspace.id, workspace.orgId);
-  if (attachedIds.length === 0) return null;
-
-  const effectiveSets = await database.query.policySets.findMany({
-    where: and(
-      inArray(policySets.id, attachedIds),
-      eq(policySets.orgId, workspace.orgId),
-      or(and(eq(policySets.kind, "sentinel"), eq(policySets.agentEnabled, true)), eq(policySets.kind, "tfpolicy")),
-    ),
-    orderBy: [asc(policySets.createdAt), asc(policySets.id)],
-  });
-  const unsupportedSets = effectiveSets.filter((policySet): boolean => policySet.kind === "tfpolicy");
-  const effectiveIds = effectiveSets.map((policySet): string => policySet.id);
-  if (effectiveIds.length === 0) return null;
-
-  const [effectivePolicies, parameters] = await Promise.all([
-    database.query.policies.findMany({
-      where: inArray(policies.policySetId, effectiveIds),
-      orderBy: [asc(policies.createdAt), asc(policies.id)],
-    }),
-    database.query.policySetParameters.findMany({
-      where: inArray(policySetParameters.policySetId, effectiveIds),
-      orderBy: [asc(policySetParameters.key), asc(policySetParameters.id)],
-    }),
-  ]);
+  const effectiveSets = snapshot.sets;
+  const unsupportedSets = effectiveSets.filter((set) => set.kind !== "sentinel" || !set.agentEnabled);
+  const effectivePolicies = snapshot.policies;
+  const parameters = snapshot.parameters;
   const policySetsWithPolicies: AgentPolicyEvaluation["policySets"][number][] = [];
   for (const policySet of effectiveSets) {
-    if (policySet.kind === "tfpolicy") continue;
+    if (policySet.kind !== "sentinel" || !policySet.agentEnabled) continue;
     const setPolicies = effectivePolicies
       .filter((policy): boolean => policy.policySetId === policySet.id)
       .map(
@@ -268,7 +248,7 @@ async function getAgentPolicyEvaluation(
           id: policy.id,
           name: policy.name,
           description: policy.description,
-          enforcementLevel: policy.enforcementLevel === "advisory" ? "advisory" : "mandatory",
+          enforcementLevel: policy.enforcementLevel,
           query: policy.query,
           source: policy.source,
         }),
@@ -293,7 +273,7 @@ async function getAgentPolicyEvaluation(
       description: policySet.description,
       kind: policySet.kind,
       policyToolVersion: policySet.policyToolVersion ?? "latest",
-      overridable: policySet.overridable !== false,
+      overridable: policySet.overridable === true,
       policies: setPolicies,
       parameters: decryptedParameters,
     });
@@ -303,43 +283,87 @@ async function getAgentPolicyEvaluation(
     : { policySets: policySetsWithPolicies, unsupportedSets };
 }
 
+function validatedAgentPolicyResult(
+  rawCheck: Readonly<Record<string, unknown>>,
+): Readonly<{ status: string; result: Record<string, unknown> }> {
+  const status = rawCheck["status"];
+  const result = rawCheck["result"];
+  if (typeof result !== "object" || result === null || Array.isArray(result))
+    return { status: "errored", result: { error: "Malformed agent policy result" } };
+  const values = result as Record<string, unknown>;
+  if (status === "errored" || status === "unreachable") return { status, result: values };
+  if (
+    (status !== "passed" && status !== "failed") ||
+    values["passed"] !== (status === "passed") ||
+    values["error"] != null ||
+    values["errors"] != null ||
+    values["skipped"] === true
+  ) {
+    return {
+      status: "errored",
+      result: { ...values, error: "Agent policy decision is missing, malformed or contradicts its status" },
+    };
+  }
+  return { status, result: values };
+}
+
 function agentPolicyResults(
   result: Readonly<Record<string, unknown>>,
 ): ReadonlyMap<string, Readonly<{ status: string; result: Record<string, unknown> }>> {
   const rawChecks = result["policy-checks"];
   if (!Array.isArray(rawChecks)) return new Map();
   const reported = new Map<string, Readonly<{ status: string; result: Record<string, unknown> }>>();
-  const duplicates = new Set<string>();
+  const seen = new Set<string>();
   for (const rawCheck of rawChecks) {
     if (typeof rawCheck !== "object" || rawCheck === null || Array.isArray(rawCheck)) continue;
     const check = rawCheck as Record<string, unknown>;
     const policyId = check["policy-id"];
-    const status = check["status"];
-    if (
-      typeof policyId !== "string" ||
-      !["passed", "failed", "errored", "unreachable"].includes(typeof status === "string" ? status : "")
-    )
-      continue;
-    if (reported.has(policyId)) {
-      duplicates.add(policyId);
+    if (typeof policyId !== "string") continue;
+    // Poison duplicates before parsing: an invalid first report must not be
+    // replaced with a later apparently valid result for the same policy.
+    if (seen.has(policyId)) {
       reported.delete(policyId);
       continue;
     }
-    if (duplicates.has(policyId)) continue;
-    const checkResult = check["result"];
-    reported.set(policyId, {
-      status: status as string,
-      result:
-        typeof checkResult === "object" && checkResult !== null && !Array.isArray(checkResult)
-          ? (checkResult as Record<string, unknown>)
-          : {},
-    });
+    seen.add(policyId);
+    reported.set(policyId, validatedAgentPolicyResult(check));
   }
   return reported;
 }
 
-function storedAgentPolicyStatus(checkStatus: string, enforcementLevel: string, overridable: boolean): string {
-  return checkStatus === "failed" && enforcementLevel === "mandatory" && overridable ? "soft_failed" : checkStatus;
+function agentPolicyCheckVerdict(
+  policy: Readonly<{ enforcementLevel: string }>,
+  policySet: Readonly<{ kind: string; overridable: boolean }>,
+  status: string,
+): Readonly<{ hardFailed: boolean; softFailed: boolean; status: string }> {
+  if (status === "passed" || (status === "failed" && policy.enforcementLevel === "advisory"))
+    return { hardFailed: false, softFailed: false, status };
+  const softFailed = status === "failed" && policyFailureIsOverridable(policy, policySet);
+  return { hardFailed: !softFailed, softFailed, status: softFailed ? "soft_failed" : status };
+}
+
+async function recordUnsupportedAgentPolicies(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  runId: string,
+  evaluationId: string,
+  unsupportedSets: AgentPolicyEvaluation["unsupportedSets"],
+  now: number,
+): Promise<void> {
+  for (const policySet of unsupportedSets) {
+    await database.insert(policyChecks).values({
+      id: newResourceId("pchk"),
+      runId,
+      policySetId: policySet.id,
+      status: "unreachable",
+      result: {
+        error: `Policy set '${policySet.kind}' execution is not supported by this agent configuration; refusing to apply`,
+        policyEvaluationId: evaluationId,
+      },
+      createdAt: now,
+    });
+  }
 }
 
 async function recordAgentPolicyChecks(
@@ -351,22 +375,22 @@ async function recordAgentPolicyChecks(
   result: Readonly<Record<string, unknown>>,
   now: number,
 ): Promise<AgentPolicyOutcome> {
-  const evaluation = await getAgentPolicyEvaluation(database, workspace);
+  const checkpoint = await latestWorkspacePolicyEvaluation(database, runId);
+  const snapshot = await loadWorkspacePolicySnapshot(database, workspace);
+  if (checkpoint?.result?.["fingerprint"] !== snapshot.fingerprint) {
+    return { evaluated: true, hardFailed: true, softFailed: false };
+  }
+  const evaluation = await getAgentPolicyEvaluation(snapshot);
   if (evaluation === null) {
-    return { evaluated: false, hardFailed: false, softFailed: false };
+    const unchanged = await completeWorkspacePolicyEvaluation(database, workspace, {
+      id: checkpoint.id,
+      fingerprint: snapshot.fingerprint,
+    });
+    return { evaluated: true, hardFailed: !unchanged, softFailed: false };
   }
 
   if (evaluation.unsupportedSets.length > 0) {
-    for (const policySet of evaluation.unsupportedSets) {
-      await database.insert(policyChecks).values({
-        id: newResourceId("pchk"),
-        runId,
-        policySetId: policySet.id,
-        status: "unreachable",
-        result: { error: `Policy set kind '${policySet.kind}' execution is not supported; refusing to apply` },
-        createdAt: now,
-      });
-    }
+    await recordUnsupportedAgentPolicies(database, runId, checkpoint.id, evaluation.unsupportedSets, now);
     return { evaluated: true, hardFailed: true, softFailed: false };
   }
 
@@ -377,21 +401,30 @@ async function recordAgentPolicyChecks(
     for (const policy of policySet.policies) {
       const outcome = reported.get(policy.id);
       const checkStatus = outcome?.status ?? "errored";
-      const storedStatus = storedAgentPolicyStatus(checkStatus, policy.enforcementLevel, policySet.overridable);
+      const verdict = agentPolicyCheckVerdict(policy, policySet, checkStatus);
       await database.insert(policyChecks).values({
         id: newResourceId("pchk"),
         runId,
         policyId: policy.id,
         policySetId: policySet.id,
-        status: storedStatus,
-        result: outcome?.result ?? { error: "Agent did not return a policy outcome" },
+        status: verdict.status,
+        result: {
+          ...(outcome?.result ?? { error: "Agent did not return a policy outcome" }),
+          policyEvaluationId: checkpoint.id,
+        },
         createdAt: now,
       });
-      if (checkStatus === "passed" || policy.enforcementLevel === "advisory") continue;
-      if (checkStatus === "failed" && policySet.overridable) softFailed = true;
-      else hardFailed = true;
+      hardFailed = hardFailed || verdict.hardFailed;
+      softFailed = softFailed || verdict.softFailed;
     }
   }
+  if (
+    !(await completeWorkspacePolicyEvaluation(database, workspace, {
+      id: checkpoint.id,
+      fingerprint: snapshot.fingerprint,
+    }))
+  )
+    hardFailed = true;
   return { evaluated: true, hardFailed, softFailed };
 }
 
@@ -704,6 +737,107 @@ export async function authenticateAgent(agentId: string, authorization: string |
   return refreshedAgent ?? { ...agent, lastPingAt: now };
 }
 
+function agentApplyIsAssociated(
+  job: AgentJob,
+  run: Readonly<Pick<typeof runs.$inferSelect, "status" | "agentId">> | undefined,
+  workspace: Readonly<Pick<typeof workspaces.$inferSelect, "locked" | "lockOwnerType" | "lockOwnerId">> | undefined,
+): boolean {
+  return (
+    run?.status === "applying" &&
+    run.agentId === job.agentId &&
+    workspace?.locked === true &&
+    workspace.lockOwnerType === "agent-run" &&
+    workspace.lockOwnerId === job.runId
+  );
+}
+
+/** Admission is persisted before returning apply credentials/artifacts. A retry
+ * after admission must not revoke a potentially running remote apply or release
+ * its lock; changes are checked before the first handoff, never retroactively. */
+async function admitAgentApplyDelivery(job: AgentJob, workspace: Workspace): Promise<boolean> {
+  const accepted = await db.transaction(async (transaction) => {
+    const database = transaction as unknown as Database;
+    const rows = await database
+      .update(agentJobs)
+      .set({ status: "claimed" })
+      .where(
+        and(
+          eq(agentJobs.id, job.id),
+          eq(agentJobs.status, "claimed"),
+          eq(agentJobs.fencingToken, job.fencingToken),
+          job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId),
+        ),
+      )
+      .returning();
+    const owned = rows[0];
+    if (owned === undefined) return false;
+    if (owned.result?.["policyApplyAdmissionToken"] === job.fencingToken) return true;
+    const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+    const currentWorkspace = await database.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
+    const error = agentApplyIsAssociated(job, run, currentWorkspace)
+      ? await workspacePolicyExecutionError(database, workspace, job.runId)
+      : "Apply blocked: agent claim is not associated with an active run and its workspace lock";
+    if (error === null) {
+      await database
+        .update(agentJobs)
+        .set({ result: { ...owned.result, policyApplyAdmissionToken: job.fencingToken } })
+        .where(eq(agentJobs.id, job.id));
+      return true;
+    }
+    await database
+      .update(agentJobs)
+      .set({ status: "errored", errorMessage: error, completedAt: Date.now() })
+      .where(eq(agentJobs.id, job.id));
+    if (run !== undefined) {
+      await database
+        .update(runs)
+        .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
+        .where(and(eq(runs.id, run.id), inArray(runs.status, ["apply_queued", "applying"])));
+      await releaseApplyWorkspaceLock(database, owned, run);
+    }
+    if (job.agentId !== null) {
+      const remaining = await database.query.agentJobs.findFirst({
+        where: and(eq(agentJobs.agentId, job.agentId), eq(agentJobs.status, "claimed")),
+      });
+      if (remaining === undefined)
+        await database.update(agents).set({ status: "idle" }).where(eq(agents.id, job.agentId));
+    }
+    return false;
+  });
+  if (!accepted) notifyRunStatus(job.runId, "errored");
+  return accepted;
+}
+
+async function agentDispatchPolicyEvaluation(
+  job: AgentJob,
+  run: DeepReadonly<typeof runs.$inferSelect>,
+  workspace: Workspace,
+): Promise<Readonly<{ evaluation: AgentPolicyEvaluation | null }> | undefined> {
+  const dispatchKey = `${job.id}:${job.fencingToken}`;
+  const previous = await latestWorkspacePolicyEvaluation(db, run.id);
+  const evaluation =
+    previous?.result?.["dispatchKey"] === dispatchKey
+      ? { id: previous.id, snapshot: await loadWorkspacePolicySnapshot(db, workspace) }
+      : await captureWorkspacePolicyEvaluation(db, workspace, run.id, dispatchKey);
+  if (
+    previous?.result?.["dispatchKey"] === dispatchKey &&
+    previous.result["fingerprint"] !== evaluation.snapshot.fingerprint
+  ) {
+    await db
+      .update(agentJobs)
+      .set({
+        status: "errored",
+        completedAt: Date.now(),
+        errorMessage: "Policies changed after agent dispatch; create a new plan",
+      })
+      .where(and(eq(agentJobs.id, job.id), eq(agentJobs.fencingToken, job.fencingToken)));
+    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, run.id));
+    notifyRunStatus(run.id, "errored");
+    return undefined;
+  }
+  return { evaluation: await getAgentPolicyEvaluation(evaluation.snapshot) };
+}
+
 async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undefined> {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, job.runId) });
   if (run === undefined || !(await runConfigurationTrusted(run))) return undefined;
@@ -729,7 +863,11 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
       : Promise.resolve(undefined),
   ]);
   if (workspace === undefined) return undefined;
-  const policyEvaluation = job.phase === "plan" ? await getAgentPolicyEvaluation(db, workspace) : null;
+  if (job.phase === "apply" && !(await admitAgentApplyDelivery(job, workspace))) return undefined;
+  const dispatch =
+    job.phase === "plan" ? await agentDispatchPolicyEvaluation(job, run, workspace) : { evaluation: null };
+  if (dispatch === undefined) return undefined;
+  const policyEvaluation = dispatch.evaluation;
   return {
     job,
     run,
@@ -826,7 +964,7 @@ async function validateCandidateRun(
     const policyError =
       workspace === undefined
         ? "Apply blocked: workspace no longer exists"
-        : await workspacePolicyExecutionError(db, workspace);
+        : await workspacePolicyExecutionError(db, workspace, run.id);
     if (policyError !== null) {
       await db
         .update(agentJobs)

@@ -1,3 +1,8 @@
+import {
+  isPolicyEvaluationCheckpoint,
+  overridableWorkspacePolicyChecks,
+  workspacePolicyExecutionError,
+} from "../lib/workspace-policy-gate";
 import { log } from "../lib/log";
 import { normalizeRunVariables, type runVariablesForWrite } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
@@ -803,7 +808,7 @@ export async function linkageForRuns(
   const [checks, stages, evals, notificationConfigurationIdsByRun] = await Promise.all([
     db.query.policyChecks.findMany({
       where: inArray(policyChecks.runId, [...ids]),
-      columns: { id: true, runId: true },
+      columns: { id: true, runId: true, policyId: true, policySetId: true, result: true },
     }),
     db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]), columns: { id: true, runId: true } }),
     db.query.policyEvaluations.findMany({
@@ -828,7 +833,8 @@ export async function linkageForRuns(
       tfPolicyEvaluationIds: [],
       notificationConfigurationIds: notificationConfigurationIdsByRun.get(id) ?? [],
     });
-  for (const check of checks) linkage.get(check.runId)?.policyCheckIds.push(check.id);
+  for (const check of checks)
+    if (!isPolicyEvaluationCheckpoint(check)) linkage.get(check.runId)?.policyCheckIds.push(check.id);
   for (const stage of stages) linkage.get(stage.runId)?.taskStageIds.push(stage.id);
   for (const evalRecord of evals) {
     if (evalRecord.runId !== null) linkage.get(evalRecord.runId)?.tfPolicyEvaluationIds.push(evalRecord.id);
@@ -2360,6 +2366,14 @@ async function commitPolicyOverride(input: PolicyOverrideInput): Promise<(typeof
   // nothing left to override. Events publish only after commit.
   return db.transaction(async (tx: unknown) => {
     const t = tx as typeof db;
+    const locked = await t
+      .update(runs)
+      .set({ status: "policy_soft_failed" })
+      .where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed")))
+      .returning();
+    if (locked.length === 0) return [];
+    const checks = await overridableWorkspacePolicyChecks(t, workspace, runId);
+    if (checks.length === 0) return [];
     const rows = await t
       .update(runs)
       .set({ status: "planned" })
@@ -2367,10 +2381,19 @@ async function commitPolicyOverride(input: PolicyOverrideInput): Promise<(typeof
       .returning();
     if (rows.length === 0) return rows;
     await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
-    await t
-      .update(policyChecks)
-      .set({ status: "overridden" })
-      .where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
+    for (const check of checks)
+      await t
+        .update(policyChecks)
+        .set({
+          status: "overridden",
+          result: {
+            ...check.result,
+            overrideEvaluationId: check.result?.["policyEvaluationId"],
+            overrideActorId: actorId,
+            overriddenAt: now,
+          },
+        })
+        .where(and(eq(policyChecks.id, check.id), eq(policyChecks.status, check.status)));
     await t.insert(auditLogs).values(
       auditLogValues({
         orgId: workspace.orgId,
@@ -2383,6 +2406,8 @@ async function commitPolicyOverride(input: PolicyOverrideInput): Promise<(typeof
           fromStatus: "policy_soft_failed",
           toStatus: "planned",
           justification,
+          policyEvaluationId: checks[0]?.result?.["policyEvaluationId"],
+          policyCheckIds: checks.map((check) => check.id),
           justificationBytes: Buffer.byteLength(justification, "utf8"),
           ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
         },
@@ -3493,6 +3518,11 @@ export const runRoutes = new Elysia({ name: "runs" })
         return {
           errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }],
         };
+      }
+      const policyError = await workspacePolicyExecutionError(db, authorized.workspace, runId);
+      if (policyError !== null) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: policyError }] };
       }
       const gateBlockReason = await applyGateBlockReason(new Date());
       if (gateBlockReason !== null) {

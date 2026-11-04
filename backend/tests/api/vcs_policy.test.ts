@@ -1,3 +1,7 @@
+import {
+  captureWorkspacePolicyEvaluation,
+  completeWorkspacePolicyEvaluation,
+} from "../../src/lib/workspace-policy-gate";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
@@ -393,6 +397,7 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
       data: {
         attributes: {
           name: "Security Standard",
+          overridable: true,
           description: "Mandatory security rules",
           kind: "opa",
           global: true,
@@ -435,6 +440,7 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
         id: psId,
         attributes: expect.objectContaining({
           name: "Security Standard",
+          overridable: true,
           scope: "global",
           "policy-count": 1,
         }),
@@ -446,10 +452,11 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     await db.insert(runs).values({
       id: runId,
       workspaceId,
-      status: "policy_checking",
+      status: "policy_soft_failed",
       createdAt: Date.now(),
     });
 
+    const evaluation = await captureWorkspacePolicyEvaluation(db, { id: workspaceId, orgId }, runId);
     const pcId = `pc-${suffix}`;
     await db.insert(policyChecks).values({
       id: pcId,
@@ -457,9 +464,15 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
       policyId: polId,
       policySetId: psId,
       status: "soft_failed",
-      result: { passed: false, policy: "No Public S3 Buckets" },
+      result: { passed: false, policy: "No Public S3 Buckets", policyEvaluationId: evaluation.id },
       createdAt: Date.now(),
     });
+
+    await completeWorkspacePolicyEvaluation(
+      db,
+      { id: workspaceId, orgId },
+      { id: evaluation.id, fingerprint: evaluation.snapshot.fingerprint },
+    );
 
     // 5. Query policy checks for run
     const getRunPcRes = await request(`/api/v2/runs/${runId}/policy-checks`);
@@ -551,6 +564,55 @@ describe("VCS OAuth & Policy as Code (Sentinel/OPA) API contract", () => {
     } finally {
       await db.delete(policies).where(eq(policies.id, opaId));
       await db.delete(policies).where(eq(policies.id, sentinelId));
+    }
+  });
+
+  it("validates engine-specific enforcement and explicit malformed policy inputs on every write route", async () => {
+    for (const kind of ["opa", "sentinel"]) {
+      // Stay within the production 60 requests/second API limiter.
+      await Bun.sleep(1100);
+      const setId = `set-validation-${kind}-${suffix}`;
+      const policyId = `policy-validation-${kind}-${suffix}`;
+      const level = kind === "opa" ? "mandatory" : "hard-mandatory";
+      await db.insert(policySets).values({ id: setId, orgId, name: setId, kind });
+      await db.insert(policies).values({ id: policyId, orgId, name: policyId, kind, enforcementLevel: level });
+      try {
+        const invalid = [
+          { "enforcement-level": kind === "opa" ? "soft-mandatory" : "mandatory" },
+          { "enforcement-level": null },
+          { "enforcement-level": 1 },
+          { enforce_mode: {} },
+          { enforce: [] },
+          { enforce: [{ mode: level }, { mode: "advisory" }] },
+          { enforce: [{ path: "policy.sentinel" }] },
+          { "enforcement-level": level, enforce_mode: "advisory" },
+          ...(kind === "opa" ? [{ query: null }, { query: "" }, { query: "data.deny; true" }] : []),
+        ];
+        for (const attributes of invalid) {
+          const payload = { data: { type: "policies", attributes: { name: "invalid", kind, ...attributes } } };
+          for (const path of [`/api/v2/organizations/${orgName}/policies`, `/api/v2/policy-sets/${setId}/policies`]) {
+            expect((await request(path, "POST", payload)).status).toBe(422);
+          }
+          expect((await request(`/api/v2/policies/${policyId}`, "PATCH", payload)).status).toBe(422);
+          expect((await db.query.policies.findFirst({ where: eq(policies.id, policyId) }))?.enforcementLevel).toBe(
+            level,
+          );
+        }
+        for (const valid of kind === "opa"
+          ? ["mandatory", "advisory"]
+          : ["hard-mandatory", "soft-mandatory", "advisory"]) {
+          const updated = await request(`/api/v2/policies/${policyId}`, "PATCH", {
+            data: { type: "policies", attributes: { "enforcement-level": valid } },
+          });
+          expect(updated.status).toBe(200);
+          expect((await db.query.policies.findFirst({ where: eq(policies.id, policyId) }))?.enforcementLevel).toBe(
+            valid,
+          );
+        }
+      } finally {
+        await db.delete(policies).where(eq(policies.id, policyId));
+        await db.delete(policySets).where(eq(policySets.id, setId));
+      }
     }
   });
 });

@@ -313,12 +313,12 @@ async function parseManifest(
     const query = attributes["query"];
     const rawEnforcement = attributes["enforcement_level"] ?? "advisory";
     if (query === undefined || query === "") throw new Error(`OPA policy "${name}" is missing query`);
-    if (!["mandatory", "advisory", "hard-mandatory", "soft-mandatory"].includes(rawEnforcement)) {
+    if (!["mandatory", "advisory"].includes(rawEnforcement)) {
       throw new Error(`OPA policy "${name}" has an invalid enforcement level`);
     }
     return {
       description: attributes["description"] ?? null,
-      enforcementLevel: rawEnforcement === "mandatory" ? "hard-mandatory" : rawEnforcement,
+      enforcementLevel: rawEnforcement,
       name,
       query,
       source,

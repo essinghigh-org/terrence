@@ -108,6 +108,8 @@ describe("endpoint-policy (465-469)", () => {
     expect(declared("POST", "http://x/api/v2/runs")).toBe("run-mutations");
     expect(declared("POST", "http://x/api/v2/runs/run-1/actions/apply")).toBe("run-mutations");
     expect(declared("GET", "http://x/api/v2/admin/users")).toBe("admin");
+    expect(declared("GET", "http://x/api/v2/admin/policy-enforcement")).toBe("admin");
+    expect(declared("PATCH", "http://x/api/v2/admin/policy-enforcement")).toBe("admin");
     expect(declared("POST", "http://x/api/v2/admin/organizations/acme")).toBe("admin");
     expect(declared("POST", "http://x/mcp")).toBe("mcp-state");
     const admin = ENDPOINT_POLICIES.find((candidate) => candidate.id === "admin");

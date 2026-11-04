@@ -1,3 +1,4 @@
+import { seedOverridablePolicyCheck } from "./policy_override_fixture";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { and, eq, inArray } from "drizzle-orm";
@@ -265,6 +266,7 @@ describe("audit coverage", () => {
     ] as const;
 
     for (const transition of transitions) {
+      if (transition.action === "override-policy") await seedOverridablePolicyCheck(transition.runId);
       const response = await request(
         `/api/v2/runs/${transition.runId}/actions/${transition.action}`,
         "POST",
@@ -356,6 +358,7 @@ describe("audit coverage", () => {
     const runId = `audit-override-justification-${suffix}`;
     await db.insert(runs).values({ id: runId, workspaceId, status: "policy_soft_failed", createdAt: Date.now() });
     try {
+      await seedOverridablePolicyCheck(runId);
       const bare = await request(`/api/v2/runs/${runId}/actions/override-policy`, "POST");
       expect(bare.status).toBe(422);
       const justified = await request(`/api/v2/runs/${runId}/actions/override-policy`, "POST", {

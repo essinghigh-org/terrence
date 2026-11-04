@@ -16,6 +16,7 @@ import {
   policySetExclusions,
   policySetProjectExclusions,
 } from "../../src/db/schema";
+import { isPolicyEvaluationCheckpoint } from "../../src/lib/workspace-policy-gate";
 import { runPolicyChecks } from "../../src/worker";
 
 const cases = [
@@ -214,7 +215,9 @@ for (const item of cases)
       const result = await runPolicyChecks(id, id, id);
       expect(result.hardFailed).toBe(item.expected);
       expect(result.proceed).toBe(!item.expected);
-      const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, id) });
+      const checks = (await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, id) })).filter(
+        (check) => !isPolicyEvaluationCheckpoint(check),
+      );
       expect(checks.map((check) => check.policyId)).toEqual(item.expected ? [id] : []);
     } finally {
       // PostgreSQL can cascade through runs while SET NULL triggers from the

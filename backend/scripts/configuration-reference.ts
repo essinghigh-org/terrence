@@ -165,7 +165,9 @@ The admin-only GET /api/v2/admin/system-info response includes
 deployment-configuration and persisted-configuration. Entries identify the value's
 origin and whether a restart is required. Sensitive persisted values are redacted.
 Persisted changes take effect on the next settings read; cache lifetime is at most
-one second. Already running operations retain values captured when they started.
+one second. Policy enforcement controls are freshly read at each policy gate;
+changes after evaluation require a new plan before apply. Other running operations
+retain values captured when they started.
 `;
 }
 
