@@ -1,3 +1,4 @@
+import { deleteOrganization } from "../../src/lib/lifecycle";
 import { afterEach, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -24,7 +25,7 @@ import {
 const ids: string[] = [];
 afterEach(async () => {
   for (const id of ids.splice(0)) {
-    await db.delete(organizations).where(eq(organizations.id, id));
+    await deleteOrganization(id);
     await db.delete(users).where(eq(users.id, id));
   }
 });

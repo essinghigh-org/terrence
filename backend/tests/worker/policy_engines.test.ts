@@ -1,3 +1,4 @@
+import { deleteOrganization } from "../../src/lib/lifecycle";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -378,7 +379,7 @@ describe("policy decisions fail closed at the worker boundary", () => {
   });
 
   afterAll(async () => {
-    await db.delete(organizations).where(eq(organizations.id, orgId));
+    await deleteOrganization(orgId);
     await rm(engineDirectory, { recursive: true, force: true });
   });
 

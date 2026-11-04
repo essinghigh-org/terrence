@@ -1,3 +1,4 @@
+import { deleteOrganization } from "../../src/lib/lifecycle";
 import { afterEach, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
@@ -22,7 +23,7 @@ import { executeApply } from "../../src/worker";
 
 const organizationsToDelete: string[] = [];
 afterEach(async () => {
-  for (const id of organizationsToDelete.splice(0)) await db.delete(organizations).where(eq(organizations.id, id));
+  for (const id of organizationsToDelete.splice(0)) await deleteOrganization(id);
   await db.delete(adminSettings).where(eq(adminSettings.id, "policy-enforcement"));
 });
 

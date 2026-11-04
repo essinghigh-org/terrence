@@ -1,3 +1,4 @@
+import { deleteOrganization } from "../../src/lib/lifecycle";
 import { seedOverridablePolicyCheck } from "./policy_override_fixture";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
@@ -125,7 +126,7 @@ afterAll(async () => {
     await Bun.sleep(10);
   }
   if (orgId !== "") await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
-  if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
+  if (orgId !== "") await deleteOrganization(orgId);
   await db.delete(apiTokens).where(eq(apiTokens.token, token));
   await db.delete(users).where(eq(users.id, userId));
 });
