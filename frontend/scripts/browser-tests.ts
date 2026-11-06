@@ -99,7 +99,8 @@ async function waitForChrome(exited: () => number | null, directory: string, sta
 }
 
 async function main(): Promise<number> {
-  const directory = await mkdtemp(join(tmpdir(), "terrence-browser-"));
+  // Parent cleanup also owns nested cold-start profiles if cancellation interrupts their supervisors.
+  const directory = await mkdtemp(join(process.env["TERRENCE_TEST_BROWSER_ROOT"] ?? tmpdir(), "terrence-browser-"));
   let chrome: OwnedProcess | undefined;
   let tests: OwnedProcess | undefined;
   let interrupted: number | undefined;
@@ -184,7 +185,7 @@ async function main(): Promise<number> {
         : [process.execPath, "test", ...(testArgs.length === 0 ? ["."] : testArgs)];
     tests = Bun.spawn(command, {
       cwd: browserDirectory,
-      env: { ...process.env, TERRENCE_TEST_CHROME_URL: endpoint },
+      env: { ...process.env, TERRENCE_TEST_CHROME_URL: endpoint, TERRENCE_TEST_BROWSER_ROOT: directory },
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
