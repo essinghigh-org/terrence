@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -143,6 +143,62 @@ describe("Azure DevOps Services PAT integration", () => {
     expect(stored).toBeDefined();
     expect(await decryptSecret(stored!.token)).toBe("test-pat-two");
   });
+  for (const [scope, scopeAttributes, column, value, preserveToken] of [
+    ["organization", { "ado-org-name": "contoso" }, "adoOrgName", "contoso", false],
+    ["provider", { "service-provider": "github" }, "serviceProvider", "github", false],
+    ["API endpoint", { "api-url": "https://dev.azure.com/fabrikam" }, "apiUrl", "https://dev.azure.com/fabrikam", true],
+    [
+      "HTTP endpoint",
+      { "http-url": "https://dev.azure.com/fabrikam" },
+      "httpUrl",
+      "https://dev.azure.com/fabrikam",
+      true,
+    ],
+  ] as const) {
+    test(`rejects PAT rotation when the ${scope} changes before its transaction`, async () => {
+      const created = await request("POST", `/organizations/${orgName}/oauth-clients`, {
+        data: { attributes },
+      });
+      expect(created.status).toBe(201);
+      const body = await created.json();
+      const id = body.data.id as string;
+      const initialTokenId = body.data.relationships["oauth-tokens"].data[0]?.id as string;
+      const asyncDb = db as unknown as {
+        transaction: (callback: (tx: typeof db) => Promise<unknown>, options?: unknown) => Promise<unknown>;
+      };
+      const originalTransaction = asyncDb.transaction.bind(db);
+      let changed = false;
+      const rotation = spyOn(asyncDb, "transaction").mockImplementation(async (callback, ...options) => {
+        if (!changed) {
+          changed = true;
+          // Commit another request after rotation has validated the old scope.
+          const concurrent = await request("PATCH", `/oauth-clients/${id}`, {
+            data: { attributes: scopeAttributes },
+          });
+          expect(concurrent.status).toBe(200);
+        }
+        return originalTransaction(callback, ...options);
+      });
+      try {
+        const response = await request("PATCH", `/oauth-clients/${id}`, {
+          data: { attributes: { "oauth-token": "fabrikam-only-pat" } },
+        });
+        expect(changed).toBeTrue();
+        expect(response.status).toBe(409);
+      } finally {
+        rotation.mockRestore();
+      }
+      const client = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, id) });
+      const tokens = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, id) });
+      expect(client?.[column]).toBe(value);
+      if (preserveToken) {
+        expect(tokens.map((stored) => stored.id)).toEqual([initialTokenId]);
+        expect(await decryptSecret(tokens[0]!.token)).toBe("test-pat-one");
+      } else {
+        expect(tokens).toEqual([]);
+      }
+    });
+  }
   test("discovers configured organization repositories using Basic PAT", async () => {
     const calls: string[] = [];
     setExternalUrlTransportForTests(async (target, init) => {

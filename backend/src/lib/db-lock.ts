@@ -45,7 +45,7 @@ async function claimLock(name: string, owner: string, now: number): Promise<bool
     .onConflictDoUpdate({
       target: locks.name,
       set: { owner, expiresAt },
-      where: lt(locks.expiresAt, now),
+      setWhere: lt(locks.expiresAt, now),
     });
   const row = await db.query.locks.findFirst({ where: eq(locks.name, name) });
   return row?.owner === owner;

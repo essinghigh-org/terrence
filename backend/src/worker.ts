@@ -1,5 +1,6 @@
 import {
   workspacePolicyExecutionError,
+  workspacePolicyPlanningError,
   captureWorkspacePolicyEvaluation,
   completeWorkspacePolicyEvaluation,
   policyFailureIsOverridable,
@@ -2737,6 +2738,8 @@ async function executeRunImpl(runId: string): Promise<void> {
   try {
     if (!(await runConfigurationTrusted(run)))
       throw new Error("Pull-request configuration lacks trusted repository admission");
+    const policyError = await workspacePolicyPlanningError(db, workspace);
+    if (policyError !== null) throw new Error(policyError);
     await preparePlanWorkspace(runId, workspace, org, run.configurationVersionId, workDir);
     if (!(await runPrePlanGate(runId, workspace, org, run.operation))) return;
 

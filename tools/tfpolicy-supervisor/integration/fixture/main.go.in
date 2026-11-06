@@ -1,0 +1,136 @@
+// Test-only native protocol fixture. This is not a Terraform policy evaluator.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"syscall"
+	"time"
+
+	"github.com/hashicorp/go-plugin"
+	p "github.com/hashicorp/terraform/internal/policy/proto"
+	"google.golang.org/grpc"
+)
+
+var handshake = plugin.HandshakeConfig{ProtocolVersion: 1, MagicCookieKey: "TF_POLICY_PLUGIN", MagicCookieValue: "6F11ED78A2AB"}
+
+type config struct {
+	Mode          string `json:"mode"`
+	ForbiddenPath string `json:"forbidden_path"`
+}
+type server struct {
+	p.UnimplementedPolicyServer
+	c config
+}
+
+func probe(path string) error {
+	if _, e := os.ReadFile(path); e == nil {
+		return errors.New("sandbox exposed forbidden canary")
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return errors.New("unsupported probe architecture")
+	}
+	// pidfd_getfd is syscall 438 on these architectures. Invalid fd would produce
+	// EBADF without the mandatory seccomp filter, not EPERM. No fd is duplicated.
+	_, _, e := syscall.RawSyscall(438, ^uintptr(0), 0, 0)
+	if e != syscall.EPERM {
+		return errors.New("debug syscall was not filtered")
+	}
+	return nil
+}
+func (s *server) Setup(_ context.Context, r *p.PolicySetupRequest) (*p.PolicySetupResponse, error) {
+	if len(r.SourceLocations) != 1 {
+		return nil, errors.New("fixture expects one root")
+	}
+	b, e := os.ReadFile(filepath.Join(r.SourceLocations[0], "fixture.json"))
+	if e != nil {
+		return nil, e
+	}
+	if e = json.Unmarshal(b, &s.c); e != nil {
+		return nil, e
+	}
+	if os.Getenv("TFPOLICY_JOURNAL_FD") != "" || os.Getenv("TFPOLICY_RECORDER_CONFIG") != "" || os.Getenv("TFPOLICY_RUN_NONCE") != "" {
+		return nil, errors.New("private recorder env leaked")
+	}
+	var st syscall.Stat_t
+	if syscall.Fstat(3, &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFIFO {
+		return nil, errors.New("private journal pipe leaked")
+	}
+	if syscall.Fstat(5, &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFREG {
+		return nil, errors.New("private config file leaked")
+	}
+	if e = probe(s.c.ForbiddenPath); e != nil {
+		return nil, e
+	}
+	if s.c.Mode == "setup-error" {
+		return nil, errors.New("expected fixture setup failure")
+	}
+	if s.c.Mode == "orphan" {
+		child := exec.Command(os.Args[0], "orphan-child")
+		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if e = child.Start(); e != nil {
+			return nil, e
+		}
+	}
+	return &p.PolicySetupResponse{}, nil
+}
+func detail(deny bool) []*p.PolicyEvaluationDetail {
+	result := p.EvaluateResult_ALLOW_EVALUATE_RESULT
+	var diagnostics []*p.Diagnostic
+	if deny {
+		result = p.EvaluateResult_DENY_EVALUATE_RESULT
+		diagnostics = []*p.Diagnostic{{Severity: p.Severity_ERROR, Summary: "Native integration fixture denied", Detail: "Expected test-only deny result.", Result: &p.DiagnosticResult{Result: result}}}
+	}
+	return []*p.PolicyEvaluationDetail{{Address: "fixture.integration", Result: result, PolicySetName: "integration", PolicySetEnforcement: "mandatory", Diagnostics: diagnostics, EnforceResults: []*p.EnforceBlockResult{{Result: result, ConditionPassed: !deny, Diagnostics: diagnostics}}}}
+}
+func (s *server) EvaluateResource(context.Context, *p.PolicyEvaluateResourceRequest) (*p.PolicyEvaluateResourceResponse, error) {
+	switch s.c.Mode {
+	case "crash":
+		os.Exit(23)
+	case "hang":
+		time.Sleep(90 * time.Second)
+	}
+	deny := s.c.Mode == "deny"
+	result := p.EvaluateResult_ALLOW_EVALUATE_RESULT
+	if deny {
+		result = p.EvaluateResult_DENY_EVALUATE_RESULT
+	}
+	return &p.PolicyEvaluateResourceResponse{Result: result, PolicyDetails: detail(deny)}, nil
+}
+func (s *server) EvaluateProvider(context.Context, *p.PolicyEvaluateProviderRequest) (*p.PolicyEvaluateProviderResponse, error) {
+	return &p.PolicyEvaluateProviderResponse{Result: p.EvaluateResult_ALLOW_EVALUATE_RESULT, PolicyDetails: detail(false)}, nil
+}
+func (s *server) EvaluateModule(context.Context, *p.PolicyEvaluateModuleRequest) (*p.PolicyEvaluateModuleResponse, error) {
+	return &p.PolicyEvaluateModuleResponse{Result: p.EvaluateResult_ALLOW_EVALUATE_RESULT, PolicyDetails: detail(false)}, nil
+}
+
+type transport struct{ plugin.NetRPCUnsupportedPlugin }
+
+func (*transport) GRPCServer(_ *plugin.GRPCBroker, g *grpc.Server) error {
+	p.RegisterPolicyServer(g, &server{})
+	return nil
+}
+func (*transport) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientConn) (interface{}, error) {
+	return nil, errors.New("fixture server only")
+}
+func main() {
+	if len(os.Args) == 2 && os.Args[1] == "orphan-child" {
+		time.Sleep(90 * time.Second)
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "sandbox-probe" {
+		if probe(os.Args[2]) != nil {
+			os.Exit(4)
+		}
+		return
+	}
+	if len(os.Args) != 2 || os.Args[1] != "rpcapi" {
+		os.Exit(2)
+	}
+	plugin.Serve(&plugin.ServeConfig{HandshakeConfig: handshake, Plugins: map[string]plugin.Plugin{"policy": &transport{}}, GRPCServer: plugin.DefaultGRPCServer})
+}

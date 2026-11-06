@@ -46,7 +46,7 @@ export async function claimRegistrySyncLease(key: string, now = Date.now()): Pro
       set: { owner: INSTANCE_ID, expiresAt },
       // Only take over a lease whose previous owner has let it expire; an
       // active lease held by another replica is left untouched.
-      where: lt(registrySyncLeases.expiresAt, now),
+      setWhere: lt(registrySyncLeases.expiresAt, now),
     });
   const row = await db.query.registrySyncLeases.findFirst({ where: eq(registrySyncLeases.key, key) });
   return row?.owner === INSTANCE_ID;
