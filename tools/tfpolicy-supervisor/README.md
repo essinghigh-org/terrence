@@ -146,9 +146,9 @@ Pure tests cover cert/private-key rejection, bounded framing, malformed process
 stat data, mandatory mTLS handshakes, private config permissions, and rejected
 peer identities. Native socket tests cover SO_PEERCRED, socket permissions,
 single-use path behavior, unchanged handshake relay, journal-only collection,
-extra stdout rejection, and shim-death cancellation. Only a kernel denial of AF_UNIX skips socket tests; other errors fail. The current build environment
-returns EPERM for AF_UNIX, so live socket/exec tests have **not** been validated
-here. Non-Linux builds explicitly reject bootstrap operation.
+extra stdout rejection, and shim-death cancellation. Only a kernel denial of AF_UNIX skips socket tests; other errors fail. Live
+AF_UNIX tests passed during independent review, alongside the full race suite
+and vet. Non-Linux builds explicitly reject bootstrap operation.
 
 ## Native integration qualification
 

@@ -34,7 +34,7 @@ are failures and it has no skip/bypass option. `.github/workflows/tfpolicy-nativ
 uses ubuntu-latest to probe first, runs supervisor and recorder race tests plus
 pure oracle tests, builds the original fixture, and conditionally runs the real
 matrix only if all native prerequisites are present. Missing prerequisites fail
-the qualification job explicitly after the independent source tests/builds. The workflow now has explicit user authorization to prepare a limited cgroup
+the qualification job explicitly after the independent source tests/builds. The workflow has explicit user authorization to prepare a limited cgroup
 subtree and temporarily replace the piped core handler on the disposable
 GitHub-hosted runner only. It restores the core handler and kills/removes only
 its owned subtree in an always-run cleanup step. A root launcher places itself
@@ -123,5 +123,10 @@ always false: this is a qualification test, not a production signer or apply gat
 
 Local pure tests: `python3 -m unittest -v` in this directory. They cover incomplete
 shutdown, denial/RPC errors, missing evaluation, sequence gaps, replay, request
-hash tampering and truncation. Current local environment denies AF_UNIX and lacks
-usable Landlock/cgroup/core facilities; the live matrix has **not** passed locally.
+hash tampering and truncation. The initial local environment lacked the required native facilities.
+[GitHub-hosted qualification run 41734647582](https://github.com/essinghigh-org/terrence/actions/runs/41734647582)
+passed all 21 cases on commit `021b9946b8e2e4e95546f6279354b3782f63cde6`,
+with Landlock ABI 8, pathname AF_UNIX, zero process capabilities and delegated
+cgroup v2. Every case reported an empty final cgroup and `admitted: false`.
+The archived native results prove this fixture matrix only; real-plugin
+acceptance and production admission remain separate requirements.

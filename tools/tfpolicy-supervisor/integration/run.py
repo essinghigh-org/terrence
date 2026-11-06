@@ -251,8 +251,8 @@ def run_case(args, bins, root, output, mode, stage):
     canary.write_text("must-never-be-visible-to-engine-or-BYOB")
     (work / "main.tf").write_text('resource "terraform_data" "proof" { input = "native-ci" }\n')
     write_json(policy / "fixture.json", {"mode": mode, "forbidden_path": str(canary)})
-    os.chmod(policy / "fixture.json", 0o444)
-    os.chmod(policy, 0o555)
+    os.chmod(policy / "fixture.json", 0o400)
+    os.chmod(policy, 0o500)
     env = {"PATH": "/usr/bin:/bin", "HOME": str(work), "TMPDIR": str(work), "TF_IN_AUTOMATION": "1", "CHECKPOINT_DISABLE": "1", "TF_INPUT": "0"}
     fence = Fence(args.cgroup_root)
     processes, captures = [], []
@@ -433,7 +433,7 @@ def main():
         for name in ("terraform", "runner", "supervisor", "shim", "recorder", "fixture"):
             target = bin_dir / name
             shutil.copyfile(getattr(args, name).resolve(strict=True), target)
-            os.chmod(target, 0o555)
+            os.chmod(target, 0o500)
             bins[name] = target
         write_json(args.output / "provenance.json", {"terraform_version": args.terraform_version, "landlock_abi": abi,
                     "executable_sha256": {k: digest(v) for k, v in bins.items()}, "admitted": False})
