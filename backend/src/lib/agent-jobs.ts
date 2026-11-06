@@ -752,6 +752,28 @@ function agentApplyIsAssociated(
   );
 }
 
+async function agentDeliveryPolicyError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  job: AgentJob,
+  run: DeepReadonly<typeof runs.$inferSelect> | undefined,
+  workspace: Workspace | undefined,
+): Promise<string | null> {
+  if (job.phase === "plan") {
+    if (
+      workspace === undefined ||
+      run?.status !== "planning" ||
+      run.agentId !== job.agentId ||
+      run.workspaceId !== workspace.id
+    )
+      return "Plan blocked: agent claim is not associated with an active run and its workspace";
+    return workspacePolicyPlanningError(database, workspace);
+  }
+  if (workspace === undefined || !agentApplyIsAssociated(job, run, workspace))
+    return "Apply blocked: agent claim is not associated with an active run and its workspace lock";
+  return workspacePolicyExecutionError(database, workspace, job.runId);
+}
+
 /** Apply admission is persisted before returning credentials/artifacts. A retry
  * after admission must not revoke a potentially running remote apply or release
  * its lock. Plan delivery rechecks unsupported runtimes on every handoff. */
@@ -775,12 +797,7 @@ async function admitAgentJobDelivery(job: AgentJob, workspace: Workspace): Promi
     if (job.phase === "apply" && owned.result?.["policyApplyAdmissionToken"] === job.fencingToken) return true;
     const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     const currentWorkspace = await database.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
-    const error =
-      job.phase === "plan"
-        ? await workspacePolicyPlanningError(database, workspace)
-        : agentApplyIsAssociated(job, run, currentWorkspace)
-          ? await workspacePolicyExecutionError(database, workspace, job.runId)
-          : "Apply blocked: agent claim is not associated with an active run and its workspace lock";
+    const error = await agentDeliveryPolicyError(database, owned, run, currentWorkspace);
     if (error === null) {
       if (job.phase === "apply")
         await database
@@ -793,8 +810,9 @@ async function admitAgentJobDelivery(job: AgentJob, workspace: Workspace): Promi
       .update(agentJobs)
       .set({ status: "errored", errorMessage: error, completedAt: Date.now() })
       .where(eq(agentJobs.id, job.id));
+    let rejectedRun = false;
     if (run !== undefined) {
-      await database
+      const rejected = await database
         .update(runs)
         .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
         .where(
@@ -802,7 +820,9 @@ async function admitAgentJobDelivery(job: AgentJob, workspace: Workspace): Promi
             eq(runs.id, run.id),
             inArray(runs.status, job.phase === "plan" ? ["plan_queued", "planning"] : ["apply_queued", "applying"]),
           ),
-        );
+        )
+        .returning({ id: runs.id });
+      rejectedRun = rejected.length > 0;
       if (job.phase === "apply") await releaseApplyWorkspaceLock(database, owned, run);
     }
     if (job.agentId !== null) {
@@ -812,7 +832,7 @@ async function admitAgentJobDelivery(job: AgentJob, workspace: Workspace): Promi
       if (remaining === undefined)
         await database.update(agents).set({ status: "idle" }).where(eq(agents.id, job.agentId));
     }
-    return false;
+    return rejectedRun ? false : null;
   });
   if (accepted === false) notifyRunStatus(job.runId, "errored");
   return accepted === true;

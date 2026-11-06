@@ -1344,11 +1344,16 @@ test("stale sweep releases a cancel-held lock only after the heartbeat lease exp
   expect(result).toEqual({ deadLocked: false, liveLocked: true });
 }, 30_000);
 
-test.each(["initial claim", "redelivery", "state download"])(
-  "agent %s rejects unsupported tfpolicy before handing off execution data",
-  async (stage) => {
-    const result = await runAgentProtocolScript(`
+test.each([
+  ["initial claim", "tfpolicy"],
+  ["redelivery", "tfpolicy"],
+  ["state download", "tfpolicy"],
+  ["redelivery", "canceled"],
+  ["state download", "canceled"],
+])("agent %s rejects %s before handing off execution data", async (stage, refusal) => {
+  const result = await runAgentProtocolScript(`
     const stage = ${JSON.stringify(stage)};
+    const refusal = ${JSON.stringify(refusal)};
     const { eq } = await import("drizzle-orm");
     const { app } = await import("./src/app.ts");
     const { db } = await import("./src/db/index.ts");
@@ -1371,7 +1376,8 @@ test.each(["initial claim", "redelivery", "state download"])(
     let response = claim;
     if (stage !== "initial claim") {
       const claimed = (await claim.json()).data;
-      await attachPolicy();
+      if (refusal === "tfpolicy") await attachPolicy();
+      else await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, "run"));
       response = stage === "redelivery"
         ? await poll()
         : await app.handle(new Request("http://terrence.test/api/v2/agents/agent/jobs/job/state", {
@@ -1383,15 +1389,16 @@ test.each(["initial claim", "redelivery", "state download"])(
     const job = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") });
     console.log(JSON.stringify({ claim: claim.status, response: response.status, body: await response.text(), status: run.status, agentStatus: agent.status, jobStatus: job.status, error: job.errorMessage }));
   `);
-    expect(result["claim"]).toBe(stage === "initial claim" ? 204 : 200);
-    expect(result["response"]).toBe(stage === "state download" ? 404 : 204);
-    expect(result["status"]).toBe("errored");
-    expect(result["agentStatus"]).toBe("idle");
-    expect(result["jobStatus"]).toBe("errored");
-    expect(result["error"]).toContain("tfpolicy runtime is not supported");
-    expect(result["body"]).not.toContain("must-not-be-delivered");
-  },
-);
+  expect(result["claim"]).toBe(stage === "initial claim" ? 204 : 200);
+  expect(result["response"]).toBe(stage === "state download" ? 404 : 204);
+  expect(result["status"]).toBe(refusal === "canceled" ? "canceled" : "errored");
+  expect(result["agentStatus"]).toBe("idle");
+  expect(result["jobStatus"]).toBe("errored");
+  expect(result["error"]).toContain(
+    refusal === "canceled" ? "not associated with an active run" : "tfpolicy runtime is not supported",
+  );
+  expect(result["body"]).not.toContain("must-not-be-delivered");
+});
 
 test("agent completion blocks unsupported tfpolicy sets with no individual policies", async () => {
   const result = await runAgentProtocolScript(`
