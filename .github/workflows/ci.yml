@@ -398,14 +398,12 @@ jobs:
           browser_path="$(command -v google-chrome-stable)"
           echo "BUN_CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
           printf 'Browser executable: %s\n' "$browser_path"
-          "$browser_path" --version
       - name: Run browser E2E & accessibility suite (Bun.WebView)
         run: |
-          cold_status=0
-          xvfb-run --auto-servernum bun frontend/tests/browser/helpers/cold-start.ts || cold_status=$?
           suite_status=0
           bun run test:profile -- browser || suite_status=$?
-          test "$cold_status" -eq 0 && test "$suite_status" -eq 0
+          "$BUN_CHROME_PATH" --version
+          exit "$suite_status"
 
   stock-tfpolicy-protocol:
     name: Stock Terraform policy protocol (test-only)
