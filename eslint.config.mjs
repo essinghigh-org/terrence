@@ -35,6 +35,9 @@ export default tseslint.config(
     files: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
     languageOptions: {
       parserOptions: {
+        // Immutable single-run programs exceed the default Node heap on this
+        // repository. Keep all typed checks on the editor-style project service.
+        disallowAutomaticSingleRunInference: true,
         projectService: {
           allowDefaultProject: [],
         },

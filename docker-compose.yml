@@ -60,6 +60,5 @@ services:
     # is authoritative. The image ships curl, wget, git, and unzip alongside
     # the runtime for VCS fetches and diagnostics.
 
-
 volumes:
   terrence-storage:
