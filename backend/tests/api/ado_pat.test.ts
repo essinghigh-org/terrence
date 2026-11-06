@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -142,6 +142,42 @@ describe("Azure DevOps Services PAT integration", () => {
     const stored = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, patId) });
     expect(stored).toBeDefined();
     expect(await decryptSecret(stored!.token)).toBe("test-pat-two");
+  });
+  test("rejects PAT rotation when the organization changes before its transaction", async () => {
+    const created = await request("POST", `/organizations/${orgName}/oauth-clients`, {
+      data: { attributes },
+    });
+    expect(created.status).toBe(201);
+    const id = (await created.json()).data.id as string;
+    const asyncDb = db as unknown as {
+      transaction: (callback: (tx: typeof db) => Promise<unknown>, options?: unknown) => Promise<unknown>;
+    };
+    const originalTransaction = asyncDb.transaction.bind(db);
+    let changed = false;
+    const rotation = spyOn(asyncDb, "transaction").mockImplementation(async (callback, ...options) => {
+      if (!changed) {
+        changed = true;
+        // Commit another request after rotation has validated the old scope.
+        const concurrent = await request("PATCH", `/oauth-clients/${id}`, {
+          data: { attributes: { "ado-org-name": "contoso" } },
+        });
+        expect(concurrent.status).toBe(200);
+      }
+      return originalTransaction(callback, ...options);
+    });
+    try {
+      const response = await request("PATCH", `/oauth-clients/${id}`, {
+        data: { attributes: { "oauth-token": "fabrikam-only-pat" } },
+      });
+      expect(changed).toBeTrue();
+      expect(response.status).toBe(409);
+    } finally {
+      rotation.mockRestore();
+    }
+    const client = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, id) });
+    const tokens = await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, id) });
+    expect(client?.adoOrgName).toBe("contoso");
+    expect(tokens).toEqual([]);
   });
   test("discovers configured organization repositories using Basic PAT", async () => {
     const calls: string[] = [];
