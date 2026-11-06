@@ -1,5 +1,6 @@
 import {
   workspacePolicyExecutionError,
+  workspacePolicyPlanningError,
   captureWorkspacePolicyEvaluation,
   latestWorkspacePolicyEvaluation,
   loadWorkspacePolicySnapshot,
@@ -751,10 +752,32 @@ function agentApplyIsAssociated(
   );
 }
 
-/** Admission is persisted before returning apply credentials/artifacts. A retry
+async function agentDeliveryPolicyError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  job: AgentJob,
+  run: DeepReadonly<typeof runs.$inferSelect> | undefined,
+  workspace: Workspace | undefined,
+): Promise<string | null> {
+  if (job.phase === "plan") {
+    if (
+      workspace === undefined ||
+      run?.status !== "planning" ||
+      run.agentId !== job.agentId ||
+      run.workspaceId !== workspace.id
+    )
+      return "Plan blocked: agent claim is not associated with an active run and its workspace";
+    return workspacePolicyPlanningError(database, workspace);
+  }
+  if (workspace === undefined || !agentApplyIsAssociated(job, run, workspace))
+    return "Apply blocked: agent claim is not associated with an active run and its workspace lock";
+  return workspacePolicyExecutionError(database, workspace, job.runId);
+}
+
+/** Apply admission is persisted before returning credentials/artifacts. A retry
  * after admission must not revoke a potentially running remote apply or release
- * its lock; changes are checked before the first handoff, never retroactively. */
-async function admitAgentApplyDelivery(job: AgentJob, workspace: Workspace): Promise<boolean> {
+ * its lock. Plan delivery rechecks unsupported runtimes on every handoff. */
+async function admitAgentJobDelivery(job: AgentJob, workspace: Workspace): Promise<boolean> {
   const accepted = await db.transaction(async (transaction) => {
     const database = transaction as unknown as Database;
     const rows = await database
@@ -770,30 +793,37 @@ async function admitAgentApplyDelivery(job: AgentJob, workspace: Workspace): Pro
       )
       .returning();
     const owned = rows[0];
-    if (owned === undefined) return false;
-    if (owned.result?.["policyApplyAdmissionToken"] === job.fencingToken) return true;
+    if (owned === undefined) return null;
+    if (job.phase === "apply" && owned.result?.["policyApplyAdmissionToken"] === job.fencingToken) return true;
     const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     const currentWorkspace = await database.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
-    const error = agentApplyIsAssociated(job, run, currentWorkspace)
-      ? await workspacePolicyExecutionError(database, workspace, job.runId)
-      : "Apply blocked: agent claim is not associated with an active run and its workspace lock";
+    const error = await agentDeliveryPolicyError(database, owned, run, currentWorkspace);
     if (error === null) {
-      await database
-        .update(agentJobs)
-        .set({ result: { ...owned.result, policyApplyAdmissionToken: job.fencingToken } })
-        .where(eq(agentJobs.id, job.id));
+      if (job.phase === "apply")
+        await database
+          .update(agentJobs)
+          .set({ result: { ...owned.result, policyApplyAdmissionToken: job.fencingToken } })
+          .where(eq(agentJobs.id, job.id));
       return true;
     }
     await database
       .update(agentJobs)
       .set({ status: "errored", errorMessage: error, completedAt: Date.now() })
       .where(eq(agentJobs.id, job.id));
+    let rejectedRun = false;
     if (run !== undefined) {
-      await database
+      const rejected = await database
         .update(runs)
         .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
-        .where(and(eq(runs.id, run.id), inArray(runs.status, ["apply_queued", "applying"])));
-      await releaseApplyWorkspaceLock(database, owned, run);
+        .where(
+          and(
+            eq(runs.id, run.id),
+            inArray(runs.status, job.phase === "plan" ? ["plan_queued", "planning"] : ["apply_queued", "applying"]),
+          ),
+        )
+        .returning({ id: runs.id });
+      rejectedRun = rejected.length > 0;
+      if (job.phase === "apply") await releaseApplyWorkspaceLock(database, owned, run);
     }
     if (job.agentId !== null) {
       const remaining = await database.query.agentJobs.findFirst({
@@ -802,10 +832,10 @@ async function admitAgentApplyDelivery(job: AgentJob, workspace: Workspace): Pro
       if (remaining === undefined)
         await database.update(agents).set({ status: "idle" }).where(eq(agents.id, job.agentId));
     }
-    return false;
+    return rejectedRun ? false : null;
   });
-  if (!accepted) notifyRunStatus(job.runId, "errored");
-  return accepted;
+  if (accepted === false) notifyRunStatus(job.runId, "errored");
+  return accepted === true;
 }
 
 async function agentDispatchPolicyEvaluation(
@@ -863,7 +893,7 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
       : Promise.resolve(undefined),
   ]);
   if (workspace === undefined) return undefined;
-  if (job.phase === "apply" && !(await admitAgentApplyDelivery(job, workspace))) return undefined;
+  if (!(await admitAgentJobDelivery(job, workspace))) return undefined;
   const dispatch =
     job.phase === "plan" ? await agentDispatchPolicyEvaluation(job, run, workspace) : { evaluation: null };
   if (dispatch === undefined) return undefined;
@@ -959,24 +989,24 @@ async function validateCandidateRun(
     notifyRunStatus(run.id, "errored");
     return null;
   }
-  if (candidate.phase === "apply") {
-    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
-    const policyError =
-      workspace === undefined
-        ? "Apply blocked: workspace no longer exists"
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+  const policyError =
+    workspace === undefined
+      ? `${candidate.phase === "plan" ? "Plan" : "Apply"} blocked: workspace no longer exists`
+      : candidate.phase === "plan"
+        ? await workspacePolicyPlanningError(db, workspace)
         : await workspacePolicyExecutionError(db, workspace, run.id);
-    if (policyError !== null) {
-      await db
-        .update(agentJobs)
-        .set({ status: "errored", completedAt: Date.now(), errorMessage: policyError })
-        .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
-      await db
-        .update(runs)
-        .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
-        .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
-      notifyRunStatus(run.id, "errored");
-      return null;
-    }
+  if (policyError !== null) {
+    await db
+      .update(agentJobs)
+      .set({ status: "errored", completedAt: Date.now(), errorMessage: policyError })
+      .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+    await db
+      .update(runs)
+      .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
+      .where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+    notifyRunStatus(run.id, "errored");
+    return null;
   }
   return { run, expectedRunStatus, nextRunStatus };
 }

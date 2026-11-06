@@ -12,14 +12,16 @@ import {
   agents,
   agentJobs,
   logs,
+  runTokens,
 } from "../../src/db/schema";
+import { deleteOrganization } from "../../src/lib/lifecycle";
 import { workspacePolicyExecutionError } from "../../src/lib/workspace-policy-gate";
 import { claimAgentJob } from "../../src/lib/agent-jobs";
-import { executeApply } from "../../src/worker";
+import { executeApply, executeRun } from "../../src/worker";
 
 const orgIds: string[] = [];
 afterEach(async () => {
-  for (const id of orgIds.splice(0)) await db.delete(organizations).where(eq(organizations.id, id));
+  for (const id of orgIds.splice(0)) await deleteOrganization(id);
 });
 async function fixture() {
   const id = crypto.randomUUID();
@@ -47,6 +49,21 @@ test("hosted apply blocks a tfpolicy set attached after plan before preparing ap
   const output = await db.query.logs.findMany({ where: eq(logs.runId, id) });
   expect(output.some((row) => row.outputText.includes("tfpolicy runtime is not supported"))).toBe(true);
   expect((await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) }))?.locked).toBe(false);
+});
+
+test("hosted planning rejects unsupported tfpolicy before source preparation or credential creation", async () => {
+  const id = await fixture();
+  await db.update(runs).set({ status: "plan_queued" }).where(eq(runs.id, id));
+  const error: unknown = await executeRun(id).catch((reason: unknown) => reason);
+  expect(error).toBeInstanceOf(Error);
+  expect(error instanceof Error ? error.message : "").toContain("Plan blocked: tfpolicy policy set");
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, id) });
+  expect(run?.status).toBe("errored");
+  expect(run?.statusTimestamps?.["fetching-at"]).toBeUndefined();
+  const output = await db.query.logs.findMany({ where: eq(logs.runId, id) });
+  expect(output.some((row) => row.outputText.includes("tfpolicy runtime is not supported"))).toBe(true);
+  expect(output.some((row) => row.outputText.includes("Initializing run environment"))).toBe(false);
+  expect(await db.query.runTokens.findMany({ where: eq(runTokens.runId, id) })).toEqual([]);
 });
 
 test("agent apply claim blocks a tfpolicy set attached after plan before handoff", async () => {
