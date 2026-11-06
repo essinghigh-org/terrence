@@ -92,9 +92,12 @@ export class BrowserPage {
   private readonly backend: "chrome" | "webkit";
   private runtimeCaptureEnabled = false;
   private initScripts: string[] = [];
+  private readonly startupStartedAt = performance.now();
+  startupStage = "constructing browser";
 
   constructor(options: BrowserOptions = {}) {
     this.backend = options.backend ?? (process.platform === "darwin" ? "webkit" : "chrome");
+    this.traceStartup("constructing browser");
     // GitHub-hosted Linux runners expose a small /dev/shm. Without this
     // switch Chrome can leave the first navigation pending, which then poisons
     // every later WebView operation with "already pending" errors.
@@ -103,7 +106,7 @@ export class BrowserPage {
         ? {
             type: "chrome" as const,
             url: false as const,
-            argv: ["--disable-dev-shm-usage"],
+            argv: ["--disable-dev-shm-usage", "--enable-logging=stderr", "--v=1"],
             stderr: "inherit" as const,
           }
         : this.backend;
@@ -116,22 +119,32 @@ export class BrowserPage {
         this.consoleErrors.push(args.map(describeConsoleArg).join(" "));
       },
     });
+    this.traceStartup("native view constructed");
   }
 
-  startupStage = "constructing browser";
+  private traceStartup(stage: string): void {
+    this.startupStage = stage;
+    if (process.env["CI"] === "true")
+      console.info(`[browser] +${Math.round(performance.now() - this.startupStartedAt)}ms ${stage}`);
+  }
 
   /** Verify the native transport before loading any application or test state. */
   async initialize(): Promise<void> {
     // Bun 1.4.4 creates an about:blank target before the first Page.navigate,
     // then waits for Page.loadEventFired. Load a distinct document rather than
     // depending on another load event for that target's existing blank page.
-    this.startupStage = "navigate startup document";
+    this.traceStartup("navigate startup document");
     await this.webview.navigate(WEBVIEW_STARTUP_URL);
-    this.startupStage = "enable Runtime capture";
+    if (this.backend === "chrome" && process.env["CI"] === "true") {
+      this.traceStartup("query browser version");
+      console.info("[browser] native version", await this.webview.cdp("Browser.getVersion"));
+    }
+    this.traceStartup("enable Runtime capture");
     await this.enableRuntimeCapture();
-    this.startupStage = "evaluate handshake";
+    this.traceStartup("evaluate handshake");
     const result = await this.webview.evaluate("document.title");
     if (result !== WEBVIEW_STARTUP_TITLE) throw new Error("WebView startup did not load the handshake document");
+    this.traceStartup("startup ready");
   }
 
   private async evaluateBounded(script: string): Promise<unknown> {
