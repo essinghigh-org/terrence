@@ -240,11 +240,6 @@ function eventLoopDelaySnapshot(): EventLoopDelayStats {
   };
 }
 
-/** Expose the current bounded event-loop histogram to benchmark runners. */
-export function eventLoopDelayMetrics(): EventLoopDelayStats {
-  return eventLoopDelaySnapshot();
-}
-
 export function requestStarted(): void {
   counters.requestsTotal += 1;
   counters.requestsInFlight += 1;

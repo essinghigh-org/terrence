@@ -314,7 +314,7 @@ export async function resolveExternalUrl(
   url: string,
   allowPrivate = false,
   resolve: HostResolver = async (hostname): Promise<readonly string[]> =>
-    (await lookup(hostname, { all: true, verbatim: true })).map((entry): string => entry.address),
+    (await lookup(hostname, { all: true, order: "verbatim" })).map((entry): string => entry.address),
 ): Promise<{ error: string } | { target: ResolvedExternalUrl }> {
   const parsedOrError = parseExternalUrl(url);
   if (typeof parsedOrError === "string") return { error: parsedOrError };

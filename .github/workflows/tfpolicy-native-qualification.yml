@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'tools/tfpolicy-supervisor/**'
-      - 'tools/tfpolicy-recorder/**'
-      - 'backend/bin/landlock-runner.c'
-      - '.github/workflows/tfpolicy-native-qualification.yml'
+      - "tools/tfpolicy-supervisor/**"
+      - "tools/tfpolicy-recorder/**"
+      - "backend/bin/landlock-runner.c"
+      - ".github/workflows/tfpolicy-native-qualification.yml"
 
 permissions:
   contents: read

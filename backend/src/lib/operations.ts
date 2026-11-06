@@ -10,31 +10,6 @@ import { queueRunNotification } from "./notifications";
 import { log } from "./log";
 import type { DeepReadonly } from "./types";
 
-// Shared cancellation/deadline primitives are exported from the operations
-// surface so routes and workers classify stop causes consistently without
-// coupling to any persistence implementation.
-export {
-  createOperationContext,
-  OperationCanceledError,
-} from "./operation-context";
-export type {
-  OperationCancellationReason,
-  OperationContext,
-  OperationContextOptions,
-} from "./operation-context";
-
-// Workspace run readiness is exported from the operations library as part of
-// the public operations surface; the implementation lives in its own module
-// so route loading does not entangle the existing apply gates.
-export { assessWorkspacePreflight, preflightResource } from "./workspace-preflight";
-export type {
-  PreflightAssessmentStatus,
-  PreflightCheckStatus,
-  WorkspacePreflightAssessment,
-  WorkspacePreflightCheck,
-  WorkspacePreflightOptions,
-} from "./workspace-preflight";
-
 // --- Maintenance windows (kanban 21.6) -------------------------------
 // Global site setting `maintenance-windows`:
 //   { enabled: boolean, windows: [{ days: number[] (0=Sun..6=Sat),

@@ -436,7 +436,7 @@ function unbracketHostname(host: string): string {
 async function resolveHost(hostname: string): Promise<string[] | null> {
   try {
     const result = await Promise.race([
-      lookup(hostname, { all: true, verbatim: true }),
+      lookup(hostname, { all: true, order: "verbatim" }),
       new Promise<null>((resolvePromise): void => {
         setTimeout(() => {
           resolvePromise(null);
