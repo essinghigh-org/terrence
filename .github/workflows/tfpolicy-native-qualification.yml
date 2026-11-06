@@ -1,0 +1,136 @@
+name: Native tfpolicy qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tools/tfpolicy-supervisor/**"
+      - "tools/tfpolicy-recorder/**"
+      - "backend/bin/landlock-runner.c"
+      - ".github/workflows/tfpolicy-native-qualification.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native-facilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build sandbox helper without changing host settings
+        run: |
+          gcc -O2 -Wall -Wextra -Werror backend/bin/landlock-runner.c -o "$RUNNER_TEMP/landlock-runner"
+          chmod 0555 "$RUNNER_TEMP/landlock-runner"
+      - name: Prepare user-authorized ephemeral runner isolation
+        id: isolation
+        run: |
+          set -euo pipefail
+          # Explicit user authorization: this disposable GitHub-hosted job only.
+          # Do not alter the host's controller set or any existing cgroup.
+          ROOT="/sys/fs/cgroup/tfpolicy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$ROOT"
+          grep -qw pids /sys/fs/cgroup/cgroup.subtree_control
+          grep -qw memory /sys/fs/cgroup/cgroup.subtree_control
+          cat /proc/sys/kernel/core_pattern > "$RUNNER_TEMP/tfpolicy-original-core-pattern"
+          printf '%s\n' "$ROOT" > "$RUNNER_TEMP/tfpolicy-owned-cgroup"
+          sudo mkdir "$ROOT"
+          echo 512 | sudo tee "$ROOT/pids.max" >/dev/null
+          echo 3221225472 | sudo tee "$ROOT/memory.max" >/dev/null
+          echo '+pids +memory' | sudo tee "$ROOT/cgroup.subtree_control" >/dev/null
+          sudo mkdir "$ROOT/launcher"
+          sudo chown "$(id -u):$(id -g)" "$ROOT" "$ROOT/cgroup.procs" "$ROOT/cgroup.threads" "$ROOT/cgroup.subtree_control"
+          echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null
+          echo "cgroup_root=$ROOT" >> "$GITHUB_OUTPUT"
+      - name: Probe prepared native facilities
+        id: facilities
+        run: |
+          python3 tools/tfpolicy-supervisor/integration/probe.py \
+            --runner "$RUNNER_TEMP/landlock-runner" --output "$RUNNER_TEMP/native-capabilities.json" \
+            --cgroup-root "${{ steps.isolation.outputs.cgroup_root }}"
+      - name: Run transport and qualification-oracle unit tests
+        env:
+          GOTOOLCHAIN: go1.26.10
+        run: |
+          (cd tools/tfpolicy-supervisor && go test -race -count=1 -v ./... && go vet ./...)
+          (cd tools/tfpolicy-supervisor/integration && python3 -m unittest -v)
+      - name: Build and race-test recorder and test-only protocol fixture
+        env:
+          GOTOOLCHAIN: go1.26.10
+          TFPOLICY_TEST_RACE: 1
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/native-bin" "$RUNNER_TEMP/terraform-protocol"
+          git -C "$RUNNER_TEMP/terraform-protocol" init
+          git -C "$RUNNER_TEMP/terraform-protocol" remote add origin https://github.com/hashicorp/terraform.git
+          git -C "$RUNNER_TEMP/terraform-protocol" fetch --depth=1 origin ff6329e4c2a159b46ec2b73d36bfa3d0ef6560c9
+          test "$(git -C "$RUNNER_TEMP/terraform-protocol" rev-parse FETCH_HEAD)" = ff6329e4c2a159b46ec2b73d36bfa3d0ef6560c9
+          bash tools/tfpolicy-recorder/build.sh "$RUNNER_TEMP/terraform-protocol" "$RUNNER_TEMP/native-bin/recorder"
+          bash tools/tfpolicy-supervisor/integration/build-fixture.sh "$RUNNER_TEMP/terraform-protocol" "$RUNNER_TEMP/native-bin/fixture"
+          (cd tools/tfpolicy-supervisor && go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/native-bin/shim" ./cmd/tfpolicy-shim)
+          (cd tools/tfpolicy-supervisor && go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/native-bin/supervisor" ./cmd/tfpolicy-supervisor)
+      - name: Fetch separately distributed official stock Terraform
+        if: steps.facilities.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          # Pinned from HashiCorp's official 1.17.1 SHA256SUMS. No engine source build.
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            https://releases.hashicorp.com/terraform/1.17.1/terraform_1.17.1_linux_amd64.zip \
+            -o "$RUNNER_TEMP/terraform.zip"
+          echo "4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061  $RUNNER_TEMP/terraform.zip" | sha256sum --check --strict
+          unzip "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/native-bin/official"
+      - name: Run actual native engine, sandbox, bootstrap, recorder and cgroup matrix
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          DELEGATED_CGROUP: ${{ steps.facilities.outputs.cgroup_root }}
+        run: |
+          # Enter only our new delegated subtree as root, then immediately drop
+          # to the ordinary runner user before the harness or any binary runs.
+          # Without this, cgroup migration checks reject the outside-to-leaf move.
+          sudo bash -ec 'echo $$ > "$1/launcher/cgroup.procs"; exec runuser -u "$2" -- "${@:3}"' -- \
+            "$DELEGATED_CGROUP" "$(id -un)" \
+            python3 "$GITHUB_WORKSPACE/tools/tfpolicy-supervisor/integration/run.py" \
+            --terraform "$RUNNER_TEMP/native-bin/official/terraform" \
+            --terraform-sha256 "$(sha256sum "$RUNNER_TEMP/native-bin/official/terraform" | cut -d ' ' -f 1)" \
+            --runner "$RUNNER_TEMP/landlock-runner" --supervisor "$RUNNER_TEMP/native-bin/supervisor" \
+            --shim "$RUNNER_TEMP/native-bin/shim" --recorder "$RUNNER_TEMP/native-bin/recorder" \
+            --fixture "$RUNNER_TEMP/native-bin/fixture" --cgroup-root "$DELEGATED_CGROUP" \
+            --output "$RUNNER_TEMP/native-results"
+      - name: Require actual native qualification facilities
+        if: steps.facilities.outputs.ready != 'true'
+        run: |
+          echo "::error::Native qualification did not run. See native-capabilities.json for missing host facilities."
+          exit 1
+      - name: Restore ephemeral runner settings and remove owned cgroup
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -f "$RUNNER_TEMP/tfpolicy-original-core-pattern"; then
+            sudo tee /proc/sys/kernel/core_pattern < "$RUNNER_TEMP/tfpolicy-original-core-pattern" >/dev/null
+          fi
+          if test -f "$RUNNER_TEMP/tfpolicy-owned-cgroup"; then
+            ROOT="$(cat "$RUNNER_TEMP/tfpolicy-owned-cgroup")"
+            test "$ROOT" = "/sys/fs/cgroup/tfpolicy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            if test -d "$ROOT"; then
+              echo 1 | sudo tee "$ROOT/cgroup.kill" >/dev/null
+              for n in {1..100}; do
+                grep -q '^populated 0$' "$ROOT/cgroup.events" && break
+                sleep 0.05
+              done
+              grep -q '^populated 0$' "$ROOT/cgroup.events"
+              sudo find "$ROOT" -depth -mindepth 1 -type d -exec rmdir {} \;
+              sudo rmdir "$ROOT"
+            fi
+          fi
+      - name: Preserve capability report and actual qualification logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tfpolicy-native-qualification
+          path: |
+            ${{ runner.temp }}/native-capabilities.json
+            ${{ runner.temp }}/native-results
+          if-no-files-found: error
+          retention-days: 7
