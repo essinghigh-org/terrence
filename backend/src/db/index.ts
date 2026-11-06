@@ -939,7 +939,7 @@ async function withPgMigrationAdvisoryLock(operation: () => Promise<void>): Prom
         .unsafe("SELECT set_config('statement_timeout', $1, false)", [previousStatementTimeout])
         .catch((): void => undefined);
     }
-    reserved.release();
+    await reserved.release();
   }
 }
 
