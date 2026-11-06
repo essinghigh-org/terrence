@@ -1,4 +1,4 @@
-import { startWebView, withWebViewDeadline } from "./webview-lifecycle";
+import { startWebView, WEBVIEW_STARTUP_TITLE, WEBVIEW_STARTUP_URL, withWebViewDeadline } from "./webview-lifecycle";
 
 export type BrowserOptions = {
   width?: number;
@@ -100,7 +100,12 @@ export class BrowserPage {
     // every later WebView operation with "already pending" errors.
     const backend =
       this.backend === "chrome" && process.env["CI"] === "true"
-        ? { type: "chrome" as const, url: false as const, argv: ["--disable-dev-shm-usage"] }
+        ? {
+            type: "chrome" as const,
+            url: false as const,
+            argv: ["--disable-dev-shm-usage"],
+            stderr: "inherit" as const,
+          }
         : this.backend;
     this.webview = new Bun.WebView({
       backend,
@@ -117,13 +122,16 @@ export class BrowserPage {
 
   /** Verify the native transport before loading any application or test state. */
   async initialize(): Promise<void> {
-    this.startupStage = "navigate about:blank";
-    await this.webview.navigate("about:blank");
+    // Bun 1.4.4 creates an about:blank target before the first Page.navigate,
+    // then waits for Page.loadEventFired. Load a distinct document rather than
+    // depending on another load event for that target's existing blank page.
+    this.startupStage = "navigate startup document";
+    await this.webview.navigate(WEBVIEW_STARTUP_URL);
     this.startupStage = "enable Runtime capture";
     await this.enableRuntimeCapture();
     this.startupStage = "evaluate handshake";
-    const result = await this.webview.evaluate("1 + 1");
-    if (result !== 2) throw new Error("WebView startup handshake returned an unexpected result");
+    const result = await this.webview.evaluate("document.title");
+    if (result !== WEBVIEW_STARTUP_TITLE) throw new Error("WebView startup did not load the handshake document");
   }
 
   private async evaluateBounded(script: string): Promise<unknown> {
@@ -176,7 +184,8 @@ export class BrowserPage {
       script = fnOrScript;
     }
     this.initScripts.push(script);
-    if (this.webview.url !== "" && this.webview.url !== "about:blank") await this.evaluateBounded(script);
+    if (this.webview.url !== "" && this.webview.url !== "about:blank" && this.webview.url !== WEBVIEW_STARTUP_URL)
+      await this.evaluateBounded(script);
   }
 
   private async enableRuntimeCapture(): Promise<void> {
