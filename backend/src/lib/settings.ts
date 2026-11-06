@@ -1,3 +1,4 @@
+import { POLICY_ENFORCEMENT_DEFAULTS } from "./policy-enforcement";
 import { loggingSetting, runtimeConfigurationReport } from "./runtime-config";
 import { configurationReportValue, settingsContract, validateSettings } from "./settings-contract";
 import { eq } from "drizzle-orm";
@@ -10,6 +11,7 @@ import { decryptSecret, encryptSecret, isEncryptedSecret } from "./secrets";
 export type Settings = Record<string, unknown>;
 
 const settingDefaults: Record<string, Settings> = {
+  "policy-enforcement": POLICY_ENFORCEMENT_DEFAULTS,
   general: {
     "local-auth-enabled": true,
     "local-signup-enabled": null,
@@ -389,7 +391,9 @@ export async function persistedConfigurationReport(): Promise<readonly Persisted
           takesEffect:
             origin === "environment"
               ? "Environment changes require a process restart"
-              : "Next settings read; cache lifetime is at most one second",
+              : group === "policy-enforcement"
+                ? "Next policy gate; fresh database read, no restart required"
+                : "Next settings read; cache lifetime is at most one second",
         };
       });
     }),

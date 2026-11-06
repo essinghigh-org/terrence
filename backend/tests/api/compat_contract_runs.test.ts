@@ -1,3 +1,4 @@
+import { seedOverridablePolicyCheck } from "./policy_override_fixture";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -338,6 +339,7 @@ describe("remote-workflow runs contract", () => {
       createdAt: Date.now(),
     });
     try {
+      await seedOverridablePolicyCheck(policyRunId);
       // Overrides require a recorded justification (CodeRabbit review).
       const overridden = await expectSuccessResponse(
         await request(`/api/v2/runs/${policyRunId}/actions/override-policy`, {

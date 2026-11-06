@@ -26,11 +26,23 @@ Each policy has an enforcement level:
 
 | Level | Behavior |
 |---|---|
-| Advisory | Evaluated and reported. Never blocks. |
+| Advisory | A successfully evaluated policy denial is reported and does not block. |
 | Mandatory | A failure blocks the apply. |
 | Soft mandatory | A failure blocks the apply unless an operator overrides it. |
 
-Mandatory failures move the run to `errored` when the policy set is not overridable. Soft-mandatory failures move the run to `policy_soft_failed`, where an operator can override.
+Mandatory denials block when the policy set is not overridable. Sentinel
+soft-mandatory denials and denials in a policy set explicitly configured with
+`overridable: true` move the run to `policy_soft_failed`, where an authorized operator can override them. An engine
+execution error, missing policy source, malformed output, or incomplete
+assessment is not a policy denial: it blocks even for advisory or overridable
+policies, and cannot be overridden as if evaluation succeeded. OPA requires
+its policy set to allow overrides explicitly; `overridable` defaults to false.
+
+Site administrators can disable OPA or Sentinel enforcement independently
+through [audited policy enforcement controls](administration#policy-enforcement).
+Both engines enforce by default. A disabled engine is an intentional site-wide
+bypass and is identified in the run log, not recorded as a policy passing.
+The controls do not enable the unfinished `tfpolicy` runtime.
 
 ## Evaluation flow
 
@@ -39,6 +51,11 @@ Mandatory failures move the run to `errored` when the policy set is not overrida
 3. Each policy evaluates against the plan JSON.
 4. Results are stored per policy check with status, result, and address.
 5. The run proceeds or stops according to the enforcement levels.
+6. Before override or apply, Terrence verifies that the assessment is complete
+   and still matches the policy source, attachments, parameters, tool versions,
+   override permissions, and site enforcement revision. If any of these changed
+   since evaluation, create a new plan. A client or execution agent cannot
+   bypass this gate by reporting an unrelated successful result.
 
 ## Policy checks
 

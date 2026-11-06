@@ -1,3 +1,4 @@
+import { deleteOrganization } from "../../src/lib/lifecycle";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -209,7 +210,7 @@ main = rule { secret_word == "s3cret" }
         hardFailed: true,
         softFailed: false,
       });
-      const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
+      const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.policySetId, setId) });
       expect(checks).toHaveLength(1);
       expect(checks[0]).toMatchObject({ status: "unreachable", policySetId: setId, policyId: null });
       expect(checks[0]?.result?.["error"]).toContain("tfpolicy");
@@ -314,7 +315,8 @@ main = rule { secret_word == "s3cret" }
     await withEnv("SENTINEL_BINARY_PATH", "/nonexistent/sentinel-xyz", async () => {
       await db.delete(policyChecks).where(eq(policyChecks.runId, senRunId));
       const result = await runPolicyChecks(senRunId, senWsId, orgId, undefined, undefined, {});
-      expect(result.proceed).toBe(true);
+      expect(result.proceed).toBe(false);
+      expect(result.hardFailed).toBe(true);
       const rows = await checksFor(senPassId);
       expect(rows.length).toBeGreaterThan(0);
       expect(rows[0]?.status).toBe("unreachable");
@@ -322,8 +324,7 @@ main = rule { secret_word == "s3cret" }
     });
   });
 
-  it("executes OPA policies for real when the engine resolves", async () => {
-    if (!opaAvailable) return;
+  it.skipIf(!opaAvailable)("executes OPA policies for real when the engine resolves", async () => {
     await db.delete(policyChecks).where(eq(policyChecks.runId, opaRunId));
     const result = await runPolicyChecks(opaRunId, opaWsId, orgId, undefined, undefined, {});
     expect(result.hardFailed).toBe(true);
@@ -334,8 +335,7 @@ main = rule { secret_word == "s3cret" }
     expect(failed[0]?.status).toBe("failed");
   });
 
-  it("executes Sentinel policies for real when the engine resolves", async () => {
-    if (!sentinelAvailable) return;
+  it.skipIf(!sentinelAvailable)("executes Sentinel policies for real when the engine resolves", async () => {
     await db.delete(policyChecks).where(eq(policyChecks.runId, senRunId));
     const result = await runPolicyChecks(senRunId, senWsId, orgId, undefined, undefined, {});
     expect(result.proceed).toBe(true);
@@ -343,12 +343,11 @@ main = rule { secret_word == "s3cret" }
     expect(passed[0]?.status).toBe("passed");
   });
 
-  it("delivers sensitive Sentinel params via config file for real", async () => {
+  it.skipIf(!sentinelAvailable)("delivers sensitive Sentinel params via config file for real", async () => {
     // End-to-end proof for the CWE-200 fix: the encrypted secret_word
     // parameter reaches the real engine through sentinel.json (the policy
     // passes only if the value arrives), while the unit test above proves
     // it never appears in argv.
-    if (!sentinelAvailable) return;
     await db.delete(policyChecks).where(eq(policyChecks.runId, senRunId));
     const result = await runPolicyChecks(senRunId, senWsId, orgId, undefined, undefined, {});
     expect(result.proceed).toBe(true);
@@ -359,4 +358,209 @@ main = rule { secret_word == "s3cret" }
     // a future engine version echoes evaluated values in its trace.
     expect(JSON.stringify(rows[0]?.result ?? {})).not.toContain("s3cret");
   });
+});
+
+describe("policy decisions fail closed at the worker boundary", () => {
+  const suffix = crypto.randomUUID();
+  const orgId = `org-decision-${suffix}`;
+  const workspaceId = `ws-decision-${suffix}`;
+  const setId = `ps-decision-${suffix}`;
+  const policyId = `pol-decision-${suffix}`;
+  const runId = `run-decision-${suffix}`;
+  let engineDirectory: string;
+
+  beforeAll(async () => {
+    engineDirectory = await mkdtemp(join(tmpdir(), "terrence-policy-decision-"));
+    await db.insert(organizations).values({ id: orgId, name: orgId });
+    await db.insert(workspaces).values({ id: workspaceId, orgId, name: workspaceId });
+    await db.insert(runs).values({ id: runId, workspaceId, status: "planned", createdAt: Date.now() });
+    await db.insert(policySets).values({ id: setId, orgId, name: setId, kind: "opa", global: true });
+    await db.insert(policies).values({ id: policyId, orgId, policySetId: setId, name: policyId, kind: "opa" });
+  });
+
+  afterAll(async () => {
+    await deleteOrganization(orgId);
+    await rm(engineDirectory, { recursive: true, force: true });
+  });
+
+  const opaDecision = (value: unknown): string => JSON.stringify({ result: [{ expressions: [{ value }] }] });
+  const sentinelDecision = (result: boolean): string =>
+    JSON.stringify({
+      result,
+      error: null,
+      policies: [{ result, error: null, trace: { result, error: null } }],
+    });
+  const cases: {
+    name: string;
+    kind: string;
+    output: string;
+    status: string;
+    proceed: boolean;
+    enforcement?: string;
+    exit?: number;
+  }[] = [
+    { name: "OPA empty deny array passes", kind: "opa", output: opaDecision([]), status: "passed", proceed: true },
+    {
+      name: "OPA nonempty deny array blocks mandatory",
+      kind: "opa",
+      output: opaDecision(["denied"]),
+      status: "failed",
+      proceed: false,
+    },
+    {
+      name: "OPA advisory denial remains nonblocking",
+      kind: "opa",
+      output: opaDecision(["denied"]),
+      enforcement: "advisory",
+      status: "failed",
+      proceed: true,
+    },
+    {
+      name: "OPA legacy explicit violations envelope",
+      kind: "opa",
+      output: opaDecision({ violations: [] }),
+      status: "passed",
+      proceed: true,
+    },
+    ...[
+      {},
+      { result: [] },
+      { result: null },
+      { result: [{ expressions: [] }] },
+      { result: [{ expressions: [{ value: [] }, { value: [] }] }] },
+    ].map((output, index) => ({
+      name: `OPA malformed envelope ${index}`,
+      kind: "opa",
+      output: JSON.stringify(output),
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    })),
+    ...[null, true, false, "pass", {}, { deny: [] }, { violations: "none" }].map((value, index) => ({
+      name: `OPA invalid decision ${index}`,
+      kind: "opa",
+      output: opaDecision(value),
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    })),
+    {
+      name: "OPA malformed JSON",
+      kind: "opa",
+      output: "not json",
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    },
+    {
+      name: "OPA errors cannot accompany a pass",
+      kind: "opa",
+      output: JSON.stringify({ result: [{ expressions: [{ value: [] }] }], errors: [{ message: "engine error" }] }),
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    },
+    {
+      name: "OPA engine nonzero exit",
+      kind: "opa",
+      output: opaDecision([]),
+      exit: 1,
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    },
+    { name: "Sentinel valid pass", kind: "sentinel", output: sentinelDecision(true), status: "passed", proceed: true },
+    {
+      name: "Sentinel advisory denial remains nonblocking",
+      kind: "sentinel",
+      output: sentinelDecision(false),
+      exit: 1,
+      enforcement: "advisory",
+      status: "failed",
+      proceed: true,
+    },
+    {
+      name: "Sentinel soft denial requires override",
+      kind: "sentinel",
+      output: sentinelDecision(false),
+      exit: 1,
+      enforcement: "soft-mandatory",
+      status: "soft_failed",
+      proceed: false,
+    },
+    {
+      name: "Sentinel hard denial blocks",
+      kind: "sentinel",
+      output: sentinelDecision(false),
+      exit: 1,
+      status: "failed",
+      proceed: false,
+    },
+    ...[2, 3, 9].map((exit) => ({
+      name: `Sentinel exit ${exit} is not an overridable denial`,
+      kind: "sentinel",
+      output: sentinelDecision(false),
+      exit,
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    })),
+    ...[
+      "not json",
+      "{}",
+      "[]",
+      '{"result":null}',
+      sentinelDecision(false),
+      '{"result":true,"policies":[]}',
+      '{"result":true,"error":"runtime error"}',
+      '{"result":true,"trace":{"error":"runtime error"}}',
+      '{"result":true,"skipped":true}',
+      '{"result":true,"policies":[{"result":true,"skipped":true}]}',
+      '{"result":true,"policies":[{"result":true,"error":"runtime error"}]}',
+      '{"result":true,"policies":[{"result":true,"trace":{"error":"runtime error"}}]}',
+    ].map((output, index) => ({
+      name: `Sentinel malformed or inconsistent result ${index}`,
+      kind: "sentinel",
+      output,
+      enforcement: "advisory",
+      status: "errored",
+      proceed: false,
+    })),
+  ];
+
+  for (const fixture of cases) {
+    it(fixture.name, async () => {
+      const variable = fixture.kind === "opa" ? "OPA_BINARY_PATH" : "SENTINEL_BINARY_PATH";
+      const oldPath = process.env[variable];
+      const executable = join(engineDirectory, fixture.kind);
+      await writeFile(
+        executable,
+        `#!/bin/sh\ncat <<'POLICY_RESULT'\n${fixture.output}\nPOLICY_RESULT\nexit ${fixture.exit ?? 0}\n`,
+        { mode: 0o700 },
+      );
+      process.env[variable] = executable;
+      try {
+        await db.update(policySets).set({ kind: fixture.kind }).where(eq(policySets.id, setId));
+        await db
+          .update(policies)
+          .set({
+            kind: fixture.kind,
+            enforcementLevel: fixture.enforcement ?? (fixture.kind === "opa" ? "mandatory" : "hard-mandatory"),
+            query: "data.deny",
+            source: fixture.kind === "opa" ? "package test\ndeny := []" : "main = rule { true }",
+          })
+          .where(eq(policies.id, policyId));
+        await db.delete(policyChecks).where(eq(policyChecks.runId, runId));
+        const outcome = await runPolicyChecks(runId, workspaceId, orgId, undefined, undefined, {});
+        const checks = await db.query.policyChecks.findMany({ where: eq(policyChecks.policySetId, setId) });
+        expect(checks).toHaveLength(1);
+        expect(checks[0]?.status).toBe(fixture.status);
+        expect(outcome.proceed).toBe(fixture.proceed);
+        if (fixture.status === "errored") expect(outcome.hardFailed).toBe(true);
+      } finally {
+        if (oldPath === undefined) Reflect.deleteProperty(process.env, variable);
+        else process.env[variable] = oldPath;
+      }
+    });
+  }
 });

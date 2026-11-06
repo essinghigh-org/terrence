@@ -1,3 +1,5 @@
+import { deleteOrganization } from "../../src/lib/lifecycle";
+import { seedOverridablePolicyCheck } from "./policy_override_fixture";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { and, eq, inArray } from "drizzle-orm";
@@ -124,7 +126,7 @@ afterAll(async () => {
     await Bun.sleep(10);
   }
   if (orgId !== "") await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
-  if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
+  if (orgId !== "") await deleteOrganization(orgId);
   await db.delete(apiTokens).where(eq(apiTokens.token, token));
   await db.delete(users).where(eq(users.id, userId));
 });
@@ -265,6 +267,7 @@ describe("audit coverage", () => {
     ] as const;
 
     for (const transition of transitions) {
+      if (transition.action === "override-policy") await seedOverridablePolicyCheck(transition.runId);
       const response = await request(
         `/api/v2/runs/${transition.runId}/actions/${transition.action}`,
         "POST",
@@ -356,6 +359,7 @@ describe("audit coverage", () => {
     const runId = `audit-override-justification-${suffix}`;
     await db.insert(runs).values({ id: runId, workspaceId, status: "policy_soft_failed", createdAt: Date.now() });
     try {
+      await seedOverridablePolicyCheck(runId);
       const bare = await request(`/api/v2/runs/${runId}/actions/override-policy`, "POST");
       expect(bare.status).toBe(422);
       const justified = await request(`/api/v2/runs/${runId}/actions/override-policy`, "POST", {

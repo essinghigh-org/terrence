@@ -1,3 +1,4 @@
+import { seedOverridablePolicyCheck } from "./policy_override_fixture";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
@@ -673,12 +674,14 @@ describe("granular organization permissions", () => {
     );
     expect(runTask.status).toBe(201);
 
+    await seedOverridablePolicyCheck(runIds.global, checkIds.global);
     expect(
       (await request(`/api/v2/policy-checks/${checkIds.global}/actions/override`, tokens.overrides, "POST")).status,
     ).toBe(200);
     expect(
       (await request(`/api/v2/policy-checks/${checkIds.direct}/actions/override`, tokens.none, "POST")).status,
     ).toBe(404);
+    await seedOverridablePolicyCheck(runIds.direct, checkIds.direct);
     expect(
       (await request(`/api/v2/policy-checks/${checkIds.direct}/actions/override`, tokens.delegateOverrides, "POST"))
         .status,
@@ -706,6 +709,7 @@ describe("granular organization permissions", () => {
     expect(readOnly.attributes.permissions["can-override-policy-check"]).toBe(false);
     expect((await request(`/api/v2/runs/${runIds.soft}/actions/apply`, ownerToken, "POST")).status).toBe(409);
 
+    await seedOverridablePolicyCheck(runIds.soft, checkIds.soft);
     const overrideResponse = await request(
       `/api/v2/runs/${runIds.soft}/actions/override-policy`,
       tokens.delegateOverrides,

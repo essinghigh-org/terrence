@@ -274,6 +274,9 @@ Unknown fields within these groups are rejected.
 | plan-explainer.model | string or null | redacted |
 | plan-explainer.provider | string or null | redacted |
 | plan-explainer.reasoning-effort | enum (none, minimal, low, medium, high, xhigh, max) or null | visible |
+| policy-enforcement.opa | boolean | visible |
+| policy-enforcement.revision | integer 0–9007199254740990 | visible |
+| policy-enforcement.sentinel | boolean | visible |
 | retention.delete-older-than-n-days | integer 1–36500 or null | visible |
 | saml.link-by-email | boolean | visible |
 | site.agent-enabled | boolean | visible |
@@ -319,4 +322,6 @@ The admin-only GET /api/v2/admin/system-info response includes
 deployment-configuration and persisted-configuration. Entries identify the value's
 origin and whether a restart is required. Sensitive persisted values are redacted.
 Persisted changes take effect on the next settings read; cache lifetime is at most
-one second. Already running operations retain values captured when they started.
+one second. Policy enforcement controls are freshly read at each policy gate;
+changes after evaluation require a new plan before apply. Other running operations
+retain values captured when they started.

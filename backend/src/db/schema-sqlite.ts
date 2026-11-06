@@ -1865,7 +1865,7 @@ export const policies = sqliteTable("policies", {
   name: text("name").notNull(),
   description: text("description"),
   kind: text("kind").notNull().default("sentinel"), // 'sentinel' or 'opa'
-  enforcementLevel: text("enforcement_level").notNull().default("soft-mandatory"), // 'hard-mandatory', 'soft-mandatory', 'advisory'
+  enforcementLevel: text("enforcement_level").notNull().default("soft-mandatory"), // Sentinel: hard-mandatory, soft-mandatory, advisory; OPA: mandatory, advisory
   query: text("query"),
   source: text("source"),
   sourcePath: text("source_path"),

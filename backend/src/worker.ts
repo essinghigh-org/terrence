@@ -1,5 +1,10 @@
-import { workspacePolicyExecutionError } from "./lib/workspace-policy-gate";
-import { resolveWorkspacePolicySetIds } from "./lib/policy-set-scope";
+import {
+  workspacePolicyExecutionError,
+  captureWorkspacePolicyEvaluation,
+  completeWorkspacePolicyEvaluation,
+  policyFailureIsOverridable,
+  type WorkspacePolicySnapshot,
+} from "./lib/workspace-policy-gate";
 import { runConfigurationTrusted } from "./lib/run-trust";
 import { readConfinedSavedPlan, writeConfinedSavedPlan } from "./lib/saved-plan-files";
 import { integerSetting } from "./lib/runtime-config";
@@ -22,9 +27,8 @@ import {
   variableSetWorkspaces,
   variableSetProjects,
   variableSetVariables,
-  policySets,
-  policySetParameters,
-  policies,
+  type policySetParameters,
+  type policies,
   policyChecks,
   runTasks,
   workspaceRunTasks,
@@ -4295,6 +4299,10 @@ async function spawnAndWaitApply(
   const stateFilePath = join(executionDir, "terraform.tfstate");
   const applyArgs = [resolved.binaryPath, "apply", "-no-color", "-input=false", "tfplan"];
 
+  const currentWorkspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+  if (currentWorkspace === undefined) throw new Error("Apply blocked: workspace no longer exists");
+  const policyError = await workspacePolicyExecutionError(db, currentWorkspace, runId);
+  if (policyError !== null) throw new Error(policyError);
   const applyProc = spawnRunProcess(
     runId,
     applyArgs,
@@ -4490,6 +4498,8 @@ async function runApplySequence(
   progress: { captureFailed: boolean; started: boolean },
 ): Promise<{ success: boolean; canceled: boolean; started: boolean }> {
   const ctx = await prepareApplyExecutionContext(runId, run, workspace, org, workDir);
+  const policyError = await workspacePolicyExecutionError(db, workspace, runId);
+  if (policyError !== null) throw new Error(policyError);
   const outcome = await executeApplyProcess(runId, workspace, run, ctx, progress);
   if (outcome.captureFailed) progress.captureFailed = true;
   if (outcome.started) progress.started = true;
@@ -4618,7 +4628,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
   const { run, workspace, org } = scope;
 
   // A policy attached after a successful plan must not be bypassed by apply.
-  const policyError = await workspacePolicyExecutionError(db, workspace);
+  const policyError = await workspacePolicyExecutionError(db, workspace, runId);
   if (policyError !== null) {
     await updateRunStatus(runId, "errored");
     await writeLog(runId, "apply", `[terrence ERROR] ${policyError}`);
@@ -4880,32 +4890,26 @@ export function splitSentinelParams(parameters: readonly SentinelParamInput[]): 
 
 type PlanPolicySets = {
   allPolicies: (typeof policies.$inferSelect)[];
-  policySetsById: ReadonlyMap<string, Readonly<{ kind: string }>>;
+  policySetsById: ReadonlyMap<string, Readonly<{ kind: string; overridable: boolean }>>;
   parametersBySet: ReadonlyMap<string, (typeof policySetParameters.$inferSelect)[]>;
   allSetIds: string[];
   unsupportedSets: Readonly<{ id: string; kind: string }>[];
 };
 
-async function resolvePlanPolicySets(workspaceId: string, orgId: string): Promise<PlanPolicySets | null> {
-  const allSetIds = await resolveWorkspacePolicySetIds(db, workspaceId, orgId);
-  if (allSetIds.length === 0) return null;
-
-  const [allPolicies, effectivePolicySets, setParameters] = await Promise.all([
-    db.query.policies.findMany({ where: inArray(policies.policySetId, allSetIds) }),
-    db.query.policySets.findMany({ where: inArray(policySets.id, allSetIds) }),
-    db.query.policySetParameters.findMany({ where: inArray(policySetParameters.policySetId, allSetIds) }),
-  ]);
+function resolvePlanPolicySets(snapshot: WorkspacePolicySnapshot): PlanPolicySets | null {
+  const allPolicies = snapshot.policies;
+  const effectivePolicySets = snapshot.sets;
+  const setParameters = snapshot.parameters;
+  const allSetIds = effectivePolicySets.map((set) => set.id);
   const unsupportedSets = effectivePolicySets.filter(
     (policySet): boolean => !["opa", "sentinel"].includes(policySet.kind),
   );
   if (allPolicies.length === 0 && unsupportedSets.length === 0) return null;
   const policySetsById = new Map(
-    effectivePolicySets.map(
-      (policySet: Readonly<{ id: string; kind: string }>): readonly [string, Readonly<{ kind: string }>] => [
-        policySet.id,
-        { kind: policySet.kind },
-      ],
-    ),
+    effectivePolicySets.map((policySet): readonly [string, Readonly<{ kind: string; overridable: boolean }>] => [
+      policySet.id,
+      { kind: policySet.kind, overridable: policySet.overridable === true },
+    ]),
   );
   const parametersBySet = new Map<string, (typeof policySetParameters.$inferSelect)[]>();
   for (const parameter of setParameters) {
@@ -4919,6 +4923,7 @@ async function resolvePlanPolicySets(workspaceId: string, orgId: string): Promis
 async function failClosedPolicyChecks(
   runId: string,
   allPolicies: (typeof policies.$inferSelect)[],
+  evaluationId: string,
 ): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
   // Fail closed (kanban t_282cf10b): policy evaluation must run against the
   // CURRENT plan. Falling back to the latest state version would silently
@@ -4930,8 +4935,7 @@ async function failClosedPolicyChecks(
     "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.",
   );
   const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
-  let hardFailed = false;
-  let softFailed = false;
+
   for (const policy of allPolicies) {
     checkBatch.push({
       id: newResourceId("pchk"),
@@ -4939,22 +4943,33 @@ async function failClosedPolicyChecks(
       policyId: policy.id,
       policySetId: policy.policySetId,
       status: "errored",
-      result: { error: "Plan JSON is unavailable; policy evaluation failed closed" },
+      result: { error: "Plan JSON is unavailable; policy evaluation failed closed", policyEvaluationId: evaluationId },
       createdAt: Date.now(),
     });
-    if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-    if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
   }
   if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
-  return { proceed: !hardFailed && !softFailed, hardFailed, softFailed };
+  return { proceed: false, hardFailed: true, softFailed: false };
 }
 
 function interpretOpaResult(checkResult: Record<string, unknown>): string {
-  const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
-  const exprList = resultList?.[0]?.["expressions"] as Record<string, unknown>[] | undefined;
-  const valObj = exprList?.[0]?.["value"] as Record<string, unknown> | undefined;
-  const violated = valObj?.["violations"];
-  return violated !== undefined && Array.isArray(violated) && violated.length > 0 ? "failed" : "passed";
+  const errors = checkResult["errors"];
+  if (errors !== undefined && (!Array.isArray(errors) || errors.length > 0)) {
+    throw new Error("OPA returned evaluation errors");
+  }
+  const results = checkResult["result"];
+  if (!Array.isArray(results) || results.length !== 1) {
+    throw new Error("OPA query must return exactly one defined decision");
+  }
+  const expressions = asObject(results[0])?.["expressions"];
+  if (!Array.isArray(expressions) || expressions.length !== 1) {
+    throw new Error("OPA query must return exactly one expression");
+  }
+  const value: unknown = asObject(expressions[0])?.["value"];
+  // TFE queries return a deny array. Preserve the original explicit
+  // violations envelope, but never treat an unknown shape as a pass.
+  const violations: unknown = Array.isArray(value) ? value : asObject(value)?.["violations"];
+  if (!Array.isArray(violations)) throw new Error("OPA policy decision must be an array of violations");
+  return violations.length > 0 ? "failed" : "passed";
 }
 
 async function evaluateOpaPolicy(
@@ -4981,11 +4996,11 @@ async function evaluateOpaPolicy(
       typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
         ? policy.query
         : "data";
-    // Validate OPA query to prevent argument injection — only allow safe query syntax
-    const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
+    // Never silently replace an invalid query with a broader decision.
+    if (!/^[a-zA-Z0-9_.]+$/.test(opaQuery)) throw new Error("Invalid OPA query");
     const opaProc = spawnRunProcess(
       runId,
-      [await requirePolicyEngine("opa"), "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
+      [await requirePolicyEngine("opa"), "eval", "--data", policyPath, "--input", dataPath, opaQuery],
       {
         cwd: workDir,
         env: { PATH: process.env["PATH"] ?? "" },
@@ -5069,32 +5084,54 @@ function enforcementFailedCounts(
   };
 }
 
+function sentinelResultHasError(result: Record<string, unknown>): boolean {
+  const trace = asObject(result["trace"]);
+  return (
+    (result["error"] !== undefined && result["error"] !== null) ||
+    (trace?.["error"] !== undefined && trace["error"] !== null) ||
+    result["skipped"] === true ||
+    result["skip"] === true
+  );
+}
+
+function sentinelDecisionError(sentinel: Record<string, unknown>, passed: boolean): string | null {
+  if (sentinelResultHasError(sentinel)) return "Sentinel returned an evaluation error or skipped policy";
+  if (sentinel["result"] !== passed) return "Sentinel returned an invalid or inconsistent decision";
+  const entries = sentinel["policies"];
+  if (entries === undefined) return null; // Accept single-policy JSON as well as set envelopes.
+  if (!Array.isArray(entries) || entries.length !== 1) return "Sentinel did not evaluate exactly one policy";
+  const entry = asObject(entries[0]);
+  if (entry === undefined || entry["result"] !== passed) return "Sentinel returned an invalid policy decision";
+  return sentinelResultHasError(entry) ? "Sentinel returned a policy evaluation error or skipped policy" : null;
+}
+
 function sentinelCheckOutcome(
   sentinelExit: number,
   enforcementLevel: string,
   duration: unknown,
   sentinel: Record<string, unknown>,
 ): { status: string; result: Record<string, unknown> } {
-  if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
-    const passed = sentinelExit === 0;
-    const failedCounts = enforcementFailedCounts(passed, enforcementLevel);
-    return {
-      status: passed ? "passed" : "failed",
-      result: {
-        result: passed,
-        passed: passed ? 1 : 0,
-        "total-failed": passed ? 0 : 1,
-        "hard-failed": failedCounts.hard,
-        "soft-failed": failedCounts.soft,
-        "advisory-failed": failedCounts.advisory,
-        "duration-ms": typeof duration === "number" ? duration : 0,
-        sentinel,
-      },
-    };
-  }
+  // Exit 2 is an undefined decision, not a policy denial. Runtime failures
+  // must never become advisory successes or overridable policy failures.
+  const error =
+    sentinelExit === 0 || sentinelExit === 1
+      ? sentinelDecisionError(sentinel, sentinelExit === 0)
+      : `Sentinel evaluation exited with code ${String(sentinelExit)}`;
+  if (error !== null) return { status: "errored", result: { error, sentinel } };
+  const passed = sentinelExit === 0;
+  const failedCounts = enforcementFailedCounts(passed, enforcementLevel);
   return {
-    status: "errored",
-    result: { error: `Sentinel evaluation exited with code ${String(sentinelExit)}`, sentinel },
+    status: passed ? "passed" : "failed",
+    result: {
+      result: passed,
+      passed: passed ? 1 : 0,
+      "total-failed": passed ? 0 : 1,
+      "hard-failed": failedCounts.hard,
+      "soft-failed": failedCounts.soft,
+      "advisory-failed": failedCounts.advisory,
+      "duration-ms": typeof duration === "number" ? duration : 0,
+      sentinel,
+    },
   };
 }
 
@@ -5229,42 +5266,26 @@ async function recordPolicyCheckOutcome(
   checkStatus: string,
   checkResult: Record<string, unknown>,
   checkBatch: (typeof policyChecks.$inferInsert)[],
+  policySet: Readonly<{ kind: string; overridable: boolean }> | undefined,
 ): Promise<{ hardFailed: boolean; softFailed: boolean }> {
-  const storedStatus =
-    checkStatus === "failed" && policy.enforcementLevel === "soft-mandatory" ? "soft_failed" : checkStatus;
+  const denied = checkStatus === "failed";
+  const advisory = policy.enforcementLevel === "advisory";
+  const softFailed = denied && policyFailureIsOverridable(policy, policySet);
+  const hardFailed = checkStatus !== "passed" && !(denied && (advisory || softFailed));
   checkBatch.push({
     id: checkId,
     runId,
     policyId: policy.id,
     policySetId: policy.policySetId,
-    status: storedStatus,
+    status: softFailed ? "soft_failed" : checkStatus,
     result: checkResult,
     createdAt: Date.now(),
   });
-
-  let hardFailed = false;
-  let softFailed = false;
-  if (checkStatus === "failed") {
-    if (policy.enforcementLevel === "hard-mandatory") {
-      hardFailed = true;
-      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" HARD-FAILED (hard-mandatory). Blocking apply.`);
-    } else if (policy.enforcementLevel === "soft-mandatory") {
-      softFailed = true;
-      await writeLog(
-        runId,
-        "plan",
-        `[terrence] Policy "${policy.name}" SOFT-FAILED (soft-mandatory). Override required.`,
-      );
-    } else {
-      await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" FAILED (advisory — not blocking).`);
-    }
-  } else if (checkStatus === "passed") {
-    await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" PASSED.`);
-  } else if (checkStatus === "errored" || checkStatus === "unreachable") {
-    if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-    if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-    await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" ${checkStatus}: ${JSON.stringify(checkResult)}`);
-  }
+  await writeLog(
+    runId,
+    "plan",
+    `[terrence] Policy "${policy.name}" ${checkStatus}${hardFailed ? " (blocking)" : softFailed ? " (override required)" : denied ? " (advisory, not blocking)" : ""}.`,
+  );
   return { hardFailed, softFailed };
 }
 
@@ -5275,40 +5296,19 @@ async function recordPolicyCheckError(
   err: unknown,
   checkBatch: (typeof policyChecks.$inferInsert)[],
 ): Promise<{ hardFailed: boolean; softFailed: boolean }> {
-  let hardFailed = false;
-  let softFailed = false;
-  // A missing engine is unreachable, not errored (issue #596): the
-  // policy never evaluated. Blocking semantics match errored
-  // (mandatory and soft-mandatory stop the run; advisory warns).
-  if (err instanceof PolicyEngineMissingError) {
-    checkBatch.push({
-      id: checkId,
-      runId,
-      policyId: policy.id,
-      policySetId: policy.policySetId,
-      status: "unreachable",
-      result: { error: err.message },
-      createdAt: Date.now(),
-    });
-    if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-    if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-    await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" unreachable: ${err.message}`);
-    return { hardFailed, softFailed };
-  }
-  const errMsg = err instanceof Error ? err.message : String(err);
+  const error = err instanceof Error ? err.message : String(err);
+  const status = err instanceof PolicyEngineMissingError ? "unreachable" : "errored";
   checkBatch.push({
     id: checkId,
     runId,
     policyId: policy.id,
     policySetId: policy.policySetId,
-    status: "errored",
-    result: { error: errMsg },
+    status,
+    result: { error },
     createdAt: Date.now(),
   });
-  if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
-  if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
-  await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" evaluation error: ${errMsg}`);
-  return { hardFailed, softFailed };
+  await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" ${status}: ${error}`);
+  return { hardFailed: true, softFailed: false };
 }
 
 async function loadPolicyEvaluationPlan(
@@ -5352,7 +5352,15 @@ async function evaluateSinglePolicy(
       generatedPlanJson,
       policyTimeoutMs,
     ));
-    return await recordPolicyCheckOutcome(runId, policy, checkId, checkStatus, checkResult, checkBatch);
+    return await recordPolicyCheckOutcome(
+      runId,
+      policy,
+      checkId,
+      checkStatus,
+      checkResult,
+      checkBatch,
+      policySetsById.get(policy.policySetId ?? ""),
+    );
   } catch (err: unknown) {
     return await recordPolicyCheckError(runId, policy, checkId, err, checkBatch);
   }
@@ -5370,8 +5378,18 @@ export async function runPolicyChecks(
   planBinaryPath?: string,
   preloadedPlanJson?: JsonObject,
 ): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
-  const resolved = await resolvePlanPolicySets(workspaceId, orgId);
-  if (resolved === null) return { proceed: true, hardFailed: false, softFailed: false };
+  const workspace = { id: workspaceId, orgId };
+  const evaluation = await captureWorkspacePolicyEvaluation(db, workspace, runId);
+  const complete = async (): Promise<boolean> =>
+    completeWorkspacePolicyEvaluation(db, workspace, {
+      id: evaluation.id,
+      fingerprint: evaluation.snapshot.fingerprint,
+    });
+  const resolved = resolvePlanPolicySets(evaluation.snapshot);
+  if (resolved === null) {
+    const unchanged = await complete();
+    return { proceed: unchanged, hardFailed: !unchanged, softFailed: false };
+  }
   const { allPolicies, policySetsById, parametersBySet, allSetIds } = resolved;
   // A version-managed policy set may have no individual Policy rows. Never
   // interpret an unimplemented engine as an empty, successfully checked set.
@@ -5383,11 +5401,12 @@ export async function runPolicyChecks(
         runId,
         policySetId: policySet.id,
         status: "unreachable",
-        result: { error },
+        result: { error, policyEvaluationId: evaluation.id },
         createdAt: Date.now(),
       });
       await writeLog(runId, "plan", `[terrence ERROR] ${error}`);
     }
+    await complete();
     return { proceed: false, hardFailed: true, softFailed: false };
   }
 
@@ -5406,7 +5425,9 @@ export async function runPolicyChecks(
   const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
 
   if (planJsonPayload === null || planJsonPayload === "") {
-    return failClosedPolicyChecks(runId, allPolicies);
+    const result = await failClosedPolicyChecks(runId, allPolicies, evaluation.id);
+    await complete();
+    return result;
   }
 
   await writeLog(
@@ -5430,7 +5451,10 @@ export async function runPolicyChecks(
     softFailed = softFailed || outcome.softFailed;
   }
 
-  await persistPolicyCheckBatch(checkBatch);
+  await persistPolicyCheckBatch(
+    checkBatch.map((check) => ({ ...check, result: { ...check.result, policyEvaluationId: evaluation.id } })),
+  );
+  if (!(await complete())) hardFailed = true;
 
   // Both hard and soft failures block apply
   const proceed = !hardFailed && !softFailed;

@@ -42,6 +42,11 @@ const privateString: Rule = { kind: "string", nullable: true, max: 65536, sensit
 
 /** Rules shared by startup, settings reads, and admin writes. */
 export const settingsContract: Readonly<Record<string, Readonly<Record<string, Rule>>>> = {
+  "policy-enforcement": {
+    revision: { kind: "integer", min: 0, max: Number.MAX_SAFE_INTEGER - 1 },
+    opa: { kind: "boolean" },
+    sentinel: { kind: "boolean" },
+  },
   general: {
     "local-auth-enabled": { kind: "boolean" },
     "local-signup-enabled": { kind: "boolean", nullable: true },

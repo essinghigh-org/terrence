@@ -1110,6 +1110,12 @@ function AdminNav({
           to: "/app/admin/audit",
         },
         {
+          active: isActivePath(pathname, "/app/admin/policy-enforcement"),
+          icon: ShieldCheck,
+          label: "Policy enforcement",
+          to: "/app/admin/policy-enforcement",
+        },
+        {
           active: isActivePath(pathname, "/app/admin/logging"),
           icon: SlidersHorizontal,
           label: "Logging",

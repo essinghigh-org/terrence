@@ -4,6 +4,9 @@ import { db } from "../../src/db";
 import {
   organizationMemberships,
   organizations,
+  policies,
+  policyChecks,
+  policySets,
   runs,
   stackStateLocks,
   stacks,
@@ -95,6 +98,29 @@ describe("workspace and organization deletion", () => {
         createdAt: Date.now() + index,
       })),
     );
+    // Exercise the PostgreSQL multi-parent delete graph: checks cascade from
+    // runs, but set their policy/policy-set references to null on deletion.
+    // The production helper must remove runs/checks before deleting the org.
+    const policySetId = `delete-organization-policy-set-${suffix}`;
+    const policyId = `delete-organization-policy-${suffix}`;
+    const policyCheckId = `delete-organization-policy-check-${suffix}`;
+    const checkpointId = `delete-organization-checkpoint-${suffix}`;
+    await db.insert(policySets).values({ id: policySetId, orgId: organizationOrgId, name: policySetId });
+    await db.insert(policies).values({
+      id: policyId,
+      orgId: organizationOrgId,
+      policySetId,
+      name: policyId,
+    });
+    await db.insert(policyChecks).values([
+      { id: policyCheckId, runId: organizationRunIds[0], policyId, policySetId, status: "passed" },
+      {
+        id: checkpointId,
+        runId: organizationRunIds[0],
+        status: "passed",
+        result: { "policy-evaluation-checkpoint": true },
+      },
+    ]);
     await db.insert(stacks).values({ id: organizationStackId, orgId: organizationOrgId, name: organizationStackId });
     await db.insert(stackStateLocks).values({
       id: organizationLockId,
@@ -115,6 +141,10 @@ describe("workspace and organization deletion", () => {
     expect(await deleteOrganization(organizationOrgId)).toEqual([]);
 
     expect(await db.query.organizations.findFirst({ where: eq(organizations.id, organizationOrgId) })).toBeUndefined();
+    expect(await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, policyCheckId) })).toBeUndefined();
+    expect(await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkpointId) })).toBeUndefined();
+    expect(await db.query.policies.findFirst({ where: eq(policies.id, policyId) })).toBeUndefined();
+    expect(await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) })).toBeUndefined();
     for (const workspaceId of organizationWorkspaceIds) {
       expect(await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })).toBeUndefined();
     }

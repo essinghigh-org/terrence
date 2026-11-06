@@ -1,3 +1,4 @@
+import { policyEnforcementAdminRoutes } from "./policy-enforcement";
 import { bannersRoutes } from "./banners";
 import { Elysia } from "elysia";
 import { usersRoutes } from "./users";
@@ -32,6 +33,7 @@ export const adminRoutes = new Elysia({ name: "admin" })
     set.status = 404;
     return { errors: [{ status: "404", title: "Not Found" }] };
   })
+  .use(policyEnforcementAdminRoutes)
   .use(bannersRoutes)
   .use(usersRoutes)
   .use(orgsRoutes)

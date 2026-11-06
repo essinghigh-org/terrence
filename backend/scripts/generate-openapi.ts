@@ -430,6 +430,78 @@ for (const route of routes) {
     const pendingResponse = responses["204"] as Record<string, unknown> | undefined;
     if (pendingResponse !== undefined) pendingResponse.description = "Plan accepted but not completed yet";
   }
+  if (openApiPath === "/api/v2/admin/policy-enforcement") {
+    responses["500"] = { description: "Persistence or audit failure; no change committed" };
+    responses["503"] = { description: "Policy enforcement settings are unavailable or invalid" };
+    operation.description =
+      "Site-administrator-only OPA and Sentinel enforcement controls. Both engines enforce by default. Changes require a reason and current revision, commit atomically with an immutable audit event, and take effect at the next policy gate without restart. Disabling is an intentional site-wide bypass, not an advisory policy result.";
+    responses["200"] = {
+      description: "Current policy enforcement settings",
+      content: {
+        "application/vnd.api+json": {
+          schema: {
+            type: "object",
+            required: ["data"],
+            properties: {
+              data: {
+                type: "object",
+                required: ["id", "type", "attributes"],
+                properties: {
+                  id: { const: "policy-enforcement" },
+                  type: { const: "policy-enforcement" },
+                  attributes: {
+                    type: "object",
+                    required: ["revision", "opa", "sentinel"],
+                    properties: {
+                      revision: { type: "integer", minimum: 0 },
+                      opa: { type: "boolean" },
+                      sentinel: { type: "boolean" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    if (m === "patch") {
+      responses["409"] = { description: "Stale revision; reload and review before retrying" };
+      responses["422"] = { description: "Missing reason, revision, or valid OPA/Sentinel boolean" };
+      operation.requestBody = {
+        required: true,
+        content: {
+          "application/vnd.api+json": {
+            schema: {
+              type: "object",
+              required: ["data"],
+              properties: {
+                data: {
+                  type: "object",
+                  required: ["attributes"],
+                  properties: {
+                    type: { const: "policy-enforcement" },
+                    attributes: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["revision", "reason"],
+                      anyOf: [{ required: ["opa"] }, { required: ["sentinel"] }],
+                      properties: {
+                        revision: { type: "integer", minimum: 0 },
+                        reason: { type: "string", minLength: 1, maxLength: 2000, pattern: "\\S" },
+                        opa: { type: "boolean" },
+                        sentinel: { type: "boolean" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+    }
+  }
   if (m === "patch" && openApiPath === "/api/v2/admin/operations-center/settings") {
     operation.requestBody = {
       required: true,

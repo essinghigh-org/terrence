@@ -1094,6 +1094,7 @@ test("evaluates project policy sets after cost estimation and honors workspace e
       workspaces,
     } = await import("./src/db/schema.ts");
     const { executeRun } = await import("./src/worker.ts");
+    const { isPolicyEvaluationCheckpoint } = await import("./src/lib/workspace-policy-gate.ts");
 
     const binDir = join(process.env.TEST_DIR, "bin");
     await mkdir(binDir);
@@ -1114,7 +1115,7 @@ test("evaluates project policy sets after cost estimation and honors workspace e
       projectId: "project",
     });
     await db.insert(policySets).values([
-      { id: "project-set", orgId: "org", name: "project", kind: "opa" },
+      { id: "project-set", orgId: "org", name: "project", kind: "opa", overridable: true },
       { id: "excluded-global", orgId: "org", name: "excluded", kind: "sentinel", global: true },
     ]);
     await db.insert(policySetProjects).values({
@@ -1132,8 +1133,10 @@ test("evaluates project policy sets after cost estimation and honors workspace e
         id: "soft-policy",
         policySetId: "project-set",
         name: "soft",
-        enforcementLevel: "soft-mandatory",
-        query: "package terrence",
+        kind: "opa",
+        enforcementLevel: "mandatory",
+        query: "data.terrence",
+        source: "package terrence",
       },
       {
         id: "excluded-hard-policy",
@@ -1163,7 +1166,7 @@ test("evaluates project policy sets after cost estimation and honors workspace e
     console.log(JSON.stringify({
       status: completed?.status,
       statusKeys: Object.keys(completed?.statusTimestamps ?? {}),
-      checks: checks.map(check => ({ policyId: check.policyId, status: check.status })),
+      checks: checks.filter(check => !isPolicyEvaluationCheckpoint(check)).map(check => ({ policyId: check.policyId, status: check.status })),
     }));
   `,
     { NODE_ENV: "test", SIMULATED_RUNS: "true" },
@@ -1190,6 +1193,7 @@ test("fails closed when plan JSON is unavailable instead of evaluating against s
       workspaces,
     } = await import("./src/db/schema.ts");
     const { runPolicyChecks } = await import("./src/worker.ts");
+    const { isPolicyEvaluationCheckpoint } = await import("./src/lib/workspace-policy-gate.ts");
 
     await db.insert(organizations).values({ id: "org", name: "org" });
     await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
@@ -1198,9 +1202,11 @@ test("fails closed when plan JSON is unavailable instead of evaluating against s
     await db.insert(policies).values({
       id: "policy",
       policySetId: "set",
-      name: "hard",
-      enforcementLevel: "hard-mandatory",
-      query: "package terrence",
+      name: "advisory",
+      kind: "opa",
+      enforcementLevel: "advisory",
+      query: "data.terrence",
+      source: "package terrence",
     });
     // A finalized state version must NOT be used as the evaluation input.
     await db.insert(stateVersions).values({
@@ -1217,7 +1223,7 @@ test("fails closed when plan JSON is unavailable instead of evaluating against s
     const checks = await db.query.policyChecks.findMany({ where: (row, { eq }) => eq(row.runId, "run") });
     console.log(JSON.stringify({
       verdict,
-      checks: checks.map(check => ({ status: check.status, error: check.result?.error })),
+      checks: checks.filter(check => !isPolicyEvaluationCheckpoint(check)).map(check => ({ status: check.status, error: check.result?.error })),
     }));
   `,
     { NODE_ENV: "test" },
@@ -1298,7 +1304,7 @@ test("evaluates Sentinel policies and persists structured results", async () => 
     await executeRun("run");
     const completed = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
     const check = await db.query.policyChecks.findFirst({
-      where: (row, { eq }) => eq(row.runId, "run"),
+      where: (row, { eq }) => eq(row.policyId, "sentinel-policy"),
     });
     console.log(JSON.stringify({
       status: completed?.status,
@@ -1389,14 +1395,15 @@ test("evaluates OPA policies through the required sandbox", async () => {
       id: "opa-policy",
       policySetId: "opa-set",
       name: "allow",
-      enforcementLevel: "hard-mandatory",
+      kind: "opa",
+      enforcementLevel: "mandatory",
       query: "data.terrence",
       source: "package terrence",
     });
     await db.insert(runs).values({ id: "run", workspaceId: "workspace", status: "pending", createdAt: Date.now() });
 
     const verdict = await runPolicyChecks("run", "workspace", "org", undefined, undefined, { format_version: "1.2" });
-    const check = await db.query.policyChecks.findFirst({ where: (row, { eq }) => eq(row.runId, "run") });
+    const check = await db.query.policyChecks.findFirst({ where: (row, { eq }) => eq(row.policyId, "opa-policy") });
     console.log(JSON.stringify({
       verdict,
       checkStatus: check?.status,

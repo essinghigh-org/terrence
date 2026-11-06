@@ -96,6 +96,7 @@ const AdminSmtpSettings = lazyView(() => import("./views/AdminSmtpSettings"), "A
 const AdminScimSettings = lazyView(() => import("./views/AdminScimSettings"), "AdminScimSettings");
 const AdminGitHubApp = lazyView(() => import("./views/AdminGitHubApp"), "AdminGitHubApp");
 const AdminLoggingSettings = lazyView(() => import("./views/AdminLoggingSettings"), "AdminLoggingSettings");
+const AdminPolicyEnforcement = lazyView(() => import("./views/AdminPolicyEnforcement"), "AdminPolicyEnforcement");
 const AdminMaintenanceWindows = lazyView(() => import("./views/AdminMaintenanceWindows"), "AdminMaintenanceWindows");
 const AdminApprovalWebhook = lazyView(() => import("./views/AdminApprovalWebhook"), "AdminApprovalWebhook");
 const AdminAppearance = lazyView(() => import("./views/AdminAppearance"), "AdminAppearance");
@@ -253,6 +254,7 @@ function AppRoutes(): JSX.Element {
         <Route path="admin/compatibility" element={<CompatibilityDashboard />} />
         <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
         <Route path="admin/logging" element={<AdminLoggingSettings />} />
+        <Route path="admin/policy-enforcement" element={<AdminPolicyEnforcement />} />
         <Route path="admin/maintenance" element={<AdminMaintenanceWindows />} />
         <Route path="admin/approval-webhook" element={<AdminApprovalWebhook />} />
         <Route path="admin/plan-explainer" element={<AdminPlanExplainer />} />

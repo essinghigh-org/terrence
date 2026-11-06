@@ -96,6 +96,34 @@ describe("openapi contract", () => {
     expect(spec).toEqual(artifact);
   });
 
+  it("documents audited policy enforcement changes and stale revision conflicts", () => {
+    const operation = paths["/api/v2/admin/policy-enforcement"]?.["patch"] as
+      | {
+          description?: string;
+          responses?: Record<string, unknown>;
+          requestBody?: { content?: Record<string, { schema?: Record<string, unknown> }> };
+        }
+      | undefined;
+    expect(operation?.description).toContain("Site-administrator-only");
+    expect(operation?.responses?.["409"]).toBeDefined();
+    expect(operation?.responses?.["422"]).toBeDefined();
+    const schema = operation?.requestBody?.content?.["application/vnd.api+json"]?.schema;
+    expect(schema).toMatchObject({
+      properties: {
+        data: {
+          properties: {
+            attributes: {
+              additionalProperties: false,
+              required: ["revision", "reason"],
+              anyOf: [{ required: ["opa"] }, { required: ["sentinel"] }],
+              properties: { opa: { type: "boolean" }, sentinel: { type: "boolean" }, reason: { maxLength: 2000 } },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("documents create-style bulk actions with their 201 response", () => {
     const operation = paths["/api/v2/organizations/{org_name}/explorer/bulk-actions"]?.["post"] as
       | {
