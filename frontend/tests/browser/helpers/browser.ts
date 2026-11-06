@@ -1,4 +1,5 @@
 import { startWebView, WEBVIEW_STARTUP_TITLE, WEBVIEW_STARTUP_URL, withWebViewDeadline } from "./webview-lifecycle";
+import { chromeBackend } from "./chrome-backend";
 
 export type BrowserOptions = {
   width?: number;
@@ -98,18 +99,7 @@ export class BrowserPage {
   constructor(options: BrowserOptions = {}) {
     this.backend = options.backend ?? (process.platform === "darwin" ? "webkit" : "chrome");
     this.traceStartup("constructing browser");
-    // GitHub-hosted Linux runners expose a small /dev/shm. Without this
-    // switch Chrome can leave the first navigation pending, which then poisons
-    // every later WebView operation with "already pending" errors.
-    const backend =
-      this.backend === "chrome" && process.env["CI"] === "true"
-        ? {
-            type: "chrome" as const,
-            url: false as const,
-            argv: ["--disable-dev-shm-usage", "--enable-logging=stderr", "--v=1"],
-            stderr: "inherit" as const,
-          }
-        : this.backend;
+    const backend = this.backend === "chrome" ? chromeBackend() : this.backend;
     this.webview = new Bun.WebView({
       backend,
       width: options.width ?? 1440,

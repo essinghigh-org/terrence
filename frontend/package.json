@@ -12,8 +12,8 @@
     "test": "bun test tests/*.test.tsx tests/*.test.ts",
     "typecheck": "tsc6 -b tsconfig.app.json && tsc6 --noEmit -p tsconfig.tools.json",
     "preview": "bun run scripts/preview.ts",
-    "test:browser": "cd tests/browser && xvfb-run --auto-servernum bun test .",
-    "test:browser:axe": "cd tests/browser && xvfb-run --auto-servernum bun test ./accessibility-*.test.ts",
+    "test:browser": "xvfb-run --auto-servernum bun scripts/browser-tests.ts",
+    "test:browser:axe": "xvfb-run --auto-servernum bun scripts/browser-tests.ts --axe",
     "test:profile:browser": "bun run ../backend/scripts/test-profile.ts browser"
   },
   "dependencies": {

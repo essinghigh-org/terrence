@@ -4,14 +4,17 @@ import { join } from "node:path";
 // Every attempt must pass; these are separate cold-start regressions, not retries.
 for (let attempt = 1; attempt <= 5; attempt++) {
   test(`fresh browser process completes startup and application navigation (${attempt}/5)`, async (): Promise<void> => {
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "helpers/cold-start.ts")], {
-      env: { ...process.env, CI: "true" },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const child = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "../../scripts/browser-tests.ts"), "--cold-start"],
+      {
+        env: { ...process.env, CI: "true" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
     const timer = setTimeout(() => {
       child.kill();
-    }, 12_000);
+    }, 42_000);
     try {
       const [exitCode, stdout, stderr] = await Promise.all([
         child.exited,
@@ -25,5 +28,5 @@ for (let attempt = 1; attempt <= 5; attempt++) {
       child.kill();
       await child.exited;
     }
-  }, 15_000);
+  }, 45_000);
 }
