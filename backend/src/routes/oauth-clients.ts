@@ -884,6 +884,21 @@ async function saveAzureDevOpsPat(tx: typeof db, clientId: string, token: string
   }
 }
 
+async function unchangedOAuthClientCredentialScope(tx: typeof db, previous: OcItem): Promise<boolean> {
+  if (isPostgres) {
+    const database = tx as unknown as { execute: (query: unknown) => Promise<unknown> };
+    await database.execute(sql`SELECT id FROM oauth_clients WHERE id = ${previous.id} FOR UPDATE`);
+  }
+  const current = await tx.query.oauthClients.findFirst({ where: eq(oauthClients.id, previous.id) });
+  return (
+    current !== undefined &&
+    current.serviceProvider === previous.serviceProvider &&
+    current.apiUrl === previous.apiUrl &&
+    current.httpUrl === previous.httpUrl &&
+    azureDevOpsOrganization(current.adoOrgName) === azureDevOpsOrganization(previous.adoOrgName)
+  );
+}
+
 function azureDevOpsUpdateError(
   client: OcItem,
   updates: Partial<typeof oauthClients.$inferInsert>,
@@ -1367,7 +1382,10 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       const adoError = azureDevOpsUpdateError(oc, updates, attributes["oauth-token"]);
       if (adoError !== undefined) return unprocessable(set, adoError);
       if (hasOAuthClientUpdates(credentialsInvalidated, updates, attributes["oauth-token"])) {
-        await db.transaction(async (tx): Promise<void> => {
+        const saved = await db.transaction(async (tx): Promise<boolean> => {
+          // Validation used the earlier connection scope. Lock and recheck before
+          // a concurrent organization/provider change can redirect its credential.
+          if (!(await unchangedOAuthClientCredentialScope(tx, oc))) return false;
           if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
           if (Object.keys(updates).length > 0)
             await tx.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
@@ -1376,7 +1394,12 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
             typeof attributes["oauth-token"] === "string"
           )
             await saveAzureDevOpsPat(tx, ocId, attributes["oauth-token"]);
+          return true;
         });
+        if (!saved) {
+          (set as { status: number }).status = 409;
+          return { errors: [{ status: "409", title: "VCS connection changed; reload before updating credentials" }] };
+        }
       }
       if (projectIds !== undefined) await replaceProjectScope(ocId, projectIds);
       const updated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
