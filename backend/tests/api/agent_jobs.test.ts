@@ -1344,6 +1344,55 @@ test("stale sweep releases a cancel-held lock only after the heartbeat lease exp
   expect(result).toEqual({ deadLocked: false, liveLocked: true });
 }, 30_000);
 
+test.each(["initial claim", "redelivery", "state download"])(
+  "agent %s rejects unsupported tfpolicy before handing off execution data",
+  async (stage) => {
+    const result = await runAgentProtocolScript(`
+    const stage = ${JSON.stringify(stage)};
+    const { eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, workspaces, runs, stateVersions, agentPools, agentPoolTokens, agents, agentJobs, policySets, policySetWorkspaces } = await import("./src/db/schema.ts");
+    const { hashAuthenticationToken } = await import("./src/lib/token-service.ts");
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agentPoolTokens).values({ id: "token", agentPoolId: "pool", token: hashAuthenticationToken("agent-fixture-token") });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "idle" });
+    await db.insert(workspaces).values({ id: "ws", orgId: "org", name: "ws", executionMode: "agent", agentPoolId: "pool" });
+    await db.insert(stateVersions).values({ id: "state", workspaceId: "ws", serial: 1, status: "finalized", statePayload: JSON.stringify({ secret: "must-not-be-delivered" }) });
+    await db.insert(policySets).values({ id: "tfpolicy-set", orgId: "org", name: "tfpolicy", kind: "tfpolicy" });
+    const attachPolicy = () => db.insert(policySetWorkspaces).values({ id: "link", policySetId: "tfpolicy-set", workspaceId: "ws" });
+    if (stage === "initial claim") await attachPolicy();
+    await db.insert(runs).values({ id: "run", workspaceId: "ws", agentPoolId: "pool", autoApply: true, status: "plan_queued", createdAt: 1 });
+    await db.insert(agentJobs).values({ id: "job", runId: "run", agentPoolId: "pool", phase: "plan", status: "queued" });
+    const headers = { Authorization: "Bearer agent-fixture-token" };
+    const poll = () => app.handle(new Request("http://terrence.test/api/v2/agents/agent/jobs/poll", { method: "POST", headers }));
+    const claim = await poll();
+    let response = claim;
+    if (stage !== "initial claim") {
+      const claimed = (await claim.json()).data;
+      await attachPolicy();
+      response = stage === "redelivery"
+        ? await poll()
+        : await app.handle(new Request("http://terrence.test/api/v2/agents/agent/jobs/job/state", {
+          headers: { ...headers, "tfc-agent-fencing-token": String(claimed.attributes["fencing-token"]) },
+        }));
+    }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, "agent") });
+    const job = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") });
+    console.log(JSON.stringify({ claim: claim.status, response: response.status, body: await response.text(), status: run.status, agentStatus: agent.status, jobStatus: job.status, error: job.errorMessage }));
+  `);
+    expect(result["claim"]).toBe(stage === "initial claim" ? 204 : 200);
+    expect(result["response"]).toBe(stage === "state download" ? 404 : 204);
+    expect(result["status"]).toBe("errored");
+    expect(result["agentStatus"]).toBe("idle");
+    expect(result["jobStatus"]).toBe("errored");
+    expect(result["error"]).toContain("tfpolicy runtime is not supported");
+    expect(result["body"]).not.toContain("must-not-be-delivered");
+  },
+);
+
 test("agent completion blocks unsupported tfpolicy sets with no individual policies", async () => {
   const result = await runAgentProtocolScript(`
     const { eq } = await import("drizzle-orm");
@@ -1357,7 +1406,6 @@ test("agent completion blocks unsupported tfpolicy sets with no individual polic
     await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "idle" });
     await db.insert(workspaces).values({ id: "ws", orgId: "org", name: "ws", executionMode: "agent", agentPoolId: "pool" });
     await db.insert(policySets).values({ id: "tfpolicy-set", orgId: "org", name: "tfpolicy", kind: "tfpolicy" });
-    await db.insert(policySetWorkspaces).values({ id: "link", policySetId: "tfpolicy-set", workspaceId: "ws" });
     await db.insert(runs).values({ id: "run", workspaceId: "ws", agentPoolId: "pool", autoApply: true, status: "plan_queued", createdAt: 1 });
     await db.insert(agentJobs).values({ id: "job", runId: "run", agentPoolId: "pool", phase: "plan", status: "queued" });
     const request = (path, body, fencingToken) => app.handle(new Request("http://terrence.test/api/v2/agents/agent" + path, {
@@ -1366,6 +1414,8 @@ test("agent completion blocks unsupported tfpolicy sets with no individual polic
     }));
     const claim = await request("/jobs/poll");
     const claimed = (await claim.json()).data;
+    // Policy scope changed after admission; completion must still fail closed.
+    await db.insert(policySetWorkspaces).values({ id: "link", policySetId: "tfpolicy-set", workspaceId: "ws" });
     const completion = await request("/jobs/job/complete", { data: { type: "agent-jobs", attributes: {
       status: "completed", "resource-additions": 1, result: { "plan-handle": "saved-plan" },
     } } }, claimed.attributes["fencing-token"]);
@@ -1378,7 +1428,7 @@ test("agent completion blocks unsupported tfpolicy sets with no individual polic
   expect(result["completion"]).toBe(200);
   expect(result["status"]).toBe("errored");
   expect(result["phases"]).toEqual(["plan"]);
-  expect(result["checks"]).toMatchObject([{ policyId: null, policySetId: "tfpolicy-set", status: "unreachable" }]);
+  expect(result["checks"]).toEqual([]);
 });
 
 test("agent policy results fail closed while preserving advisory and authorized override semantics", async () => {

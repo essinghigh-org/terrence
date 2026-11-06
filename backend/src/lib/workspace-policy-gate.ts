@@ -86,6 +86,29 @@ export async function loadWorkspacePolicySnapshot(
 
 export type WorkspacePolicyEvaluation = Readonly<{ id: string; snapshot: WorkspacePolicySnapshot }>;
 
+function unsupportedRuntimeError(snapshot: DeepReadonly<WorkspacePolicySnapshot>): string | null {
+  const unsupported = snapshot.sets.find((set) => !["opa", "sentinel"].includes(set.kind));
+  return unsupported === undefined
+    ? null
+    : `${unsupported.kind} policy set ${unsupported.name} (${unsupported.id}) cannot be evaluated because the ${unsupported.kind} runtime is not supported`;
+}
+
+/** Reject unsupported native policy execution before preparing source, releasing
+ * credentials, or starting an engine. Completion/apply checks remain necessary
+ * because policy scope can change while a plan is running. */
+export async function workspacePolicyPlanningError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  workspace: Workspace,
+): Promise<string | null> {
+  try {
+    const reason = unsupportedRuntimeError(await loadWorkspacePolicySnapshot(database, workspace));
+    return reason === null ? null : `Plan blocked: ${reason}`;
+  } catch (error: unknown) {
+    return `Plan blocked: policy configuration could not be verified: ${error instanceof Error ? error.message : "unknown error"}`;
+  }
+}
+
 export async function captureWorkspacePolicyEvaluation(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
   database: Database,
@@ -186,9 +209,8 @@ async function workspacePolicyExecutionErrorImpl(
   allowOverride = false,
 ): Promise<string | null> {
   const snapshot = await loadWorkspacePolicySnapshot(database, workspace);
-  const unsupported = snapshot.sets.find((set) => !["opa", "sentinel"].includes(set.kind));
-  if (unsupported !== undefined)
-    return `Apply blocked: ${unsupported.kind} policy set ${unsupported.name} (${unsupported.id}) cannot be evaluated because the ${unsupported.kind} runtime is not supported`;
+  const unsupported = unsupportedRuntimeError(snapshot);
+  if (unsupported !== null) return `Apply blocked: ${unsupported}`;
   if (runId === undefined) return null;
   const checkpoint = await latestWorkspacePolicyEvaluation(database, runId);
   // Historical runs without policy requirements remain usable. Newly attached
