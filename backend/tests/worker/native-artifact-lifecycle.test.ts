@@ -19,14 +19,12 @@ test("retention prunes terminal and deleted native artifacts while preserving li
   try {
     for (const [index, runId] of names.entries()) {
       if (index !== 4)
-        await db
-          .insert(runs)
-          .values({
-            id: runId,
-            workspaceId: workspace,
-            status: index === 2 ? "planned_and_saved" : "applied",
-            createdAt: Date.now(),
-          });
+        await db.insert(runs).values({
+          id: runId,
+          workspaceId: workspace,
+          status: index === 2 ? "planned_and_saved" : "applied",
+          createdAt: Date.now(),
+        });
       const directory = join(storageDir, "native-policy", runId),
         source = join(directory, "generation", "source");
       await mkdir(source, { recursive: true, mode: 0o700 });
