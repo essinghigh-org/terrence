@@ -27,7 +27,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "contractVersion": 2}) != nil {
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "contractVersion": 2, "receiptVersion": 2, "runtimeSha256": execution.RuntimeIdentitySHA256(c.Runtime)}) != nil {
 			os.Exit(1)
 		}
 		return

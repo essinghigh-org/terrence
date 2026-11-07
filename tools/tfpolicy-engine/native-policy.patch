@@ -1541,6 +1541,51 @@ index ce2194f..95c6389 100644
  
  	// Close the channel so the watcher stops, and wait for it to return.
  	close(watchStop)
+diff --git a/internal/terraform/native_policy_module_test.go b/internal/terraform/native_policy_module_test.go
+new file mode 100644
+index 0000000..5e9075a
+--- /dev/null
++++ b/internal/terraform/native_policy_module_test.go
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: BUSL-1.1
++package terraform
++
++import (
++	"github.com/hashicorp/terraform/internal/addrs"
++	"github.com/hashicorp/terraform/internal/configs"
++	"github.com/hashicorp/terraform/internal/policy"
++	"testing"
++)
++
++func TestNativePolicyModuleTraversalIncludesAllDescendants(t *testing.T) {
++	root := configs.NewEmptyConfig()
++	parent := root
++	for _, name := range []string{"child", "inner", "leaf"} {
++		path := append(append(addrs.Module{}, parent.Path...), name)
++		child := &configs.Config{Parent: parent, Root: root, Path: path, Module: &configs.Module{}, Children: map[string]*configs.Config{}}
++		parent.Children[name] = child
++		parent = child
++	}
++	g := &Graph{Path: addrs.RootModuleInstance}
++	transform := ModulePolicyTransformer{Config: root, PolicyClient: policy.NewTestMockClient(t)}
++	if err := transform.Transform(g); err != nil {
++		t.Fatal(err)
++	}
++	seen := map[string]bool{}
++	for vertex := range g.VerticesSeq() {
++		if node, ok := vertex.(*nodeModulePolicy); ok {
++			seen[node.Config.Path.String()] = true
++		}
++	}
++	for _, address := range []string{"module.child", "module.child.module.inner", "module.child.module.inner.module.leaf"} {
++		if !seen[address] {
++			t.Errorf("native module policy omitted %s", address)
++		}
++	}
++	if len(seen) != 3 {
++		t.Errorf("unexpected module policy count: %d", len(seen))
++	}
++}
 diff --git a/internal/terraform/node_policy_eval.go b/internal/terraform/node_policy_eval.go
 index 1d736ae..a38921f 100644
 --- a/internal/terraform/node_policy_eval.go
@@ -1683,9 +1728,29 @@ index 0000000..6a702bc
 +	return targets
 +}
 diff --git a/internal/terraform/transform_module_policy.go b/internal/terraform/transform_module_policy.go
-index f928877..72fc16f 100644
+index f928877..3878e0f 100644
 --- a/internal/terraform/transform_module_policy.go
 +++ b/internal/terraform/transform_module_policy.go
+@@ -30,16 +30,16 @@ func (t *ModulePolicyTransformer) Transform(g *Graph) error {
+ 	}
+ 
+ 	moduleNodes := make(map[string]*nodeModulePolicy, 0)
+-	for config := range t.Config.AllModules() {
++	t.Config.DeepEach(func(config *configs.Config) {
+ 		// root modules need no policy evaluation
+ 		if config.Path.IsRoot() {
+-			continue
++			return
+ 		}
+ 		n := &nodeModulePolicy{Config: config}
+ 		log.Printf("[TRACE] ModulePolicyTransformer: adding %s", n.Name())
+ 		g.Add(n)
+ 		moduleNodes[config.Path.String()] = n
+-	}
++	})
+ 
+ 	if len(moduleNodes) == 0 {
+ 		return nil
 @@ -137,6 +137,7 @@ func (n *nodeModulePolicy) Execute(ctx EvalContext, op walkOperation) tfdiags.Di
  	}
  

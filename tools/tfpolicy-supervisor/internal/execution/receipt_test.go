@@ -8,7 +8,7 @@ import (
 func receiptFixture(t *testing.T) (Config, Result) {
 	t.Helper()
 	hash := strings.Repeat("a", 64)
-	c := Config{RunID: "run-one", WorkspaceID: "ws-one", EvaluationID: "eval-one", PolicyFingerprint: hash, ReceiptKey: strings.Repeat("b", 64), SavedPlan: &PinnedFile{Path: "/private/tfplan", SHA256: hash}}
+	c := Config{PolicyRoots: []string{"/snapshot"}, RunID: "run-one", WorkspaceID: "ws-one", EvaluationID: "eval-one", PolicyFingerprint: hash, ReceiptKey: strings.Repeat("b", 64), SavedPlan: &PinnedFile{Path: "/private/tfplan", SHA256: hash}}
 	r := Result{Verified: true, CgroupEmpty: true, Nonce: hash, PlanSHA256: hash, RuntimeSHA256: hash, PolicySnapshotSHA256: hash, AuditSHA256: hash, JournalSHA256: hash, StdoutSHA256: hash, Evidence: Evidence{Allows: true}}
 	receipt, e := sealPlan(c, r)
 	if e != nil {

@@ -53,14 +53,14 @@ type AuditRecord struct {
 }
 
 type EvidenceInput struct {
-	Command                             string
-	Nonce                               string
-	Roots                               []string
-	Overrides                           []Override
-	ExitCode                            int
-	Cancelled                           bool
-	CgroupEmpty                         bool
-	Audit, Journal, Transport, PlanJSON []byte
+	Command                                        string
+	Nonce                                          string
+	Roots                                          []string
+	Overrides                                      []Override
+	ExitCode                                       int
+	Cancelled                                      bool
+	CgroupEmpty                                    bool
+	Audit, Journal, Transport, PlanJSON, SavedPlan []byte
 }
 type Evidence struct {
 	Allows   bool           `json:"allows"`
@@ -254,6 +254,19 @@ func Verify(in EvidenceInput) (out Evidence, err error) {
 		}
 		if !reflect.DeepEqual(targets, resources) {
 			return Evidence{}, errors.New("native resource coverage differs from immutable saved plan")
+		}
+		metadata, e := metadataTargets(in.PlanJSON, in.SavedPlan)
+		if e != nil {
+			return Evidence{}, e
+		}
+		actual := map[Target]int{}
+		for target, count := range observed {
+			if target.Kind != "resource" {
+				actual[target] = count
+			}
+		}
+		if !reflect.DeepEqual(metadata, actual) {
+			return Evidence{}, errors.New("native provider/module coverage differs from immutable saved plan")
 		}
 	}
 	return out, nil

@@ -541,12 +541,7 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 		return result, e
 	}
 	result.PolicySnapshotSHA256 = snapshot
-	runtimeIdentity, e := json.Marshal(c.Runtime)
-	if e != nil {
-		return result, e
-	}
-	runtimeDigest := sha256.Sum256(runtimeIdentity)
-	result.RuntimeSHA256 = hex.EncodeToString(runtimeDigest[:])
+	result.RuntimeSHA256 = RuntimeIdentitySHA256(c.Runtime)
 	opened := map[string]*os.File{}
 	defer func() {
 		for _, f := range opened {
@@ -851,11 +846,19 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 	}
 	// Independent show/coverage runs in a fresh bounded tree with the saved
 	// plan read-only, no run credentials, and no native runtime controls.
-	var planJSON []byte
+	var planJSON, planArchive []byte
 	if c.Command != "init" {
 		planJSON, e = inspectPlan(ctx, c, opened, plan, dir)
 		if e != nil {
 			return result, e
+		}
+		planArchive, e = os.ReadFile(plan)
+		if e != nil {
+			return result, e
+		}
+		planDigest := sha256.Sum256(planArchive)
+		if hex.EncodeToString(planDigest[:]) != result.PlanSHA256 {
+			return result, errors.New("saved plan changed before independent inventory verification")
 		}
 	}
 	auditBytes, e := os.ReadFile(filepath.Join(dir, "audit"))
@@ -870,7 +873,7 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 	if e != nil {
 		return result, e
 	}
-	result.Evidence, e = Verify(EvidenceInput{Command: c.Command, Nonce: result.Nonce, Roots: c.PolicyRoots, Overrides: c.Overrides, ExitCode: result.ExitCode, CgroupEmpty: result.CgroupEmpty, Audit: auditBytes, Journal: journalBytes, Transport: status, PlanJSON: planJSON})
+	result.Evidence, e = Verify(EvidenceInput{Command: c.Command, Nonce: result.Nonce, Roots: c.PolicyRoots, Overrides: c.Overrides, ExitCode: result.ExitCode, CgroupEmpty: result.CgroupEmpty, Audit: auditBytes, Journal: journalBytes, Transport: status, PlanJSON: planJSON, SavedPlan: planArchive})
 	if e != nil {
 		return result, e
 	}

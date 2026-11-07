@@ -66,12 +66,33 @@ try {
     await writeFile(join(config, "main.tf"), 'resource "terraform_data" "proof" { input = "local-only" }\n', {
       mode: 0o600,
     });
+    if (mode === "allow") {
+      for (const name of ["child", "inner", "empty"]) await mkdir(join(config, name), { mode: 0o700 });
+      await appendFile(
+        join(config, "main.tf"),
+        'module "child" {\n source = "./child"\n count = 2\n}\nmodule "empty" {\n source = "./empty"\n count = 0\n}\n',
+      );
+      await writeFile(
+        join(config, "child/main.tf"),
+        'resource "terraform_data" "child" { input = "local-only" }\nmodule "inner" { source = "../inner" }\n',
+        { mode: 0o600 },
+      );
+      await writeFile(join(config, "inner/main.tf"), 'resource "terraform_data" "inner" { input = "local-only" }\n', {
+        mode: 0o600,
+      });
+      await writeFile(join(config, "empty/main.tf"), "# Empty local module\n", { mode: 0o600 });
+    }
     await writeFile(
       join(policy, "proof.policy.hcl"),
       `policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\nresource_policy "terraform_data" "proof" {\n enforcement_level = "${mode === "override" ? "mandatory_overridable" : "mandatory"}"\n enforce {\n condition = attrs.input == "${["allow", "legacy"].includes(mode) ? "local-only" : "forbidden"}"\n error_message = "worker acceptance denial"\n }\n}\n`,
       { mode: 0o600 },
     );
     const archives = [join(root, mode, "config.tar.gz"), join(root, mode, "policy.tar.gz")];
+    if (mode === "allow")
+      await appendFile(
+        join(policy, "proof.policy.hcl"),
+        'provider_policy "terraform" "source" {\n enforce {\n condition = meta.source == "terraform.io/builtin/terraform"\n }\n}\nmodule_policy "*" "local" {\n enforce {\n condition = true\n }\n}\n',
+      );
     for (const [index, source] of [config, policy].entries()) {
       const child = Bun.spawn(["tar", "-czf", archives[index] ?? "", "-C", source, "."], {
         stdout: "ignore",
@@ -111,6 +132,16 @@ try {
     const planned = await db.query.runs.findFirst({ where: eq(s.runs.id, runId) });
     const checks = await db.query.policyChecks.findMany({ where: eq(s.policyChecks.runId, runId) });
     await writeFile(join(root, mode, "checks.json"), JSON.stringify(checks, null, 2), { mode: 0o600 });
+    if (mode === "allow") {
+      const native = checks.find((check) => check.result?.["native"] === true);
+      const policies = native?.result?.["nativePolicies"];
+      if (
+        !Array.isArray(policies) ||
+        !policies.some((policy) => policy.address === "provider_policy.terraform.source") ||
+        !policies.some((policy) => policy.address === "module_policy.*.local")
+      )
+        throw new Error("Hosted worker did not persist matched provider/module policies");
+    }
     if (mode === "deny") {
       if (
         !checks.some((check) => check.status === "failed" && check.result?.["native"] === true) ||

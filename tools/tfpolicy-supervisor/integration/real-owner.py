@@ -116,7 +116,7 @@ def stage(args, config, output, private, interrupt=None):
 
 def matrix(args, runtime, context):
     rows = []
-    for mode in ['allow', 'filtered', 'advisory', 'override', 'deny', 'unknown', 'setup-error', 'missing', 'crash', 'cancel']:
+    for mode in ['allow', 'metadata', 'relocated', 'filtered', 'advisory', 'override', 'deny', 'unknown', 'setup-error', 'missing', 'crash', 'cancel']:
         output = args.output/mode
         output.mkdir(mode=0o700)
         with tempfile.TemporaryDirectory(prefix='tfpr-', dir='/tmp') as temporary:
@@ -126,6 +126,13 @@ def matrix(args, runtime, context):
                 path.mkdir(mode=0o700)
             count = ' count = 1000\n' if mode in ['crash', 'cancel'] else ''
             (work/'main.tf').write_text('resource "terraform_data" "proof" {\n'+count+' input = "local-only"\n}\n')
+            if mode == 'metadata':
+                (work/'main.tf').write_text('provider "terraform" { alias = "secondary" }\nresource "terraform_data" "proof" {\n provider = terraform.secondary\n input = "local-only"\n}\nmodule "child" {\n source = "./child"\n count = 2\n}\nmodule "empty" {\n source = "./empty"\n count = 0\n}\n')
+                for name in ['child', 'inner', 'empty']:
+                    (work/name).mkdir(mode=0o700)
+                (work/'child/main.tf').write_text('resource "terraform_data" "child" { input = "local-only" }\nmodule "inner" { source = "../inner" }\n')
+                (work/'inner/main.tf').write_text('resource "terraform_data" "inner" { input = "local-only" }\n')
+                (work/'empty/main.tf').write_text('# Empty count-zero local module still requires module policy evaluation.\n')
             condition = 'attrs.input == "local-only"'
             if mode == 'deny':
                 condition = 'attrs.input == "forbidden"'
@@ -133,14 +140,17 @@ def matrix(args, runtime, context):
                 condition = 'attrs.id == "never"'
             if mode == 'setup-error':
                 condition = 'attrs.input =='
-            enforcement = 'advisory' if mode == 'advisory' else 'mandatory_overridable' if mode == 'override' else 'mandatory'
-            if mode in ['advisory', 'override']:
+            enforcement = 'advisory' if mode == 'advisory' else 'mandatory_overridable' if mode in ['override', 'relocated'] else 'mandatory'
+            if mode in ['advisory', 'override', 'relocated']:
                 condition = 'attrs.input == "forbidden"'
             source = 'policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\n'
             source += 'resource_policy "terraform_data" "proof" {\n enforcement_level = "'+enforcement+'"\n'
             if mode == 'filtered':
                 source += ' filter = false\n'
             source += ' enforce {\n condition = '+condition+'\n error_message = "local acceptance denial"\n }\n}\n'
+            if mode == 'metadata':
+                source += 'provider_policy "terraform" "source" {\n enforce {\n condition = meta.source == "terraform.io/builtin/terraform"\n error_message = "unexpected local provider"\n }\n}\nmodule_policy "*" "local" {\n enforce {\n condition = true\n error_message = "local module denied"\n }\n}\n'
+                source += 'resource_policy "terraform_data" "delete" {\n operations = ["delete"]\n enforce {\n condition = prior_attrs.input == "local-only"\n error_message = "unexpected deleted local resource"\n }\n}\n'
             policy_file = policy/'proof.policy.hcl'
             policy_file.write_text(source)
             policy_file.chmod(0o400)
@@ -154,7 +164,7 @@ def matrix(args, runtime, context):
                       'policyFingerprint': digest(policy_file)}
             if mode == 'missing':
                 config['runtime'] = {**runtime, 'plugin': {**runtime['plugin'], 'path': str(private/'missing-plugin')}}
-            if mode == 'override':
+            if mode in ['override', 'relocated']:
                 config['overrides'] = [{'file': str(policy_file), 'address': 'resource_policy.terraform_data.proof'}]
             try:
                 code, initialized = stage(args, config, output/'init', private)
@@ -167,20 +177,59 @@ def matrix(args, runtime, context):
                     config['command'] = 'plan'
                     code, planned = stage(args, config, output/'plan', private,
                                           'crash' if mode == 'crash' else 'cancel' if mode == 'cancel' else None)
-                    if mode in ['allow', 'filtered', 'advisory', 'override']:
+                    if mode in ['allow', 'metadata', 'relocated', 'filtered', 'advisory', 'override']:
                         if code != 0 or not planned['verified'] or not planned['evidence']['allows']:
                             raise RuntimeError('real positive control failed owner verification')
                         if mode != 'filtered' and not planned['evidence']['policies']:
                             raise RuntimeError('positive control did not evaluate a named policy')
+                        if mode == 'metadata':
+                            addresses = {policy['address'] for policy in planned['evidence']['policies']}
+                            if not {'provider_policy.terraform.source', 'module_policy.*.local'} <= addresses:
+                                raise RuntimeError('provider/module policies were not actually matched')
                         config['command'] = 'apply'
                         config['savedPlan'] = {'path': str(Path(planned['directory'])/'tfplan'), 'sha256': planned['planSha256']}
                         config['planReceipt'] = planned['receipt']
+                        if mode == 'relocated':
+                            moved = root/'new-host-source'
+                            moved.mkdir(mode=0o700)
+                            shutil.copyfile(policy_file, moved/policy_file.name)
+                            (moved/policy_file.name).chmod(0o400)
+                            moved.chmod(0o500)
+                            config['policyRoots'] = [str(moved)]
+                            config['overrides'] = [{'file': str(moved/policy_file.name), 'address': 'resource_policy.terraform_data.proof'}]
+                            shim = root/'new-host-shim'
+                            shutil.copyfile(Path(runtime['shim']['path']), shim)
+                            shim.chmod(0o500)
+                            config['runtime'] = {**runtime, 'shim': {'path': str(shim), 'sha256': digest(shim)}}
                         code, applied = stage(args, config, output/'apply', private)
                         if code != 0 or not applied['verified'] or not applied['evidence']['allows']:
                             raise RuntimeError('real saved-plan apply failed owner verification')
                         state = json.loads((work/'terraform.tfstate').read_text())
                         if not any(r.get('instances') for r in state.get('resources', [])):
                             raise RuntimeError('positive apply did not preserve managed state')
+                        if mode == 'metadata':
+                            # Remove a whole nested module tree. The default
+                            # provider is now used only by orphan state; the
+                            # retained root resource uses its secondary alias.
+                            original = (work/'main.tf').read_text()
+                            (work/'main.tf').write_text(original.replace('module "child" {\n source = "./child"\n count = 2\n}\n', ''))
+                            config['command'] = 'plan'
+                            config.pop('savedPlan', None)
+                            config.pop('planReceipt', None)
+                            code, removed = stage(args, config, output/'orphan-plan', private)
+                            if code != 0 or not removed['verified'] or not removed['evidence']['allows']:
+                                raise RuntimeError('removed module/orphan provider plan failed independent coverage')
+                            if not any(p['address'] == 'resource_policy.terraform_data.delete' for p in removed['evidence']['policies']):
+                                raise RuntimeError('delete policies did not evaluate orphan instances')
+                            config['command'] = 'apply'
+                            config['savedPlan'] = {'path': str(Path(removed['directory'])/'tfplan'), 'sha256': removed['planSha256']}
+                            config['planReceipt'] = removed['receipt']
+                            code, deleted = stage(args, config, output/'orphan-apply', private)
+                            if code != 0 or not deleted['verified'] or not deleted['evidence']['allows']:
+                                raise RuntimeError('removed module/orphan provider apply failed independent coverage')
+                            state = json.loads((work/'terraform.tfstate').read_text())
+                            if any(r.get('module', '').startswith('module.child') for r in state.get('resources', [])):
+                                raise RuntimeError('orphan resource state survived its verified deletion')
                     else:
                         if code == 0 or planned['evidence']['allows']:
                             raise RuntimeError('negative native control authorized execution')

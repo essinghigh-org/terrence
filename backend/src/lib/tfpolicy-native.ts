@@ -214,7 +214,8 @@ async function probeProfile(profile: Profile): Promise<void> {
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    if (code !== 0 || record(JSON.parse(output || "{}") as unknown)["ready"] !== true)
+    const probe = record(JSON.parse(output || "{}") as unknown);
+    if (code !== 0 || probe["ready"] !== true || probe["receiptVersion"] !== 2)
       throw new Error(`Native policy runtime is unavailable: ${error.trim() || "readiness checks failed"}`);
   } finally {
     await rm(control, { recursive: true, force: true });
@@ -374,7 +375,7 @@ function decodeReceipt(
     throw new Error("Native plan admission signature is invalid");
   const payload = record(JSON.parse(bytes.toString("utf8")) as unknown);
   if (
-    payload["version"] !== 1 ||
+    payload["version"] !== 2 ||
     payload["stage"] !== "plan" ||
     payload["runId"] !== runId ||
     payload["workspaceId"] !== workspaceId ||
@@ -411,6 +412,25 @@ function nativeSetAdmission(
   }
   return null;
 }
+function receiptPolicyFile(roots: readonly string[], value: unknown): Readonly<{ index: number; file: string }> {
+  const reference = text(value),
+    slash = reference.indexOf("/"),
+    index = Number(reference.slice(0, slash)),
+    path = reference.slice(slash + 1);
+  const root = roots[index];
+  if (
+    slash < 1 ||
+    String(index) !== reference.slice(0, slash) ||
+    root === undefined ||
+    path === "" ||
+    path.includes("\\")
+  )
+    throw new Error("Invalid native receipt policy reference");
+  const file = resolve(root, path);
+  if (!within(root, file) || relative(root, file).split(sep).join("/") !== path)
+    throw new Error("Native receipt policy reference escapes its snapshot");
+  return { index, file };
+}
 function nativeDenialAdmission(
   payload: Readonly<Record<string, unknown>>,
   state: NativeState,
@@ -424,7 +444,7 @@ function nativeDenialAdmission(
   const nativeSets = snapshot.sets.filter((set) => set.kind === "tfpolicy");
   for (const raw of payload["denials"]) {
     const denial = record(raw);
-    const index = state.roots.findIndex((root) => within(root, text(denial["file"])));
+    const { index } = receiptPolicyFile(state.roots, denial["file"]);
     const set = nativeSets[index];
     const check = selected.find((item) => item.policySetId === set?.id);
     if (denial["enforcement"] !== "mandatory_overridable" || check === undefined)
@@ -735,10 +755,9 @@ export async function nativeApplyInput(
   const nativeSets = context.evaluation.snapshot.sets.filter((set) => set.kind === "tfpolicy");
   for (const item of denied) {
     const denial = record(item),
-      file = text(denial["file"]),
       address = text(denial["address"]);
-    const index = state.roots.findIndex((root) => within(root, file)),
-      set = nativeSets[index];
+    const { index, file } = receiptPolicyFile(state.roots, denial["file"]);
+    const set = nativeSets[index];
     const approved =
       set !== undefined &&
       checks.some(

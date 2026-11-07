@@ -52,7 +52,7 @@ func evidenceFixture(t *testing.T) EvidenceInput {
 			rpc = append(rpc, row)
 		}
 	}
-	return EvidenceInput{Command: "plan", Nonce: nonce, Roots: []string{"/snapshot/policies"}, ExitCode: 2, CgroupEmpty: true, Audit: encodeLines(t, rows, "sequence"), Journal: encodeLines(t, rpc, "sequence"), Transport: []byte(`{"run_nonce":"` + nonce + `","completed":false,"transport":"engine_shutdown_observed"}`), PlanJSON: []byte(`{"format_version":"1.2","terraform_version":"1.17.1","complete":true,"errored":false,"resource_changes":[{"address":"terraform_data.proof","mode":"managed","change":{"actions":["create"]}}]}`)}
+	return EvidenceInput{Command: "plan", Nonce: nonce, Roots: []string{"/snapshot/policies"}, ExitCode: 2, CgroupEmpty: true, Audit: encodeLines(t, rows, "sequence"), Journal: encodeLines(t, rpc, "sequence"), Transport: []byte(`{"run_nonce":"` + nonce + `","completed":false,"transport":"engine_shutdown_observed"}`), SavedPlan: testPlanArchive(t, `{"version":4,"resources":[]}`), PlanJSON: []byte(`{"configuration":{"root_module":{}},"format_version":"1.2","terraform_version":"1.17.1","complete":true,"errored":false,"resource_changes":[{"address":"terraform_data.proof","mode":"managed","change":{"actions":["create"]}}]}`)}
 }
 
 func TestEvidenceMatchesPlanAndAcceptsValidUnmatchedPolicy(t *testing.T) {
