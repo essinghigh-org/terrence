@@ -1,5 +1,5 @@
 // Opt-in local acceptance using the production worker, API, and operator binary.
-import { appendFile, chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 
@@ -66,6 +66,8 @@ const modes = [
   "apply-cancel",
   "saved-tamper",
   "stale-policy",
+  "worker-death",
+  "apply-force",
 ];
 const selected = process.argv[3]?.split(",") ?? modes;
 if (selected.some((mode) => !modes.includes(mode))) throw new Error("Unknown hosted acceptance case");
@@ -117,7 +119,7 @@ try {
     await mkdir(policy, { recursive: true, mode: 0o700 });
     await writeFile(
       join(config, "main.tf"),
-      /^(plan|apply)-(crash|cancel)$/.test(mode)
+      /^(plan|apply)-(crash|cancel)$/.test(mode) || ["worker-death", "apply-force"].includes(mode)
         ? 'resource "terraform_data" "proof" {\n count = 200\n input = "local-only"\n}\n'
         : 'resource "terraform_data" "proof" { input = "local-only" }\n',
       { mode: 0o600 },
@@ -300,11 +302,103 @@ try {
       if (mode === "stale-policy")
         await db.update(s.policySets).set({ description: "changed before apply" }).where(eq(s.policySets.id, setId));
       await db.update(s.runs).set({ status: "confirmed" }).where(eq(s.runs.id, runId));
-      const applyFault = mode.startsWith("apply-") ? await fault(mode) : undefined;
+      if (mode === "worker-death") {
+        const child = Bun.spawn([process.execPath, join(import.meta.dir, "worker-task.ts"), runId, root], {
+          env: process.env,
+          stdout: Bun.file(join(root, mode, "worker.stdout")),
+          stderr: Bun.file(join(root, mode, "worker.stderr")),
+          timeout: 60000,
+        });
+        const killer = Bun.spawn(
+          [
+            "python3",
+            "-I",
+            resolve(import.meta.dir, "../../../../tools/tfpolicy-supervisor/integration/agent-fault.py"),
+            fullProfile.cgroupRoot,
+            fullProfile.privateParent,
+            fullProfile.runtime.plugin.path,
+            "parent-death",
+            "--parent-pid",
+            String(child.pid),
+            "--parent-exe",
+            await realpath(process.execPath),
+          ],
+          {
+            stdout: Bun.file(join(root, mode, "fault.json")),
+            stderr: Bun.file(join(root, mode, "fault.stderr")),
+            timeout: 55000,
+          },
+        );
+        await child.exited;
+        if ((await killer.exited) !== 0) throw new Error("Worker death did not interrupt a stopped native RPC");
+        let empty = false;
+        for (let attempt = 0; attempt < 120; attempt++) {
+          const events = await readFile(join(fullProfile.cgroupRoot, runId, "cgroup.events"), "utf8").catch(
+            () => "populated 0",
+          );
+          if (events.includes("populated 0")) {
+            empty = true;
+            break;
+          }
+          await Bun.sleep(100);
+        }
+        if (!empty) throw new Error("Native execution outlived its dead worker with a stopped plugin");
+        const { reconcileInterruptedLocalRuns } = await import("../../../src/worker");
+        await reconcileInterruptedLocalRuns();
+        const { recoveryStatePathFor } = await import("../../../src/lib/recovery-files");
+        const { decryptStatePayload } = await import("../../../src/lib/validation");
+        const actual = JSON.parse(
+          decryptStatePayload(await readFile(recoveryStatePathFor(join(root, "storage"), runId), "utf8")),
+        );
+        const instances = (actual.resources ?? []).flatMap(
+          (resource: { instances?: unknown[] }) => resource.instances ?? [],
+        );
+        const recovered = await db.query.runs.findFirst({ where: eq(s.runs.id, runId) });
+        if (instances.length !== 200 || recovered?.status !== "errored")
+          throw new Error("Worker death lost post-mutation recovery state");
+        await writeFile(
+          join(root, mode, "retained-state-summary.json"),
+          JSON.stringify({
+            instances: instances.length,
+            status: recovered.status,
+            ownerStopped: true,
+            recoveryCaptured: true,
+          }),
+          { mode: 0o600 },
+        );
+        await recordCase(mode, runId);
+        continue;
+      }
+      const forced =
+        mode === "apply-force"
+          ? Bun.spawn(
+              [
+                "python3",
+                "-I",
+                resolve(import.meta.dir, "../../../../tools/tfpolicy-supervisor/integration/agent-fault.py"),
+                fullProfile.cgroupRoot,
+                fullProfile.privateParent,
+                fullProfile.runtime.plugin.path,
+                "freeze",
+              ],
+              {
+                stdout: Bun.file(join(root, mode, "fault.json")),
+                stderr: Bun.file(join(root, mode, "fault.stderr")),
+                timeout: 55000,
+              },
+            )
+          : undefined;
+      const applyFault = mode.startsWith("apply-") && forced === undefined ? await fault(mode) : undefined;
       try {
-        await executeApply(runId);
+        const execution = executeApply(runId);
+        if (forced !== undefined) {
+          if ((await forced.exited) !== 0) throw new Error("Force cancellation did not reach a stopped native RPC");
+          const { cancelRunExecution } = await import("../../../src/worker");
+          cancelRunExecution(runId, true);
+        }
+        await execution;
       } catch (error) {
-        if (!["apply-crash", "apply-cancel", "saved-tamper", "stale-policy"].includes(mode)) throw error;
+        if (!["apply-crash", "apply-cancel", "apply-force", "saved-tamper", "stale-policy"].includes(mode)) throw error;
         await writeFile(join(root, mode, "failure.txt"), String(error), { mode: 0o600 });
       }
       await verifyFault(applyFault);

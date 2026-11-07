@@ -23,6 +23,7 @@ type RunContext struct {
 }
 type Config struct {
 	engineTemp        string
+	ParentPID         int               `json:"parentPid,omitempty"`
 	ExecutionID       string            `json:"executionId,omitempty"`
 	SchemaVersion     int               `json:"schemaVersion"`
 	Runtime           Runtime           `json:"runtime"`

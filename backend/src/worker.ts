@@ -765,7 +765,9 @@ function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
   // group.
   const tracked = {
     pid: child.pid ?? null,
-    kill: child.kill,
+    kill: (signal?: string | number): void => {
+      child.kill(signal);
+    },
     exited: child.exited,
     stdout: child.stdout,
     stderr: child.stderr,
@@ -4498,7 +4500,16 @@ async function executeNativeApply(
       if (text !== "") await writeLog(runId, "apply", text);
     },
     input,
-  );
+  ).catch(async (error: unknown): Promise<never> => {
+    await writeLog(
+      runId,
+      "apply",
+      "[terrence] Native policy execution failed after apply started. Infrastructure may already have changed. Terrence will attempt to capture actual state; no rollback occurred.",
+    ).catch((logError: unknown): void => {
+      logBestEffortFailure("Could not write native apply recovery warning", { runId }, logError);
+    });
+    throw error;
+  });
   const applyExit = result.evidence.allows ? 0 : 1;
   if (applyExit !== 0)
     await writeLog(

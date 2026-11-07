@@ -33,8 +33,10 @@ def main():
     parser.add_argument('root', type=Path)
     parser.add_argument('private', type=Path)
     parser.add_argument('binary', type=Path)
-    parser.add_argument('mode', choices=['crash', 'cancel'])
+    parser.add_argument('mode', choices=['crash', 'cancel', 'parent-death', 'freeze'])
     parser.add_argument('--command', choices=['plan', 'apply'], default='apply')
+    parser.add_argument('--parent-pid', type=int)
+    parser.add_argument('--parent-exe', type=Path)
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     relative = '/' + str(root.relative_to('/sys/fs/cgroup'))
@@ -56,7 +58,22 @@ def main():
                         descriptor = os.pidfd_open(pid)
                         if os.readlink(f'/proc/{pid}/exe') != str(args.binary):
                             continue
-                        signal.pidfd_send_signal(descriptor, signal.SIGKILL if args.mode == 'crash' else signal.SIGINT)
+                        if args.mode == 'parent-death':
+                            if args.parent_pid is None or args.parent_exe is None:
+                                raise RuntimeError('parent death requires a pinned harness child')
+                            parent = os.pidfd_open(args.parent_pid)
+                            try:
+                                member = Path(f'/proc/{args.parent_pid}/cgroup').read_text().strip().split(':')[-1]
+                                if not member.startswith(relative + '/') or os.readlink(f'/proc/{args.parent_pid}/exe') != str(args.parent_exe):
+                                    raise RuntimeError('parent is not the pinned process in this test subtree')
+                                # A stopped RPC cannot complete naturally and hide a missing
+                                # parent-liveness check. The owner must cancel and reap it.
+                                signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
+                                signal.pidfd_send_signal(parent, signal.SIGKILL)
+                            finally:
+                                os.close(parent)
+                        else:
+                            signal.pidfd_send_signal(descriptor, signal.SIGSTOP if args.mode == 'freeze' else signal.SIGKILL if args.mode == 'crash' else signal.SIGINT)
                         print(json.dumps({'interrupted': True, 'pendingResourceRpc': True, 'command': args.command, 'mode': args.mode}))
                         return
                     except (ProcessLookupError, FileNotFoundError):

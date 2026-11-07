@@ -187,14 +187,7 @@ export function attachToRunCgroup(pid: number, groupPath: string | null): void {
  * true when a kill was issued. */
 export function killRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const path = runCgroupPath(runId, env);
-  if (path === null) return false;
-  let procs: string;
-  try {
-    procs = readFileSync(join(path, "cgroup.procs"), "utf8").trim();
-  } catch {
-    return false;
-  }
-  if (procs === "") return false;
+  if (path === null || !cgroupPopulated(path)) return false;
   // cgroup.kill is the primary path: atomic kernel-side termination with no
   // PID-reuse risk. On a fake/test root the write succeeds but does nothing
   // (no kernel behind the files), so also kill the listed PIDs when the file
@@ -246,6 +239,17 @@ function fallbackKillAll(path: string): boolean {
 export function runCgroupHasProcesses(runId: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const path = runCgroupPath(runId, env);
   if (path === null) return false;
+  return cgroupPopulated(path);
+}
+
+function cgroupPopulated(path: string): boolean {
+  try {
+    // Native owners, engines and supervisors occupy bounded child groups.
+    // Only cgroup.events includes descendants of an empty run root.
+    return readFileSync(join(path, "cgroup.events"), "utf8").split("\n").includes("populated 1");
+  } catch {
+    // Preserve the existing fake-root and older-kernel fallback.
+  }
   try {
     return readFileSync(join(path, "cgroup.procs"), "utf8").trim() !== "";
   } catch {
