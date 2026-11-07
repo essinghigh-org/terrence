@@ -12,6 +12,50 @@ import (
 	"time"
 )
 
+func TestOwnerRejectsTargetedPlansBeforeRuntimePreparation(t *testing.T) {
+	for _, args := range [][]string{
+		{"-target=terraform_data.proof"},
+		{"-target", "terraform_data.proof"},
+		{"--target=terraform_data.proof"},
+		{"--target", "terraform_data.proof"},
+		{"-refresh=false", "-target=module.child"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			c := Config{Command: "plan", Arguments: args}
+			if _, err := commandArgs(c, "plan"); err == nil || !strings.Contains(err.Error(), "without -target") {
+				t.Fatalf("targeted plan arguments did not produce an explicit rejection: %v", err)
+			}
+			// No paths or runtime pins are supplied: this must reject the mode
+			// before configuration preparation or any executable is consulted.
+			result, err := Execute(context.Background(), c)
+			if err == nil || !strings.Contains(err.Error(), "without -target") {
+				t.Fatalf("targeted plan reached runtime preparation: %v", err)
+			}
+			if result.Directory != "" || result.Verified || result.Receipt != nil || !result.CgroupEmpty {
+				t.Fatalf("targeted plan created execution artifacts or admission: %+v", result)
+			}
+		})
+	}
+}
+
+func TestOwnerPreservesSupportedPlanArguments(t *testing.T) {
+	for _, arg := range []string{"-refresh=false", "-refresh=true", "-refresh-only", "-destroy", "-replace=terraform_data.proof", "-var-file=run.tfvars", "-parallelism=4"} {
+		t.Run(arg, func(t *testing.T) {
+			args, err := commandArgs(Config{Command: "plan", Arguments: []string{arg}}, "plan")
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, actual := range args {
+				found = found || actual == arg
+			}
+			if !found {
+				t.Fatalf("supported argument was omitted: %v", args)
+			}
+		})
+	}
+}
+
 func TestOwnerRejectsRuntimeControlEnvironmentAndDirectApply(t *testing.T) {
 	for _, key := range []string{"LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "GLIBC_TUNABLES", "GCONV_PATH", "TF_CLI_ARGS", "TF_POLICY_PLUGIN", "TFPOLICY_RECORDER_CONFIG"} {
 		if _, e := engineEnv(Config{Environment: map[string]string{key: "injected"}}, "nonce", "socket"); e == nil {

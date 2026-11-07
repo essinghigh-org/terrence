@@ -477,7 +477,19 @@ func sandboxArgs(c Config, plan string, show bool) []string {
 	}
 	return append(args, "--rw=/dev/null", "--cwd="+c.WorkDirectory)
 }
+func rejectTargetedPlan(c Config) error {
+	for _, arg := range c.Arguments {
+		if arg == "-target" || arg == "--target" || strings.HasPrefix(arg, "-target=") || strings.HasPrefix(arg, "--target=") {
+			return errors.New("targeted native policy plans are not supported; create a full plan without -target")
+		}
+	}
+	return nil
+}
+
 func commandArgs(c Config, plan string) ([]string, error) {
+	if err := rejectTargetedPlan(c); err != nil {
+		return nil, err
+	}
 	if c.Command != "init" && c.Command != "plan" && c.Command != "apply" {
 		return nil, errors.New("unsupported native command")
 	}
@@ -487,7 +499,7 @@ func commandArgs(c Config, plan string) ([]string, error) {
 	}
 	for _, arg := range c.Arguments {
 		valid := c.Command == "plan" && (arg == "-refresh=false" || arg == "-refresh=true" || arg == "-refresh-only" || arg == "-destroy")
-		for _, prefix := range []string{"-target=", "-replace=", "-var-file=", "-parallelism="} {
+		for _, prefix := range []string{"-replace=", "-var-file=", "-parallelism="} {
 			if strings.HasPrefix(arg, prefix) && c.Command == "plan" && len(arg) > len(prefix) && !strings.ContainsAny(arg, "\x00\r\n") {
 				valid = true
 			}
@@ -526,6 +538,11 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 			result.Receipt = nil
 		}
 	}()
+	// Terraform marks targeted plans incomplete. Reject this unsupported mode
+	// before opening runtime artifacts, launching probes or creating captures.
+	if err := rejectTargetedPlan(c); err != nil {
+		return result, err
+	}
 	if c.SchemaVersion != 1 || c.RunID == "" || c.WorkspaceID == "" || c.TimeoutSeconds < 1 || c.TimeoutSeconds > 86400 || !canonical(c.WorkRoot) || !canonical(c.WorkDirectory) || !within(c.WorkRoot, c.WorkDirectory) || !privateDir(c.PrivateParent) || len(c.PrivateParent) > 25 || len(c.PolicyRoots) == 0 {
 		return result, errors.New("invalid native owner configuration")
 	}

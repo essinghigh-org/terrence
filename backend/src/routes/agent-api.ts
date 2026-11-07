@@ -1461,6 +1461,13 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const suppliedFence =
+      ctx.request.headers.has("tfc-agent-fencing-token") || new URL(ctx.request.url).searchParams.has("fencing_token");
+    const requiresFence =
+      suppliedFence ||
+      agentSupportsCapability(agent, NATIVE_AGENT_CAPABILITY) ||
+      typeof job.result?.["nativePolicyEvaluationId"] === "string";
+    if (requiresFence && requestedFencingToken(ctx) !== job.fencingToken) return fencingConflict(set);
     const run = await db.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     const canceled = job.status === "canceled" || run?.status === "canceled" || run?.status === "force_canceled";
     return { status: job.status, canceled };

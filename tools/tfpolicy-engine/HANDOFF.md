@@ -55,13 +55,23 @@ Set `TERRENCE_TFPOLICY_RUNTIME_PROFILE` to the canonical path of a read-only JSO
 
 The catalog/archive digest and executable digest identify different files. The enabled tfpolicy catalog must contain the matching Linux architecture and ZIP digest. Optional `runtime.entitlementCA` has the same path/SHA-256 shape and accepts public certificates only. `PUBLIC_URL` must be the genuine HTTPS Terrence endpoint reachable from the plugin. Set `TERRENCE_RUN_CGROUP_ROOT` to the delegated hierarchy and install the runner through the existing worker configuration.
 
-Use Terraform 1.17.1 workspaces. Attach a ready native policy-set archive whose selected `policyToolVersion` or `.tfpolicy-version` is the installed plugin version. `policiesPath` must contain `.policy.hcl` files. Native parameters, action-only runs, other engine versions, and the deny-network profile are rejected. The profile and binaries must stay identical between plan and apply; changes require a new plan.
+Use Terraform 1.17.1 workspaces. Attach a ready native policy-set archive whose selected `policyToolVersion` or `.tfpolicy-version` is the installed plugin version. `policiesPath` must contain `.policy.hcl` files. Native parameters, targeted plans (`-target`), action-only runs, other engine versions, and the deny-network profile are rejected. Targeted plans are rejected before owner runtime preparation because Terraform marks them incomplete; create a full plan instead. The profile and binaries must stay identical between plan and apply; changes require a new plan.
 
 For agents, set `TERRENCE_AGENT_NATIVE_POLICY_PROFILE` to the same profile shape on the agent host, and keep `TERRENCE_AGENT_SANDBOX=true`. The owner and runtime **bytes** must match the server's pins; local paths, `cgroupRoot` and `privateParent` may differ. The agent process must already be inside its delegated hierarchy. Its native path creates only bounded children of that hierarchy. `runtime.runner` is the backend's native helper; `TERRENCE_LANDLOCK_RUNNER` remains the helper built by the agent repository, used for state capture. Registration checks both execution paths. A configured but invalid profile stops registration; omitting it preserves the legacy capability baseline.
 
 Terraform's upstream BUSL-1.1 applies to the patched reference build. Preserve upstream copyright/license notices and review the applicable distribution and commercial-use terms. The build recipe is not a grant to redistribute Terraform or the proprietary plugin. Operators supply their own licensed plugin.
 
 ## Validation
+
+### Ownership review follow-up
+
+The additional review closes two agent delivery races: stale recovery reads the locked current lease rather than its scan snapshot, and native preparation merges metadata under that same lease lock so it cannot erase a concurrent payload-delivery marker. Completion and recovery acknowledgments also lock the current job. A cancellation racing missing state retains its canceled status and workspace hold; duplicate valid recovery acknowledgments persist state only once. Missing or malformed Terraform state is retained for diagnosis but never finalized or acknowledged as recovered.
+
+Native status polling now enforces the owning fence. Legacy non-native agents may still omit a fence for read-only cancellation polling; supplied malformed or stale fences are rejected. Preparation/payload-failure tests distinguish first delivery from possible prior delivery, and completion tests reject changes to server-owned metadata. A changed policy snapshot on redelivery now revokes run credentials and frees the agent. Targeted plans are rejected before owner runtime preparation instead of failing late on incomplete evidence.
+
+The backend regression suites and changed-file lint/typecheck cover these changes. The owner passes focused argument tests, supervisor race tests, vet and builds. Deliberately restoring the prior recovery, delivery, metadata, status and cancellation guards makes their regression tests fail. Local owner tests skip `TestNativeOwner` without a qualification profile; these checks do not establish licensed-plugin behavior. Before release, qualify the final CI head, rebuild/repin the changed owner and recorder, create fresh plans, and rerun the hosted `auto-apply` and updated `worker-death` cases with the operator-supplied plugin. The earlier real-plugin results below remain historical evidence, not verification of later changes.
+
+### Earlier qualification
 
 The final contract-v2 build used:
 

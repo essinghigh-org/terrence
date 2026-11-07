@@ -409,6 +409,18 @@ for (const route of routes) {
         content: { "application/json": { schema: { type: "object" } } },
       };
   }
+  if (m === "get" && openApiPath === "/api/agent/jobs/{job_id}/status") {
+    operation.description =
+      "Poll the owning agent's current job lease. Requires the agent session token, tfc-agent-id, and the exact fencing_token query parameter or tfc-agent-fencing-token header. A stale or malformed fence returns 409. Native-capable agents and native jobs also reject a missing fence; legacy non-native agents may omit it for read-only status compatibility. Only claimed is active; terminal states or loss of authority require the agent to stop execution and retain recovery state.";
+    operation.security = [{ agentSessionToken: [] }];
+    operation.parameters = [
+      ...(operation.parameters as Record<string, unknown>[]),
+      { name: "tfc-agent-id", in: "header", required: true, schema: { type: "string" } },
+      { name: "fencing_token", in: "query", schema: { type: "integer", minimum: 0 } },
+      { name: "tfc-agent-fencing-token", in: "header", schema: { type: "integer", minimum: 0 } },
+    ];
+    responses["409"] = { description: "The fencing token is missing or the job lease is no longer current" };
+  }
   if (m === "get" && openApiPath === "/api/v2/admin/github-app/manifest/redirect") {
     operation.parameters = [{ name: "state", in: "query", required: true, schema: { type: "string" } }];
     const redirectResponse = responses["200"] as Record<string, unknown> | undefined;

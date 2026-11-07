@@ -1720,3 +1720,202 @@ test("canceled native apply retains its lock after heartbeat expiry until state 
   `);
   expect(result).toEqual({ locked: true, held: true, missing: true, recovered: "canceled", unlocked: true, states: 1 });
 });
+
+test("stale recovery observes admission committed after its scan and skips replacement leases", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs } = await import("./src/lib/agent-jobs.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy",lastPingAt:1});
+    for (const [index, id] of ["first", "admitted", "replaced"].entries()) {
+      const apply = id !== "first";
+      await db.insert(s.workspaces).values({id,orgId:"org",name:id,locked:apply,lockOwnerType:apply?"agent-run":null,lockOwnerId:apply?id:null});
+      await db.insert(s.runs).values({id,workspaceId:id,agentId:"agent",status:apply?"applying":"planning",createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id,runId:id,agentPoolId:"pool",agentId:"agent",phase:apply?"apply":"plan",status:"claimed",fencingToken:7,claimedAt:index+1});
+    }
+    // Pause at the real database read boundary, after capturing candidates but
+    // before recovery opens its transaction. No production test hook is needed.
+    const { spyOn } = await import("bun:test");
+    const findMany = db.query.agentJobs.findMany.bind(db.query.agentJobs);
+    const scan = spyOn(db.query.agentJobs, "findMany").mockImplementation(async (...args) => {
+      const candidates = await findMany(...args);
+      scan.mockRestore();
+      await db.update(s.agentJobs).set({result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7,payloadDeliveryToken:7}}).where(eq(s.agentJobs.id,"admitted"));
+      await db.update(s.agentJobs).set({fencingToken:8}).where(eq(s.agentJobs.id,"replaced"));
+      return candidates;
+    });
+    const recovered = await recoverStaleAgentJobs(Date.now());
+    const outcome = {};
+    for (const id of ["admitted", "replaced"]) {
+      const job = await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,id)});
+      const run = await db.query.runs.findFirst({where:eq(s.runs.id,id)});
+      const workspace = await db.query.workspaces.findFirst({where:eq(s.workspaces.id,id)});
+      outcome[id] = {job:job.status,run:run.status,fence:job.fencingToken,locked:workspace.locked,recovery:job.result?.nativeRecoveryRequired??false};
+    }
+    console.log(JSON.stringify({recovered,...outcome}));
+  `);
+  expect(result).toEqual({
+    recovered: ["first", "admitted"],
+    admitted: { job: "errored", run: "errored", fence: 7, locked: true, recovery: true },
+    replaced: { job: "claimed", run: "applying", fence: 8, locked: true, recovery: false },
+  });
+});
+
+test("native apply rejects malformed recovery state without unlocking or losing returned bytes", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { completeAgentJob } = await import("./src/lib/agent-jobs.ts");
+    const { inspectRecoveryCopy } = await import("./src/lib/recovery-files.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy"});
+    const completion={status:"errored",errorMessage:"interrupted",resourceAdditions:null,resourceChanges:null,resourceDestructions:null,resourceImports:null,planJson:null,statePayload:null,jsonState:null,jsonStateOutputs:null,result:{}};
+    const outcomes=[];
+    for (const status of ["claimed","errored","canceled"]) {
+      await db.insert(s.workspaces).values({id:status,orgId:"org",name:status,locked:true,lockOwnerType:"agent-run",lockOwnerId:status});
+      await db.insert(s.runs).values({id:status,workspaceId:status,agentId:"agent",status:status==="claimed"?"applying":status,createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id:status,runId:status,agentPoolId:"pool",agentId:"agent",phase:"apply",status,fencingToken:7,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7,...(status==="errored"?{nativeRecoveryRequired:true}:{})}});
+      for (const statePayload of ["{}","null","[]",JSON.stringify({version:4,serial:1,lineage:"proof",resources:[{}]})]) {
+        const accepted=await completeAgentJob("agent",status,7,{...completion,statePayload});
+        const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,status)});
+        const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,status)});
+        const states=await db.query.stateVersions.findMany({where:eq(s.stateVersions.workspaceId,status)});
+        const copy=await inspectRecoveryCopy(process.env.STORAGE_DIR,status);
+        outcomes.push({accepted:accepted!==undefined,locked:workspace.locked,recovered:job.result.nativeStateRecovered===true,states:states.length,copy:copy.status});
+      }
+    }
+    console.log(JSON.stringify({outcomes}));
+  `);
+  expect(result["outcomes"]).toEqual(
+    Array(12).fill({ accepted: false, locked: true, recovered: false, states: 0, copy: "invalid" }),
+  );
+});
+
+test("agent completion preserves server-owned native admission and delivery metadata", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { completeAgentJob } = await import("./src/lib/agent-jobs.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy"});
+    await db.insert(s.workspaces).values({id:"ws",orgId:"org",name:"ws"});
+    await db.insert(s.runs).values({id:"run",workspaceId:"ws",agentId:"agent",status:"planning",createdAt:Date.now()});
+    const owned={nativePolicyEvaluationId:"eval",nativeRecoveryRequired:false,nativeStateRecovered:false,policyApplyAdmissionToken:7,payloadDeliveryToken:7};
+    await db.insert(s.agentJobs).values({id:"job",runId:"run",agentPoolId:"pool",agentId:"agent",phase:"plan",status:"claimed",fencingToken:7,result:owned});
+    const completion={status:"errored",errorMessage:"fixture",resourceAdditions:null,resourceChanges:null,resourceDestructions:null,resourceImports:null,planJson:null,statePayload:null,jsonState:null,jsonStateOutputs:null,result:{...Object.fromEntries(Object.keys(owned).map(key=>[key,"forged"])),agentMessage:"retained"}};
+    const done=await completeAgentJob("agent","job",7,completion);
+    const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+    console.log(JSON.stringify({accepted:done!==undefined,result:job.result}));
+  `);
+  expect(result).toEqual({
+    accepted: true,
+    result: {
+      nativePolicyEvaluationId: "eval",
+      nativeRecoveryRequired: false,
+      nativeStateRecovered: false,
+      policyApplyAdmissionToken: 7,
+      payloadDeliveryToken: 7,
+      agentMessage: "retained",
+    },
+  });
+});
+
+test("cancellation racing missing native state retains its terminal status and recovery lock", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { completeAgentJob, cancelAgentJobsForRun, recoverStaleAgentJobs } = await import("./src/lib/agent-jobs.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy",lastPingAt:1});
+    const completion={status:"errored",errorMessage:"interrupted",resourceAdditions:null,resourceChanges:null,resourceDestructions:null,resourceImports:null,planJson:null,statePayload:null,jsonState:null,jsonStateOutputs:null,result:{}};
+    const outcomes=[];
+    for (const [index, status] of ["canceled","force_canceled","canceled","force_canceled"].entries()) {
+      const lateCancel = index >= 2;
+      const id="run"+index;
+      await db.insert(s.workspaces).values({id,orgId:"org",name:id,locked:true,lockOwnerType:"agent-run",lockOwnerId:id});
+      await db.insert(s.runs).values({id,workspaceId:id,agentId:"agent",status:lateCancel?"applying":status,createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id,runId:id,agentPoolId:"pool",agentId:"agent",phase:"apply",status:"claimed",fencingToken:7,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7,payloadDeliveryToken:7}});
+      // Cancellation persists the run first, then cancels the remote job.
+      // An incomplete completion can arrive in between those real operations.
+      const missing=await completeAgentJob("agent",id,7,completion);
+      if(lateCancel)await db.update(s.runs).set({status}).where(eq(s.runs.id,id));
+      await cancelAgentJobsForRun(id);
+      await recoverStaleAgentJobs(Date.now());
+      const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,id)});
+      const run=await db.query.runs.findFirst({where:eq(s.runs.id,id)});
+      const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,id)});
+      const recovered=await Promise.all([1,2].map(()=>completeAgentJob("agent",id,7,{...completion,statePayload:'{"version":4,"serial":1,"lineage":"proof","resources":[]}'})));
+      const after=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,id)});
+      const states=await db.query.stateVersions.findMany({where:eq(s.stateVersions.workspaceId,id)});
+      outcomes.push({missing:missing===undefined,job:job.status,run:run.status,locked:workspace.locked,recovery:job.result.nativeRecoveryRequired,recovered:recovered.map(value=>value?.runStatus),unlocked:!after.locked,states:states.length});
+    }
+    console.log(JSON.stringify({outcomes}));
+  `);
+  expect(result["outcomes"]).toEqual(
+    ["canceled", "force_canceled", "canceled", "force_canceled"].map((status, index) => ({
+      missing: true,
+      job: index >= 2 ? "errored" : "canceled",
+      run: status,
+      locked: true,
+      recovery: true,
+      recovered: [status, status],
+      unlocked: true,
+      states: 1,
+    })),
+  );
+});
+
+test("valid native state survives cancellation and malformed completion without replaying apply", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { completeAgentJob, cancelAgentJobsForRun } = await import("./src/lib/agent-jobs.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy"});
+    const completion={status:"errored",errorMessage:"interrupted",resourceAdditions:null,resourceChanges:null,resourceDestructions:null,resourceImports:null,planJson:null,statePayload:'{"version":4,"serial":1,"lineage":"proof","resources":[]}',jsonState:null,jsonStateOutputs:null,result:{}};
+    const outcomes=[];
+    for(const id of ["canceled","force_canceled","invalid-result","invalid-plan"]){
+      const canceled=id==="canceled"||id==="force_canceled";
+      await db.insert(s.workspaces).values({id,orgId:"org",name:id,locked:true,lockOwnerType:"agent-run",lockOwnerId:id});
+      await db.insert(s.runs).values({id,workspaceId:id,agentId:"agent",status:canceled?id:"applying",createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id,runId:id,agentPoolId:"pool",agentId:"agent",phase:"apply",status:"claimed",fencingToken:7,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7,payloadDeliveryToken:7}});
+      const first=await completeAgentJob("agent",id,7,{...completion,...(id==="invalid-result"?{result:[]}:{ }),...(id==="invalid-plan"?{planJson:{}}:{})});
+      if(canceled)await cancelAgentJobsForRun(id);
+      const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,id)});
+      const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,id)});
+      const beforeStates=await db.query.stateVersions.findMany({where:eq(s.stateVersions.workspaceId,id)});
+      const retry=await completeAgentJob("agent",id,7,completion);
+      const after=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,id)});
+      const states=await db.query.stateVersions.findMany({where:eq(s.stateVersions.workspaceId,id)});
+      outcomes.push({first:first?.runStatus??null,job:job.status,owner:job.agentId,fence:job.fencingToken,locked:workspace.locked,beforeStates:beforeStates.length,retry:retry?.runStatus,unlocked:!after.locked,states:states.length});
+    }
+    console.log(JSON.stringify({outcomes}));
+  `);
+  expect(result["outcomes"]).toEqual(
+    ["canceled", "force_canceled", "invalid-result", "invalid-plan"].map((id) => {
+      const canceled = id === "canceled" || id === "force_canceled";
+      return {
+        first: canceled ? id : null,
+        job: canceled ? "canceled" : "errored",
+        owner: "agent",
+        fence: 7,
+        locked: !canceled,
+        beforeStates: canceled ? 1 : 0,
+        retry: canceled ? id : "errored",
+        unlocked: true,
+        states: 1,
+      };
+    }),
+  );
+});
