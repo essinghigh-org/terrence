@@ -305,6 +305,18 @@ func verifyPolicyResult(r AuditRecord, in EvidenceInput) error {
 		switch p.Result {
 		case "AllowResult":
 		case "DenyResult", "UnknownResult":
+			if p.Result == "UnknownResult" && p.Enforcement != "advisory" && in.Command != "init" {
+				return errors.New("required unknown policy result cannot authorize plan or apply")
+			}
+			if r.Result == "deferred" && p.Result == "DenyResult" && p.Enforcement != "advisory" {
+				approved := false
+				for _, override := range in.Overrides {
+					approved = approved || override == key
+				}
+				if p.Enforcement != "mandatory_overridable" || !approved {
+					return errors.New("init deferral concealed a known required policy denial")
+				}
+			}
 			if r.Result == "passed" {
 				return errors.New("ALLOW concealed a failed policy")
 			}

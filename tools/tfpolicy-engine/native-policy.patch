@@ -461,10 +461,10 @@ index 0000000..504fe05
 +}
 diff --git a/internal/command/native_policy_audit.go b/internal/command/native_policy_audit.go
 new file mode 100644
-index 0000000..b679c87
+index 0000000..f82a222
 --- /dev/null
 +++ b/internal/command/native_policy_audit.go
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,460 @@
 +// SPDX-License-Identifier: BUSL-1.1
 +
 +package command
@@ -827,8 +827,21 @@ index 0000000..b679c87
 +		return errors.New("native policy result lacks transport identity")
 +	}
 +	status, details := a.classify(response)
++	knownDenial := false
++	for _, p := range details {
++		if p.Result == "DenyResult" && (p.Enforcement == "mandatory" || p.Enforcement == "mandatory_overridable" && !a.overrides[nativePolicyOverride{File: p.File, Address: p.Address}]) {
++			knownDenial = true
++		}
++	}
++	// An UNKNOWN may defer only the unknown decision itself. Preserve a
++	// sibling's known, unapproved required denial as an independent blocker.
++	a.denied = a.denied || knownDenial
 +	if status == "unknown" && a.command == "init" {
-+		status = "deferred"
++		if knownDenial {
++			status = "denied"
++		} else {
++			status = "deferred"
++		}
 +	}
 +	a.observed[target]++
 +	failed := status == "error" || status == "unknown" || status == "denied"
@@ -1237,6 +1250,89 @@ index 0000000..606f541
 +	}
 +	c.Ui.Output(string(encoded))
 +	return 0
++}
+diff --git a/internal/command/native_policy_init_denial_test.go b/internal/command/native_policy_init_denial_test.go
+new file mode 100644
+index 0000000..7b4ee1b
+--- /dev/null
++++ b/internal/command/native_policy_init_denial_test.go
+@@ -0,0 +1,77 @@
++// SPDX-License-Identifier: BUSL-1.1
++package command
++
++import (
++	"context"
++	"fmt"
++	"github.com/hashicorp/terraform/internal/addrs"
++	"github.com/hashicorp/terraform/internal/command/views"
++	"github.com/hashicorp/terraform/internal/configs"
++	"github.com/hashicorp/terraform/internal/policy"
++	"github.com/hashicorp/terraform/internal/policy/proto"
++	"testing"
++)
++
++type nativeInitPolicyView struct{ views.Init }
++
++func (*nativeInitPolicyView) PolicyResult(string, policy.EvaluationResponse) {}
++
++// Exercise the production installation hooks, whose return value is the
++// installer's blocking signal. An unknown sibling must never erase a known
++// unapproved required denial, independent of the plugin's policy ordering.
++func TestNativePolicyInitHooksKeepKnownDenialWithUnknown(t *testing.T) {
++	for _, kind := range []string{"provider", "module"} {
++		for _, level := range []string{"mandatory", "mandatory_overridable", "approved", "advisory", "pure-unknown"} {
++			for _, reverse := range []bool{false, true} {
++				t.Run(fmt.Sprintf("%s/%s/reverse=%t", kind, level, reverse), func(t *testing.T) {
++					audit, _, file := testNativeAudit(t, "init")
++					if err := audit.PolicyStart("init", nil); err != nil {
++						t.Fatal(err)
++					}
++					unknown := &policy.Policy{Directory: file, Address: kind + "_policy.unknown", EnforcementLevel: "mandatory", Result: policy.UnknownResult}
++					denial := &policy.Policy{Directory: file, Address: kind + "_policy.known", EnforcementLevel: level, Result: policy.DenyResult}
++					if level == "approved" {
++						denial.EnforcementLevel = "mandatory_overridable"
++						audit.overrides[nativePolicyOverride{File: file, Address: denial.Address}] = true
++					}
++					response := auditTestResponse(file, policy.DenyResult, "mandatory")
++					response.Policies = []*policy.Policy{denial, unknown}
++					if reverse {
++						response.Policies = []*policy.Policy{unknown, denial}
++					}
++					if level == "pure-unknown" {
++						response.Overall = policy.UnknownResult
++						response.Policies = []*policy.Policy{unknown}
++					}
++					client := policy.NewTestMockClient(t)
++					client.EvaluateProviderFn = func(context.Context, policy.EvaluationRequest[*proto.PolicyEvaluateProviderRequest_ProviderMetadata]) policy.EvaluationResponse {
++						return response
++					}
++					client.EvaluateModuleFn = func(context.Context, policy.EvaluationRequest[*proto.PolicyEvaluateModuleRequest_ModuleMetadata]) policy.EvaluationResponse {
++						return response
++					}
++					blocked := false
++					if kind == "provider" {
++						hook := &providerPolicyHook{audit: audit, client: client, rootModule: &configs.Module{}, view: &nativeInitPolicyView{}}
++						blocked = hook.ProviderVersionSelected(context.Background(), addrs.NewDefaultProvider("test"), "1.0.0") != nil
++					} else {
++						hook := &policyModuleInstallHook{audit: audit, client: client, view: &nativeInitPolicyView{}}
++						blocked = hook.ModuleSourceResolved(context.Background(), &configs.ModuleRequest{Path: addrs.Module{"child"}, Name: "child", SourceAddr: addrs.ModuleSourceLocal("./child")}, "").HasErrors()
++					}
++					want := level == "mandatory" || level == "mandatory_overridable"
++					if blocked != want || audit.denied != want {
++						t.Errorf("installation blocked=%t audit.denied=%t, want %t", blocked, audit.denied, want)
++					}
++					if err := audit.PolicyEnd(false); err != nil {
++						t.Fatal(err)
++					}
++					code := 0
++					audit.finish(&code)
++					if (code != 0) != want {
++						t.Errorf("init exit=%d, denial required=%t", code, want)
++					}
++				})
++			}
++		}
++	}
 +}
 diff --git a/internal/command/native_policy_plan_fd_linux_test.go b/internal/command/native_policy_plan_fd_linux_test.go
 new file mode 100644

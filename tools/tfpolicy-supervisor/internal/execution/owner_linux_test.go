@@ -43,7 +43,7 @@ func TestNativeOwner(t *testing.T) {
 	if e = strictJSON(data, &base); e != nil {
 		t.Fatal(e)
 	}
-	for _, mode := range []string{"allow", "advisory", "override", "orphan", "apply-deny", "apply-crash", "apply-hang", "deny", "setup-error", "crash", "hang"} {
+	for _, mode := range []string{"allow", "advisory", "override", "orphan", "apply-deny", "apply-crash", "apply-hang", "deny", "setup-error", "crash", "hang", "init-mandatory", "init-mandatory-reverse", "init-overridable", "init-overridable-reverse", "init-unknown"} {
 		t.Run(mode, func(t *testing.T) {
 			root, e := os.MkdirTemp("/tmp", "tfo-")
 			if e != nil {
@@ -85,6 +85,26 @@ func TestNativeOwner(t *testing.T) {
 				fixtureMode = "deny"
 				enforcement = "mandatory_overridable"
 			}
+			if strings.HasPrefix(mode, "init-") {
+				if strings.HasPrefix(mode, "init-overridable") {
+					enforcement = "mandatory_overridable"
+				}
+				if e = os.Mkdir(filepath.Join(work, "child"), 0700); e != nil {
+					t.Fatal(e)
+				}
+				if e = os.WriteFile(filepath.Join(work, "child", "main.tf"), []byte("# local module policy fixture\n"), 0600); e != nil {
+					t.Fatal(e)
+				}
+				f, e := os.OpenFile(filepath.Join(work, "main.tf"), os.O_APPEND|os.O_WRONLY, 0600)
+				if e != nil {
+					t.Fatal(e)
+				}
+				_, e = f.WriteString("\nmodule \"child\" { source = \"./child\" }\n")
+				f.Close()
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
 			fixture, _ := json.Marshal(map[string]any{"mode": fixtureMode, "enforcement": enforcement, "require_context": true, "forbidden_path": filepath.Join(private, "canary")})
 			if e = os.WriteFile(filepath.Join(policies, "fixture.json"), fixture, 0400); e != nil {
 				t.Fatal(e)
@@ -114,6 +134,16 @@ func TestNativeOwner(t *testing.T) {
 			// Setup failure is exercised during strict init; other modes fail only
 			// during resource evaluation, after a successful audited initialization.
 			init, e := Execute(context.Background(), c)
+			if strings.HasPrefix(mode, "init-") {
+				allowed := mode == "init-unknown"
+				if allowed && (e != nil || !init.Verified || !init.Evidence.Allows || init.ExitCode != 0) {
+					t.Fatal("pure unknown was not deferred at init", init, e)
+				}
+				if !allowed && (init.Evidence.Allows || init.ExitCode == 0 || !init.CgroupEmpty) {
+					t.Fatal("mixed required denial/unknown passed init", init, e)
+				}
+				return
+			}
 			if mode == "setup-error" {
 				if e == nil || init.Verified || init.Evidence.Allows || !init.CgroupEmpty {
 					t.Fatal("Setup failure was not fenced", init, e)

@@ -116,7 +116,14 @@ def stage(args, config, output, private, interrupt=None):
 
 def matrix(args, runtime, context):
     rows = []
-    for mode in ['allow', 'metadata', 'relocated', 'filtered', 'advisory', 'override', 'deny', 'unknown', 'setup-error', 'missing', 'crash', 'cancel']:
+    modes = ['allow', 'metadata', 'relocated', 'filtered', 'advisory', 'override', 'deny', 'unknown', 'setup-error', 'missing', 'crash', 'cancel']
+    modes += ['init-mixed-'+level+'-'+order for level in ['mandatory', 'overridable'] for order in ['deny-first', 'unknown-first']]
+    if args.cases:
+        selected = args.cases.split(',')
+        if any(mode not in modes for mode in selected):
+            raise RuntimeError('unknown real-owner acceptance case')
+        modes = selected
+    for mode in modes:
         output = args.output/mode
         output.mkdir(mode=0o700)
         with tempfile.TemporaryDirectory(prefix='tfpr-', dir='/tmp') as temporary:
@@ -148,6 +155,15 @@ def matrix(args, runtime, context):
             if mode == 'filtered':
                 source += ' filter = false\n'
             source += ' enforce {\n condition = '+condition+'\n error_message = "local acceptance denial"\n }\n}\n'
+            if mode.startswith('init-mixed-'):
+                (work/'child').mkdir(mode=0o700)
+                (work/'child/main.tf').write_text('resource "terraform_data" "child" { input = "local-only" }\n')
+                with (work/'main.tf').open('a') as stream:
+                    stream.write('module "child" { source = "./child" }\n')
+                level = 'mandatory_overridable' if 'overridable' in mode else 'mandatory'
+                known = 'module_policy "*" "known" {\n enforcement_level = "'+level+'"\n enforce {\n condition = false\n error_message = "known mandatory init denial"\n }\n}\n'
+                unknown = 'module_policy "*" "unknown" {\n enforce {\n condition = attrs.input == "local-only"\n error_message = "required unknown at init"\n }\n}\n'
+                source += unknown+known if mode.endswith('unknown-first') else known+unknown
             if mode == 'metadata':
                 source += 'provider_policy "terraform" "source" {\n enforce {\n condition = meta.source == "terraform.io/builtin/terraform"\n error_message = "unexpected local provider"\n }\n}\nmodule_policy "*" "local" {\n enforce {\n condition = true\n error_message = "local module denied"\n }\n}\n'
                 source += 'resource_policy "terraform_data" "delete" {\n operations = ["delete"]\n enforce {\n condition = prior_attrs.input == "local-only"\n error_message = "unexpected deleted local resource"\n }\n}\n'
@@ -168,7 +184,17 @@ def matrix(args, runtime, context):
                 config['overrides'] = [{'file': str(policy_file), 'address': 'resource_policy.terraform_data.proof'}]
             try:
                 code, initialized = stage(args, config, output/'init', private)
-                if mode in ['setup-error', 'missing']:
+                if mode.startswith('init-mixed-'):
+                    if code == 0 or initialized['exitCode'] == 0 or initialized['evidence']['allows']:
+                        raise RuntimeError('known required DENY was deferred with UNKNOWN during native init')
+                    audit = [json.loads(line) for line in (output/'init/audit').read_bytes().splitlines()]
+                    results = [row for row in audit if row['event'] == 'result' and row.get('target', {}).get('kind') == 'module']
+                    if not any(row['result'] == 'denied' and row['failed'] and any(p['result'] == 'DenyResult' for p in row.get('policies', [])) and any(p['result'] == 'UnknownResult' for p in row.get('policies', [])) for row in results):
+                        raise RuntimeError('mixed native init control did not reach both known denial and required unknown')
+                    manifest = work/'.terraform/modules/modules.json'
+                    if manifest.exists() and any(module.get('Key') == 'child' for module in json.loads(manifest.read_text()).get('Modules', [])):
+                        raise RuntimeError('known denied module was installed')
+                elif mode in ['setup-error', 'missing']:
                     if code == 0 or initialized['verified']:
                         raise RuntimeError('invalid policy Setup authorized execution')
                 else:
@@ -255,6 +281,7 @@ def main():
     parser.add_argument('--cgroup-root', required=True)
     parser.add_argument('--hosted-worker', action='store_true', help='exercise production worker plan/apply and persisted policy gates')
     parser.add_argument('--plugin-archive', type=Path, help='original operator ZIP, required for hosted catalog identity')
+    parser.add_argument('--cases', help='comma-separated subset of real-plugin acceptance cases')
     args = parser.parse_args()
     if os.getuid() == 0 or args.output.exists() or digest(args.plugin) != args.plugin_sha256:
         raise RuntimeError('non-root execution, new output and an independently pinned BYOB executable are required')

@@ -6,6 +6,7 @@ on:
     paths:
       - "tools/tfpolicy-supervisor/**"
       - "tools/tfpolicy-recorder/**"
+      - "tools/tfpolicy-engine/**"
       - "backend/bin/landlock-runner.c"
       - ".github/workflows/tfpolicy-native-qualification.yml"
 
@@ -81,7 +82,7 @@ jobs:
             -o "$RUNNER_TEMP/terraform.zip"
           echo "4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061  $RUNNER_TEMP/terraform.zip" | sha256sum --check --strict
           unzip "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/native-bin/official"
-      - name: Run actual native engine, sandbox, bootstrap, recorder and cgroup matrix
+      - name: Run stock-engine transport, sandbox, bootstrap and recorder matrix
         if: steps.facilities.outputs.ready == 'true'
         env:
           DELEGATED_CGROUP: ${{ steps.facilities.outputs.cgroup_root }}
@@ -98,6 +99,43 @@ jobs:
             --shim "$RUNNER_TEMP/native-bin/shim" --recorder "$RUNNER_TEMP/native-bin/recorder" \
             --fixture "$RUNNER_TEMP/native-bin/fixture" --cgroup-root "$DELEGATED_CGROUP" \
             --output "$RUNNER_TEMP/native-results"
+      - name: Build strict reference engine and owner qualification binary
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          GOTOOLCHAIN: go1.26.10
+          DELEGATED_CGROUP: ${{ steps.isolation.outputs.cgroup_root }}
+        run: |
+          set -euo pipefail
+          bash tools/tfpolicy-engine/build.sh "$RUNNER_TEMP/terraform-protocol" "$RUNNER_TEMP/strict-engine"
+          (cd tools/tfpolicy-supervisor && go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/native-bin/owner" ./cmd/tfpolicy-owner)
+          (cd tools/tfpolicy-supervisor && go test -c -o "$RUNNER_TEMP/native-bin/owner-tests" ./internal/execution)
+          chmod 0555 "$RUNNER_TEMP/native-bin/owner" "$RUNNER_TEMP/native-bin/owner-tests"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          base=Path(os.environ['RUNNER_TEMP'])
+          def pin(path):
+              with path.open('rb') as stream:
+                  return {'path':str(path),'sha256':hashlib.file_digest(stream,'sha256').hexdigest()}
+          runtime={name:pin(base/'native-bin'/name) for name in ['supervisor','shim','recorder']}
+          runtime.update({'engine':pin(base/'strict-engine/terraform'),'runner':pin(base/'landlock-runner'),'plugin':pin(base/'native-bin/fixture'),'patchSha256':json.loads((base/'strict-engine/provenance.json').read_text())['patchSha256']})
+          path=base/'native-owner-profile.json'
+          path.write_text(json.dumps({'schemaVersion':1,'runtime':runtime,'cgroupRoot':os.environ['DELEGATED_CGROUP']}))
+          path.chmod(0o600)
+          PY
+      - name: Require strict owner admission matrix with the reference engine
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          DELEGATED_CGROUP: ${{ steps.isolation.outputs.cgroup_root }}
+        run: |
+          set -euo pipefail
+          sudo bash -ec 'echo $$ > "$1/launcher/cgroup.procs"; shift; exec setpriv --reuid="$1" --regid="$2" --init-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs env -i PATH=/usr/bin:/bin "${@:3}"' -- \
+            "$DELEGATED_CGROUP" "$(id -u)" "$(id -g)" \
+            "TFPOLICY_OWNER_TEST_PROFILE=$RUNNER_TEMP/native-owner-profile.json" \
+            "$RUNNER_TEMP/native-bin/owner-tests" -test.v -test.run='^TestNativeOwner$' -test.timeout=120s \
+            | tee "$RUNNER_TEMP/native-owner-results.log"
+          grep -q -- '--- PASS: TestNativeOwner ' "$RUNNER_TEMP/native-owner-results.log"
+          ! grep -q -- '--- SKIP: TestNativeOwner' "$RUNNER_TEMP/native-owner-results.log"
       - name: Require actual native qualification facilities
         if: steps.facilities.outputs.ready != 'true'
         run: |
@@ -132,5 +170,6 @@ jobs:
           path: |
             ${{ runner.temp }}/native-capabilities.json
             ${{ runner.temp }}/native-results
+            ${{ runner.temp }}/native-owner-results.log
           if-no-files-found: error
           retention-days: 7
