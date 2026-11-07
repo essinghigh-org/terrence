@@ -99,7 +99,7 @@ func (t *transport) GRPCServer(b *plugin.GRPCBroker, s *grpc.Server) error {
 	}
 	bridge, closeBridge := r.BridgeBrokers(b, downstream.broker, t.journal)
 	registerCleanup(closeBridge)
-	p.RegisterPolicyServer(s, &r.Proxy{Client: downstream.client, Journal: t.journal, Bridge: bridge, PolicyRoots: t.config.PolicyReadRoots})
+	p.RegisterPolicyServer(s, &r.Proxy{Client: downstream.client, Journal: t.journal, Bridge: bridge, PolicyRoots: t.config.PolicyReadRoots, RunContext: t.config.RunContext})
 	return nil
 }
 func run() error {

@@ -1,0 +1,1857 @@
+diff --git a/commands.go b/commands.go
+index 4e4542b..2fb6f1a 100644
+--- a/commands.go
++++ b/commands.go
+@@ -323,6 +323,8 @@ func initCommands(
+ 			}, nil
+ 		},
+ 
++		"native-policy-contract": func() (cli.Command, error) { return &command.NativePolicyContractCommand{Meta: meta}, nil },
++
+ 		"version": func() (cli.Command, error) {
+ 			return &command.VersionCommand{
+ 				Meta:              meta,
+diff --git a/internal/backend/backendrun/operation.go b/internal/backend/backendrun/operation.go
+index 83aa75a..c500420 100644
+--- a/internal/backend/backendrun/operation.go
++++ b/internal/backend/backendrun/operation.go
+@@ -5,6 +5,7 @@ package backendrun
+ 
+ import (
+ 	"context"
++	"io"
+ 	"log"
+ 
+ 	svchost "github.com/hashicorp/terraform-svchost"
+@@ -77,6 +78,8 @@ type Operation struct {
+ 	PlanId      string
+ 	PlanRefresh bool   // PlanRefresh will do a refresh before a plan
+ 	PlanOutPath string // PlanOutPath is the path to save the plan
++	// PolicyPlanWriter is supplied only by a strict native CLI owner.
++	PolicyPlanWriter io.Writer
+ 
+ 	// PlanMinimalRefresh will run an initial plan for each resource prior to refreshing:
+ 	//   - If the plan indicates a no-op, then the no-op plan will be returned without refreshing the resource.
+diff --git a/internal/backend/local/backend_apply.go b/internal/backend/local/backend_apply.go
+index b383d5d..453a7e8 100644
+--- a/internal/backend/local/backend_apply.go
++++ b/internal/backend/local/backend_apply.go
+@@ -96,9 +96,16 @@ func (b *Local) opApply(
+ 	combinedPlanApply := false
+ 	// If we weren't given a plan, then we refresh/plan
+ 	if op.PlanFile == nil {
+-		// set the policy client to nil for the plan preceding apply
+-		// so that policy evaluation is skipped during the plan.
+-		lr.PlanOpts.PolicyClient = nil
++		strictPolicy := false
++		for _, hook := range op.Hooks {
++			if _, ok := hook.(terraform.PolicyAuditHook); ok {
++				strictPolicy = true
++			}
++		}
++		if !strictPolicy {
++			// Preserve the stock combined-operation behavior outside strict ownership.
++			lr.PlanOpts.PolicyClient = nil
++		}
+ 		combinedPlanApply = true
+ 		// Perform the plan
+ 		log.Printf("[INFO] backend/local: apply calling Plan")
+diff --git a/internal/backend/local/backend_plan.go b/internal/backend/local/backend_plan.go
+index b770515..bf7f616 100644
+--- a/internal/backend/local/backend_plan.go
++++ b/internal/backend/local/backend_plan.go
+@@ -185,13 +185,19 @@ func (b *Local) opPlan(
+ 		}
+ 
+ 		log.Printf("[INFO] backend/local: writing plan output to: %s", path)
+-		err := planfile.Create(path, planfile.CreateArgs{
++		createArgs := planfile.CreateArgs{
+ 			ConfigSnapshot:       configSnap,
+ 			PreviousRunStateFile: prevStateFile,
+ 			StateFile:            plannedStateFile,
+ 			Plan:                 plan,
+ 			DependencyLocks:      op.DependencyLocks,
+-		})
++		}
++		var err error
++		if op.PolicyPlanWriter != nil {
++			err = planfile.CreateToWriter(op.PolicyPlanWriter, createArgs)
++		} else {
++			err = planfile.Create(path, createArgs)
++		}
+ 		if err != nil {
+ 			diags = diags.Append(tfdiags.Sourceless(
+ 				tfdiags.Error,
+diff --git a/internal/command/apply.go b/internal/command/apply.go
+index f5ebbe6..856f0d7 100644
+--- a/internal/command/apply.go
++++ b/internal/command/apply.go
+@@ -25,7 +25,7 @@ type ApplyCommand struct {
+ 	Destroy bool
+ }
+ 
+-func (c *ApplyCommand) Run(rawArgs []string) int {
++func (c *ApplyCommand) Run(rawArgs []string) (exitCode int) {
+ 	var diags tfdiags.Diagnostics
+ 
+ 	// Parse and apply global view arguments
+@@ -74,6 +74,16 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
+ 		return 1
+ 	}
+ 
++	audit, auditDiags, stopAudit := c.nativePolicyAdmission(args.StrictPolicy, "apply", args.PolicyPaths)
++	if audit != nil {
++		defer audit.finish(&exitCode)
++	}
++	defer stopAudit()
++	if auditDiags.HasErrors() {
++		view.Operation().PolicyDiagnostics(auditDiags)
++		return 1
++	}
++
+ 	// Check for user-supplied plugin path
+ 	if c.pluginPath, err = c.loadPluginPath(); err != nil {
+ 		diags = diags.Append(err)
+@@ -111,6 +121,13 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
+ 		return 1
+ 	}
+ 
++	if audit != nil {
++		if remote, ok := be.(BackendWithRemoteTerraformVersion); ok && !remote.IsLocalOperations() {
++			view.Diagnostics(tfdiags.Diagnostics{}.Append(tfdiags.Sourceless(tfdiags.Error, "Unsupported strict policy backend", "Strict policy execution requires local operations under the authenticated run owner.")))
++			return 1
++		}
++	}
++
+ 	// Build the operation request
+ 	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, planFile, args.Operation, args.AutoApprove, args.PolicyPaths)
+ 	diags = diags.Append(opDiags)
+@@ -131,6 +148,10 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
+ 		defer stopClient()
+ 	}
+ 
++	if audit != nil {
++		opReq.Hooks = append(opReq.Hooks, audit)
++	}
++
+ 	// Assign config loader and variables to the operation request
+ 	opReq.ConfigLoader = loader
+ 	opReq.Variables = c.Meta.VariableValues
+diff --git a/internal/command/arguments/apply.go b/internal/command/arguments/apply.go
+index accf7c3..ffec456 100644
+--- a/internal/command/arguments/apply.go
++++ b/internal/command/arguments/apply.go
+@@ -33,6 +33,8 @@ type Apply struct {
+ 	// PolicyPath contains an optional path to any defined policies that should
+ 	// be applied for this apply operation.
+ 	PolicyPaths []string
++
++	StrictPolicy bool
+ }
+ 
+ // ParseApply processes CLI arguments, returning an Apply value and errors.
+@@ -50,6 +52,7 @@ func ParseApply(args []string) (*Apply, tfdiags.Diagnostics) {
+ 	cmdFlags.BoolVar(&apply.AutoApprove, "auto-approve", false, "auto-approve")
+ 	cmdFlags.BoolVar(&apply.InputEnabled, "input", true, "input")
+ 	cmdFlags.Var((*FlagStringSlice)(&apply.PolicyPaths), "policies", "policies")
++	cmdFlags.BoolVar(&apply.StrictPolicy, "strict-policy", false, "require native policy evidence")
+ 
+ 	var json bool
+ 	cmdFlags.BoolVar(&json, "json", false, "json")
+diff --git a/internal/command/arguments/init.go b/internal/command/arguments/init.go
+index 11f992a..f0bea69 100644
+--- a/internal/command/arguments/init.go
++++ b/internal/command/arguments/init.go
+@@ -85,6 +85,8 @@ type Init struct {
+ 	// PolicyPath contains an optional path to any defined policies that should
+ 	// be applied for this init operation.
+ 	PolicyPaths []string
++
++	StrictPolicy bool
+ }
+ 
+ // ParseInit processes CLI arguments, returning an Init value and errors.
+@@ -120,6 +122,7 @@ func ParseInit(rawArgs []string, experimentsEnabled bool) (*Init, tfdiags.Diagno
+ 	cmdFlags.Var(&init.PluginPath, "plugin-dir", "plugin directory")
+ 	cmdFlags.StringVar(&init.StateStoreProviderLockFile, "state-provider-lock-file", "", "path to the dependency lock file used to establish trust in the provider used for state storage. This flag can only be supplied when input is disabled. Defaults to the working directory's .terraform.lock.hcl file.")
+ 	cmdFlags.Var((*FlagStringSlice)(&init.PolicyPaths), "policies", "policies")
++	cmdFlags.BoolVar(&init.StrictPolicy, "strict-policy", false, "require native policy evidence")
+ 
+ 	// Used for enabling experimental code that's invoked before configuration is parsed.
+ 	cmdFlags.BoolVar(&init.EnablePssExperiment, "enable-pluggable-state-storage-experiment", false, "Enable the pluggable state storage experiment")
+diff --git a/internal/command/arguments/plan.go b/internal/command/arguments/plan.go
+index 8a1b3b3..aef78d6 100644
+--- a/internal/command/arguments/plan.go
++++ b/internal/command/arguments/plan.go
+@@ -36,6 +36,8 @@ type Plan struct {
+ 	// PolicyPath contains an optional path to any defined policies that should
+ 	// be applied for this plan operation.
+ 	PolicyPaths []string
++
++	StrictPolicy bool
+ }
+ 
+ // ParsePlan processes CLI arguments, returning a Plan value and errors.
+@@ -55,6 +57,7 @@ func ParsePlan(args []string) (*Plan, tfdiags.Diagnostics) {
+ 	cmdFlags.StringVar(&plan.OutPath, "out", "", "out")
+ 	cmdFlags.StringVar(&plan.GenerateConfigPath, "generate-config-out", "", "generate-config-out")
+ 	cmdFlags.Var((*FlagStringSlice)(&plan.PolicyPaths), "policies", "policies")
++	cmdFlags.BoolVar(&plan.StrictPolicy, "strict-policy", false, "require native policy evidence")
+ 
+ 	var json bool
+ 	cmdFlags.BoolVar(&json, "json", false, "json")
+diff --git a/internal/command/init.go b/internal/command/init.go
+index 6e1cf8f..b81661a 100644
+--- a/internal/command/init.go
++++ b/internal/command/init.go
+@@ -48,7 +48,7 @@ type InitCommand struct {
+ 	incompleteProviders []string
+ }
+ 
+-func (c *InitCommand) Run(args []string) int {
++func (c *InitCommand) Run(args []string) (exitCode int) {
+ 	var diags tfdiags.Diagnostics
+ 	args = c.Meta.process(args)
+ 	initArgs, initDiags := arguments.ParseInit(args, c.Meta.AllowExperimentalFeatures)
+@@ -74,7 +74,29 @@ func (c *InitCommand) Run(args []string) int {
+ 		return 1
+ 	}
+ 
+-	return c.run(initArgs, view)
++	audit, auditDiags, stopAudit := c.nativePolicyAdmission(initArgs.StrictPolicy, "init", initArgs.PolicyPaths)
++	if audit != nil {
++		defer audit.finish(&exitCode)
++	}
++	defer stopAudit()
++	if auditDiags.HasErrors() {
++		view.PolicyDiagnostics(auditDiags)
++		return 1
++	}
++	if audit != nil {
++		if err := audit.PolicyStart("init", nil); err != nil {
++			view.Diagnostics(tfdiags.Diagnostics{}.Append(err))
++			return 1
++		}
++	}
++	code := c.run(initArgs, view)
++	if audit != nil {
++		if err := audit.PolicyEnd(code != 0); err != nil {
++			view.Diagnostics(tfdiags.Diagnostics{}.Append(err))
++			return 1
++		}
++	}
++	return code
+ }
+ 
+ func (c *InitCommand) getModules(ctx context.Context, path, testsDir string, earlyRoot *configs.Module, upgrade bool, view views.Init, policyClient policy.Client) (output bool, abort bool, diags tfdiags.Diagnostics) {
+@@ -111,6 +133,7 @@ func (c *InitCommand) getModules(ctx context.Context, path, testsDir string, ear
+ 	hooks := []initwd.ModuleInstallHook{uiHook}
+ 	if policyClient != nil {
+ 		policyHook := &policyModuleInstallHook{
++			audit:      c.policyAudit,
+ 			client:     policyClient,
+ 			rootModule: earlyRoot,
+ 			view:       view,
+@@ -300,6 +323,9 @@ func (c *InitCommand) initBackend(ctx context.Context, root *configs.Module, ini
+ 
+ func (c *InitCommand) Validate(args *arguments.Init) (diags tfdiags.Diagnostics) {
+ 	diags = diags.Append(validatePolicyPaths(args.PolicyPaths))
++	if args.StrictPolicy && (args.FromModule != "" || args.MigrateState || args.ForceInitCopy || args.EnablePssExperiment) {
++		diags = diags.Append(tfdiags.Sourceless(tfdiags.Error, "Unsupported strict policy initialization", "Strict policy initialization requires an existing immutable configuration and does not permit state migration or experimental state providers."))
++	}
+ 	return diags
+ }
+ 
+diff --git a/internal/command/init_run.go b/internal/command/init_run.go
+index d01a1f3..9d5aa3f 100644
+--- a/internal/command/init_run.go
++++ b/internal/command/init_run.go
+@@ -156,6 +156,11 @@ func (c *InitCommand) run(initArgs *arguments.Init, view views.Init) int {
+ 		return 1
+ 	}
+ 
++	if initArgs.StrictPolicy && rootModEarly.CloudConfig != nil {
++		view.Diagnostics(tfdiags.Diagnostics{}.Append(tfdiags.Sourceless(tfdiags.Error, "Unsupported strict policy backend", "Strict policy initialization requires a local operations backend under the authenticated run owner.")))
++		return 1
++	}
++
+ 	// Load locks from any pre-existing dependency lock file.
+ 	previousLocks, locksDiags := c.lockedDependencies()
+ 	diags = diags.Append(locksDiags)
+@@ -299,6 +304,7 @@ Please use \"terraform state migrate -upgrade\" to upgrade the state store provi
+ 		}
+ 	}
+ 	providerHook := &providerPolicyHook{
++		audit:      c.policyAudit,
+ 		client:     policyClient,
+ 		view:       view,
+ 		rootModule: rootModEarly,
+diff --git a/internal/command/meta.go b/internal/command/meta.go
+index f36ce42..191bf65 100644
+--- a/internal/command/meta.go
++++ b/internal/command/meta.go
+@@ -47,6 +47,7 @@ import (
+ 
+ // Meta are the meta-options that are available on all or most commands.
+ type Meta struct {
++	policyAudit *nativePolicyAudit
+ 	// The exported fields below should be set by anyone using a
+ 	// command with a Meta field. These are expected to be set externally
+ 	// (not from within the command itself).
+diff --git a/internal/command/meta_policy.go b/internal/command/meta_policy.go
+index d9cf281..16ab846 100644
+--- a/internal/command/meta_policy.go
++++ b/internal/command/meta_policy.go
+@@ -19,10 +19,14 @@ import (
+ 	"github.com/hashicorp/terraform/internal/policy"
+ 	"github.com/hashicorp/terraform/internal/policy/proto"
+ 	"github.com/hashicorp/terraform/internal/providercache"
++	"github.com/hashicorp/terraform/internal/terraform"
+ 	"github.com/hashicorp/terraform/internal/tfdiags"
+ )
+ 
+ func (c *Meta) PolicyClient(ctx context.Context, policyPaths []string, ent *policy.Entitlement) (policy.Client, policy.Diagnostics, func()) {
++	if c.policyAudit != nil && c.policyAudit.client != nil {
++		return c.policyAudit.client, nil, func() {}
++	}
+ 	var client policy.Client
+ 	closer := func() {
+ 		if client != nil {
+@@ -48,6 +52,13 @@ func (c *Meta) PolicyClient(ctx context.Context, policyPaths []string, ent *poli
+ 		return nil, diags, closer
+ 	}
+ 
++	if c.policyAudit != nil {
++		if err := c.policyAudit.setupReady(); err != nil {
++			client.Stop()
++			client = nil
++			return nil, policy.Diagnostics{policy.NewErrorDiagnostic("Native policy admission failed", err.Error(), policy.SetupErrorResult)}, closer
++		}
++	}
+ 	log.Printf("[DEBUG] backend/operation/policy: Policy engine initialized")
+ 	return client, diags, closer
+ }
+@@ -72,6 +83,7 @@ func backendPolicyEntitlement(be backend.Backend, stage policy.EvaluationStage)
+ 
+ // policyModuleInstallHook enables policy evaluation during module installation.
+ type policyModuleInstallHook struct {
++	audit *nativePolicyAudit
+ 	initwd.ModuleInstallHookImpl
+ 	client     policy.Client
+ 	rootModule *configs.Module
+@@ -88,6 +100,12 @@ func (h *policyModuleInstallHook) ModuleSourceResolved(ctx context.Context, req
+ 
+ 	log.Println("[DEBUG] init: evaluating policy for module", req.Path.String(), version)
+ 	moduleAddr := req.Path.String()
++	target := terraform.PolicyTarget{Kind: "module", Address: moduleAddr}
++	if h.audit != nil {
++		if err := h.audit.PolicyExpect([]terraform.PolicyTarget{target}); err != nil {
++			return tfdiags.Diagnostics{}.Append(err)
++		}
++	}
+ 	result := h.client.EvaluateModule(ctx, policy.EvaluationRequest[*proto.PolicyEvaluateModuleRequest_ModuleMetadata]{
+ 		// Configuration attributes may not be available during init, so we will send an unknown
+ 		// dynamic value to the policy client.
+@@ -109,6 +127,9 @@ func (h *policyModuleInstallHook) ModuleSourceResolved(ctx context.Context, req
+ 		result = result.WithLocalRange(moduleCall.DeclRange.Ptr())
+ 	}
+ 	h.view.PolicyResult(req.Path.String(), result)
++	if h.audit != nil {
++		return tfdiags.Diagnostics{}.Append(h.audit.PolicyEvaluated(target, result))
++	}
+ 
+ 	// Return a generic error here that the init command returns to the CLI.
+ 	// The detailed policy diagnostics are included in the policy results
+@@ -131,6 +152,7 @@ var _ providercache.InstallerHook = &providerPolicyHook{}
+ 
+ // providerPolicyHook enables policy evaluation during provider installation.
+ type providerPolicyHook struct {
++	audit      *nativePolicyAudit
+ 	client     policy.Client
+ 	rootModule *configs.Module
+ 	view       views.Init
+@@ -145,6 +167,12 @@ func (p *providerPolicyHook) ProviderVersionSelected(ctx context.Context, provid
+ 		return nil
+ 	}
+ 	log.Println("[DEBUG] init: evaluating policy for provider", provider.String(), version)
++	target := terraform.PolicyTarget{Kind: "provider", Address: (addrs.AbsProviderConfig{Provider: provider, Module: addrs.RootModule}).String()}
++	if p.audit != nil {
++		if err := p.audit.PolicyExpect([]terraform.PolicyTarget{target}); err != nil {
++			return err
++		}
++	}
+ 	result := p.client.EvaluateProvider(ctx, policy.EvaluationRequest[*proto.PolicyEvaluateProviderRequest_ProviderMetadata]{
+ 		Target: provider.Type,
+ 
+@@ -169,6 +197,9 @@ func (p *providerPolicyHook) ProviderVersionSelected(ctx context.Context, provid
+ 		result = result.WithLocalRange(providerConfig.DeclRange.Ptr())
+ 	}
+ 	p.view.PolicyResult(addr.String(), result)
++	if p.audit != nil {
++		return p.audit.PolicyEvaluated(target, result)
++	}
+ 	log.Println("[DEBUG] init: policy result for provider", provider.String(), version, "overall", result.Overall)
+ 	// Init uses diagnostics as the blocking signal because advisory policies
+ 	// may return deny without any error diagnostics.
+diff --git a/internal/command/native_policy_admission_test.go b/internal/command/native_policy_admission_test.go
+new file mode 100644
+index 0000000..504fe05
+--- /dev/null
++++ b/internal/command/native_policy_admission_test.go
+@@ -0,0 +1,60 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++// A strict owner is mandatory even when a local-only configuration could apply
++// without a provider download. Missing evidence ownership must stop before any
++// plan or state artifact exists, in either output format.
++func TestNativePolicyAdmissionRequiresOwner(t *testing.T) {
++	for _, operation := range []string{"plan", "apply", "init"} {
++		for _, jsonView := range []bool{false, true} {
++			name := operation
++			if jsonView {
++				name += "-json"
++			}
++			t.Run(name, func(t *testing.T) {
++				root := t.TempDir()
++				t.Chdir(root)
++				t.Setenv("TF_POLICY_AUDIT_NONCE", "")
++				t.Setenv("TF_POLICY_AUDIT_FD", "")
++				if err := os.WriteFile("main.tf", []byte(`resource "terraform_data" "proof" { input="local-only" }`), 0600); err != nil {
++					t.Fatal(err)
++				}
++				if err := os.Mkdir("policies", 0700); err != nil {
++					t.Fatal(err)
++				}
++				t.Setenv("TF_POLICY_PLUGIN", filepath.Join(root, "missing-runtime"))
++				view, done := testView(t)
++				meta := Meta{View: view}
++				args := []string{"-strict-policy", "-policies=policies", "-input=false", "-no-color"}
++				if jsonView {
++					args = append(args, "-json")
++				}
++				var code int
++				switch operation {
++				case "plan":
++					code = (&PlanCommand{Meta: meta}).Run(append(args, "-out=proof.tfplan"))
++				case "apply":
++					code = (&ApplyCommand{Meta: meta}).Run(append(args, "-auto-approve"))
++				case "init":
++					code = (&InitCommand{Meta: meta}).Run(args)
++				}
++				output := done(t)
++				if code == 0 {
++					t.Fatalf("unowned strict execution succeeded:\n%s\n%s", output.Stdout(), output.Stderr())
++				}
++				for _, file := range []string{"proof.tfplan", "terraform.tfstate"} {
++					if _, err := os.Stat(file); !os.IsNotExist(err) {
++						t.Fatalf("unowned execution created %s", file)
++					}
++				}
++			})
++		}
++	}
++}
+diff --git a/internal/command/native_policy_audit.go b/internal/command/native_policy_audit.go
+new file mode 100644
+index 0000000..f82a222
+--- /dev/null
++++ b/internal/command/native_policy_audit.go
+@@ -0,0 +1,460 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++
++	"github.com/hashicorp/terraform/internal/policy"
++	"github.com/hashicorp/terraform/internal/terraform"
++	"github.com/hashicorp/terraform/internal/tfdiags"
++)
++
++const nativePolicyAuditVersion = 1
++const nativePolicyAuditLimit = 16 << 20
++
++type nativePolicyOverride struct {
++	File    string `json:"file"`
++	Address string `json:"address"`
++}
++type nativePolicyResult struct {
++	File        string `json:"file"`
++	Address     string `json:"address"`
++	Enforcement string `json:"enforcement"`
++	Result      string `json:"result"`
++}
++type nativePolicyAuditRecord struct {
++	Version       int                      `json:"version"`
++	Sequence      int                      `json:"sequence"`
++	Nonce         string                   `json:"nonce"`
++	Command       string                   `json:"command"`
++	Event         string                   `json:"event"`
++	Phase         int                      `json:"phase"`
++	Stage         string                   `json:"stage,omitempty"`
++	Roots         []string                 `json:"roots,omitempty"`
++	Targets       []terraform.PolicyTarget `json:"targets,omitempty"`
++	Target        *terraform.PolicyTarget  `json:"target,omitempty"`
++	RequestSHA256 string                   `json:"requestSha256,omitempty"`
++	Result        string                   `json:"result,omitempty"`
++	Policies      []nativePolicyResult     `json:"policies,omitempty"`
++	Failed        bool                     `json:"failed"`
++	ExitCode      *int                     `json:"exitCode,omitempty"`
++	Overrides     []nativePolicyOverride   `json:"overrides,omitempty"`
++}
++
++// nativePolicyAudit owns a protected write-only descriptor. Descendants never
++// inherit it. It joins the graph inventory, exact RPC digests, and the final
++// command outcome; stdout and workspace files cannot substitute for this pipe.
++type nativePolicyAudit struct {
++	terraform.NilHook
++	mu           sync.Mutex
++	output       io.WriteCloser
++	planOutput   io.WriteCloser
++	nonce        string
++	command      string
++	roots        []string
++	overrides    map[nativePolicyOverride]bool
++	overrideList []nativePolicyOverride
++	sequence     int
++	bytes        int
++	phase        int
++	active       bool
++	setup        bool
++	denied       bool
++	failed       bool
++	poisoned     bool
++	ended        int
++	expected     map[terraform.PolicyTarget]int
++	observed     map[terraform.PolicyTarget]int
++	client       policy.Client
++}
++
++func newNativePolicyAudit(enabled bool, command string, roots []string) (*nativePolicyAudit, error) {
++	if !enabled {
++		return nil, nil
++	}
++	if len(roots) == 0 {
++		return nil, errors.New("-strict-policy requires at least one -policies directory")
++	}
++	nonce := os.Getenv("TF_POLICY_AUDIT_NONCE")
++	decoded, err := hex.DecodeString(nonce)
++	if err != nil || len(decoded) != 32 || nonce != strings.ToLower(nonce) {
++		return nil, errors.New("strict policy requires an owner nonce")
++	}
++	out, err := openNativePolicyAuditFD()
++	if err != nil {
++		return nil, err
++	}
++	audit := &nativePolicyAudit{output: out, nonce: nonce, command: command, roots: append([]string(nil), roots...), overrides: make(map[nativePolicyOverride]bool)}
++	for i, root := range audit.roots {
++		absolute, err := filepath.Abs(root)
++		if err != nil {
++			out.Close()
++			return nil, err
++		}
++		audit.roots[i] = filepath.Clean(absolute)
++	}
++	raw := os.Getenv("TF_POLICY_AUDIT_OVERRIDES")
++	if raw != "" {
++		if len(raw) > 32768 {
++			out.Close()
++			return nil, errors.New("native policy overrides exceed limit")
++		}
++		decoder := json.NewDecoder(strings.NewReader(raw))
++		decoder.DisallowUnknownFields()
++		if decoder.Decode(&audit.overrideList) != nil || len(audit.overrideList) > 1000 {
++			out.Close()
++			return nil, errors.New("invalid native policy overrides")
++		}
++		if decoder.Decode(new(any)) != io.EOF {
++			out.Close()
++			return nil, errors.New("trailing native policy override data")
++		}
++		for _, override := range audit.overrideList {
++			if override.Address == "" || !audit.policyFileAllowed(override.File) {
++				out.Close()
++				return nil, errors.New("native policy override is outside the immutable policy roots")
++			}
++			if audit.overrides[override] {
++				out.Close()
++				return nil, errors.New("duplicate native policy override")
++			}
++			audit.overrides[override] = true
++		}
++	}
++	if command == "plan" {
++		planOutput, err := openNativePolicyPlanFD()
++		if err != nil {
++			out.Close()
++			return nil, err
++		}
++		audit.planOutput = planOutput
++	}
++	if err := audit.write(nativePolicyAuditRecord{Event: "start", Roots: audit.roots, Overrides: audit.overrideList}); err != nil {
++		out.Close()
++		if audit.planOutput != nil {
++			audit.planOutput.Close()
++		}
++		return nil, err
++	}
++	return audit, nil
++}
++
++func (a *nativePolicyAudit) write(record nativePolicyAuditRecord) error {
++	if a.poisoned {
++		return errors.New("native policy evidence is poisoned")
++	}
++	record.Version = nativePolicyAuditVersion
++	record.Sequence = a.sequence
++	record.Nonce = a.nonce
++	record.Command = a.command
++	record.Phase = a.phase
++	encoded, err := json.Marshal(record)
++	if err != nil || a.sequence >= 100000 || a.bytes+len(encoded)+1 > nativePolicyAuditLimit {
++		a.poisoned = true
++		return errors.New("native policy evidence exceeds its bounded contract")
++	}
++	encoded = append(encoded, '\n')
++	n, err := a.output.Write(encoded)
++	if err != nil || n != len(encoded) {
++		a.poisoned = true
++		return errors.New("native policy evidence pipe failed")
++	}
++	a.sequence++
++	a.bytes += n
++	return nil
++}
++
++func (a *nativePolicyAudit) setupReady() error {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if a.setup {
++		a.poisoned = true
++		return errors.New("duplicate native policy Setup")
++	}
++	a.setup = true
++	return a.write(nativePolicyAuditRecord{Event: "setup"})
++}
++
++func validPolicyTarget(target terraform.PolicyTarget) bool {
++	if target.Address == "" || len(target.Address) > 4096 {
++		return false
++	}
++	switch target.Kind {
++	case "resource":
++		return target.Operation == "Create" || target.Operation == "Update" || target.Operation == "Delete" || target.Operation == "NoOp"
++	case "provider", "module":
++		return target.Operation == ""
++	default:
++		return false
++	}
++}
++
++func (a *nativePolicyAudit) expect(targets []terraform.PolicyTarget) error {
++	if len(targets) > 100000 {
++		return errors.New("native policy inventory exceeds limit")
++	}
++	for _, target := range targets {
++		if !validPolicyTarget(target) {
++			return errors.New("invalid native policy target")
++		}
++		a.expected[target]++
++	}
++	return nil
++}
++
++func (a *nativePolicyAudit) PolicyStart(stage string, targets []terraform.PolicyTarget) error {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if !a.setup || a.active {
++		a.poisoned = true
++		return errors.New("invalid native policy phase ordering")
++	}
++	if stage != "init" && stage != "walkPlan" && stage != "walkPlanDestroy" && stage != "walkApply" && stage != "walkDestroy" {
++		a.poisoned = true
++		return errors.New("unsupported native policy graph stage")
++	}
++	a.phase++
++	a.active = true
++	a.expected = make(map[terraform.PolicyTarget]int)
++	a.observed = make(map[terraform.PolicyTarget]int)
++	if err := a.expect(targets); err != nil {
++		a.poisoned = true
++		return err
++	}
++	return a.write(nativePolicyAuditRecord{Event: "begin", Stage: stage, Targets: targets})
++}
++
++func (a *nativePolicyAudit) PolicyExpect(targets []terraform.PolicyTarget) error {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if !a.active {
++		a.poisoned = true
++		return errors.New("policy inventory outside active phase")
++	}
++	if err := a.expect(targets); err != nil {
++		a.poisoned = true
++		return err
++	}
++	return a.write(nativePolicyAuditRecord{Event: "inventory", Targets: targets})
++}
++
++func (a *nativePolicyAudit) policyFileAllowed(file string) bool {
++	if !filepath.IsAbs(file) || filepath.Clean(file) != file {
++		return false
++	}
++	for _, root := range a.roots {
++		relative, err := filepath.Rel(root, file)
++		if err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
++			return true
++		}
++	}
++	return false
++}
++
++func (a *nativePolicyAudit) classify(response policy.EvaluationResponse) (string, []nativePolicyResult) {
++	status := "passed"
++	details := make([]nativePolicyResult, 0, len(response.Policies))
++	promote := func(next string) {
++		rank := map[string]int{"passed": 0, "advisory": 1, "overridden": 2, "denied": 3, "unknown": 4, "error": 5}
++		if rank[next] > rank[status] {
++			status = next
++		}
++	}
++	denied := false
++	for _, p := range response.Policies {
++		if p == nil || !a.policyFileAllowed(p.Directory) || p.Address == "" {
++			promote("error")
++			continue
++		}
++		if p.EnforcementLevel != "advisory" && p.EnforcementLevel != "mandatory" && p.EnforcementLevel != "mandatory_overridable" {
++			promote("error")
++		}
++		details = append(details, nativePolicyResult{File: p.Directory, Address: p.Address, Enforcement: p.EnforcementLevel, Result: p.Result.String()})
++		switch p.Result {
++		case policy.AllowResult:
++		case policy.DenyResult:
++			denied = true
++			if p.EnforcementLevel == "advisory" {
++				promote("advisory")
++			} else if p.EnforcementLevel == "mandatory_overridable" && a.overrides[nativePolicyOverride{File: p.Directory, Address: p.Address}] {
++				promote("overridden")
++			} else {
++				promote("denied")
++			}
++		case policy.UnknownResult:
++			if p.EnforcementLevel == "advisory" {
++				promote("advisory")
++			} else {
++				promote("unknown")
++			}
++		default:
++			promote("error")
++		}
++	}
++	for _, enforcement := range response.Enforcements {
++		if enforcement.Policy == nil {
++			promote("error")
++			continue
++		}
++		switch enforcement.Result {
++		case policy.AllowResult:
++		case policy.DenyResult:
++			if enforcement.Policy.Result != policy.DenyResult {
++				promote("error")
++			}
++		case policy.UnknownResult:
++			if enforcement.Policy.Result != policy.UnknownResult {
++				promote("error")
++			}
++		default:
++			promote("error")
++		}
++	}
++	for _, diag := range response.Diagnostics {
++		if diag.Severity() != tfdiags.Error {
++			continue
++		}
++		extra, ok := diag.ExtraInfo().(*policy.PolicyExtra)
++		if !ok || extra.Result != policy.DenyResult || extra.Policy.Result != policy.DenyResult {
++			promote("error")
++		}
++	}
++	switch response.Overall {
++	case policy.AllowResult:
++		if status == "denied" || status == "unknown" {
++			promote("error")
++		}
++	case policy.DenyResult:
++		if !denied {
++			promote("error")
++		}
++	case policy.UnknownResult:
++		if len(response.Policies) == 0 {
++			promote("unknown")
++		}
++	default:
++		promote("error")
++	}
++	return status, details
++}
++
++func (a *nativePolicyAudit) PolicyEvaluated(target terraform.PolicyTarget, response policy.EvaluationResponse) error {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if !a.active || !validPolicyTarget(target) || a.observed[target] >= a.expected[target] {
++		a.poisoned = true
++		return errors.New("unexpected or duplicate native policy evaluation")
++	}
++	digest, err := hex.DecodeString(response.RequestSHA256)
++	if err != nil || len(digest) != 32 || response.RequestSHA256 != strings.ToLower(response.RequestSHA256) {
++		a.poisoned = true
++		return errors.New("native policy result lacks transport identity")
++	}
++	status, details := a.classify(response)
++	knownDenial := false
++	for _, p := range details {
++		if p.Result == "DenyResult" && (p.Enforcement == "mandatory" || p.Enforcement == "mandatory_overridable" && !a.overrides[nativePolicyOverride{File: p.File, Address: p.Address}]) {
++			knownDenial = true
++		}
++	}
++	// An UNKNOWN may defer only the unknown decision itself. Preserve a
++	// sibling's known, unapproved required denial as an independent blocker.
++	a.denied = a.denied || knownDenial
++	if status == "unknown" && a.command == "init" {
++		if knownDenial {
++			status = "denied"
++		} else {
++			status = "deferred"
++		}
++	}
++	a.observed[target]++
++	failed := status == "error" || status == "unknown" || status == "denied"
++	a.failed = a.failed || status == "error" || status == "unknown"
++	if err := a.write(nativePolicyAuditRecord{Event: "result", Target: &target, RequestSHA256: response.RequestSHA256, Result: status, Policies: details, Failed: failed}); err != nil {
++		return err
++	}
++	if status == "denied" {
++		a.denied = true
++		if a.command == "plan" {
++			return nil
++		}
++	}
++	if failed {
++		return fmt.Errorf("native policy evaluation %s for %s", status, target.Address)
++	}
++	return nil
++}
++
++func (a *nativePolicyAudit) PolicyEnd(failed bool) error {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if !a.active {
++		a.poisoned = true
++		return errors.New("native policy phase was not started")
++	}
++	missing := false
++	for target, count := range a.expected {
++		if a.observed[target] != count {
++			missing = true
++		}
++	}
++	if err := a.write(nativePolicyAuditRecord{Event: "end", Failed: failed || missing}); err != nil {
++		return err
++	}
++	a.active = false
++	a.ended++
++	a.failed = a.failed || failed || missing
++	if missing {
++		a.poisoned = true
++		return errors.New("native policy phase omitted expected evaluations")
++	}
++	return nil
++}
++
++func (a *nativePolicyAudit) finish(exitCode *int) {
++	if a == nil {
++		return
++	}
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if a.active || !a.setup || a.ended == 0 || a.poisoned || a.denied || a.failed {
++		*exitCode = 1
++	}
++	if a.planOutput != nil && a.planOutput.Close() != nil {
++		*exitCode = 1
++	}
++	if err := a.write(nativePolicyAuditRecord{Event: "complete", ExitCode: exitCode, Failed: *exitCode != 0 && *exitCode != 2}); err != nil {
++		*exitCode = 1
++	}
++	if a.output.Close() != nil {
++		*exitCode = 1
++	}
++}
++
++func (c *Meta) nativePolicyAdmission(enabled bool, command string, roots []string) (*nativePolicyAudit, policy.Diagnostics, func()) {
++	c.policyAudit = nil
++	audit, err := newNativePolicyAudit(enabled, command, roots)
++	closer := func() {}
++	if err != nil {
++		return nil, policy.Diagnostics{policy.NewErrorDiagnostic("Native policy admission failed", err.Error(), policy.SetupErrorResult)}, closer
++	}
++	if audit == nil {
++		return nil, nil, closer
++	}
++	c.policyAudit = audit
++	client, diags, stop := c.PolicyClient(c.CommandContext(), roots, nil)
++	if client == nil && !diags.HasErrors() {
++		diags = append(diags, policy.NewErrorDiagnostic("Native policy admission failed", "The requested native runtime was not initialized.", policy.SetupErrorResult))
++	}
++	audit.client = client
++	return audit, diags, stop
++}
+diff --git a/internal/command/native_policy_audit_fd_linux.go b/internal/command/native_policy_audit_fd_linux.go
+new file mode 100644
+index 0000000..c278f07
+--- /dev/null
++++ b/internal/command/native_policy_audit_fd_linux.go
+@@ -0,0 +1,35 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"errors"
++	"golang.org/x/sys/unix"
++	"os"
++)
++
++func openNativePolicyAuditFD() (*os.File, error) {
++	return openNativePolicyPipe("TF_POLICY_AUDIT_FD", "3", 3)
++}
++func openNativePolicyPlanFD() (*os.File, error) {
++	return openNativePolicyPipe("TF_POLICY_PLAN_FD", "4", 4)
++}
++func openNativePolicyPipe(env, expected string, fd uintptr) (*os.File, error) {
++	if os.Getenv(env) != expected {
++		return nil, errors.New("strict policy requires its private output descriptor")
++	}
++	file := os.NewFile(fd, "native-policy-output")
++	if file == nil {
++		return nil, errors.New("native audit descriptor missing")
++	}
++	flags, err := unix.FcntlInt(file.Fd(), unix.F_GETFL, 0)
++	if err != nil || flags&unix.O_ACCMODE != unix.O_WRONLY {
++		return nil, errors.New("native audit descriptor must be write-only")
++	}
++	info, err := file.Stat()
++	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
++		return nil, errors.New("native audit descriptor must be a pipe")
++	}
++	unix.CloseOnExec(int(fd))
++	return file, nil
++}
+diff --git a/internal/command/native_policy_audit_fd_unsupported.go b/internal/command/native_policy_audit_fd_unsupported.go
+new file mode 100644
+index 0000000..7a2bfa3
+--- /dev/null
++++ b/internal/command/native_policy_audit_fd_unsupported.go
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++//go:build !linux
++
++package command
++
++import (
++	"errors"
++	"os"
++)
++
++func openNativePolicyAuditFD() (*os.File, error) {
++	return nil, errors.New("strict native policy execution requires Linux")
++}
++func openNativePolicyPlanFD() (*os.File, error) {
++	return nil, errors.New("strict native policy execution requires Linux")
++}
+diff --git a/internal/command/native_policy_audit_test.go b/internal/command/native_policy_audit_test.go
+new file mode 100644
+index 0000000..559bb63
+--- /dev/null
++++ b/internal/command/native_policy_audit_test.go
+@@ -0,0 +1,210 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/hashicorp/terraform/internal/policy"
++	"github.com/hashicorp/terraform/internal/terraform"
++)
++
++type auditTestOutput struct {
++	bytes.Buffer
++	fail   bool
++	closed bool
++}
++
++func (o *auditTestOutput) Write(data []byte) (int, error) {
++	if o.fail {
++		return 0, errors.New("closed owner pipe")
++	}
++	return o.Buffer.Write(data)
++}
++func (o *auditTestOutput) Close() error { o.closed = true; return nil }
++func testNativeAudit(t *testing.T, command string) (*nativePolicyAudit, *auditTestOutput, string) {
++	t.Helper()
++	root := t.TempDir()
++	out := &auditTestOutput{}
++	audit := &nativePolicyAudit{output: out, command: command, nonce: strings.Repeat("a", 64), roots: []string{root}, overrides: make(map[nativePolicyOverride]bool)}
++	if err := audit.write(nativePolicyAuditRecord{Event: "start", Roots: audit.roots}); err != nil {
++		t.Fatal(err)
++	}
++	if err := audit.setupReady(); err != nil {
++		t.Fatal(err)
++	}
++	return audit, out, filepath.Join(root, "proof.policy.hcl")
++}
++func auditTestTarget() terraform.PolicyTarget {
++	return terraform.PolicyTarget{Kind: "resource", Address: "terraform_data.proof", Operation: "Create"}
++}
++func auditTestResponse(file string, result policy.EvaluateResult, level string) policy.EvaluationResponse {
++	return policy.EvaluationResponse{Overall: result, RequestSHA256: strings.Repeat("b", 64), Policies: []*policy.Policy{{Directory: file, Address: "resource_policy.proof", EnforcementLevel: level, Result: result}}}
++}
++func TestNativePolicyAuditLifecycle(t *testing.T) {
++	audit, out, file := testNativeAudit(t, "plan")
++	target := auditTestTarget()
++	if err := audit.PolicyStart("walkPlan", nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := audit.PolicyExpect([]terraform.PolicyTarget{target}); err != nil {
++		t.Fatal(err)
++	}
++	if err := audit.PolicyEvaluated(target, auditTestResponse(file, policy.AllowResult, "mandatory")); err != nil {
++		t.Fatal(err)
++	}
++	if err := audit.PolicyEnd(false); err != nil {
++		t.Fatal(err)
++	}
++	code := 0
++	audit.finish(&code)
++	if code != 0 || !out.closed {
++		t.Fatal("successful lifecycle failed")
++	}
++	lines := bytes.Split(bytes.TrimSpace(out.Bytes()), []byte{'\n'})
++	if len(lines) != 7 {
++		t.Fatalf("records: %d", len(lines))
++	}
++	for i, line := range lines {
++		var record nativePolicyAuditRecord
++		if json.Unmarshal(line, &record) != nil || record.Sequence != i || record.Nonce != audit.nonce {
++			t.Fatal("invalid ordered evidence")
++		}
++	}
++	if !bytes.Contains(lines[4], []byte(`"requestSha256"`)) || !bytes.Contains(lines[6], []byte(`"event":"complete"`)) {
++		t.Fatal("transport identity/completion omitted")
++	}
++}
++func TestNativePolicyAuditDecisions(t *testing.T) {
++	for _, test := range []struct {
++		name, command, level   string
++		result                 policy.EvaluateResult
++		override, graphFailure bool
++		exit                   int
++	}{
++		{"allow", "plan", "mandatory", policy.AllowResult, false, false, 0},
++		{"advisory", "apply", "advisory", policy.DenyResult, false, false, 0},
++		{"plan-denied", "plan", "mandatory", policy.DenyResult, false, false, 1},
++		{"apply-denied", "apply", "mandatory", policy.DenyResult, false, true, 1},
++		{"overridable-unapproved", "plan", "mandatory_overridable", policy.DenyResult, false, false, 1},
++		{"overridable-approved", "apply", "mandatory_overridable", policy.DenyResult, true, false, 0},
++		{"mandatory-cannot-override", "apply", "mandatory", policy.DenyResult, true, true, 1},
++		{"unknown", "plan", "mandatory", policy.UnknownResult, false, true, 1},
++		{"init-deferred", "init", "mandatory", policy.UnknownResult, false, false, 0},
++		{"advisory-unknown", "apply", "advisory", policy.UnknownResult, false, false, 0},
++		{"runtime-error", "plan", "advisory", policy.PolicyErrorResult, true, true, 1},
++		{"invalid", "plan", "mandatory", policy.InvalidResult, false, true, 1},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			audit, _, file := testNativeAudit(t, test.command)
++			target := auditTestTarget()
++			if test.override {
++				audit.overrides[nativePolicyOverride{File: file, Address: "resource_policy.proof"}] = true
++			}
++			if err := audit.PolicyStart("walkPlan", []terraform.PolicyTarget{target}); err != nil {
++				t.Fatal(err)
++			}
++			err := audit.PolicyEvaluated(target, auditTestResponse(file, test.result, test.level))
++			if (err != nil) != test.graphFailure {
++				t.Fatalf("graph failure: %v", err)
++			}
++			if err := audit.PolicyEnd(test.graphFailure); err != nil {
++				t.Fatal(err)
++			}
++			code := 0
++			if test.graphFailure {
++				code = 1
++			}
++			audit.finish(&code)
++			if code != test.exit {
++				t.Fatalf("exit %d, want %d", code, test.exit)
++			}
++		})
++	}
++}
++func TestNativePolicyAuditRejectsMissingOrForgedResults(t *testing.T) {
++	for _, mode := range []string{"missing", "duplicate", "unexpected", "missing-digest", "outside-source", "failed-pipe"} {
++		t.Run(mode, func(t *testing.T) {
++			audit, out, file := testNativeAudit(t, "plan")
++			target := auditTestTarget()
++			if err := audit.PolicyStart("walkPlan", []terraform.PolicyTarget{target}); err != nil {
++				t.Fatal(err)
++			}
++			response := auditTestResponse(file, policy.AllowResult, "mandatory")
++			switch mode {
++			case "missing":
++				if audit.PolicyEnd(false) == nil {
++					t.Fatal("omitted target accepted")
++				}
++			case "duplicate":
++				if err := audit.PolicyEvaluated(target, response); err != nil {
++					t.Fatal(err)
++				}
++				if audit.PolicyEvaluated(target, response) == nil {
++					t.Fatal("duplicate accepted")
++				}
++			case "unexpected":
++				target.Address = "terraform_data.other"
++				if audit.PolicyEvaluated(target, response) == nil {
++					t.Fatal("unregistered target accepted")
++				}
++			case "missing-digest":
++				response.RequestSHA256 = ""
++				if audit.PolicyEvaluated(target, response) == nil {
++					t.Fatal("unbound result accepted")
++				}
++			case "outside-source":
++				response.Policies[0].Directory = "/outside/proof.policy.hcl"
++				if audit.PolicyEvaluated(target, response) == nil {
++					t.Fatal("outside policy accepted")
++				}
++			case "failed-pipe":
++				out.fail = true
++				if audit.PolicyEvaluated(target, response) == nil {
++					t.Fatal("lost evidence accepted")
++				}
++			}
++			code := 0
++			audit.finish(&code)
++			if code == 0 {
++				t.Fatal("invalid evidence returned success")
++			}
++		})
++	}
++}
++func TestNativePolicyAuditDoesNotSerializeAttributesOrMessages(t *testing.T) {
++	audit, out, file := testNativeAudit(t, "plan")
++	target := auditTestTarget()
++	audit.PolicyStart("walkPlan", []terraform.PolicyTarget{target})
++	response := auditTestResponse(file, policy.AllowResult, "mandatory")
++	response.Enforcements = []policy.EnforcementResult{{Result: policy.AllowResult, Policy: response.Policies[0], Message: "sensitive-attribute-value"}}
++	if err := audit.PolicyEvaluated(target, response); err != nil {
++		t.Fatal(err)
++	}
++	audit.PolicyEnd(false)
++	code := 0
++	audit.finish(&code)
++	if bytes.Contains(out.Bytes(), []byte("sensitive-attribute-value")) {
++		t.Fatal("private value leaked into audit records")
++	}
++}
++
++func TestNativePolicyAuditRemembersPhaseFailure(t *testing.T) {
++	audit, _, _ := testNativeAudit(t, "plan")
++	if err := audit.PolicyStart("walkPlan", nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := audit.PolicyEnd(true); err != nil {
++		t.Fatal(err)
++	}
++	code := 0
++	audit.finish(&code)
++	if code == 0 {
++		t.Fatal("failed phase became a successful command")
++	}
++}
+diff --git a/internal/command/native_policy_contract.go b/internal/command/native_policy_contract.go
+new file mode 100644
+index 0000000..606f541
+--- /dev/null
++++ b/internal/command/native_policy_contract.go
+@@ -0,0 +1,40 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"encoding/json"
++	"github.com/hashicorp/terraform/version"
++	"runtime"
++)
++
++// NativePolicyPatchSHA256 is set by the source-build recipe. Runtime owners pin
++// the executable checksum as well as this source provenance; the descriptor
++// alone never authorizes a binary or a run.
++var NativePolicyPatchSHA256 string
++
++type NativePolicyContractCommand struct{ Meta }
++
++func (c *NativePolicyContractCommand) Help() string {
++	return "Report the native policy owner contract as JSON."
++}
++func (c *NativePolicyContractCommand) Synopsis() string {
++	return "Report the native policy owner contract"
++}
++func (c *NativePolicyContractCommand) Run(args []string) int {
++	if len(args) != 0 {
++		c.Ui.Error("native-policy-contract accepts no arguments")
++		return 1
++	}
++	encoded, err := json.Marshal(struct {
++		ContractVersion  int    `json:"contractVersion"`
++		TerraformVersion string `json:"terraformVersion"`
++		Platform         string `json:"platform"`
++		PatchSHA256      string `json:"patchSha256"`
++	}{2, version.String(), runtime.GOOS + "_" + runtime.GOARCH, NativePolicyPatchSHA256})
++	if err != nil {
++		return 1
++	}
++	c.Ui.Output(string(encoded))
++	return 0
++}
+diff --git a/internal/command/native_policy_init_denial_test.go b/internal/command/native_policy_init_denial_test.go
+new file mode 100644
+index 0000000..7b4ee1b
+--- /dev/null
++++ b/internal/command/native_policy_init_denial_test.go
+@@ -0,0 +1,77 @@
++// SPDX-License-Identifier: BUSL-1.1
++package command
++
++import (
++	"context"
++	"fmt"
++	"github.com/hashicorp/terraform/internal/addrs"
++	"github.com/hashicorp/terraform/internal/command/views"
++	"github.com/hashicorp/terraform/internal/configs"
++	"github.com/hashicorp/terraform/internal/policy"
++	"github.com/hashicorp/terraform/internal/policy/proto"
++	"testing"
++)
++
++type nativeInitPolicyView struct{ views.Init }
++
++func (*nativeInitPolicyView) PolicyResult(string, policy.EvaluationResponse) {}
++
++// Exercise the production installation hooks, whose return value is the
++// installer's blocking signal. An unknown sibling must never erase a known
++// unapproved required denial, independent of the plugin's policy ordering.
++func TestNativePolicyInitHooksKeepKnownDenialWithUnknown(t *testing.T) {
++	for _, kind := range []string{"provider", "module"} {
++		for _, level := range []string{"mandatory", "mandatory_overridable", "approved", "advisory", "pure-unknown"} {
++			for _, reverse := range []bool{false, true} {
++				t.Run(fmt.Sprintf("%s/%s/reverse=%t", kind, level, reverse), func(t *testing.T) {
++					audit, _, file := testNativeAudit(t, "init")
++					if err := audit.PolicyStart("init", nil); err != nil {
++						t.Fatal(err)
++					}
++					unknown := &policy.Policy{Directory: file, Address: kind + "_policy.unknown", EnforcementLevel: "mandatory", Result: policy.UnknownResult}
++					denial := &policy.Policy{Directory: file, Address: kind + "_policy.known", EnforcementLevel: level, Result: policy.DenyResult}
++					if level == "approved" {
++						denial.EnforcementLevel = "mandatory_overridable"
++						audit.overrides[nativePolicyOverride{File: file, Address: denial.Address}] = true
++					}
++					response := auditTestResponse(file, policy.DenyResult, "mandatory")
++					response.Policies = []*policy.Policy{denial, unknown}
++					if reverse {
++						response.Policies = []*policy.Policy{unknown, denial}
++					}
++					if level == "pure-unknown" {
++						response.Overall = policy.UnknownResult
++						response.Policies = []*policy.Policy{unknown}
++					}
++					client := policy.NewTestMockClient(t)
++					client.EvaluateProviderFn = func(context.Context, policy.EvaluationRequest[*proto.PolicyEvaluateProviderRequest_ProviderMetadata]) policy.EvaluationResponse {
++						return response
++					}
++					client.EvaluateModuleFn = func(context.Context, policy.EvaluationRequest[*proto.PolicyEvaluateModuleRequest_ModuleMetadata]) policy.EvaluationResponse {
++						return response
++					}
++					blocked := false
++					if kind == "provider" {
++						hook := &providerPolicyHook{audit: audit, client: client, rootModule: &configs.Module{}, view: &nativeInitPolicyView{}}
++						blocked = hook.ProviderVersionSelected(context.Background(), addrs.NewDefaultProvider("test"), "1.0.0") != nil
++					} else {
++						hook := &policyModuleInstallHook{audit: audit, client: client, view: &nativeInitPolicyView{}}
++						blocked = hook.ModuleSourceResolved(context.Background(), &configs.ModuleRequest{Path: addrs.Module{"child"}, Name: "child", SourceAddr: addrs.ModuleSourceLocal("./child")}, "").HasErrors()
++					}
++					want := level == "mandatory" || level == "mandatory_overridable"
++					if blocked != want || audit.denied != want {
++						t.Errorf("installation blocked=%t audit.denied=%t, want %t", blocked, audit.denied, want)
++					}
++					if err := audit.PolicyEnd(false); err != nil {
++						t.Fatal(err)
++					}
++					code := 0
++					audit.finish(&code)
++					if (code != 0) != want {
++						t.Errorf("init exit=%d, denial required=%t", code, want)
++					}
++				})
++			}
++		}
++	}
++}
+diff --git a/internal/command/native_policy_plan_fd_linux_test.go b/internal/command/native_policy_plan_fd_linux_test.go
+new file mode 100644
+index 0000000..e0ddc2a
+--- /dev/null
++++ b/internal/command/native_policy_plan_fd_linux_test.go
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"bytes"
++	"golang.org/x/sys/unix"
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"testing"
++)
++
++func TestNativePolicyPlanPipeDescriptor(t *testing.T) {
++	if mode := os.Getenv("TF_TEST_NATIVE_PLAN_PIPE"); mode != "" {
++		file, err := openNativePolicyPlanFD()
++		if mode != "valid" {
++			if err == nil {
++				os.Exit(1)
++			}
++			os.Exit(0)
++		}
++		if err != nil {
++			os.Exit(2)
++		}
++		flags, err := unix.FcntlInt(file.Fd(), unix.F_GETFD, 0)
++		if err != nil || flags&unix.FD_CLOEXEC == 0 {
++			os.Exit(3)
++		}
++		if _, err = file.Write([]byte("owned-plan-output\n")); err != nil {
++			os.Exit(4)
++		}
++		if file.Close() != nil {
++			os.Exit(5)
++		}
++		os.Exit(0)
++	}
++	for _, mode := range []string{"missing", "read-only", "regular", "valid"} {
++		t.Run(mode, func(t *testing.T) {
++			read, write, err := os.Pipe()
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer read.Close()
++			defer write.Close()
++			null, err := os.Open("/dev/null")
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer null.Close()
++			fd := write
++			if mode == "read-only" {
++				fd = read
++			}
++			if mode == "regular" {
++				fd, err = os.OpenFile(filepath.Join(t.TempDir(), "plan"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer fd.Close()
++			}
++			cmd := exec.Command(os.Args[0], "-test.run=^TestNativePolicyPlanPipeDescriptor$")
++			cmd.Env = []string{"PATH=/usr/bin:/bin", "TF_TEST_NATIVE_PLAN_PIPE=" + mode}
++			if mode != "missing" {
++				cmd.Env = append(cmd.Env, "TF_POLICY_PLAN_FD=4")
++			}
++			cmd.ExtraFiles = []*os.File{null, fd}
++			if output, err := cmd.CombinedOutput(); err != nil {
++				t.Fatalf("protected descriptor control failed: %v %s", err, output)
++			}
++			write.Close()
++			if mode == "valid" {
++				output, err := io.ReadAll(read)
++				if err != nil || !bytes.Equal(output, []byte("owned-plan-output\n")) {
++					t.Fatal("plan stream changed", err)
++				}
++			}
++		})
++	}
++}
+diff --git a/internal/command/plan.go b/internal/command/plan.go
+index 1a752a9..531a371 100644
+--- a/internal/command/plan.go
++++ b/internal/command/plan.go
+@@ -20,7 +20,7 @@ type PlanCommand struct {
+ 	Meta
+ }
+ 
+-func (c *PlanCommand) Run(rawArgs []string) int {
++func (c *PlanCommand) Run(rawArgs []string) (exitCode int) {
+ 	// Parse and apply global view arguments
+ 	common, rawArgs := arguments.ParseView(rawArgs)
+ 	c.View.Configure(common)
+@@ -61,6 +61,16 @@ func (c *PlanCommand) Run(rawArgs []string) int {
+ 		return 1
+ 	}
+ 
++	audit, auditDiags, stopAudit := c.nativePolicyAdmission(args.StrictPolicy, "plan", args.PolicyPaths)
++	if audit != nil {
++		defer audit.finish(&exitCode)
++	}
++	defer stopAudit()
++	if auditDiags.HasErrors() {
++		view.Operation().PolicyDiagnostics(auditDiags)
++		return 1
++	}
++
+ 	// Check for user-supplied plugin path
+ 	if c.pluginPath, err = c.loadPluginPath(); err != nil {
+ 		diags = diags.Append(err)
+@@ -95,6 +105,13 @@ func (c *PlanCommand) Run(rawArgs []string) int {
+ 		return 1
+ 	}
+ 
++	if audit != nil {
++		if remote, ok := be.(BackendWithRemoteTerraformVersion); ok && !remote.IsLocalOperations() {
++			view.Diagnostics(tfdiags.Diagnostics{}.Append(tfdiags.Sourceless(tfdiags.Error, "Unsupported strict policy backend", "Strict policy execution requires local operations under the authenticated run owner.")))
++			return 1
++		}
++	}
++
+ 	// Build the operation request
+ 	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, args.Operation, args.OutPath, args.GenerateConfigPath, args.PolicyPaths)
+ 	diags = diags.Append(opDiags)
+@@ -115,6 +132,10 @@ func (c *PlanCommand) Run(rawArgs []string) int {
+ 		defer stopClient()
+ 	}
+ 
++	if audit != nil {
++		opReq.Hooks = append(opReq.Hooks, audit)
++	}
++
+ 	// Assign config loader and variables to the operation request
+ 	opReq.ConfigLoader = loader
+ 	opReq.Variables = c.Meta.VariableValues
+@@ -184,6 +205,9 @@ func (c *PlanCommand) OperationRequest(
+ 	opReq.Hooks = view.Hooks()
+ 	opReq.PlanRefresh = args.Refresh
+ 	opReq.PlanOutPath = planOutPath
++	if c.policyAudit != nil {
++		opReq.PolicyPlanWriter = c.policyAudit.planOutput
++	}
+ 	opReq.GenerateConfigOut = generateConfigOut
+ 	opReq.Targets = args.Targets
+ 	opReq.ForceReplace = args.ForceReplace
+diff --git a/internal/plans/planfile/writer.go b/internal/plans/planfile/writer.go
+index a4db0b3..0494b48 100644
+--- a/internal/plans/planfile/writer.go
++++ b/internal/plans/planfile/writer.go
+@@ -6,6 +6,7 @@ package planfile
+ import (
+ 	"archive/zip"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"time"
+ 
+@@ -57,9 +58,18 @@ func Create(filename string, args CreateArgs) error {
+ 		return err
+ 	}
+ 	defer f.Close()
++	return CreateToWriter(f, args)
++}
+ 
+-	zw := zip.NewWriter(f)
+-	defer zw.Close()
++// CreateToWriter emits the complete saved-plan archive to an owner-controlled
++// stream without granting filesystem access to policy/provider descendants.
++func CreateToWriter(w io.Writer, args CreateArgs) (retErr error) {
++	zw := zip.NewWriter(w)
++	defer func() {
++		if err := zw.Close(); retErr == nil {
++			retErr = err
++		}
++	}()
+ 
+ 	// tfplan file
+ 	{
+diff --git a/internal/policy/client.go b/internal/policy/client.go
+index d578a0b..5b5f183 100644
+--- a/internal/policy/client.go
++++ b/internal/policy/client.go
+@@ -5,6 +5,8 @@ package policy
+ 
+ import (
+ 	"context"
++	"crypto/sha256"
++	"encoding/hex"
+ 	"fmt"
+ 	"log"
+ 	"os"
+@@ -21,6 +23,7 @@ import (
+ 	"go.opentelemetry.io/otel/codes"
+ 	"go.opentelemetry.io/otel/trace"
+ 	"google.golang.org/grpc"
++	pb "google.golang.org/protobuf/proto"
+ 
+ 	"github.com/hashicorp/terraform/internal/policy/callback"
+ 	"github.com/hashicorp/terraform/internal/policy/proto"
+@@ -324,10 +327,10 @@ func (c *client) EvaluateResource(ctx context.Context, req EvaluationRequest[*pr
+ 			Severity: proto.Severity_ERROR,
+ 			Summary:  "Failed to evaluate Terraform Policy",
+ 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
+-		}))
++		})).withRequestSHA256(request)
+ 	}
+ 
+-	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
++	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
+ }
+ 
+ func (c *client) EvaluateProvider(ctx context.Context, req EvaluationRequest[*proto.PolicyEvaluateProviderRequest_ProviderMetadata]) EvaluationResponse {
+@@ -361,10 +364,10 @@ func (c *client) EvaluateProvider(ctx context.Context, req EvaluationRequest[*pr
+ 			Severity: proto.Severity_ERROR,
+ 			Summary:  "Failed to evaluate Terraform Policy",
+ 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
+-		}))
++		})).withRequestSHA256(request)
+ 	}
+ 
+-	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
++	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
+ }
+ 
+ func (c *client) EvaluateModule(ctx context.Context, req EvaluationRequest[*proto.PolicyEvaluateModuleRequest_ModuleMetadata]) EvaluationResponse {
+@@ -399,10 +402,10 @@ func (c *client) EvaluateModule(ctx context.Context, req EvaluationRequest[*prot
+ 			Severity: proto.Severity_ERROR,
+ 			Summary:  "Failed to evaluate Terraform Policy",
+ 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
+-		}))
++		})).withRequestSHA256(request)
+ 	}
+ 
+-	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
++	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
+ }
+ 
+ func (c *client) Stop() {
+@@ -450,3 +453,15 @@ func (s *policy) GRPCClient(_ context.Context, broker *plugin.GRPCBroker, conn *
+ 		callbackRegistry: callback.NewRegistry(),
+ 	}, nil
+ }
++
++func (r EvaluationResponse) withRequestSHA256(request pb.Message) EvaluationResponse {
++	encoded, err := (pb.MarshalOptions{Deterministic: true}).Marshal(request)
++	if err != nil {
++		r.Overall = PolicyErrorResult
++		r.Diagnostics = append(r.Diagnostics, NewErrorDiagnostic("Invalid policy request", "The native policy request could not be hashed.", PolicyErrorResult))
++		return r
++	}
++	digest := sha256.Sum256(encoded)
++	r.RequestSHA256 = hex.EncodeToString(digest[:])
++	return r
++}
+diff --git a/internal/policy/policy.go b/internal/policy/policy.go
+index 79db12d..e7bf81d 100644
+--- a/internal/policy/policy.go
++++ b/internal/policy/policy.go
+@@ -145,6 +145,8 @@ type (
+ 
+ 	// EvaluationResponse contains response from a single Evaluate RPC request.
+ 	EvaluationResponse struct {
++		// RequestSHA256 binds native target evidence to the exact transport request.
++		RequestSHA256 string
+ 		// Overall is a result of all enforcements evaluated in a single Evaluate RPC request.
+ 		Overall EvaluateResult
+ 
+diff --git a/internal/terraform/context_walk.go b/internal/terraform/context_walk.go
+index ce2194f..95c6389 100644
+--- a/internal/terraform/context_walk.go
++++ b/internal/terraform/context_walk.go
+@@ -96,11 +96,24 @@ func (c *Context) walk(graph *Graph, operation walkOperation, opts *graphWalkOpt
+ 
+ 	walker := c.graphWalker(graph, operation, opts)
+ 
++	if opts.PolicyClient != nil {
++		auditDiags := policyAuditHooks(c.hooks, func(audit PolicyAuditHook) error {
++			return audit.PolicyStart(operation.String(), policyGraphMetadataTargets(graph))
++		})
++		if auditDiags.HasErrors() {
++			return walker, auditDiags
++		}
++	}
++
+ 	// Watch for a stop so we can call the provider Stop() API.
+ 	watchStop, watchWait := c.watchStop(walker)
+ 
+ 	// Walk the real graph, this will block until it completes
+ 	diags := graph.Walk(walker)
++	if opts.PolicyClient != nil {
++		failed := diags.HasErrors()
++		diags = diags.Append(policyAuditHooks(c.hooks, func(audit PolicyAuditHook) error { return audit.PolicyEnd(failed) }))
++	}
+ 
+ 	// Close the channel so the watcher stops, and wait for it to return.
+ 	close(watchStop)
+diff --git a/internal/terraform/native_policy_module_test.go b/internal/terraform/native_policy_module_test.go
+new file mode 100644
+index 0000000..5e9075a
+--- /dev/null
++++ b/internal/terraform/native_policy_module_test.go
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: BUSL-1.1
++package terraform
++
++import (
++	"github.com/hashicorp/terraform/internal/addrs"
++	"github.com/hashicorp/terraform/internal/configs"
++	"github.com/hashicorp/terraform/internal/policy"
++	"testing"
++)
++
++func TestNativePolicyModuleTraversalIncludesAllDescendants(t *testing.T) {
++	root := configs.NewEmptyConfig()
++	parent := root
++	for _, name := range []string{"child", "inner", "leaf"} {
++		path := append(append(addrs.Module{}, parent.Path...), name)
++		child := &configs.Config{Parent: parent, Root: root, Path: path, Module: &configs.Module{}, Children: map[string]*configs.Config{}}
++		parent.Children[name] = child
++		parent = child
++	}
++	g := &Graph{Path: addrs.RootModuleInstance}
++	transform := ModulePolicyTransformer{Config: root, PolicyClient: policy.NewTestMockClient(t)}
++	if err := transform.Transform(g); err != nil {
++		t.Fatal(err)
++	}
++	seen := map[string]bool{}
++	for vertex := range g.VerticesSeq() {
++		if node, ok := vertex.(*nodeModulePolicy); ok {
++			seen[node.Config.Path.String()] = true
++		}
++	}
++	for _, address := range []string{"module.child", "module.child.module.inner", "module.child.module.inner.module.leaf"} {
++		if !seen[address] {
++			t.Errorf("native module policy omitted %s", address)
++		}
++	}
++	if len(seen) != 3 {
++		t.Errorf("unexpected module policy count: %d", len(seen))
++	}
++}
+diff --git a/internal/terraform/node_policy_eval.go b/internal/terraform/node_policy_eval.go
+index 1d736ae..a38921f 100644
+--- a/internal/terraform/node_policy_eval.go
++++ b/internal/terraform/node_policy_eval.go
+@@ -36,6 +36,15 @@ func (n *nodePolicyEval) DynamicExpand(ctx EvalContext) (*Graph, tfdiags.Diagnos
+ 	ctx.Changes().Close()
+ 	ctx.State().Close()
+ 
++	auditErr := ctx.Hook(func(h Hook) (HookAction, error) {
++		if audit, ok := h.(PolicyAuditHook); ok {
++			return HookActionContinue, audit.PolicyExpect(policyGraph.auditTargets())
++		}
++		return HookActionContinue, nil
++	})
++	if auditErr != nil {
++		return nil, tfdiags.Diagnostics{}.Append(auditErr)
++	}
+ 	_, span := tracer().Start(ctx.StopCtx(), "terraform.policy.evaluate")
+ 	return policyGraph.evalGraph(span), nil
+ }
+diff --git a/internal/terraform/node_policy_resource.go b/internal/terraform/node_policy_resource.go
+index fe1ecea..10ced78 100644
+--- a/internal/terraform/node_policy_resource.go
++++ b/internal/terraform/node_policy_resource.go
+@@ -80,6 +80,7 @@ func (n *nodeResourcePolicy) Execute(ctx EvalContext, operation walkOperation) t
+ 	}
+ 
+ 	result := evaluatePolicies(ctx, n.ResourceAddr, resourceConfig, n.After, n.Before, meta, callbacks)
++	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "resource", Address: n.ResourceAddr.String(), Operation: n.Action.String()}, result))
+ 	if !result.Empty() {
+ 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
+ 			return h.PolicyResult(n.ResourceAddr.String(), result)
+diff --git a/internal/terraform/node_provider.go b/internal/terraform/node_provider.go
+index 8118f14..26e591c 100644
+--- a/internal/terraform/node_provider.go
++++ b/internal/terraform/node_provider.go
+@@ -248,6 +248,7 @@ func (n *NodeApplyableProvider) EvalPolicy(ctx EvalContext, attrs cty.Value) tfd
+ 	}
+ 
+ 	var diags tfdiags.Diagnostics
++	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "provider", Address: n.Addr.String()}, result))
+ 	if !result.Empty() {
+ 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
+ 			return h.PolicyResult(n.Addr.String(), result)
+diff --git a/internal/terraform/policy_audit.go b/internal/terraform/policy_audit.go
+new file mode 100644
+index 0000000..6a702bc
+--- /dev/null
++++ b/internal/terraform/policy_audit.go
+@@ -0,0 +1,91 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package terraform
++
++import (
++	"github.com/hashicorp/terraform/internal/policy"
++	"github.com/hashicorp/terraform/internal/tfdiags"
++	"sort"
++)
++
++// PolicyTarget identifies a native graph evaluation independently of whether a
++// policy matched it. Replacements have distinct create and delete targets.
++type PolicyTarget struct {
++	Kind      string `json:"kind"`
++	Address   string `json:"address"`
++	Operation string `json:"operation"`
++}
++
++// PolicyAuditHook is optional for ordinary CLI consumers. Strict owners use it
++// to receive the graph's expected inventory separately from observed results.
++// Resource expectations are added after resource expansion, before evaluation.
++type PolicyAuditHook interface {
++	PolicyStart(stage string, targets []PolicyTarget) error
++	PolicyExpect(targets []PolicyTarget) error
++	PolicyEvaluated(target PolicyTarget, result policy.EvaluationResponse) error
++	PolicyEnd(failed bool) error
++}
++
++func policyAuditHooks(hooks []Hook, fn func(PolicyAuditHook) error) tfdiags.Diagnostics {
++	var diags tfdiags.Diagnostics
++	for _, hook := range hooks {
++		if audit, ok := hook.(PolicyAuditHook); ok {
++			diags = diags.Append(fn(audit))
++		}
++	}
++	return diags
++}
++
++func policyAuditEvaluated(ctx EvalContext, target PolicyTarget, result policy.EvaluationResponse) error {
++	return ctx.Hook(func(h Hook) (HookAction, error) {
++		if audit, ok := h.(PolicyAuditHook); ok {
++			return HookActionContinue, audit.PolicyEvaluated(target, result)
++		}
++		return HookActionContinue, nil
++	})
++}
++
++func policyGraphMetadataTargets(graph *Graph) []PolicyTarget {
++	targets := make([]PolicyTarget, 0)
++	for vertex := range graph.VerticesSeq() {
++		switch node := vertex.(type) {
++		case *NodeApplyableProvider:
++			targets = append(targets, PolicyTarget{Kind: "provider", Address: node.Addr.String()})
++		case *nodeModulePolicy:
++			targets = append(targets, PolicyTarget{Kind: "module", Address: node.Config.Path.String()})
++		}
++	}
++	sortPolicyTargets(targets)
++	return targets
++}
++
++func sortPolicyTargets(targets []PolicyTarget) {
++	sort.Slice(targets, func(i, j int) bool {
++		a, b := targets[i], targets[j]
++		if a.Kind != b.Kind {
++			return a.Kind < b.Kind
++		}
++		if a.Address != b.Address {
++			return a.Address < b.Address
++		}
++		return a.Operation < b.Operation
++	})
++}
++
++func (ps *policySubgraph) auditTargets() []PolicyTarget {
++	ps.lock.Lock()
++	defer ps.lock.Unlock()
++	targets := make([]PolicyTarget, 0)
++	for vertex := range ps.graph.VerticesSeq() {
++		switch node := vertex.(type) {
++		case *nodeResourcePolicy:
++			if _, ok := policyOperationForAction(node.Action); ok {
++				targets = append(targets, PolicyTarget{Kind: "resource", Address: node.ResourceAddr.String(), Operation: node.Action.String()})
++			}
++		case *nodeQueryResourcePolicy:
++			targets = append(targets, PolicyTarget{Kind: "query", Address: node.ResourceAddr.String(), Operation: "read"})
++		}
++	}
++	sortPolicyTargets(targets)
++	return targets
++}
+diff --git a/internal/terraform/transform_module_policy.go b/internal/terraform/transform_module_policy.go
+index f928877..3878e0f 100644
+--- a/internal/terraform/transform_module_policy.go
++++ b/internal/terraform/transform_module_policy.go
+@@ -30,16 +30,16 @@ func (t *ModulePolicyTransformer) Transform(g *Graph) error {
+ 	}
+ 
+ 	moduleNodes := make(map[string]*nodeModulePolicy, 0)
+-	for config := range t.Config.AllModules() {
++	t.Config.DeepEach(func(config *configs.Config) {
+ 		// root modules need no policy evaluation
+ 		if config.Path.IsRoot() {
+-			continue
++			return
+ 		}
+ 		n := &nodeModulePolicy{Config: config}
+ 		log.Printf("[TRACE] ModulePolicyTransformer: adding %s", n.Name())
+ 		g.Add(n)
+ 		moduleNodes[config.Path.String()] = n
+-	}
++	})
+ 
+ 	if len(moduleNodes) == 0 {
+ 		return nil
+@@ -137,6 +137,7 @@ func (n *nodeModulePolicy) Execute(ctx EvalContext, op walkOperation) tfdiags.Di
+ 	}
+ 
+ 	var diags tfdiags.Diagnostics
++	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "module", Address: addr.String()}, result))
+ 	if !result.Empty() {
+ 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
+ 			return h.PolicyResult(addr.String(), result)

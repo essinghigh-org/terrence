@@ -186,6 +186,21 @@ describe("run cgroups (kanban 8/9)", () => {
     destroyRunCgroup("run-empty", env);
   });
 
+  it("detects and kills nested native processes when the run root has no direct members", (): void => {
+    const root = makeFakeRoot();
+    created.push(root);
+    const env = envWith(root);
+    const path = createRunCgroup("run-native-children", env)!;
+    writeFileSync(join(path, "cgroup.procs"), "");
+    writeFileSync(join(path, "cgroup.events"), "populated 1\nfrozen 0\n");
+    writeFileSync(join(path, "cgroup.kill"), "");
+    expect(runCgroupHasProcesses("run-native-children", env)).toBeTrue();
+    expect(killRunCgroup("run-native-children", env)).toBeTrue();
+    expect(readFileSync(join(path, "cgroup.kill"), "utf8")).toBe("1");
+    writeFileSync(join(path, "cgroup.events"), "populated 0\nfrozen 0\n");
+    expect(runCgroupHasProcesses("run-native-children", env)).toBeFalse();
+  });
+
   it("destroy removes an empty group and tolerates lingering processes", (): void => {
     const root = makeFakeRoot();
     created.push(root);

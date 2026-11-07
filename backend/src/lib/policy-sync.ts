@@ -264,6 +264,13 @@ async function parseManifest(
   const directoryInfo = await stat(policyDirectory);
   if (!directoryInfo.isDirectory()) throw new Error("policies-path does not identify a directory");
 
+  if (policySet.kind === "tfpolicy") {
+    const files = await readdir(policyDirectory, { withFileTypes: true });
+    if (!files.some((file) => file.isFile() && file.name.endsWith(".policy.hcl")))
+      throw new Error("Native policy set must contain .policy.hcl sources in policies-path");
+    return { manifest: relative(root, policyDirectory).split(sep).join("/") || ".", policies: [] };
+  }
+
   if (policySet.kind === "sentinel") {
     const manifestPath = join(policyDirectory, "sentinel.hcl");
     const blocks = hclPolicyBlocks(await readPolicyFile(manifestPath));
@@ -423,21 +430,22 @@ export async function synchronizeVcsPolicySet(
     const readyAt = new Date().toISOString();
     await db.transaction(async (tx): Promise<void> => {
       await tx.delete(policies).where(eq(policies.policySetId, policySet.id));
-      await tx.insert(policies).values(
-        parsed.policies.map((policy): typeof policies.$inferInsert => ({
-          id: newResourceId("pol"),
-          policySetId: policySet.id,
-          policySetVersionId: versionId,
-          name: policy.name,
-          description: policy.description,
-          kind: policySet.kind,
-          enforcementLevel: policy.enforcementLevel,
-          query: policy.query,
-          source: policy.source,
-          sourcePath: policy.sourcePath,
-          createdAt: Date.now(),
-        })),
-      );
+      if (parsed.policies.length > 0)
+        await tx.insert(policies).values(
+          parsed.policies.map((policy): typeof policies.$inferInsert => ({
+            id: newResourceId("pol"),
+            policySetId: policySet.id,
+            policySetVersionId: versionId,
+            name: policy.name,
+            description: policy.description,
+            kind: policySet.kind,
+            enforcementLevel: policy.enforcementLevel,
+            query: policy.query,
+            source: policy.source,
+            sourcePath: policy.sourcePath,
+            createdAt: Date.now(),
+          })),
+        );
       await tx
         .update(policySetVersions)
         .set({

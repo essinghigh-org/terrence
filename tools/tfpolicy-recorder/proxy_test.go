@@ -87,6 +87,38 @@ func fixture(t *testing.T) (*Proxy, *fake, *bytes.Buffer) {
 func request() *p.PolicyEvaluateResourceRequest {
 	return &p.PolicyEvaluateResourceRequest{EvaluationId: 123, Resource: "test_resource", Attrs: &p.ResourceAttributes{Raw: []byte("typed attributes")}, Metadata: &p.PolicyEvaluateResourceRequest_ResourceMetadata{Operation: p.Operation_CREATE}}
 }
+
+func TestTrustedRunContextReplacesOnlyEntitlementAndNeverEntersJournal(t *testing.T) {
+	b := new(bytes.Buffer)
+	f := &fake{}
+	trusted := &RunContext{Host: "terrence.example:443", Organization: "test-org", Token: "trusted-run-secret"}
+	s := &Proxy{Client: f, Journal: NewJournal(b, nil), PolicyRoots: []string{"/snapshot/policies"}, RunContext: trusted, Bridge: func(context.Context, uint32) (uint32, error) { return 22, nil }}
+	req := &p.PolicySetupRequest{SourceLocations: s.PolicyRoots, CallbackService: 7, Entitlement: &p.PolicySetupRequest_Entitlement{Host: "workspace.example", Org: "other-org", Token: "untrusted-secret"}}
+	if _, err := s.Setup(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if f.setup.Entitlement.Host != trusted.Host || f.setup.Entitlement.Org != trusted.Organization || f.setup.Entitlement.Token != trusted.Token || f.setup.CallbackService != 22 {
+		t.Fatal("trusted identity was not forwarded")
+	}
+	if req.Entitlement.Token != "untrusted-secret" || req.CallbackService != 7 {
+		t.Fatal("request was mutated")
+	}
+	for _, secret := range []string{trusted.Token, "untrusted-secret", trusted.Host, trusted.Organization} {
+		if strings.Contains(b.String(), secret) {
+			t.Fatal("identity entered journal")
+		}
+	}
+	sanitized := pb.Clone(req).(*p.PolicySetupRequest)
+	sanitized.Entitlement = nil
+	encoded, err := (pb.MarshalOptions{Deterministic: true}).Marshal(sanitized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(encoded)
+	if records(t, b)[0].RequestSHA256 != hex.EncodeToString(hash[:]) {
+		t.Fatal("trusted credentials altered sanitized request hash")
+	}
+}
 func TestBeginWrittenBeforeRPCAndExactForwarding(t *testing.T) {
 	s, f, b := fixture(t)
 	f.during = func() {

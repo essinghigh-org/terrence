@@ -2,11 +2,20 @@ name: Native tfpolicy qualification
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "47 6 * * 2"
   pull_request:
     paths:
       - "tools/tfpolicy-supervisor/**"
       - "tools/tfpolicy-recorder/**"
+      - "tools/tfpolicy-engine/**"
       - "backend/bin/landlock-runner.c"
+      - "backend/src/**"
+      - "backend/drizzle/**"
+      - "backend/tests/compat/tfpolicy-owner/**"
+      - "backend/package.json"
+      - "package.json"
+      - "bun.lock"
       - ".github/workflows/tfpolicy-native-qualification.yml"
 
 permissions:
@@ -14,12 +23,31 @@ permissions:
 
 jobs:
   native-facilities:
+    name: Native tfpolicy (${{ matrix.release }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        release: [pinned, latest]
+    # The exact known release gates PRs. An upstream release must not silently
+    # make unrelated PRs unmergeable; the scheduled canary still fails loudly.
+    continue-on-error: ${{ matrix.release == 'latest' && github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up pinned Bun for real production-worker tests
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch and verify official tfpolicy-plugin
+        id: plugin
+        run: |
+          python3 tools/tfpolicy-supervisor/integration/fetch_plugin.py \
+            --release '${{ matrix.release }}' --output "$RUNNER_TEMP/official-plugin"
       - name: Build sandbox helper without changing host settings
         run: |
           gcc -O2 -Wall -Wextra -Werror backend/bin/landlock-runner.c -o "$RUNNER_TEMP/landlock-runner"
@@ -81,7 +109,7 @@ jobs:
             -o "$RUNNER_TEMP/terraform.zip"
           echo "4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061  $RUNNER_TEMP/terraform.zip" | sha256sum --check --strict
           unzip "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/native-bin/official"
-      - name: Run actual native engine, sandbox, bootstrap, recorder and cgroup matrix
+      - name: Run stock-engine transport, sandbox, bootstrap and recorder matrix
         if: steps.facilities.outputs.ready == 'true'
         env:
           DELEGATED_CGROUP: ${{ steps.facilities.outputs.cgroup_root }}
@@ -98,6 +126,90 @@ jobs:
             --shim "$RUNNER_TEMP/native-bin/shim" --recorder "$RUNNER_TEMP/native-bin/recorder" \
             --fixture "$RUNNER_TEMP/native-bin/fixture" --cgroup-root "$DELEGATED_CGROUP" \
             --output "$RUNNER_TEMP/native-results"
+      - name: Build strict reference engine and owner qualification binary
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          GOTOOLCHAIN: go1.26.10
+          DELEGATED_CGROUP: ${{ steps.isolation.outputs.cgroup_root }}
+        run: |
+          set -euo pipefail
+          bash tools/tfpolicy-engine/build.sh "$RUNNER_TEMP/terraform-protocol" "$RUNNER_TEMP/strict-engine"
+          (cd tools/tfpolicy-supervisor && go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/native-bin/owner" ./cmd/tfpolicy-owner)
+          (cd tools/tfpolicy-supervisor && go test -c -o "$RUNNER_TEMP/native-bin/owner-tests" ./internal/execution)
+          chmod 0555 "$RUNNER_TEMP/native-bin/owner" "$RUNNER_TEMP/native-bin/owner-tests" "$RUNNER_TEMP/native-bin/supervisor" "$RUNNER_TEMP/native-bin/shim"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          base=Path(os.environ['RUNNER_TEMP'])
+          def pin(path):
+              with path.open('rb') as stream:
+                  return {'path':str(path),'sha256':hashlib.file_digest(stream,'sha256').hexdigest()}
+          runtime={name:pin(base/'native-bin'/name) for name in ['supervisor','shim','recorder']}
+          runtime.update({'engine':pin(base/'strict-engine/terraform'),'runner':pin(base/'landlock-runner'),'plugin':pin(base/'native-bin/fixture'),'patchSha256':json.loads((base/'strict-engine/provenance.json').read_text())['patchSha256']})
+          path=base/'native-owner-profile.json'
+          path.write_text(json.dumps({'schemaVersion':1,'runtime':runtime,'cgroupRoot':os.environ['DELEGATED_CGROUP']}))
+          path.chmod(0o600)
+          PY
+      - name: Require strict owner admission matrix with the reference engine
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          DELEGATED_CGROUP: ${{ steps.isolation.outputs.cgroup_root }}
+        run: |
+          set -euo pipefail
+          sudo bash -ec 'echo $$ > "$1/launcher/cgroup.procs"; shift; exec setpriv --reuid="$1" --regid="$2" --init-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs env -i PATH=/usr/bin:/bin "${@:3}"' -- \
+            "$DELEGATED_CGROUP" "$(id -u)" "$(id -g)" \
+            "TFPOLICY_OWNER_TEST_PROFILE=$RUNNER_TEMP/native-owner-profile.json" \
+            "$RUNNER_TEMP/native-bin/owner-tests" -test.v -test.run='^TestNativeOwner$' -test.timeout=120s \
+            | tee "$RUNNER_TEMP/native-owner-results.log"
+          grep -q -- '--- PASS: TestNativeOwner ' "$RUNNER_TEMP/native-owner-results.log"
+          ! grep -q -- '--- SKIP: TestNativeOwner' "$RUNNER_TEMP/native-owner-results.log"
+      - name: Require real-plugin production-worker compatibility
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          DELEGATED_CGROUP: ${{ steps.isolation.outputs.cgroup_root }}
+          PLUGIN_VERSION: ${{ steps.plugin.outputs.version }}
+          PLUGIN_PATH: ${{ steps.plugin.outputs.plugin }}
+          PLUGIN_SHA256: ${{ steps.plugin.outputs.sha256 }}
+          PLUGIN_ARCHIVE: ${{ steps.plugin.outputs.archive }}
+        run: |
+          set -euo pipefail
+          # No repository/cloud credentials reach the isolated API or plugin.
+          # Only terraform_data is used: these tests create no cloud resources.
+          BUN_DIR="$(dirname "$(command -v bun)")"
+          set +e
+          sudo bash -ec 'echo $$ > "$1/launcher/cgroup.procs"; shift; exec setpriv --reuid="$1" --regid="$2" --init-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs env -i "${@:3}"' -- \
+            "$DELEGATED_CGROUP" "$(id -u)" "$(id -g)" "PATH=$BUN_DIR:/usr/bin:/bin" \
+            python3 "$GITHUB_WORKSPACE/tools/tfpolicy-supervisor/integration/real-owner.py" \
+            --owner "$RUNNER_TEMP/native-bin/owner" --profile "$RUNNER_TEMP/native-owner-profile.json" \
+            --plugin "$PLUGIN_PATH" --plugin-sha256 "$PLUGIN_SHA256" --plugin-version "$PLUGIN_VERSION" \
+            --plugin-archive "$PLUGIN_ARCHIVE" --cgroup-root "$DELEGATED_CGROUP" \
+            --repository "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/real-plugin-results" \
+            --hosted-worker --cases allow,auto-apply,deny,override,apply-crash,apply-cancel,worker-death,apply-force \
+            > "$RUNNER_TEMP/real-plugin-private.log" 2>&1
+          status=$?
+          set -e
+          # Assert the full requested matrix, rather than accepting a skipped or
+          # partial result. Publish only synthetic case status, never plugin logs.
+          HARNESS_STATUS="$status" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          base = Path(os.environ['RUNNER_TEMP'])
+          path = base/'real-plugin-results/api/summary.json'
+          expected = ['allow','auto-apply','deny','override','apply-crash','apply-cancel','worker-death','apply-force']
+          rows = json.loads(path.read_text())['hostedWorkerCases'] if path.exists() else []
+          passed = [r['mode'] for r in rows if r['passed'] is True]
+          assert passed == expected[:len(rows)], 'unexpected compatibility case results'
+          success = os.environ['HARNESS_STATUS'] == '0' and passed == expected
+          summary = {'version': os.environ['PLUGIN_VERSION'], 'passed': passed, 'success': success,
+                     'firstIncompleteCase': None if passed == expected else expected[len(passed)]}
+          (base/'real-plugin-summary.json').write_text(json.dumps(summary, indent=2)+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Official tfpolicy-plugin '+summary['version']+': '+str(len(passed))+'/'+str(len(expected))+' hosted functional compatibility cases passed.\n')
+              if not success:
+                  output.write('First incomplete case: '+str(summary['firstIncompleteCase'])+'. Raw plugin output remains private on the ephemeral runner.\n')
+          if not success:
+              raise SystemExit('Real-plugin compatibility failed; see the case summary.')
+          PY
       - name: Require actual native qualification facilities
         if: steps.facilities.outputs.ready != 'true'
         run: |
@@ -128,9 +240,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: tfpolicy-native-qualification
+          name: tfpolicy-native-qualification-${{ matrix.release }}
           path: |
             ${{ runner.temp }}/native-capabilities.json
             ${{ runner.temp }}/native-results
+            ${{ runner.temp }}/native-owner-results.log
+            ${{ runner.temp }}/official-plugin/provenance.json
+            ${{ runner.temp }}/real-plugin-summary.json
           if-no-files-found: error
           retention-days: 7

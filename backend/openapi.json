@@ -36844,6 +36844,30 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "tfc-agent-id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fencing_token",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "tfc-agent-fencing-token",
+            "in": "header",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         ],
         "summary": "GET /api/agent/jobs/{job_id}/status",
@@ -36877,7 +36901,7 @@
             "description": "Not Acceptable"
           },
           "409": {
-            "description": "Conflict"
+            "description": "The fencing token is missing or the job lease is no longer current"
           },
           "413": {
             "description": "Payload Too Large"
@@ -36891,7 +36915,13 @@
           "500": {
             "description": "Internal Server Error"
           }
-        }
+        },
+        "description": "Poll the owning agent's current job lease. Requires the agent session token, tfc-agent-id, and the exact fencing_token query parameter or tfc-agent-fencing-token header. A stale or malformed fence returns 409. Native-capable agents and native jobs also reject a missing fence; legacy non-native agents may omit it for read-only status compatibility. Only claimed is active; terminal states or loss of authority require the agent to stop execution and retain recovery state.",
+        "security": [
+          {
+            "agentSessionToken": []
+          }
+        ]
       }
     },
     "/api/agent/stack-jobs/{job_id}/configuration": {
@@ -54691,6 +54721,166 @@
           }
         }
       }
+    },
+    "/api/agent/jobs/{job_id}/native-policy": {
+      "get": {
+        "operationId": "get-api-agent-jobs-job-id-native-policy",
+        "tags": [
+          "api"
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tfc-agent-id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fencing_token",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "tfc-agent-fencing-token",
+            "in": "header",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "summary": "GET /api/agent/jobs/{job_id}/native-policy",
+        "responses": {
+          "200": {
+            "description": "Private native execution manifest; Cache-Control: no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "The job lease is no longer current"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          }
+        },
+        "description": "Private native-policy transport for the owning authenticated agent with operation.native-policy.v2 and a current job lease. Signed artifact URLs alone do not authorize access. Requires the agent session token, tfc-agent-id header and fencing_token query parameter (or tfc-agent-fencing-token header).",
+        "security": [
+          {
+            "agentSessionToken": []
+          }
+        ]
+      }
+    },
+    "/api/agent/jobs/{job_id}/native-result": {
+      "put": {
+        "operationId": "put-api-agent-jobs-job-id-native-result",
+        "tags": [
+          "api"
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tfc-agent-id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fencing_token",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "tfc-agent-fencing-token",
+            "in": "header",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "summary": "PUT /api/agent/jobs/{job_id}/native-result",
+        "responses": {
+          "200": {
+            "description": "Evidence accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "The job lease is no longer current"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          }
+        },
+        "description": "Private native-policy transport for the owning authenticated agent with operation.native-policy.v2 and a current job lease. Signed artifact URLs alone do not authorize access. Requires the agent session token, tfc-agent-id header and fencing_token query parameter (or tfc-agent-fencing-token header).",
+        "security": [
+          {
+            "agentSessionToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Signed receipt and captured evidence; maximum aggregate size 64 MiB",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -54703,6 +54893,10 @@
       "azureDevOpsWebhookBasic": {
         "type": "http",
         "scheme": "basic"
+      },
+      "agentSessionToken": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   },

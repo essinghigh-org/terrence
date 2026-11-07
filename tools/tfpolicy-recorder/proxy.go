@@ -14,6 +14,7 @@ type Proxy struct {
 	Bridge  func(context.Context, uint32) (uint32, error)
 	// Exact source directories supplied by the trusted snapshot supervisor.
 	PolicyRoots []string
+	RunContext  *RunContext
 }
 
 func (s *Proxy) Setup(ctx context.Context, req *p.PolicySetupRequest) (*p.PolicySetupResponse, error) {
@@ -44,6 +45,14 @@ func (s *Proxy) Setup(ctx context.Context, req *p.PolicySetupRequest) (*p.Policy
 		}
 	}
 	copied := pb.Clone(req).(*p.PolicySetupRequest)
+	if s.RunContext != nil {
+		if err := s.RunContext.validate(); err != nil {
+			return fail("invalid trusted run context")
+		}
+		// Only this private supervisor-owned identity may supply local-backend
+		// credentials. Do not mutate the original request or its sanitized hash.
+		copied.Entitlement = &p.PolicySetupRequest_Entitlement{Host: s.RunContext.Host, Org: s.RunContext.Organization, Token: s.RunContext.Token}
+	}
 	copied.CallbackService, err = s.Bridge(ctx, req.CallbackService)
 	if err != nil {
 		return fail("callback bridge failed")

@@ -3,9 +3,24 @@ import {
   workspacePolicyPlanningError,
   captureWorkspacePolicyEvaluation,
   completeWorkspacePolicyEvaluation,
+  loadWorkspacePolicySnapshot,
+  latestWorkspacePolicyEvaluation,
   policyFailureIsOverridable,
   type WorkspacePolicySnapshot,
+  type WorkspacePolicyEvaluation,
 } from "./lib/workspace-policy-gate";
+import {
+  prepareNativeRun,
+  runNativeStage,
+  nativePlanBytes,
+  nativePlanJson,
+  nativeCheckpointState,
+  nativePolicyVerdict,
+  nativeApplyInput,
+  cleanupNativeRun,
+  type NativeRun,
+  type NativeLaunch,
+} from "./lib/tfpolicy-native";
 import { runConfigurationTrusted } from "./lib/run-trust";
 import { readConfinedSavedPlan, writeConfinedSavedPlan } from "./lib/saved-plan-files";
 import { integerSetting } from "./lib/runtime-config";
@@ -50,7 +65,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac } from "node:crypto";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
-import { mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
+import { mkdir, mkdtemp, rm, rmdir, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { resolveManagedOpaBinary } from "./lib/opa-bin";
@@ -283,6 +298,82 @@ export function runWorkDir(runId: string): string {
 }
 
 const LOCAL_BACKEND_OVERRIDE = 'terraform {\n  backend "local" {}\n}\n';
+const activeNativeRuns = new Map<string, NativeRun>();
+
+function launchNativeOwner(runId: string, phase: "plan" | "apply", cwd: string): NativeLaunch {
+  return async (args, cgroupRoot, controlDirectory, timeoutMs) => {
+    if (getRunCgroup(runId) !== cgroupRoot) throw new Error("Native owner must use the run's leased cgroup");
+    await writeFile(join(cgroupRoot, "cgroup.subtree_control"), "+pids +memory");
+    const launcher = join(cgroupRoot, `native-owner-${crypto.randomUUID()}`);
+    await mkdir(launcher, { mode: 0o700 });
+    try {
+      const child = spawnRunProcess(
+        runId,
+        args,
+        { cwd, env: { PATH: "/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe", cgroupOverride: launcher },
+        null,
+      );
+      const output = captureProcessOutput(child.stdout, child.stderr, controlDirectory, "native-owner");
+      const [code, captured] = await waitForTrackedProcess(runId, phase, child, output, timeoutMs);
+      return {
+        code,
+        stdout: await readCapturedJson(captured, "Native owner result"),
+        stderr: (await readFile(captured.stderr.path, "utf8")).slice(0, 16384),
+      };
+    } finally {
+      await rmdir(launcher).catch((error: unknown) => {
+        log.warn("Failed to remove native owner launcher cgroup", { runId, launcher, error });
+      });
+    }
+  };
+}
+
+async function runNativePlan(
+  runId: string,
+  native: NativeRun,
+  run: PlanRunFlags,
+  executionDir: string,
+  workRoot: string,
+  files: PlanExecutionContext,
+  timeoutMs: number,
+): Promise<Readonly<{ proceed: boolean; planHasChanges: boolean; resolvedBinaryPath: string }>> {
+  const group = getRunCgroup(runId);
+  if (group === null) throw new Error("Native policy execution requires a delegated run cgroup");
+  await db
+    .update(runs)
+    .set({ terraformVersion: "1.17.1" })
+    .where(runExecutionFenceCondition(runId, eq(runs.id, runId)));
+  const launch = launchNativeOwner(runId, "plan", executionDir);
+  const output = async (text: string): Promise<void> => {
+    if (text !== "") await writeLog(runId, "plan", text);
+  };
+  await writeLog(runId, "plan", "[terrence] Initializing the native policy runtime and Terraform configuration.");
+  await runNativeStage(db, native, "init", workRoot, executionDir, files.envVars, [], group, timeoutMs, launch, output);
+  if (await returnIfRunCanceled(runId))
+    return { proceed: false, planHasChanges: true, resolvedBinaryPath: native.profile.runtime.engine.path };
+  const args = buildPlanArgs(native.profile.runtime.engine.path, run, files.tfVarsLines, files.runTfVarsLines)
+    .slice(2)
+    .filter((arg) => !["-no-color", "-input=false", "-detailed-exitcode"].includes(arg) && !arg.startsWith("-out="));
+  await writeLog(runId, "plan", "[terrence] Planning with native policy enforcement.");
+  const result = await runNativeStage(
+    db,
+    native,
+    "plan",
+    workRoot,
+    executionDir,
+    files.envVars,
+    args,
+    group,
+    timeoutMs,
+    launch,
+    output,
+  );
+  return {
+    proceed: !(await returnIfRunCanceled(runId)),
+    planHasChanges: result.exitCode !== 0,
+    resolvedBinaryPath: native.profile.runtime.engine.path,
+  };
+}
 
 async function writeLocalBackendOverride(executionDir: string): Promise<void> {
   await writeFile(join(executionDir, "terrence_backend_override.tf"), LOCAL_BACKEND_OVERRIDE, { mode: 0o600 });
@@ -308,6 +399,7 @@ function savedPlanDirectory(runId: string): string {
 
 export async function cleanupSavedPlan(runId: string): Promise<void> {
   await rm(savedPlanDirectory(runId), { recursive: true, force: true });
+  await cleanupNativeRun(runId);
 }
 
 export async function cleanupRunWorkDir(runId: string): Promise<void> {
@@ -379,17 +471,20 @@ async function persistSavedPlan(
   state: Readonly<{ id: string | null; serial: number }>,
   configurationVersionId: string | null,
   simulated: boolean,
+  nativeEvaluationId?: string,
 ): Promise<SavedPlanMetadata> {
   const directory = savedPlanDirectory(runId);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPlan = join(directory, `.tfplan-${crypto.randomUUID()}`);
-  const bytes = await readConfinedSavedPlan(runWorkDir(runId), executionDir).catch((error: unknown): Buffer => {
-    if (isMissingFileError(error)) {
-      if (simulated) return Buffer.from("terrence-simulated-plan\n");
-      throw new Error("Terraform did not produce a saved plan file.");
-    }
-    throw error;
-  });
+  const bytes =
+    (await nativePlanBytes(runId, nativeEvaluationId)) ??
+    (await readConfinedSavedPlan(runWorkDir(runId), executionDir).catch((error: unknown): Buffer => {
+      if (isMissingFileError(error)) {
+        if (simulated) return Buffer.from("terrence-simulated-plan\n");
+        throw new Error("Terraform did not produce a saved plan file.");
+      }
+      throw error;
+    }));
   const metadata: SavedPlanMetadata = {
     sha256: createHash("sha256").update(bytes).digest("hex"),
     stateId: state.id,
@@ -632,12 +727,13 @@ function spawnRunProcess(
     stdout?: "pipe" | "ignore" | "inherit";
     stderr?: "pipe" | "ignore" | "inherit";
     extraRo?: readonly string[];
+    cgroupOverride?: string;
   },
   sandbox?: RunSandbox | null,
   requireExecutionLease = true,
 ): TrackedRunProcess {
   if (requireExecutionLease) assertLocalRunExecutionLease(runId);
-  const cgroup = activeRunCgroups.get(runId) ?? null;
+  const cgroup = options.cgroupOverride ?? activeRunCgroups.get(runId) ?? null;
   if (sandbox !== undefined && sandbox !== null) {
     const proc = sandbox.spawnGeneric(args, {
       cwd: options.cwd,
@@ -671,7 +767,9 @@ function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
   // group.
   const tracked = {
     pid: child.pid ?? null,
-    kill: child.kill,
+    kill: (signal?: string | number): void => {
+      child.kill(signal);
+    },
     exited: child.exited,
     stdout: child.stdout,
     stderr: child.stderr,
@@ -2716,6 +2814,59 @@ async function cleanupPlanWorkDir(runId: string): Promise<void> {
   }
 }
 
+function hostedNativeSelection(
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: typeof runs.$inferSelect,
+) {
+  return {
+    organization: org?.name ?? workspace.orgId,
+    tool: workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform",
+    version: run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest",
+  };
+}
+
+async function prepareHostedNativeRun(
+  runId: string,
+  workspace: typeof workspaces.$inferSelect,
+  org: typeof organizations.$inferSelect | undefined,
+  run: typeof runs.$inferSelect,
+  phase: "plan" | "apply",
+): Promise<NativeRun | null> {
+  const snapshot = await loadWorkspacePolicySnapshot(db, workspace);
+  if (!snapshot.sets.some((set) => set.kind === "tfpolicy")) return null;
+  if (snapshot.nativeInfo?.profileDigest == null) {
+    const error = await workspacePolicyPlanningError(db, workspace);
+    throw new Error(error ?? "Native policy runtime is unavailable");
+  }
+  if (run.operation === "action_only" || (run.invokeActionAddrs?.length ?? 0) > 0)
+    throw new Error("Native policy execution does not support action-only runs");
+  const evaluation =
+    phase === "plan"
+      ? await captureWorkspacePolicyEvaluation(db, workspace, runId)
+      : await nativeApplyEvaluation(runId, snapshot);
+  const selection = hostedNativeSelection(workspace, org, run);
+  const native = await prepareNativeRun(
+    evaluation,
+    runId,
+    workspace,
+    selection.organization,
+    selection.tool,
+    selection.version,
+  );
+  if (native !== null) activeNativeRuns.set(runId, native);
+  return native;
+}
+async function nativeApplyEvaluation(
+  runId: string,
+  snapshot: WorkspacePolicySnapshot,
+): Promise<{ id: string; snapshot: WorkspacePolicySnapshot }> {
+  const checkpoint = await latestWorkspacePolicyEvaluation(db, runId);
+  if (checkpoint === undefined || (await nativeCheckpointState(checkpoint)) === null)
+    throw new Error("Native plan admission is missing");
+  return { id: checkpoint.id, snapshot };
+}
+
 async function executeRunImpl(runId: string): Promise<void> {
   const scope = await loadPlanExecutionScope(runId);
   if (scope === null) return;
@@ -2738,7 +2889,8 @@ async function executeRunImpl(runId: string): Promise<void> {
   try {
     if (!(await runConfigurationTrusted(run)))
       throw new Error("Pull-request configuration lacks trusted repository admission");
-    const policyError = await workspacePolicyPlanningError(db, workspace);
+    const native = await prepareHostedNativeRun(runId, workspace, org, run, "plan");
+    const policyError = await workspacePolicyPlanningError(db, workspace, native !== null);
     if (policyError !== null) throw new Error(policyError);
     await preparePlanWorkspace(runId, workspace, org, run.configurationVersionId, workDir);
     if (!(await runPrePlanGate(runId, workspace, org, run.operation))) return;
@@ -2756,19 +2908,22 @@ async function executeRunImpl(runId: string): Promise<void> {
       run.terraformVersion,
     );
     const planTimeoutMs = await executionTimeoutMs("plan");
-    const plan = await runPlanBinaryOrSimulated(
-      runId,
-      run,
-      prepared.executionDir,
-      planFiles.envVars,
-      planFiles.tfVarsLines,
-      planFiles.runTfVarsLines,
-      planFiles.requestedTool,
-      planFiles.requestedVersion,
-      planFiles.hasTfFiles,
-      planFiles.isSimulatedAllowed,
-      planTimeoutMs,
-    );
+    const plan =
+      native !== null
+        ? await runNativePlan(runId, native, run, prepared.executionDir, workDir, planFiles, planTimeoutMs)
+        : await runPlanBinaryOrSimulated(
+            runId,
+            run,
+            prepared.executionDir,
+            planFiles.envVars,
+            planFiles.tfVarsLines,
+            planFiles.runTfVarsLines,
+            planFiles.requestedTool,
+            planFiles.requestedVersion,
+            planFiles.hasTfFiles,
+            planFiles.isSimulatedAllowed,
+            planTimeoutMs,
+          );
     if (!plan.proceed) return;
     await runPlanFinalizeStages(
       runId,
@@ -2787,6 +2942,7 @@ async function executeRunImpl(runId: string): Promise<void> {
   } catch (error: unknown) {
     await reportPlanFailure(run.status, runId, error);
   } finally {
+    activeNativeRuns.delete(runId);
     await cleanupPlanWorkDir(runId);
   }
 }
@@ -3040,7 +3196,7 @@ async function isApplySavedPlanRequired(run: typeof runs.$inferSelect, runId: st
   // configuration archive is extracted, because uploaded archives can
   // contain a stale client-side `tfplan` bookmark that must not shadow the
   // verified saved plan.
-  if (run.savePlan === true) return true;
+  if (run.savePlan === true || activeNativeRuns.has(runId)) return true;
   try {
     return (await readSavedPlanMetadata(runId)) !== undefined;
   } catch {
@@ -3597,11 +3753,19 @@ function createPlanPersister(
   plannedState: Readonly<{ id: string | null; serial: number }>,
   configurationVersionId: string | null,
   isSimulatedAllowed: boolean,
+  nativeEvaluationId?: string,
 ): () => Promise<void> {
   let durablePlan: SavedPlanMetadata | undefined;
   return async (): Promise<void> => {
     if (durablePlan !== undefined) return;
-    durablePlan = await persistSavedPlan(runId, executionDir, plannedState, configurationVersionId, isSimulatedAllowed);
+    durablePlan = await persistSavedPlan(
+      runId,
+      executionDir,
+      plannedState,
+      configurationVersionId,
+      isSimulatedAllowed,
+      nativeEvaluationId,
+    );
     await recordPlanInput(runId, plannedState, durablePlan);
   };
 }
@@ -3617,12 +3781,15 @@ async function finalizePlanOutput(
   resolvedBinaryPath: string | undefined,
   isSimulatedAllowed: boolean,
 ): Promise<{ planJson: JsonObject | undefined; persistPlanForLater: () => Promise<void> }> {
-  const planCapture = isSimulatedAllowed
-    ? undefined
-    : await readPlanJson(runId, executionDir, resolvedBinaryPath, planTimeoutMs, workDir);
-  const planJson = isSimulatedAllowed
-    ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
-    : planCapture?.planJson;
+  const native = activeNativeRuns.get(runId);
+  const nativeJson = native === undefined ? undefined : await nativePlanJson(runId, native.evaluation.id);
+  const planCapture =
+    isSimulatedAllowed || native !== undefined
+      ? undefined
+      : await readPlanJson(runId, executionDir, resolvedBinaryPath, planTimeoutMs, workDir);
+  const planJson =
+    nativeJson ??
+    (isSimulatedAllowed ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}") : planCapture?.planJson);
   if (planJson !== undefined) {
     if (planCapture === undefined) {
       await writePlanJsonArtifact(runId, planJson, undefined, executionArtifactPublicationFence(runId));
@@ -3667,6 +3834,7 @@ async function finalizePlanOutput(
     plannedState,
     configurationVersionId,
     isSimulatedAllowed,
+    native?.evaluation.id,
   );
   return { planJson, persistPlanForLater };
 }
@@ -3792,6 +3960,9 @@ async function runPostPlanDispatch(
   await updateRunStatus(runId, "post_plan_completed");
   if (await returnIfRunCanceled(runId)) return;
 
+  // Native apply always consumes the authenticated immutable plan, including auto-apply.
+  if (activeNativeRuns.has(runId)) await persistPlanForLater();
+
   // Terraform's detailed exit code includes output/import/move changes,
   // while observed drift alone does not imply there is anything to apply.
   if (run.operation === "action_only") {
@@ -3904,6 +4075,27 @@ async function runApplyInit(
   savedPlanRequired: boolean,
 ): Promise<boolean> {
   if (!savedPlanRequired) return true;
+  const native = activeNativeRuns.get(runId);
+  if (native !== undefined) {
+    const group = getRunCgroup(runId);
+    if (group === null) throw new Error("Native apply requires a delegated run cgroup");
+    await runNativeStage(
+      db,
+      native,
+      "init",
+      runWorkDir(runId),
+      executionDir,
+      envVars,
+      [],
+      group,
+      applyTimeoutMs,
+      launchNativeOwner(runId, "apply", executionDir),
+      async (text) => {
+        if (text !== "") await writeLog(runId, "apply", text);
+      },
+    );
+    return !(await runWasCanceled(runId));
+  }
   if (await runWasCanceled(runId)) return false;
   await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} init ---`);
   if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
@@ -4226,7 +4418,11 @@ async function prepareApplyExecutionContext(
   // directory `terraform apply` is about to see.
   const currentListing = await listApplyDirFiles(executionDir);
   const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
-  const resolved = await resolveApplyBinary(runId, requestedTool, requestedVersion, isSimulatedAllowed);
+  const native = activeNativeRuns.get(runId);
+  const resolved =
+    native === undefined
+      ? await resolveApplyBinary(runId, requestedTool, requestedVersion, isSimulatedAllowed)
+      : { tool: "terraform", version: "1.17.1", binaryPath: native.profile.runtime.engine.path };
 
   const preflight = await writeApplyPreflightDiagnostic(
     runId,
@@ -4284,6 +4480,57 @@ type ApplyProcessOutcome = Readonly<{
   error: unknown;
 }>;
 
+async function executeNativeApply(
+  runId: string,
+  native: NativeRun,
+  executionDir: string,
+  envVars: Record<string, string>,
+  applyTimeoutMs: number,
+): Promise<number> {
+  const group = getRunCgroup(runId);
+  if (group === null) throw new Error("Native apply requires a delegated run cgroup");
+  const input = await nativeApplyInput(db, native);
+  const result = await runNativeStage(
+    db,
+    native,
+    "apply",
+    runWorkDir(runId),
+    executionDir,
+    envVars,
+    [],
+    group,
+    applyTimeoutMs,
+    launchNativeOwner(runId, "apply", executionDir),
+    async (text) => {
+      if (text !== "") await writeLog(runId, "apply", text);
+    },
+    input,
+  ).catch(async (error: unknown): Promise<never> => {
+    await writeLog(
+      runId,
+      "apply",
+      "[terrence] Native policy execution failed after apply started. Infrastructure may already have changed. Terrence will attempt to capture actual state; no rollback occurred.",
+    ).catch((logError: unknown): void => {
+      logBestEffortFailure("Could not write native apply recovery warning", { runId }, logError);
+    });
+    throw error;
+  });
+  const applyExit = result.evidence.allows ? 0 : 1;
+  if (applyExit !== 0)
+    await writeLog(
+      runId,
+      "apply",
+      "[terrence] Native policy evaluation failed after apply. Actual state is retained; no rollback occurred.",
+    );
+  return applyExit;
+}
+
+async function streamApplyOutput(runId: string, proc: TrackedRunProcess | undefined): Promise<void> {
+  await Promise.all(
+    proc === undefined ? [] : [streamLog(runId, "apply", proc.stdout), streamLog(runId, "apply", proc.stderr)],
+  );
+}
+
 async function spawnAndWaitApply(
   runId: string,
   workspaceId: string,
@@ -4306,26 +4553,31 @@ async function spawnAndWaitApply(
   if (currentWorkspace === undefined) throw new Error("Apply blocked: workspace no longer exists");
   const policyError = await workspacePolicyExecutionError(db, currentWorkspace, runId);
   if (policyError !== null) throw new Error(policyError);
-  const applyProc = spawnRunProcess(
-    runId,
-    applyArgs,
-    {
-      cwd: executionDir,
-      env: envVars,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-    runSandbox,
-  );
+  const native = activeNativeRuns.get(runId);
+  const applyProc =
+    native === undefined
+      ? spawnRunProcess(
+          runId,
+          applyArgs,
+          {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+          runSandbox,
+        )
+      : undefined;
 
   progress.started = true;
-  const applyOutput = Promise.all([
-    streamLog(runId, "apply", applyProc.stdout),
-    streamLog(runId, "apply", applyProc.stderr),
-  ]);
+  const applyOutput = streamApplyOutput(runId, applyProc);
   let applyExit: number;
   try {
-    [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
+    if (native !== undefined) {
+      applyExit = await executeNativeApply(runId, native, executionDir, envVars, applyTimeoutMs);
+    } else if (applyProc !== undefined)
+      [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
+    else throw new Error("Apply process was not initialized");
   } catch (error: unknown) {
     // A timeout/output failure happens after the apply process started and may
     // therefore have changed real infrastructure. Once the process has been
@@ -4643,7 +4895,12 @@ async function executeApplyImpl(runId: string): Promise<void> {
   // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
   if (!(await enforceApplyExecutorPolicy(workspace, org, run, runId))) return;
 
-  if (!(await acquireApplyWorkspaceLock(workspace, run, runId))) return;
+  await prepareHostedNativeRun(runId, workspace, org, run, "apply");
+
+  if (!(await acquireApplyWorkspaceLock(workspace, run, runId))) {
+    activeNativeRuns.delete(runId);
+    return;
+  }
   let workspaceRunLock = true;
 
   try {
@@ -4689,6 +4946,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       );
     }
   } finally {
+    activeNativeRuns.delete(runId);
     if (workspaceRunLock) {
       workspaceRunLock = false;
       await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
@@ -4899,13 +5157,14 @@ type PlanPolicySets = {
   unsupportedSets: Readonly<{ id: string; kind: string }>[];
 };
 
-function resolvePlanPolicySets(snapshot: WorkspacePolicySnapshot): PlanPolicySets | null {
+function resolvePlanPolicySets(snapshot: WorkspacePolicySnapshot, nativeComplete = false): PlanPolicySets | null {
   const allPolicies = snapshot.policies;
   const effectivePolicySets = snapshot.sets;
   const setParameters = snapshot.parameters;
   const allSetIds = effectivePolicySets.map((set) => set.id);
   const unsupportedSets = effectivePolicySets.filter(
-    (policySet): boolean => !["opa", "sentinel"].includes(policySet.kind),
+    (policySet): boolean =>
+      !["opa", "sentinel"].includes(policySet.kind) && !(nativeComplete && policySet.kind === "tfpolicy"),
   );
   if (allPolicies.length === 0 && unsupportedSets.length === 0) return null;
   const policySetsById = new Map(
@@ -5373,6 +5632,17 @@ async function persistPolicyCheckBatch(checkBatch: (typeof policyChecks.$inferIn
   if (checkBatch.length > 0) await db.insert(policyChecks).values(checkBatch);
 }
 
+async function runPolicyEvaluation(
+  runId: string,
+  workspace: Readonly<{ id: string; orgId: string }>,
+): Promise<WorkspacePolicyEvaluation> {
+  const native = activeNativeRuns.get(runId);
+  // The policy engine adapters build mutable parameter buckets from this copy.
+  return native === undefined
+    ? captureWorkspacePolicyEvaluation(db, workspace, runId)
+    : (structuredClone(native.evaluation) as WorkspacePolicyEvaluation);
+}
+
 export async function runPolicyChecks(
   runId: string,
   workspaceId: string,
@@ -5382,16 +5652,21 @@ export async function runPolicyChecks(
   preloadedPlanJson?: JsonObject,
 ): Promise<{ proceed: boolean; hardFailed: boolean; softFailed: boolean }> {
   const workspace = { id: workspaceId, orgId };
-  const evaluation = await captureWorkspacePolicyEvaluation(db, workspace, runId);
+  const evaluation = await runPolicyEvaluation(runId, workspace);
+  const native = await nativePolicyVerdict(db, runId, evaluation);
   const complete = async (): Promise<boolean> =>
     completeWorkspacePolicyEvaluation(db, workspace, {
       id: evaluation.id,
       fingerprint: evaluation.snapshot.fingerprint,
     });
-  const resolved = resolvePlanPolicySets(evaluation.snapshot);
+  const resolved = resolvePlanPolicySets(evaluation.snapshot, native.valid);
   if (resolved === null) {
     const unchanged = await complete();
-    return { proceed: unchanged, hardFailed: !unchanged, softFailed: false };
+    return {
+      proceed: unchanged && !native.hardFailed && !native.softFailed,
+      hardFailed: !unchanged || native.hardFailed,
+      softFailed: native.softFailed,
+    };
   }
   const { allPolicies, policySetsById, parametersBySet, allSetIds } = resolved;
   // A version-managed policy set may have no individual Policy rows. Never
@@ -5423,8 +5698,8 @@ export async function runPolicyChecks(
     planTimeoutMs,
   );
 
-  let hardFailed = false;
-  let softFailed = false;
+  let hardFailed = native.hardFailed;
+  let softFailed = native.softFailed;
   const checkBatch: (typeof policyChecks.$inferInsert)[] = [];
 
   if (planJsonPayload === null || planJsonPayload === "") {
@@ -7645,8 +7920,8 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
       return null;
     }
   };
-  const pruneSavedPlans = async (): Promise<void> => {
-    const root = join(storageDir, "saved-plans");
+  const pruneSavedPlans = async (kind: "saved-plans" | "native-policy"): Promise<void> => {
+    const root = join(storageDir, kind);
     const entries = await readCleanupEntries(root, "Could not scan saved-plan cleanup directory");
     if (entries === null) return;
     await Promise.all(
@@ -7658,7 +7933,7 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
             if ((await stat(path)).mtimeMs >= cutoff) return;
             const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
             if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
-            await rm(path, { recursive: true, force: true });
+            await cleanupSavedPlan(entry.name);
           } catch (error: unknown) {
             if (!isMissingFileError(error)) logBestEffortFailure("Could not prune saved plan", { path }, error);
           }
@@ -7694,7 +7969,8 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }),
     );
   }
-  await pruneSavedPlans();
+  await pruneSavedPlans("saved-plans");
+  await pruneSavedPlans("native-policy");
 }
 
 type InterruptedRunCandidate = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "statusTimestamps">;
