@@ -33,6 +33,7 @@ func TestEntitlementCAAcceptsPinnedPublicCertificatesOnly(t *testing.T) {
 		valid bool
 	}{
 		{"public", cert, true}, {"private key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("private")}), false},
+		{"leading-space hidden block", append([]byte("  -----BEGIN CERTIFICATE-----\nhidden non-PEM text\n"), cert...), false},
 		{"hidden prefix", append([]byte("private prefix\n"), cert...), false}, {"trailing data", append(append([]byte{}, cert...), []byte("private suffix")...), false}, {"empty", nil, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

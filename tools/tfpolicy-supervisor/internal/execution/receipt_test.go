@@ -59,3 +59,20 @@ func TestMandatoryDenialCannotBecomeSavedPlanAdmission(t *testing.T) {
 		t.Fatal("unverified stage signed")
 	}
 }
+
+func TestVerifiedApplyFailureKeepsReceiptWithoutGrantingPlanAdmission(t *testing.T) {
+	c, r := receiptFixture(t)
+	r.ExitCode = 1
+	r.Evidence.Allows = false
+	if _, err := sealPlan(c, r); err == nil {
+		t.Fatal("failed plan without policy disposition was signed")
+	}
+	c.Command = "apply"
+	receipt, err := sealPlan(c, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readReceipt(&receipt, c.ReceiptKey); err == nil {
+		t.Fatal("apply failure receipt authorized a saved plan")
+	}
+}

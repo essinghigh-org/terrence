@@ -25,6 +25,8 @@ import {
   appendAgentJobLog,
   authenticateAgent,
   claimAgentJob,
+  failAgentJobDelivery,
+  markAgentJobPayloadDelivered,
   completeAgentJob,
   findClaimedAgentJob,
   parseAgentFencingToken,
@@ -82,6 +84,10 @@ const AGENT_ARCHITECTURES = new Set(["amd64", "aarch64", "arm64", "386", "arm"])
 
 async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const { job, run } = claimed;
+  if (claimed.nativePolicy != null) {
+    await failAgentJobDelivery(job, "Native agent payload construction failed");
+    return;
+  }
   const queuedStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
   const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
   await db.transaction(async (transaction: unknown): Promise<void> => {
@@ -97,7 +103,8 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
     if (
       currentJob?.phase === "apply" &&
       typeof currentJob.result?.["nativePolicyEvaluationId"] === "string" &&
-      currentJob.result["policyApplyAdmissionToken"] === job.fencingToken
+      currentJob.result["policyApplyAdmissionToken"] === job.fencingToken &&
+      currentJob.result["payloadDeliveryToken"] === job.fencingToken
     ) {
       await t
         .update(agentJobs)
@@ -1126,6 +1133,7 @@ async function buildClaimedJobPayload(
       nativePolicy: claimed.nativePolicy != null,
     };
     const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
+    await markAgentJobPayloadDelivered(job);
     return payload;
   } catch (error: unknown) {
     try {

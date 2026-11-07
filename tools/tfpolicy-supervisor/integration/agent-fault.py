@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--command', choices=['plan', 'apply'], default='apply')
     parser.add_argument('--parent-pid', type=int)
     parser.add_argument('--parent-exe', type=Path)
+    parser.add_argument('--observe-cgroup', type=Path)
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     relative = '/' + str(root.relative_to('/sys/fs/cgroup'))
@@ -68,13 +69,22 @@ def main():
                                     raise RuntimeError('parent is not the pinned process in this test subtree')
                                 # A stopped RPC cannot complete naturally and hide a missing
                                 # parent-liveness check. The owner must cancel and reap it.
+                                observed = None
+                                if args.observe_cgroup is not None:
+                                    observed = args.observe_cgroup.resolve(strict=True)
+                                    observed.relative_to(root)
+                                    events = (observed/'cgroup.events').read_text()
+                                    member = Path(f'/proc/{pid}/cgroup').read_text().strip().split(':')[-1]
+                                    expected = '/' + str(observed.relative_to('/sys/fs/cgroup'))
+                                    if 'populated 1' not in events or not member.startswith(expected+'/'):
+                                        raise RuntimeError('native RPC is not in the observed populated run cgroup')
                                 signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
                                 signal.pidfd_send_signal(parent, signal.SIGKILL)
                             finally:
                                 os.close(parent)
                         else:
                             signal.pidfd_send_signal(descriptor, signal.SIGSTOP if args.mode == 'freeze' else signal.SIGKILL if args.mode == 'crash' else signal.SIGINT)
-                        print(json.dumps({'interrupted': True, 'pendingResourceRpc': True, 'command': args.command, 'mode': args.mode}))
+                        print(json.dumps({'interrupted': True, 'pendingResourceRpc': True, 'command': args.command, 'mode': args.mode, 'observedCgroup': str(observed) if args.mode == 'parent-death' and args.observe_cgroup is not None else None}))
                         return
                     except (ProcessLookupError, FileNotFoundError):
                         continue

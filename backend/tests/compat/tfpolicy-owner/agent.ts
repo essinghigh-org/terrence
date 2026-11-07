@@ -112,7 +112,14 @@ await db.insert(s.agentPoolTokens).values({
 await db.insert(s.adminTfpolicyVersions).values({
   id: `tfp-${crypto.randomUUID()}`,
   version: "0.5.0",
-  archs: [{ os: "linux", arch: "amd64", url: "https://example.invalid/operator.zip", sha: profile.catalogSha256 }],
+  archs: [
+    {
+      os: "linux",
+      arch: process.arch === "arm64" ? "arm64" : "amd64",
+      url: "https://example.invalid/operator.zip",
+      sha: profile.catalogSha256,
+    },
+  ],
 });
 ready = true;
 const rows: Record<string, unknown>[] = [];

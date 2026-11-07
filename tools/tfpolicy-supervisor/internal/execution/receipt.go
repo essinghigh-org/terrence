@@ -76,7 +76,7 @@ func sealPlan(c Config, r Result) (Receipt, error) {
 			}
 		}
 	}
-	if !p.Allows && len(p.Denials) == 0 {
+	if c.Command == "plan" && !p.Allows && len(p.Denials) == 0 {
 		return Receipt{}, errors.New("failed native plan has no overridable policy disposition")
 	}
 	sort.Slice(p.Denials, func(i, j int) bool {

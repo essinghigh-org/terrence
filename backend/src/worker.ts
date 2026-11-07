@@ -321,7 +321,9 @@ function launchNativeOwner(runId: string, phase: "plan" | "apply", cwd: string):
         stderr: (await readFile(captured.stderr.path, "utf8")).slice(0, 16384),
       };
     } finally {
-      await rmdir(launcher);
+      await rmdir(launcher).catch((error: unknown) => {
+        log.warn("Failed to remove native owner launcher cgroup", { runId, launcher, error });
+      });
     }
   };
 }
@@ -3194,7 +3196,7 @@ async function isApplySavedPlanRequired(run: typeof runs.$inferSelect, runId: st
   // configuration archive is extracted, because uploaded archives can
   // contain a stale client-side `tfplan` bookmark that must not shadow the
   // verified saved plan.
-  if (run.savePlan === true) return true;
+  if (run.savePlan === true || activeNativeRuns.has(runId)) return true;
   try {
     return (await readSavedPlanMetadata(runId)) !== undefined;
   } catch {
@@ -3957,6 +3959,9 @@ async function runPostPlanDispatch(
   }
   await updateRunStatus(runId, "post_plan_completed");
   if (await returnIfRunCanceled(runId)) return;
+
+  // Native apply always consumes the authenticated immutable plan, including auto-apply.
+  if (activeNativeRuns.has(runId)) await persistPlanForLater();
 
   // Terraform's detailed exit code includes output/import/move changes,
   // while observed drift alone does not imply there is anything to apply.

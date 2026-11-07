@@ -49,11 +49,19 @@ const profile = (await Bun.file(process.env["TERRENCE_TFPOLICY_RUNTIME_PROFILE"]
 await db.insert(s.adminTfpolicyVersions).values({
   id: `tfp-${crypto.randomUUID()}`,
   version: "0.5.0",
-  archs: [{ os: "linux", arch: "amd64", url: "https://example.invalid/operator.zip", sha: profile.catalogSha256 }],
+  archs: [
+    {
+      os: "linux",
+      arch: process.arch === "arm64" ? "arm64" : "amd64",
+      url: "https://example.invalid/operator.zip",
+      sha: profile.catalogSha256,
+    },
+  ],
 });
 const rows: Record<string, unknown>[] = [];
 const modes = [
   "allow",
+  "auto-apply",
   "deny",
   "override",
   "legacy",
@@ -189,7 +197,8 @@ try {
       configurationVersionId: cvId,
       status: "pending",
       terraformVersion: "1.17.1",
-      savePlan: true,
+      savePlan: mode !== "auto-apply",
+      autoApply: mode === "auto-apply",
       createdAt: Date.now(),
     });
     const planFault = mode.startsWith("plan-") ? await fault(mode) : undefined;
@@ -226,6 +235,17 @@ try {
       await noManagedState(workspaceId);
       if (checks.some((check) => check.result?.["native"] === true && check.status === "passed"))
         throw new Error("Failed hosted native stage produced passed admission");
+      await recordCase(mode, runId);
+      continue;
+    }
+    if (mode === "auto-apply") {
+      const state = await db.query.stateVersions.findFirst({ where: eq(s.stateVersions.workspaceId, workspaceId) });
+      if (
+        planned?.status !== "applied" ||
+        state === undefined ||
+        !checks.some((check) => check.result?.["native"] === true && check.status === "passed")
+      )
+        throw new Error(`Native auto-apply did not persist its authenticated plan and state: ${planned?.status}`);
       await recordCase(mode, runId);
       continue;
     }
@@ -322,6 +342,8 @@ try {
             String(child.pid),
             "--parent-exe",
             await realpath(process.execPath),
+            "--observe-cgroup",
+            join(process.env["TERRENCE_RUN_CGROUP_ROOT"] ?? fullProfile.cgroupRoot, runId),
           ],
           {
             stdout: Bun.file(join(root, mode, "fault.json")),
@@ -331,11 +353,16 @@ try {
         );
         await child.exited;
         if ((await killer.exited) !== 0) throw new Error("Worker death did not interrupt a stopped native RPC");
+        const observed = JSON.parse(await readFile(join(root, mode, "fault.json"), "utf8"));
+        const runCgroup = join(process.env["TERRENCE_RUN_CGROUP_ROOT"] ?? fullProfile.cgroupRoot, runId);
+        if (observed.observedCgroup !== runCgroup)
+          throw new Error("Worker death did not observe the populated run cgroup");
         let empty = false;
         for (let attempt = 0; attempt < 120; attempt++) {
-          const events = await readFile(join(fullProfile.cgroupRoot, runId, "cgroup.events"), "utf8").catch(
-            () => "populated 0",
-          );
+          const events = await readFile(join(runCgroup, "cgroup.events"), "utf8").catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return "populated 0";
+            throw error;
+          });
           if (events.includes("populated 0")) {
             empty = true;
             break;

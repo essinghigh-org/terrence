@@ -48,11 +48,21 @@ func (c *Certificate) validate() error {
 	}
 	count := 0
 	for len(bytes.TrimSpace(data)) > 0 {
-		if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("-----BEGIN CERTIFICATE-----")) {
+		data = bytes.TrimSpace(data)
+		if !bytes.HasPrefix(data, []byte("-----BEGIN CERTIFICATE-----")) {
 			return errors.New("entitlement CA must contain public certificates only")
 		}
-		block, rest := pem.Decode(data)
-		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+		// Decode only the first block: pem.Decode otherwise skips malformed text
+		// before a later valid certificate, even after trimming whitespace.
+		endMarker := []byte("-----END CERTIFICATE-----")
+		end := bytes.Index(data, endMarker)
+		if end < 0 || bytes.Contains(data[len("-----BEGIN CERTIFICATE-----"):end], []byte("-----BEGIN ")) {
+			return errors.New("entitlement CA must contain public certificates only")
+		}
+		end += len(endMarker)
+		block, remaining := pem.Decode(data[:end])
+		rest := data[end:]
+		if block == nil || len(bytes.TrimSpace(remaining)) != 0 || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
 			return errors.New("entitlement CA must contain public certificates only")
 		}
 		if _, e = x509.ParseCertificate(block.Bytes); e != nil {
