@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import ssl
@@ -278,6 +279,7 @@ def main():
     for key in ['owner', 'profile', 'plugin', 'output', 'repository']:
         parser.add_argument('--'+key, type=Path, required=True)
     parser.add_argument('--plugin-sha256', required=True)
+    parser.add_argument('--plugin-version', default='0.5.0', help='actual release version for catalog and policy selection')
     parser.add_argument('--cgroup-root', required=True)
     parser.add_argument('--hosted-worker', action='store_true', help='exercise production worker plan/apply and persisted policy gates')
     parser.add_argument('--agent-binary', type=Path, help='exercise production agent API and the specified terrence-agent executable')
@@ -285,6 +287,14 @@ def main():
     parser.add_argument('--plugin-archive', type=Path, help='original operator ZIP, required for hosted catalog identity')
     parser.add_argument('--cases', help='comma-separated subset of real-plugin acceptance cases')
     args = parser.parse_args()
+    if re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', args.plugin_version) is None:
+        raise RuntimeError('plugin version must identify an exact stable release')
+    # Resolve setup-bun's executable before clearing the caller's environment.
+    # The isolated API must not inherit CI tokens, proxy variables or credentials.
+    bun = shutil.which('bun')
+    if bun is None:
+        raise RuntimeError('Bun must be available on the caller PATH')
+    bun = str(Path(bun).resolve(strict=True))
     if os.getuid() == 0 or args.output.exists() or digest(args.plugin) != args.plugin_sha256:
         raise RuntimeError('non-root execution, new output and an independently pinned BYOB executable are required')
     args.output.mkdir(mode=0o700)
@@ -320,7 +330,7 @@ def main():
             raise RuntimeError('hosted acceptance requires the operator archive identity')
         with tempfile.TemporaryDirectory(prefix='tfpw-', dir='/tmp') as private:
             profile = {'schemaVersion': 1, 'owner': {'path': str(args.owner), 'sha256': digest(args.owner)},
-                       'runtime': runtime, 'pluginVersion': '0.5.0', 'catalogSha256': digest(args.plugin_archive),
+                       'runtime': runtime, 'pluginVersion': args.plugin_version, 'catalogSha256': digest(args.plugin_archive),
                        'cgroupRoot': args.cgroup_root, 'privateParent': private}
             path = api/'profile.json'
             private_json(path, profile)
@@ -329,7 +339,7 @@ def main():
                         'TERRENCE_RUN_CGROUP_ROOT': args.cgroup_root,
                         'TERRENCE_LANDLOCK_RUNNER': runtime['runner']['path']})
             script = 'agent.ts' if args.agent_binary is not None else 'worker.ts'
-            command = ['bun', str(args.repository/'backend/tests/compat/tfpolicy-owner'/script), str(api)]
+            command = [bun, str(args.repository/'backend/tests/compat/tfpolicy-owner'/script), str(api)]
             if args.agent_binary is not None:
                 if args.agent_runner is None:
                     raise RuntimeError('native agent acceptance requires its project sandbox helper')
@@ -337,14 +347,14 @@ def main():
             if (args.hosted_worker or args.agent_binary is not None) and args.cases:
                 command.append(args.cases)
             child = subprocess.run(command,
-                                   env=env, cwd=args.repository, timeout=240)
+                                   env=env, cwd=args.repository, timeout=600)
             if child.returncode != 0:
                 raise RuntimeError('hosted worker or native agent acceptance failed')
             summary = json.loads((api/'summary.json').read_text())
             private_json(args.output/'summary.json', summary)
             return
     log = (api/'server.log').open('wb')
-    server = subprocess.Popen(['bun', str(args.repository/'backend/tests/compat/tfpolicy-owner/entitlement-server.ts'), str(api)],
+    server = subprocess.Popen([bun, str(args.repository/'backend/tests/compat/tfpolicy-owner/entitlement-server.ts'), str(api)],
                               env=env, cwd=args.repository, stdout=log, stderr=subprocess.STDOUT)
     try:
         until = time.monotonic()+30

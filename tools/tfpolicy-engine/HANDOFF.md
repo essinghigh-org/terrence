@@ -63,6 +63,39 @@ Terraform's upstream BUSL-1.1 applies to the patched reference build. Preserve u
 
 ## Validation
 
+### Official-plugin CI
+
+The native qualification workflow now downloads the separately distributed official
+Linux amd64 tfpolicy-plugin for functional interoperability tests. The `pinned`
+lane uses 0.5.0 and its reviewed archive SHA-256; `latest` resolves the newest
+stable release from HashiCorp's index on every run. Both verify the detached
+SHA256SUMS signature against the pinned HashiCorp primary-key fingerprint before
+extracting the executable. Changed signing keys, unexpected archive contents,
+missing builds and checksum failures fail closed.
+
+Each lane keeps the existing fixture qualification and runs eight real-plugin
+hosted-worker cases: allow with saved apply, auto-apply, mandatory denial, approved
+override, post-apply plugin crash, cancellation, abrupt worker death, and forced
+cancellation. The failure cases check that all 200 actual local resources are
+retained. The tests use only built-in `terraform_data`, a temporary database and
+a private loopback TLS API, with no cloud/repository credentials passed to the
+harness. The actual plugin version is used in the runtime, catalog and policy set.
+
+The pinned lane fails the PR workflow on regressions. The latest lane is advisory
+on PRs, but failures fail scheduled weekly and manual runs. Schedules run only
+from the default branch after merge. Branch protection must explicitly require
+`Native tfpolicy (pinned)` if a required check is desired; this workflow does not
+change repository settings. Release provenance and synthetic case summaries are
+retained, never the proprietary binary/archive, private API/database, tokens,
+TLS keys or raw real-plugin output. A failed run identifies the first incomplete
+case without publishing plugin diagnostics.
+
+This is functional compatibility testing, not a performance benchmark or a grant
+of license rights. HashiCorp's EULA and evaluation terms accompany the official
+archive; review the terms applicable to your use. The download script preserves
+them locally and records their hashes. Neither the plugin nor compiled Terraform
+is redistributed with Terrence.
+
 ### Ownership review follow-up
 
 The additional review closes two agent delivery races: stale recovery reads the locked current lease rather than its scan snapshot, and native preparation merges metadata under that same lease lock so it cannot erase a concurrent payload-delivery marker. Completion and recovery acknowledgments also lock the current job. A cancellation racing missing state retains its canceled status and workspace hold; duplicate valid recovery acknowledgments persist state only once. Missing or malformed Terraform state is retained for diagnosis but never finalized or acknowledged as recovered.
@@ -90,7 +123,7 @@ The recipe's upstream/additional policy tests and full planfile package passed. 
 
 The same harness with `--hosted-worker --plugin-archive /absolute/operator.zip` invokes the production worker and persisted policy gates through `backend/tests/compat/tfpolicy-owner/worker.ts`. Fifteen real-plugin hosted cases passed: allow plan plus saved apply, mandatory deny, approved override, legacy-agent rejection, invalid Setup, missing plugin, unresolved required results, plan RPC crash/cancellation, apply RPC crash/cancellation, altered saved-plan bytes, a changed policy snapshot before apply, abrupt worker death with a stopped plugin, and hard cancellation of a stopped plugin. The crash, graceful-cancel and hard-cancel cases persisted all 200 actual local resources and left the run errored with a no-rollback warning. The worker-death case first failed because the owner survived its parent; it now stops the owner and startup reconciliation captures all 200 resources for recovery. The allow/deny cases also rejected a changed snapshot and a forged passed check against a signed denial. State versions and native policy checks were persisted, including actual matched provider and nested-module results in the allow case. Tests use only built-in `terraform_data`, isolated local databases/state, a private loopback TLS endpoint and an owned bounded cgroup. Host settings remained unchanged and the test subtree was empty and removed.
 
-All harness modes require an already prepared non-root, zero-capability process and its own delegated cgroup. Supply `--owner`, `--profile` (the owner test profile with `runtime`), `--plugin`, `--plugin-sha256`, `--output` (a new private directory), `--repository` and `--cgroup-root`. They do not prepare host privileges or download the plugin. `--cases` selects a comma-separated subset of the standalone owner or hosted cases.
+All harness modes require an already prepared non-root, zero-capability process and its own delegated cgroup. Supply `--owner`, `--profile` (the owner test profile with `runtime`), `--plugin`, `--plugin-sha256`, `--plugin-version` (the actual release; defaults to 0.5.0 for older callers), `--output` (a new private directory), `--repository` and `--cgroup-root`. They do not prepare host privileges or download the plugin. `--cases` selects a comma-separated subset of the standalone owner or hosted cases. Bun must be on the caller's PATH; its absolute executable is resolved before the harness clears the inherited environment.
 
 The init admission regression is also covered at both production install hooks and the owner verifier: a known unapproved mandatory or mandatory-overridable denial blocks init even with a required unknown sibling. Pure unknowns remain deferrable at init; required unknowns are rejected during plan/apply regardless of a sibling's soft denial. The focused tests failed against the preceding implementation and pass after the fix. The original-protocol strict-owner matrix now includes the same mixed-init cases and a pure-unknown control. CI builds this patched reference engine and requires a non-skipped `TestNativeOwner` run with pinned fixture/runtime artifacts and zero capabilities. The stock-engine transport matrix remains a separate layer.
 

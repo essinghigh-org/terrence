@@ -111,7 +111,7 @@ await db.insert(s.agentPoolTokens).values({
 });
 await db.insert(s.adminTfpolicyVersions).values({
   id: `tfp-${crypto.randomUUID()}`,
-  version: "0.5.0",
+  version: profile.pluginVersion,
   archs: [
     {
       os: "linux",
@@ -310,7 +310,7 @@ try {
       .values({ id: cvId, workspaceId, status: "uploaded", archivePath: archives[0] });
     await db
       .insert(s.policySets)
-      .values({ id: setId, orgId, name: `agent-${mode}`, kind: "tfpolicy", policyToolVersion: "0.5.0" });
+      .values({ id: setId, orgId, name: `agent-${mode}`, kind: "tfpolicy", policyToolVersion: profile.pluginVersion });
     await db.insert(s.policySetWorkspaces).values({ id: `psw-${id}`, policySetId: setId, workspaceId });
     await db
       .insert(s.policySetVersions)
