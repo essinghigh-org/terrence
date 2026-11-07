@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "fs/promises";
+import { chmod, readdir, mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+
+async function thawTestDirectories(path: string): Promise<void> {
+  await chmod(path, 0o700);
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    if (entry.isDirectory()) await thawTestDirectories(join(path, entry.name));
+  }
+}
 
 async function runAgentApiScript(script: string): Promise<Record<string, unknown>> {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-agent-api-"));
@@ -26,6 +33,7 @@ async function runAgentApiScript(script: string): Promise<Record<string, unknown
     if (exitCode !== 0) throw new Error(stderr || stdout);
     return JSON.parse(stdout.trim().split("\n").at(-1)!) as Record<string, unknown>;
   } finally {
+    await thawTestDirectories(testDir);
     await rm(testDir, { recursive: true, force: true });
   }
 }
@@ -609,3 +617,77 @@ test("modern agent protocol: errored completion and apply job payload", async ()
   expect(result["jobStatusAfterError"]).toBe("errored");
   expect(result["jobError"]).toContain("failed running terraform plan");
 }, 30000);
+
+test("native agent artifacts require the owning lease and authenticate protected plan bytes", async () => {
+  const result = await runAgentApiScript(String.raw`
+    const { createHash, createHmac } = await import("node:crypto");
+    const { mkdir, writeFile, chmod } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { eq } = await import("drizzle-orm");
+    const root=process.env.TEST_DIR, base="https://native.example.test";
+    const digest=(value)=>createHash("sha256").update(value).digest("hex");
+    const profilePath=join(root,"native-profile.json"), source=join(root,"policy");
+    await mkdir(source); await writeFile(join(source,"proof.policy.hcl"),"# authenticated owner fixture\n");
+    const archive=join(root,"policy.tar.gz");
+    const tar=Bun.spawn(["tar","-czf",archive,"-C",source,"."],{stdout:"ignore",stderr:"pipe"});
+    if(await tar.exited!==0)throw new Error(await new Response(tar.stderr).text());
+    const pin={path:"/not-executed-on-control-plane",sha256:"b".repeat(64)};
+    await writeFile(profilePath,JSON.stringify({schemaVersion:1,owner:pin,runtime:{engine:pin,runner:pin,supervisor:pin,shim:pin,recorder:pin,plugin:pin,patchSha256:"c".repeat(64)},pluginVersion:"0.5.0",catalogSha256:"d".repeat(64),cgroupRoot:"/not-used-for-remote-execution",privateParent:"/tmp"}));
+    await chmod(profilePath,0o400);
+    process.env.PUBLIC_URL=base;process.env.TERRENCE_TFPOLICY_RUNTIME_PROFILE=profilePath;
+    const { app }=await import("./src/app.ts"), { db }=await import("./src/db/index.ts"), s=await import("./src/db/schema.ts");
+    const { hashAuthenticationToken }=await import("./src/lib/token-service.ts");
+    const { AGENT_PROTOCOL_CAPABILITIES }=await import("./src/lib/agent-protocol.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org",defaultTerraformVersion:"1.17.1"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agentPoolTokens).values({id:"token",agentPoolId:"pool",token:hashAuthenticationToken("agent-native-fixture")});
+    for(const id of ["agent","other"])await db.insert(s.agents).values({id,agentPoolId:"pool",name:id,status:"idle",lastPingAt:Date.now(),capabilities:[...AGENT_PROTOCOL_CAPABILITIES]});
+    await db.insert(s.workspaces).values({id:"ws",orgId:"org",name:"ws",executionMode:"agent",agentPoolId:"pool",iacBinary:"terraform",terraformVersion:"1.17.1"});
+    await db.insert(s.adminTfpolicyVersions).values({id:"tfp",version:"0.5.0",archs:[{os:"linux",arch:"amd64",url:"https://example.invalid/operator.zip",sha:"d".repeat(64)}]});
+    await db.insert(s.policySets).values({id:"set",orgId:"org",name:"native",kind:"tfpolicy",policyToolVersion:"0.5.0"});
+    await db.insert(s.policySetWorkspaces).values({id:"scope",policySetId:"set",workspaceId:"ws"});
+    await db.insert(s.policySetVersions).values({id:"version",policySetId:"set",status:"ready",archivePath:archive});
+    const headers={authorization:"Bearer agent-native-fixture","tfc-agent-id":"agent","content-type":"application/json"};
+    const call=(url,method="GET",body,extra=headers)=>app.handle(new Request(url.startsWith("https:")?url:base+url,{method,headers:extra,...(body===undefined?{}:{body:JSON.stringify(body)})}));
+    async function claim(runId,jobId){await db.insert(s.runs).values({id:runId,workspaceId:"ws",status:"plan_queued",savePlan:true,createdAt:Date.now()});await db.insert(s.agentJobs).values({id:jobId,runId,agentPoolId:"pool",phase:"plan",status:"queued",createdAt:Date.now()});const response=await call("/api/agent/jobs");if(response.status!==200)throw new Error("Native claim failed");return response.json();}
+    const job=await claim("run","job"), manifestResponse=await call(job.data.native_policy_url), manifest=await manifestResponse.json();
+    const unsigned=(await call(job.data.native_policy_url,"GET",undefined,{})).status;
+    const wrongAgent=(await call(job.data.native_policy_url,"GET",undefined,{...headers,"tfc-agent-id":"other"})).status;
+    const stale=new URL(job.data.native_policy_url);stale.searchParams.set("fencing_token","999");
+    const oldLease=(await call(stale.toString())).status;
+    const plan=Buffer.from("protected owner plan bytes"), planJson=JSON.stringify({resource_changes:[{mode:"managed",change:{actions:["create"]}}]});
+    const nonce="a".repeat(64), audit=JSON.stringify({event:"start",nonce,roots:["/agent-policy"]})+"\n"+JSON.stringify({event:"result",policies:[{file:"/agent-policy/proof.policy.hcl",address:"resource_policy.proof",enforcement:"mandatory",result:"AllowResult"}]})+"\n",journal="authenticated RPC capture\n";
+    const payload={version:2,stage:"plan",executionId:"job:"+job.data.fencing_token+":plan",exitCode:2,runId:"run",workspaceId:"ws",evaluationId:manifest.evaluationId,policyFingerprint:manifest.policyFingerprint,nonce,planSha256:digest(plan),planJsonSha256:digest(planJson),runtimeSha256:manifest.runtimeSha256,policySnapshotSha256:manifest.sourceSha256,auditSha256:digest(audit),journalSha256:digest(journal),stdoutSha256:nonce,allows:true,denials:[],overrides:[]};
+    const sign=(value)=>{const bytes=Buffer.from(JSON.stringify(value));return {payload:bytes.toString("base64url"),mac:createHmac("sha256",Buffer.from(manifest.receiptKey,"hex")).update(bytes).digest("hex")};};
+    const artifact={receipt:sign(payload),audit,journal,planJson,plan:plan.toString("base64")};
+    const invalid=[{...artifact,planJson:"{}"},{...artifact,plan:Buffer.from("another plan").toString("base64")},{...artifact,receipt:{...artifact.receipt,mac:"0".repeat(64)}}];
+    for(const [key,value]of [["executionId","other-job:99:plan"],["runtimeSha256","0".repeat(64)],["policySnapshotSha256","0".repeat(64)],["stage","apply"]])invalid.push({...artifact,receipt:sign({...payload,[key]:value})});
+    const rejected=[];for(const value of invalid)rejected.push((await call(job.data.native_result_url,"PUT",value)).status);
+    invalid.push({...artifact,receipt:sign({...payload,allows:false,exitCode:1,denials:[]})});
+    rejected.push((await call(job.data.native_result_url,"PUT",invalid.at(-1))).status);
+    const stored=(await call(job.data.native_result_url,"PUT",artifact)).status;
+    await call(job.data.json_plan_url,"PUT",{resource_changes:[]});
+    const completion={status:"idle",job:{status:"finished",data:{run_id:"run",operation:"plan",fencing_token:job.data.fencing_token,resource_additions:999}}};
+    const completed=(await call("/api/agent/status","PUT",completion)).status;
+    const replay=(await call(job.data.native_result_url,"PUT",artifact)).status;
+    const run=await db.query.runs.findFirst({where:eq(s.runs.id,"run")});
+    const missing=await claim("missing","missing-job");
+    const missingCompletion=(await call("/api/agent/status","PUT",{status:"idle",job:{status:"finished",data:{run_id:"missing",operation:"plan",fencing_token:missing.data.fencing_token}}})).status;
+    const refused=await db.query.runs.findFirst({where:eq(s.runs.id,"missing")});
+    console.log(JSON.stringify({manifest:manifestResponse.status,unsigned,wrongAgent,oldLease,rejected,stored,completed,replay,status:run.status,additions:run.planResourceAdditions,missingCompletion,missingStatus:refused.status}));
+  `);
+  expect(result).toEqual({
+    manifest: 200,
+    unsigned: 401,
+    wrongAgent: 401,
+    oldLease: 401,
+    rejected: Array(8).fill(422),
+    stored: 200,
+    completed: 200,
+    replay: 401,
+    status: "planned_and_saved",
+    additions: 1,
+    missingCompletion: 200,
+    missingStatus: "errored",
+  });
+}, 30_000);

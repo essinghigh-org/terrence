@@ -1,5 +1,5 @@
 import { integrationSetting } from "../lib/runtime-config";
-import { CLIENT_ENCRYPTED_STATE_ERROR, isClientEncryptedState } from "../lib/validation";
+import { CLIENT_ENCRYPTED_STATE_ERROR, isClientEncryptedState, decryptStatePayload } from "../lib/validation";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { tokenHashCandidates } from "../lib/token-service";
@@ -52,7 +52,7 @@ import {
 } from "../lib/agent-api";
 import { persistUploadBody } from "../lib/upload-body";
 import { log } from "../lib/log";
-import { validSignedApiURL } from "../lib/utils";
+import { validSignedApiURL, type DeepReadonly } from "../lib/utils";
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveExternalUrl } from "../lib/url-safety";
 import { isAgentPoolTokenActive } from "../lib/agent-token";
@@ -63,7 +63,11 @@ import {
   negotiateAgentProtocol,
   parseAgentProtocolOffer,
   serializeAgentCapabilities,
+  NATIVE_AGENT_CAPABILITY,
+  agentSupportsCapability,
 } from "../lib/agent-protocol";
+
+import { nativeAgentManifest, storeNativeAgentCandidate, revokeNativeAgentToken } from "../lib/agent-native-policy";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -82,6 +86,35 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
   await db.transaction(async (transaction: unknown): Promise<void> => {
     const t = transaction as typeof db;
+    const currentJob = await t.query.agentJobs.findFirst({
+      where: and(
+        eq(agentJobs.id, job.id),
+        owner,
+        eq(agentJobs.fencingToken, job.fencingToken),
+        eq(agentJobs.status, "claimed"),
+      ),
+    });
+    if (
+      currentJob?.phase === "apply" &&
+      typeof currentJob.result?.["nativePolicyEvaluationId"] === "string" &&
+      currentJob.result["policyApplyAdmissionToken"] === job.fencingToken
+    ) {
+      await t
+        .update(agentJobs)
+        .set({
+          status: "errored",
+          completedAt: Date.now(),
+          errorMessage: "Native delivery failed after apply admission; state recovery is required",
+          result: { ...currentJob.result, nativeRecoveryRequired: true },
+        })
+        .where(eq(agentJobs.id, job.id));
+      await t
+        .update(runs)
+        .set({ status: "errored" })
+        .where(and(eq(runs.id, run.id), eq(runs.status, "applying")));
+      await t.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, run.id));
+      return;
+    }
     const released = await t
       .update(agentJobs)
       .set({
@@ -364,6 +397,36 @@ async function claimedJobForArtifact(ctx: AgentCtx, jobId: string): Promise<Clai
   }
 
   return claimedSignedJob(ctx, jobId, fencingToken);
+}
+
+async function nativeLeaseCurrent(details: DeepReadonly<ClaimedAgentJob>): Promise<boolean> {
+  const job = await db.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.id, details.job.id),
+      eq(agentJobs.agentId, details.job.agentId ?? ""),
+      eq(agentJobs.fencingToken, details.job.fencingToken),
+      eq(agentJobs.status, "claimed"),
+    ),
+    columns: { id: true },
+  });
+  const run = await db.query.runs.findFirst({
+    where: and(
+      eq(runs.id, details.run.id),
+      eq(runs.agentId, details.job.agentId ?? ""),
+      eq(runs.status, details.job.phase === "plan" ? "planning" : "applying"),
+    ),
+    columns: { id: true },
+  });
+  return job !== undefined && run !== undefined;
+}
+
+async function claimedNativeJob(ctx: AgentCtx): Promise<ClaimedAgentJob | undefined> {
+  const agent = await agentFromRequest(ctx);
+  if (agent === undefined || !agentSupportsCapability(agent, NATIVE_AGENT_CAPABILITY)) return undefined;
+  const fencingToken = requestedFencingToken(ctx);
+  if (fencingToken === undefined) return undefined;
+  const job = await findClaimedAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
+  return job?.nativePolicy == null ? undefined : job;
 }
 
 async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
@@ -668,15 +731,20 @@ async function findStatusAgentJob(
   fencingToken: number | undefined,
 ): Promise<typeof agentJobs.$inferSelect | undefined> {
   if (fencingToken === undefined) return undefined;
-  return db.query.agentJobs.findFirst({
+  const job = await db.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.runId, runId),
       eq(agentJobs.phase, phase),
       eq(agentJobs.agentId, agentId),
       eq(agentJobs.fencingToken, fencingToken),
-      inArray(agentJobs.status, ["claimed", "canceled"]),
+      inArray(agentJobs.status, ["claimed", "canceled", "errored", "completed"]),
     ),
   });
+  return job !== undefined &&
+    ["errored", "completed"].includes(job.status) &&
+    typeof job.result?.["nativePolicyEvaluationId"] !== "string"
+    ? undefined
+    : job;
 }
 
 async function completeStatusAgentJob(
@@ -698,6 +766,13 @@ async function completeStatusAgentJob(
     "resource_imports",
     "action_failures",
     "action_invocations",
+    "state_recovered",
+    "state_recovery_required",
+    "state_recovery_error",
+    "apply_error",
+    "lifecycle",
+    "state_digest",
+    "state_bytes",
   ]);
   const statePayload = jsonStringOrNull(jobData?.["state"]);
   const jsonState = jsonStringOrNull(jobData?.["json_state"]);
@@ -1027,7 +1102,10 @@ async function buildClaimedJobPayload(
     if (org === undefined) throw new Error("organization not found");
     const baseUrl = agentApiBaseUrl(request);
     const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
-    const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
+    const terraformInfo =
+      claimed.nativePolicy == null
+        ? await terraformReleaseInfo(version, agent.architecture ?? "amd64")
+        : { version: "1.17.1", url: "", checksum: "" };
     if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
     const environment = await agentEnvironment(
       workspace.id,
@@ -1039,7 +1117,14 @@ async function buildClaimedJobPayload(
     // Mint the run token only after all fallible lookups/resolution work has
     // succeeded, so a failed payload build cannot accumulate valid tokens.
     const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
-    const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
+    const details: AgentJobDetails = {
+      job,
+      run,
+      workspace,
+      organizationName: org.name,
+      configuration,
+      nativePolicy: claimed.nativePolicy != null,
+    };
     const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
     return payload;
   } catch (error: unknown) {
@@ -1382,6 +1467,51 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         ? undefined
         : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
     return serveStackConfigArchive(claimed, stackJobConfigArchivePath(claimed), agent === undefined, set);
+  })
+
+  .get("/api/agent/jobs/:job_id/native-policy", async (ctx: AgentCtx): Promise<unknown> => {
+    const details = await claimedNativeJob(ctx);
+    if (details?.nativePolicy == null) {
+      ctx.set.status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
+    ctx.set.headers = { "cache-control": "no-store" };
+    const manifest = await nativeAgentManifest(
+      db,
+      details.nativePolicy,
+      details.job,
+      details.inputState?.statePayload == null ? null : decryptStatePayload(details.inputState.statePayload),
+    );
+    if (!(await nativeLeaseCurrent(details))) {
+      await revokeNativeAgentToken(details.nativePolicy, details.job);
+      return fencingConflict(ctx.set as { status?: number });
+    }
+    return manifest;
+  })
+  .put("/api/agent/jobs/:job_id/native-result", async (ctx: AgentCtx): Promise<unknown> => {
+    const details = await claimedNativeJob(ctx);
+    if (details?.nativePolicy == null) {
+      ctx.set.status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
+    try {
+      const value = await jsonBodyValue(ctx);
+      if (value === undefined) throw new Error("Invalid native agent artifact");
+      await storeNativeAgentCandidate(
+        details.nativePolicy,
+        details.job,
+        value,
+        async () =>
+          (await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken)) !==
+          undefined,
+      );
+      return {};
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === "stale-agent-lease")
+        return fencingConflict(ctx.set as { status?: number });
+      ctx.set.status = 422;
+      return { errors: [{ status: "422", title: "Invalid native execution evidence" }] };
+    }
   })
 
   // --- Artifact endpoints (agent-token + claimed-job scoped) ----------------

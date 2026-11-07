@@ -12,7 +12,10 @@ export const AGENT_PROTOCOL_PRODUCT = "terrence-agent";
 export const AGENT_PROTOCOL_VERSION = "1";
 export const AGENT_PROTOCOL_SUPPORTED_VERSIONS = [AGENT_PROTOCOL_VERSION] as const;
 
+export const NATIVE_AGENT_CAPABILITY = "operation.native-policy.v2";
+
 export const AGENT_PROTOCOL_CAPABILITIES = [
+  NATIVE_AGENT_CAPABILITY,
   "operation.plan",
   "operation.apply",
   "operation.policy",

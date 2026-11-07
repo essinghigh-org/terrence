@@ -33,8 +33,8 @@ type Profile = Readonly<{
   privateParent: string;
   digest: string;
 }>;
-type Receipt = Readonly<{ payload: string; mac: string }>;
-type NativePolicy = Readonly<{ file: string; address: string; enforcement: string; result: string }>;
+export type Receipt = Readonly<{ payload: string; mac: string }>;
+export type NativePolicy = Readonly<{ file: string; address: string; enforcement: string; result: string }>;
 type OwnerResult = Readonly<{
   schemaVersion: number;
   runId: string;
@@ -315,6 +315,13 @@ async function prepareSource(
   return root;
 }
 
+async function probeLocalRuntime(profile: Profile, local: boolean): Promise<void> {
+  if (!local) return;
+  if (runNetDenyEnabled())
+    throw new Error("Native policy entitlement networking is unavailable with the deny network profile");
+  await probeProfile(profile);
+}
+
 export async function prepareNativeRun(
   evaluation: DeepReadonly<WorkspacePolicyEvaluation>,
   runId: string,
@@ -322,18 +329,17 @@ export async function prepareNativeRun(
   organizationName: string,
   requestedTool: string,
   requestedVersion: string,
+  local = true,
 ): Promise<NativeRun | null> {
   const snapshot = evaluation.snapshot,
     native = snapshot.sets.filter((set) => set.kind === "tfpolicy");
   if (native.length === 0) return null;
   if (requestedTool !== "terraform" || !["latest", "1.17.1"].includes(requestedVersion))
     throw new Error("Native policy execution requires the configured strict Terraform 1.17.1 engine");
-  if (runNetDenyEnabled())
-    throw new Error("Native policy entitlement networking is unavailable with the deny network profile");
   const profile = await runtimeProfile();
   if (profile === null)
     throw new Error("tfpolicy runtime is not supported until TERRENCE_TFPOLICY_RUNTIME_PROFILE is configured");
-  await probeProfile(profile);
+  await probeLocalRuntime(profile, local);
   const catalog = snapshot.nativeInfo?.catalog.find((row) => row.version === profile.pluginVersion && row.enabled);
   const architecture = process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : process.arch;
   if (
@@ -356,19 +362,20 @@ export async function prepareNativeRun(
   return { runId, workspaceId: workspace.id, organizationName, evaluation, profile, roots, directory };
 }
 
-function runKey(runId: string, evaluationId: string): string {
+export function nativeRunKey(runId: string, evaluationId: string): string {
   return hashAuthenticationToken(`native-policy-receipt:v1:${runId}:${evaluationId}`);
 }
-function decodeReceipt(
+export function decodeNativeReceipt(
   receipt: Receipt,
   runId: string,
   workspaceId: string,
   evaluationId: string,
   fingerprint: string,
+  stage: "plan" | "apply" = "plan",
 ): Record<string, unknown> {
   const bytes = Buffer.from(receipt.payload, "base64url"),
     mac = Buffer.from(receipt.mac, "hex");
-  const expected = createHmac("sha256", Buffer.from(runKey(runId, evaluationId), "hex"))
+  const expected = createHmac("sha256", Buffer.from(nativeRunKey(runId, evaluationId), "hex"))
     .update(bytes)
     .digest();
   if (bytes.length > 512 * 1024 || mac.length !== expected.length || !timingSafeEqual(mac, expected))
@@ -376,12 +383,20 @@ function decodeReceipt(
   const payload = record(JSON.parse(bytes.toString("utf8")) as unknown);
   if (
     payload["version"] !== 2 ||
-    payload["stage"] !== "plan" ||
+    payload["stage"] !== stage ||
     payload["runId"] !== runId ||
     payload["workspaceId"] !== workspaceId ||
     payload["evaluationId"] !== evaluationId ||
     payload["policyFingerprint"] !== fingerprint ||
-    !digest(payload["planSha256"])
+    ![
+      "planSha256",
+      "planJsonSha256",
+      "runtimeSha256",
+      "policySnapshotSha256",
+      "auditSha256",
+      "journalSha256",
+      "nonce",
+    ].every((key) => digest(payload[key]))
   )
     throw new Error("Native plan admission is stale or belongs to another run");
   return payload;
@@ -471,7 +486,7 @@ export async function nativeAdmissionError(
     const state = await nativeCheckpointState(checkpoint);
     if (state === null || snapshot.nativeInfo?.profileDigest !== state.profileDigest)
       return "Native policy plan admission is missing or its runtime changed; create a new plan";
-    const payload = decodeReceipt(state.receipt, runId, workspace.id, checkpoint.id, snapshot.fingerprint);
+    const payload = decodeNativeReceipt(state.receipt, runId, workspace.id, checkpoint.id, snapshot.fingerprint);
     const checks = await database.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
     const selected = checks.filter(
       (check) => check.result?.["policyEvaluationId"] === checkpoint.id && check.result["native"] === true,
@@ -552,7 +567,7 @@ async function publishNativePlan(
   result: OwnerResult,
 ): Promise<void> {
   if (result.receipt === undefined) throw new Error("Native plan did not produce authenticated admission");
-  const receipt = decodeReceipt(
+  const receipt = decodeNativeReceipt(
     result.receipt,
     context.runId,
     context.workspaceId,
@@ -561,18 +576,28 @@ async function publishNativePlan(
   );
   const bytes = await boundedFile(join(result.directory, "tfplan"));
   if (sha(bytes) !== receipt["planSha256"]) throw new Error("Native saved plan changed before publication");
-  await writeFile(join(context.directory, "plan.enc"), await encryptSecret(bytes.toString("base64")), {
+  const json = (await boundedFile(join(result.directory, "plan.json"))).toString("utf8");
+  if (sha(json) !== receipt["planJsonSha256"]) throw new Error("Native plan JSON changed before publication");
+  await persistNativePlan(database, context, result.receipt, bytes.toString("base64"), json, result.evidence.policies);
+}
+
+export async function persistNativePlan(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  context: NativeRun,
+  receipt: Receipt,
+  planBase64: string,
+  planJson: string,
+  policies: readonly NativePolicy[],
+): Promise<void> {
+  await writeFile(join(context.directory, "plan.enc"), await encryptSecret(planBase64), {
     mode: 0o600,
   });
-  await writeFile(
-    join(context.directory, "plan-json.enc"),
-    await encryptSecret((await boundedFile(join(result.directory, "plan.json"))).toString("utf8")),
-    { mode: 0o600 },
-  );
+  await writeFile(join(context.directory, "plan-json.enc"), await encryptSecret(planJson), { mode: 0o600 });
   const state: NativeState = {
     profileDigest: context.profile.digest,
     roots: context.roots,
-    receipt: result.receipt,
+    receipt,
   };
   const checkpoint = await database.query.policyChecks.findFirst({
     where: eq(policyChecks.id, context.evaluation.id),
@@ -584,9 +609,9 @@ async function publishNativePlan(
     .where(eq(policyChecks.id, context.evaluation.id));
   for (const [index, set] of context.evaluation.snapshot.sets.filter((item) => item.kind === "tfpolicy").entries()) {
     const root = context.roots[index] ?? "",
-      policies = result.evidence.policies.filter((policy) => within(root, policy.file));
-    const hard = policies.some((policy) => policy.result === "DenyResult" && policy.enforcement === "mandatory"),
-      soft = policies.some(
+      selected = policies.filter((policy) => within(root, policy.file));
+    const hard = selected.some((policy) => policy.result === "DenyResult" && policy.enforcement === "mandatory"),
+      soft = selected.some(
         (policy) => policy.result === "DenyResult" && policy.enforcement === "mandatory_overridable",
       );
     await database.insert(policyChecks).values({
@@ -597,7 +622,7 @@ async function publishNativePlan(
       result: {
         native: true,
         policyEvaluationId: context.evaluation.id,
-        nativePolicies: policies.map((policy) => ({ ...policy, file: relative(root, policy.file) })),
+        nativePolicies: selected.map((policy) => ({ ...policy, file: relative(root, policy.file) })),
         nativeEnforcement: hard ? "mandatory" : soft ? "mandatory_overridable" : "advisory",
       },
       createdAt: Date.now(),
@@ -639,7 +664,7 @@ export async function runNativeStage(
       workspaceId: context.workspaceId,
       evaluationId: context.evaluation.id,
       policyFingerprint: context.evaluation.snapshot.fingerprint,
-      receiptKey: runKey(context.runId, context.evaluation.id),
+      receiptKey: nativeRunKey(context.runId, context.evaluation.id),
       command,
       workRoot,
       workDirectory: cwd,
@@ -703,13 +728,15 @@ export async function nativePolicyVerdict(
   const state = await nativeCheckpointState(checkpoint);
   if (state === null) return { valid: false, hardFailed: true, softFailed: false };
   try {
-    decodeReceipt(
+    const receipt = decodeNativeReceipt(
       state.receipt,
       runId,
       (await database.query.runs.findFirst({ where: eq(runs.id, runId) }))?.workspaceId ?? "",
       evaluation.id,
       evaluation.snapshot.fingerprint,
     );
+    if (receipt["allows"] === false && (!Array.isArray(receipt["denials"]) || receipt["denials"].length === 0))
+      return { valid: false, hardFailed: true, softFailed: false };
   } catch {
     return { valid: false, hardFailed: true, softFailed: false };
   }
@@ -724,6 +751,7 @@ export async function nativeApplyInput(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
   database: Database,
   context: NativeRun,
+  source: "saved-plan" | "native-artifact" = "saved-plan",
 ): Promise<
   Readonly<{ bytes: Buffer; receipt: Receipt; overrides: readonly Readonly<{ file: string; address: string }>[] }>
 > {
@@ -735,18 +763,28 @@ export async function nativeApplyInput(
     JSON.stringify(state.roots) !== JSON.stringify(context.roots)
   )
     throw new Error("Native plan source or runtime changed after admission");
-  const payload = decodeReceipt(
+  const payload = decodeNativeReceipt(
     state.receipt,
     context.runId,
     context.workspaceId,
     context.evaluation.id,
     context.evaluation.snapshot.fingerprint,
   );
-  const stored = await boundedFile(
-    join(storageDir, "saved-plans", resourcePath(context.runId), "tfplan"),
-    64 * 1024 * 1024,
-  );
-  const bytes = Buffer.from(await decryptSecret(stored.toString("utf8")), "base64");
+  const bytes =
+    source === "native-artifact"
+      ? await nativePlanBytes(context.runId, context.evaluation.id)
+      : Buffer.from(
+          await decryptSecret(
+            (
+              await boundedFile(
+                join(storageDir, "saved-plans", resourcePath(context.runId), "tfplan"),
+                64 * 1024 * 1024,
+              )
+            ).toString("utf8"),
+          ),
+          "base64",
+        );
+  if (bytes === null) throw new Error("Native saved plan is missing");
   if (sha(bytes) !== payload["planSha256"])
     throw new Error("Native saved plan does not match its authenticated admission");
   const checks = await database.query.policyChecks.findMany({ where: eq(policyChecks.runId, context.runId) });

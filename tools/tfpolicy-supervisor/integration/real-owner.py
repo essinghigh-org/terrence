@@ -280,6 +280,8 @@ def main():
     parser.add_argument('--plugin-sha256', required=True)
     parser.add_argument('--cgroup-root', required=True)
     parser.add_argument('--hosted-worker', action='store_true', help='exercise production worker plan/apply and persisted policy gates')
+    parser.add_argument('--agent-binary', type=Path, help='exercise production agent API and the specified terrence-agent executable')
+    parser.add_argument('--agent-runner', type=Path, help='the agent project sandbox helper, required with --agent-binary')
     parser.add_argument('--plugin-archive', type=Path, help='original operator ZIP, required for hosted catalog identity')
     parser.add_argument('--cases', help='comma-separated subset of real-plugin acceptance cases')
     args = parser.parse_args()
@@ -289,18 +291,31 @@ def main():
     api = args.output/'api'
     api.mkdir(mode=0o700)
     subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-                    '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+                    '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,DNS:localhost.localdomain,IP:127.0.0.1',
                     '-addext', 'basicConstraints=critical,CA:TRUE', '-keyout', str(api/'server.key'),
                     '-out', str(api/'server.crt')], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     (api/'server.key').chmod(0o600)
     (api/'server.crt').chmod(0o400)
+    trust = api/'server.crt'
+    if args.agent_binary is not None:
+        # Rustls requires a leaf server certificate, not a CA used as a leaf.
+        (api/'ca.crt').write_bytes((api/'server.crt').read_bytes())
+        (api/'ca.crt').chmod(0o400)
+        (api/'ca.key').write_bytes((api/'server.key').read_bytes())
+        (api/'ca.key').chmod(0o600)
+        (api/'server.crt').unlink()
+        (api/'leaf.conf').write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,DNS:localhost.localdomain,IP:127.0.0.1\n')
+        subprocess.run(['openssl', 'req', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=localhost.localdomain', '-keyout', str(api/'server.key'), '-out', str(api/'server.csr')], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['openssl', 'x509', '-req', '-in', str(api/'server.csr'), '-CA', str(api/'ca.crt'), '-CAkey', str(api/'ca.key'), '-CAcreateserial', '-days', '1', '-extfile', str(api/'leaf.conf'), '-out', str(api/'server.crt')], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        (api/'server.crt').chmod(0o400)
+        trust = api/'ca.crt'
     runtime = json.loads(args.profile.read_text())['runtime']
     runtime['plugin'] = {'path': str(args.plugin), 'sha256': args.plugin_sha256}
-    runtime['entitlementCA'] = {'path': str(api/'server.crt'), 'sha256': digest(api/'server.crt')}
+    runtime['entitlementCA'] = {'path': str(trust), 'sha256': digest(trust)}
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(api), 'DATABASE_URL': 'file:'+str(api/'test.db'),
            'STORAGE_DIR': str(api/'storage'), 'NODE_ENV': 'test', 'TERRENCE_DISABLE_WORKER': '1',
-           'TERRENCE_ALLOWED_HOSTS': 'localhost,127.0.0.1'}
-    if args.hosted_worker:
+           'TERRENCE_ALLOWED_HOSTS': 'localhost,localhost.localdomain,127.0.0.1'}
+    if args.hosted_worker or args.agent_binary is not None:
         if args.plugin_archive is None:
             raise RuntimeError('hosted acceptance requires the operator archive identity')
         with tempfile.TemporaryDirectory(prefix='tfpw-', dir='/tmp') as private:
@@ -313,10 +328,16 @@ def main():
             env.update({'TERRENCE_TFPOLICY_RUNTIME_PROFILE': str(path),
                         'TERRENCE_RUN_CGROUP_ROOT': args.cgroup_root,
                         'TERRENCE_LANDLOCK_RUNNER': runtime['runner']['path']})
-            child = subprocess.run(['bun', str(args.repository/'backend/tests/compat/tfpolicy-owner/worker.ts'), str(api)],
-                                   env=env, cwd=args.repository, timeout=110)
+            script = 'agent.ts' if args.agent_binary is not None else 'worker.ts'
+            command = ['bun', str(args.repository/'backend/tests/compat/tfpolicy-owner'/script), str(api)]
+            if args.agent_binary is not None:
+                if args.agent_runner is None:
+                    raise RuntimeError('native agent acceptance requires its project sandbox helper')
+                command += [str(args.agent_binary), str(args.agent_runner)]
+            child = subprocess.run(command,
+                                   env=env, cwd=args.repository, timeout=240 if args.agent_binary is not None else 110)
             if child.returncode != 0:
-                raise RuntimeError('hosted worker acceptance failed')
+                raise RuntimeError('hosted worker or native agent acceptance failed')
             summary = json.loads((api/'summary.json').read_text())
             private_json(args.output/'summary.json', summary)
             return

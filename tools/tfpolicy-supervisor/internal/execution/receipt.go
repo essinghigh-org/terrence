@@ -22,6 +22,8 @@ type Denial struct {
 	Enforcement string `json:"enforcement"`
 }
 type PlanReceipt struct {
+	ExecutionID          string     `json:"executionId,omitempty"`
+	ExitCode             int        `json:"exitCode"`
 	Version              int        `json:"version"`
 	Stage                string     `json:"stage"`
 	RunID                string     `json:"runId"`
@@ -29,6 +31,7 @@ type PlanReceipt struct {
 	EvaluationID         string     `json:"evaluationId"`
 	PolicyFingerprint    string     `json:"policyFingerprint"`
 	Nonce                string     `json:"nonce"`
+	PlanJSONSHA256       string     `json:"planJsonSha256"`
 	PlanSHA256           string     `json:"planSha256"`
 	RuntimeSHA256        string     `json:"runtimeSha256"`
 	PolicySnapshotSHA256 string     `json:"policySnapshotSha256"`
@@ -58,7 +61,7 @@ func sealPlan(c Config, r Result) (Receipt, error) {
 	if e != nil {
 		return Receipt{}, e
 	}
-	p := PlanReceipt{Version: 2, Stage: "plan", RunID: c.RunID, WorkspaceID: c.WorkspaceID, EvaluationID: c.EvaluationID, PolicyFingerprint: c.PolicyFingerprint, Nonce: r.Nonce, PlanSHA256: r.PlanSHA256, RuntimeSHA256: r.RuntimeSHA256, PolicySnapshotSHA256: r.PolicySnapshotSHA256, AuditSHA256: r.AuditSHA256, JournalSHA256: r.JournalSHA256, StdoutSHA256: r.StdoutSHA256, Allows: r.Evidence.Allows, Denials: []Denial{}, Overrides: approvals}
+	p := PlanReceipt{ExecutionID: c.ExecutionID, ExitCode: r.ExitCode, Version: 2, Stage: c.Command, PlanJSONSHA256: r.PlanJSONSHA256, RunID: c.RunID, WorkspaceID: c.WorkspaceID, EvaluationID: c.EvaluationID, PolicyFingerprint: c.PolicyFingerprint, Nonce: r.Nonce, PlanSHA256: r.PlanSHA256, RuntimeSHA256: r.RuntimeSHA256, PolicySnapshotSHA256: r.PolicySnapshotSHA256, AuditSHA256: r.AuditSHA256, JournalSHA256: r.JournalSHA256, StdoutSHA256: r.StdoutSHA256, Allows: r.Evidence.Allows, Denials: []Denial{}, Overrides: approvals}
 	seen := map[Denial]bool{}
 	for _, policy := range r.Evidence.Policies {
 		if policy.Result == "DenyResult" && policy.Enforcement != "advisory" {
@@ -113,7 +116,7 @@ func readReceipt(receipt *Receipt, keyText string) (PlanReceipt, error) {
 	if e != nil || !hmac.Equal(provided, mac.Sum(nil)) || strictJSON(data, &p) != nil || p.Version != 2 || p.Stage != "plan" {
 		return p, errors.New("invalid sealed native plan receipt")
 	}
-	for _, digest := range []string{p.PolicyFingerprint, p.Nonce, p.PlanSHA256, p.RuntimeSHA256, p.PolicySnapshotSHA256, p.AuditSHA256, p.JournalSHA256, p.StdoutSHA256} {
+	for _, digest := range []string{p.PolicyFingerprint, p.Nonce, p.PlanSHA256, p.RuntimeSHA256, p.PolicySnapshotSHA256, p.AuditSHA256, p.JournalSHA256, p.StdoutSHA256, p.PlanJSONSHA256} {
 		if !validDigest(digest) {
 			return PlanReceipt{}, errors.New("native receipt lacks required capture identities")
 		}

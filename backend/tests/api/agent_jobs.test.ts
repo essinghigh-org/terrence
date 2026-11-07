@@ -1650,3 +1650,73 @@ test("agent policy results fail closed while preserving advisory and authorized 
     }
   }
 }, 30_000);
+
+test("native apply lease loss holds the workspace until returned state is durably recovered", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs, completeAgentJob, isLiveRunLock } = await import("./src/lib/agent-jobs.ts");
+    const { decryptStatePayload } = await import("./src/lib/validation.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy",lastPingAt:1});
+    await db.insert(s.workspaces).values({id:"ws",orgId:"org",name:"ws",executionMode:"agent",agentPoolId:"pool",locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"});
+    await db.insert(s.runs).values({id:"run",workspaceId:"ws",agentId:"agent",status:"applying",createdAt:Date.now()});
+    await db.insert(s.agentJobs).values({id:"job",runId:"run",agentPoolId:"pool",agentId:"agent",phase:"apply",status:"claimed",fencingToken:7,claimedAt:1,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7}});
+    await recoverStaleAgentJobs(Date.now());
+    const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+    const run=await db.query.runs.findFirst({where:eq(s.runs.id,"run")});
+    const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+    const held=await isLiveRunLock(workspace);
+    const completion={status:"completed",errorMessage:null,resourceAdditions:1,resourceChanges:0,resourceDestructions:0,resourceImports:0,planJson:null,statePayload:null,jsonState:null,jsonStateOutputs:null,result:{}};
+    const missing=await completeAgentJob("agent","job",7,completion);
+    const wrong=await completeAgentJob("agent","job",8,{...completion,statePayload:'{"version":4,"serial":1,"lineage":"proof","resources":[]}'});
+    const payload='{"version":4,"serial":1,"lineage":"proof","resources":[]}';
+    const recovered=await completeAgentJob("agent","job",7,{...completion,statePayload:payload});
+    const replay=await completeAgentJob("agent","job",7,{...completion,statePayload:payload});
+    const states=await db.query.stateVersions.findMany({where:eq(s.stateVersions.workspaceId,"ws")});
+    const after=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+    console.log(JSON.stringify({jobStatus:job.status,runStatus:run.status,fence:job.fencingToken,recovery:job.result.nativeRecoveryRequired,held,locked:workspace.locked,missing:missing===undefined,wrong:wrong===undefined,recovered:recovered?.runStatus,replay:replay?.runStatus,states:states.length,payload:decryptStatePayload(states[0].statePayload),unlocked:!after.locked}));
+  `);
+  expect(result).toEqual({
+    jobStatus: "errored",
+    runStatus: "errored",
+    fence: 7,
+    recovery: true,
+    held: true,
+    locked: true,
+    missing: true,
+    wrong: true,
+    recovered: "errored",
+    replay: "errored",
+    states: 1,
+    payload: '{"version":4,"serial":1,"lineage":"proof","resources":[]}',
+    unlocked: true,
+  });
+});
+
+test("canceled native apply retains its lock after heartbeat expiry until state acknowledgment", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const s = await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs, completeAgentJob, isLiveRunLock } = await import("./src/lib/agent-jobs.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"unknown",lastPingAt:1});
+    await db.insert(s.workspaces).values({id:"ws",orgId:"org",name:"ws",locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"});
+    await db.insert(s.runs).values({id:"run",workspaceId:"ws",agentId:"agent",status:"canceled",createdAt:Date.now()});
+    await db.insert(s.agentJobs).values({id:"job",runId:"run",agentPoolId:"pool",agentId:"agent",phase:"apply",status:"canceled",fencingToken:3,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:3}});
+    await recoverStaleAgentJobs(Date.now());
+    const before=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+    const held=await isLiveRunLock(before);
+    const completion={status:"errored",errorMessage:"canceled",resourceAdditions:null,resourceChanges:null,resourceDestructions:null,resourceImports:null,planJson:null,statePayload:null,jsonState:null,jsonStateOutputs:null,result:{}};
+    const missing=await completeAgentJob("agent","job",3,completion);
+    const recovered=await completeAgentJob("agent","job",3,{...completion,statePayload:'{"version":4,"serial":2,"lineage":"proof","resources":[]}'});
+    const after=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+    const states=await db.query.stateVersions.findMany({where:eq(s.stateVersions.workspaceId,"ws")});
+    console.log(JSON.stringify({locked:before.locked,held,missing:missing===undefined,recovered:recovered?.runStatus,unlocked:!after.locked,states:states.length}));
+  `);
+  expect(result).toEqual({ locked: true, held: true, missing: true, recovered: "canceled", unlocked: true, states: 1 });
+});

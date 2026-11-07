@@ -22,6 +22,8 @@ type RunContext struct {
 	Token        string `json:"token"`
 }
 type Config struct {
+	engineTemp        string
+	ExecutionID       string            `json:"executionId,omitempty"`
 	SchemaVersion     int               `json:"schemaVersion"`
 	Runtime           Runtime           `json:"runtime"`
 	RunID             string            `json:"runId"`
@@ -55,6 +57,7 @@ type Result struct {
 	Cancelled            bool     `json:"cancelled"`
 	Verified             bool     `json:"verified"`
 	Evidence             Evidence `json:"evidence"`
+	PlanJSONSHA256       string   `json:"planJsonSha256,omitempty"`
 	PlanSHA256           string   `json:"planSha256,omitempty"`
 	PolicySnapshotSHA256 string   `json:"policySnapshotSha256,omitempty"`
 	RuntimeSHA256        string   `json:"runtimeSha256,omitempty"`

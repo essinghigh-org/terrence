@@ -65,6 +65,9 @@ func TestNativeOwner(t *testing.T) {
 				}
 			})
 			work, policies, private := filepath.Join(root, "w"), filepath.Join(root, "p"), filepath.Join(root, "s")
+			if mode == "allow" {
+				work = filepath.Join(root, strings.Repeat("long-workspace-", 12))
+			}
 			for _, p := range []string{work, policies, private} {
 				if e = os.Mkdir(p, 0700); e != nil {
 					t.Fatal(e)

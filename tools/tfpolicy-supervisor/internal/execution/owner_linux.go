@@ -397,7 +397,11 @@ func waitGate(ctx context.Context, p *os.Process, runnerPath string) (uint64, er
 	}
 }
 func engineEnv(c Config, nonce, socket string) ([]string, error) {
-	env := []string{"PATH=/usr/bin:/bin", "HOME=" + c.WorkDirectory, "TMPDIR=" + c.WorkDirectory, "TF_IN_AUTOMATION=1", "CHECKPOINT_DISABLE=1", "TF_INPUT=0"}
+	temporary := c.engineTemp
+	if temporary == "" {
+		temporary = c.WorkDirectory
+	}
+	env := []string{"PATH=/usr/bin:/bin", "HOME=" + c.WorkDirectory, "TMPDIR=" + temporary, "TF_IN_AUTOMATION=1", "CHECKPOINT_DISABLE=1", "TF_INPUT=0"}
 	for k, v := range c.Environment {
 		if k == "TF_CLI_CONFIG_FILE" {
 			root := c.WorkRoot
@@ -448,6 +452,9 @@ func sandboxArgs(c Config, plan string, show bool) []string {
 	args := []string{"--deny-debug", "--gate-stdin", "--rwx=" + root, "--rx=" + c.Runtime.Engine.Path, "--rx=" + c.Runtime.Shim.Path}
 	if show {
 		args[2] = "--rx=" + root
+	}
+	if c.engineTemp != "" {
+		args = append(args, "--rwx="+c.engineTemp)
 	}
 	for _, root := range c.PolicyRoots {
 		args = append(args, "--ro="+root)
@@ -597,7 +604,11 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 	}
 	result.Directory = dir
 	socketDir, tmpDir := filepath.Join(dir, "u"), filepath.Join(dir, "t")
-	for _, p := range []string{socketDir, tmpDir} {
+	// go-plugin callback sockets must fit Unix path limits even for a long
+	// workspace path. This writable engine scratch never contains owner data
+	// and is distinct from the recorder/plugin temporary directory.
+	c.engineTemp = filepath.Join(dir, "w")
+	for _, p := range []string{socketDir, tmpDir, c.engineTemp} {
 		if e = os.Mkdir(p, 0700); e != nil {
 			return result, e
 		}
@@ -852,6 +863,8 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 		if e != nil {
 			return result, e
 		}
+		sum := sha256.Sum256(planJSON)
+		result.PlanJSONSHA256 = hex.EncodeToString(sum[:])
 		planArchive, e = os.ReadFile(plan)
 		if e != nil {
 			return result, e
@@ -884,7 +897,7 @@ func execute(parent context.Context, c Config) (result Result, retErr error) {
 		}
 	}
 	result.Verified = true
-	if c.Command == "plan" {
+	if c.Command != "init" {
 		receipt, e := sealPlan(c, result)
 		if e != nil {
 			return result, e
@@ -919,7 +932,7 @@ func inspectPlan(ctx context.Context, c Config, opened map[string]*os.File, plan
 	args := append(sandboxArgs(c, plan, true), "--", "/proc/self/fd/4", "show", "-json", plan)
 	cmd := exec.Command("/proc/self/fd/5", args...)
 	cmd.ExtraFiles = []*os.File{null, opened["engine"], opened["runner"]}
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + c.WorkDirectory, "TMPDIR=" + c.WorkDirectory, "CHECKPOINT_DISABLE=1"}
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + c.WorkDirectory, "TMPDIR=" + c.engineTemp, "CHECKPOINT_DISABLE=1"}
 	cmd.Dir = c.WorkDirectory
 	cmd.Stdout = stdout
 	cmd.Stderr = io.Discard

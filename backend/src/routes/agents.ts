@@ -63,7 +63,7 @@ import {
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS, agentPoolTokenExpiresAt, isAgentPoolTokenActive } from "../lib/agent-token";
-import { AGENT_PROTOCOL_CAPABILITIES, AGENT_PROTOCOL_VERSION } from "../lib/agent-protocol";
+import { LEGACY_AGENT_CAPABILITIES, AGENT_PROTOCOL_VERSION } from "../lib/agent-protocol";
 
 const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
@@ -1321,7 +1321,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
         ipAddress,
         version,
         protocolVersion: AGENT_PROTOCOL_VERSION,
-        capabilities: [...AGENT_PROTOCOL_CAPABILITIES],
+        capabilities: [...LEGACY_AGENT_CAPABILITIES],
         artifactFormats: ["tar.gz", "json", "text"],
         architecture,
         iacBinaries,
@@ -1339,7 +1339,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
             "ip-address": ipAddress,
             version,
             "protocol-version": AGENT_PROTOCOL_VERSION,
-            capabilities: [...AGENT_PROTOCOL_CAPABILITIES],
+            capabilities: [...LEGACY_AGENT_CAPABILITIES],
             "artifact-formats": ["tar.gz", "json", "text"],
             architecture,
             "iac-binaries": iacBinaries,
