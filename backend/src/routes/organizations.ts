@@ -1011,6 +1011,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
             teams: capabilities["teams"] === true,
             "vcs-integrations": capabilities["vcs-integrations"] === true,
             "policy-enforcement": capabilities["policy-enforcement"] === true,
+            "tf-policy-enforcement": capabilities["policy-enforcement"] === true,
             "cost-estimation": costEnabled,
             "private-module-registry": capabilities["private-module-registry"] === true,
             agents: capabilities["agents"] === true,

@@ -139,6 +139,8 @@ describe("account and system compatibility", () => {
     const body = await response.json();
     expect(body.data.attributes.operations).toBe(true);
     expect(body.data.attributes["state-storage"]).toBe(true);
+    expect(body.data.attributes["policy-enforcement"]).toBe(true);
+    expect(body.data.attributes["tf-policy-enforcement"]).toBe(true);
     // ORG-009: current the reference format entitlement keys with truthful OSS values.
     expect(body.data.attributes["configuration-designer"]).toBe(true);
     expect(body.data.attributes["module-tests-generation"]).toBe(true);
