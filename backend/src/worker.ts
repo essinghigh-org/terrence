@@ -7904,8 +7904,8 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
       return null;
     }
   };
-  const pruneSavedPlans = async (): Promise<void> => {
-    const root = join(storageDir, "saved-plans");
+  const pruneSavedPlans = async (kind: "saved-plans" | "native-policy"): Promise<void> => {
+    const root = join(storageDir, kind);
     const entries = await readCleanupEntries(root, "Could not scan saved-plan cleanup directory");
     if (entries === null) return;
     await Promise.all(
@@ -7917,7 +7917,7 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
             if ((await stat(path)).mtimeMs >= cutoff) return;
             const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
             if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
-            await rm(path, { recursive: true, force: true });
+            await cleanupSavedPlan(entry.name);
           } catch (error: unknown) {
             if (!isMissingFileError(error)) logBestEffortFailure("Could not prune saved plan", { path }, error);
           }
@@ -7953,7 +7953,8 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }),
     );
   }
-  await pruneSavedPlans();
+  await pruneSavedPlans("saved-plans");
+  await pruneSavedPlans("native-policy");
 }
 
 type InterruptedRunCandidate = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "statusTimestamps">;
