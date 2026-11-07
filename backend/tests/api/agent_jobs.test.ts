@@ -1807,7 +1807,7 @@ test("agent completion preserves server-owned native admission and delivery meta
     await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy"});
     await db.insert(s.workspaces).values({id:"ws",orgId:"org",name:"ws"});
     await db.insert(s.runs).values({id:"run",workspaceId:"ws",agentId:"agent",status:"planning",createdAt:Date.now()});
-    const owned={nativePolicyEvaluationId:"eval",nativeRecoveryRequired:false,nativeStateRecovered:false,policyApplyAdmissionToken:7,payloadDeliveryToken:7};
+    const owned={nativePolicyEvaluationId:"eval",nativeRecoveryRequired:false,nativeStateRecovered:false,policyApplyAdmissionToken:7,payloadDeliveryToken:7,payloadDeliveryTrackingToken:7};
     await db.insert(s.agentJobs).values({id:"job",runId:"run",agentPoolId:"pool",agentId:"agent",phase:"plan",status:"claimed",fencingToken:7,result:owned});
     const completion={status:"errored",errorMessage:"fixture",resourceAdditions:null,resourceChanges:null,resourceDestructions:null,resourceImports:null,planJson:null,statePayload:null,jsonState:null,jsonStateOutputs:null,result:{...Object.fromEntries(Object.keys(owned).map(key=>[key,"forged"])),agentMessage:"retained"}};
     const done=await completeAgentJob("agent","job",7,completion);
@@ -1822,6 +1822,7 @@ test("agent completion preserves server-owned native admission and delivery meta
       nativeStateRecovered: false,
       policyApplyAdmissionToken: 7,
       payloadDeliveryToken: 7,
+      payloadDeliveryTrackingToken: 7,
       agentMessage: "retained",
     },
   });
@@ -1918,4 +1919,71 @@ test("valid native state survives cancellation and malformed completion without 
       };
     }),
   );
+});
+
+test("stale native recovery distinguishes undelivered leases from possible and older deliveries", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq }=await import("drizzle-orm");
+    const { db }=await import("./src/db/index.ts"),s=await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs, markAgentJobPayloadDelivered }=await import("./src/lib/agent-jobs.ts");
+    const { mintRunToken }=await import("./src/lib/run-token.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy",lastPingAt:1});
+    const cases=["undelivered","wrong-fence","possible","recovery","older"];
+    for(const id of cases){
+      await db.insert(s.workspaces).values({id,orgId:"org",name:id,locked:true,lockOwnerType:"agent-run",lockOwnerId:id});
+      await db.insert(s.runs).values({id,workspaceId:id,agentId:"agent",status:"applying",createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id,runId:id,agentPoolId:"pool",agentId:"agent",phase:"apply",status:"claimed",fencingToken:7,claimedAt:1,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7,...(id!=="older"?{payloadDeliveryTrackingToken:7}:{}),...(id==="wrong-fence"?{payloadDeliveryToken:6}:{}),...(id==="recovery"?{nativeRecoveryRequired:true}:{})}});
+      await mintRunToken(id,id,"org");
+      if(id==="possible")await markAgentJobPayloadDelivered(await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,id)}),true);
+    }
+    await recoverStaleAgentJobs(Date.now());
+    const outcomes=[];
+    for(const id of cases){
+      const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,id)}),run=await db.query.runs.findFirst({where:eq(s.runs.id,id)}),workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,id)});
+      const tokens=await db.query.runTokens.findMany({where:eq(s.runTokens.runId,id)});
+      let lateDelivery=false;
+      try{await markAgentJobPayloadDelivered(job,true);lateDelivery=true;}catch{}
+      outcomes.push({id,job:job.status,run:run.status,fence:job.fencingToken,locked:workspace.locked,recovery:job.result.nativeRecoveryRequired===true,lateDelivery,activeTokens:tokens.filter(token=>token.revokedAt===null).length});
+    }
+    console.log(JSON.stringify({outcomes}));
+  `);
+  expect(result["outcomes"]).toEqual(
+    ["undelivered", "wrong-fence", "possible", "recovery", "older"].map((id) => ({
+      id,
+      job: "errored",
+      run: "errored",
+      fence: 7,
+      locked: !["undelivered", "wrong-fence"].includes(id),
+      recovery: !["undelivered", "wrong-fence"].includes(id),
+      lateDelivery: false,
+      activeTokens: 0,
+    })),
+  );
+});
+
+test("canceled native lock sweep releases only tracked undelivered jobs even with a live agent", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq }=await import("drizzle-orm");
+    const { db }=await import("./src/db/index.ts"),s=await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs, isLiveRunLock }=await import("./src/lib/agent-jobs.ts");
+    await db.insert(s.organizations).values({id:"org",name:"org"});
+    await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+    await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"native",status:"busy",lastPingAt:Date.now()});
+    for(const id of ["undelivered","possible","recovery","older"]){
+      await db.insert(s.workspaces).values({id,orgId:"org",name:id,locked:true,lockOwnerType:"agent-run",lockOwnerId:id});
+      await db.insert(s.runs).values({id,workspaceId:id,agentId:"agent",status:"force_canceled",createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id,runId:id,agentPoolId:"pool",agentId:"agent",phase:"apply",status:"canceled",fencingToken:7,result:{nativePolicyEvaluationId:"eval",policyApplyAdmissionToken:7,...(id!=="older"?{payloadDeliveryTrackingToken:7}:{}),...(id==="possible"?{payloadDeliveryToken:7}:{}),...(id==="recovery"?{nativeRecoveryRequired:true}:{})}});
+    }
+    const before={};
+    for(const id of ["undelivered","possible","recovery","older"])before[id]=await isLiveRunLock({lockOwnerType:"agent-run",lockOwnerId:id});
+    await recoverStaleAgentJobs(Date.now());
+    const locks=await db.query.workspaces.findMany();
+    console.log(JSON.stringify({before,after:Object.fromEntries(locks.map(row=>[row.id,row.locked]))}));
+  `);
+  expect(result).toEqual({
+    before: { undelivered: false, possible: true, recovery: true, older: true },
+    after: { undelivered: false, possible: true, recovery: true, older: true },
+  });
 });

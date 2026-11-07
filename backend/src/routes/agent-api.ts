@@ -26,6 +26,7 @@ import {
   authenticateAgent,
   claimAgentJob,
   failAgentJobDelivery,
+  failAgentJobDeliveryInTransaction,
   markAgentJobPayloadDelivered,
   completeAgentJob,
   findClaimedAgentJob,
@@ -54,6 +55,7 @@ import {
 } from "../lib/agent-api";
 import { persistUploadBody } from "../lib/upload-body";
 import { log } from "../lib/log";
+import { revokeRunTokenValue } from "../lib/run-token";
 import { validSignedApiURL, type DeepReadonly } from "../lib/utils";
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveExternalUrl } from "../lib/url-safety";
@@ -92,34 +94,28 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
   await db.transaction(async (transaction: unknown): Promise<void> => {
     const t = transaction as typeof db;
-    const currentJob = await t.query.agentJobs.findFirst({
-      where: and(
-        eq(agentJobs.id, job.id),
-        owner,
-        eq(agentJobs.fencingToken, job.fencingToken),
-        eq(agentJobs.status, "claimed"),
-      ),
-    });
-    if (
-      currentJob?.phase === "apply" &&
-      typeof currentJob.result?.["nativePolicyEvaluationId"] === "string" &&
-      currentJob.result["policyApplyAdmissionToken"] === job.fencingToken &&
-      currentJob.result["payloadDeliveryToken"] === job.fencingToken
-    ) {
-      await t
-        .update(agentJobs)
-        .set({
-          status: "errored",
-          completedAt: Date.now(),
-          errorMessage: "Native delivery failed after apply admission; state recovery is required",
-          result: { ...currentJob.result, nativeRecoveryRequired: true },
-        })
-        .where(eq(agentJobs.id, job.id));
-      await t
-        .update(runs)
-        .set({ status: "errored" })
-        .where(and(eq(runs.id, run.id), eq(runs.status, "applying")));
+    const rows = await t
+      .update(agentJobs)
+      .set({ status: "claimed" })
+      .where(
+        and(
+          eq(agentJobs.id, job.id),
+          owner,
+          eq(agentJobs.fencingToken, job.fencingToken),
+          eq(agentJobs.status, "claimed"),
+        ),
+      )
+      .returning();
+    const currentJob = rows[0];
+    if (currentJob === undefined) return;
+    // Preparation may have used an earlier non-native snapshot. Never requeue
+    // a lease whose locked current identity is native, even without delivery
+    // metadata from older server versions.
+    if (typeof currentJob.result?.["nativePolicyEvaluationId"] === "string") {
+      const currentRun = await t.query.runs.findFirst({ where: eq(runs.id, run.id) });
+      await failAgentJobDeliveryInTransaction(t, currentJob, currentRun, "Native agent payload construction failed");
       await t.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, run.id));
+      if (job.agentId !== null) await t.update(agents).set({ status: "idle" }).where(eq(agents.id, job.agentId));
       return;
     }
     const released = await t
@@ -1104,6 +1100,7 @@ async function buildClaimedJobPayload(
   set: { status?: number },
 ): Promise<unknown> {
   const { job, run, workspace, configuration } = claimed;
+  let runToken: string | undefined;
   try {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
     if (org === undefined) throw new Error("organization not found");
@@ -1123,7 +1120,7 @@ async function buildClaimedJobPayload(
     const runVars: Record<string, string> = {};
     // Mint the run token only after all fallible lookups/resolution work has
     // succeeded, so a failed payload build cannot accumulate valid tokens.
-    const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
+    runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
     const details: AgentJobDetails = {
       job,
       run,
@@ -1133,10 +1130,13 @@ async function buildClaimedJobPayload(
       nativePolicy: claimed.nativePolicy != null,
     };
     const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
-    await markAgentJobPayloadDelivered(job);
+    await markAgentJobPayloadDelivered(job, claimed.nativePolicy != null);
     return payload;
   } catch (error: unknown) {
     try {
+      // Cancellation may have revoked earlier tokens before this build minted
+      // its own. Revoke only this undelivered token, never a replacement lease.
+      if (runToken !== undefined) await revokeRunTokenValue(runToken);
       await releaseAgentClaim(claimed);
     } catch (releaseError: unknown) {
       log.error("Failed to release an agent claim after payload construction failed", {

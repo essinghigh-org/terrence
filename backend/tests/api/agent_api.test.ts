@@ -715,7 +715,7 @@ ${nativeAgentFixture}
         await claim("run","job");
         const before=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
         const apply=failure!=="prepare-redelivery", repeated=failure.endsWith("repeat");
-        await db.update(s.agentJobs).set({phase:apply?"apply":"plan",result:{nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,...(apply?{policyApplyAdmissionToken:before.fencingToken}:{}),...(repeated?{payloadDeliveryToken:before.fencingToken}:{})}}).where(eq(s.agentJobs.id,"job"));
+        await db.update(s.agentJobs).set({phase:apply?"apply":"plan",result:{payloadDeliveryTrackingToken:before.result.payloadDeliveryTrackingToken,nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,...(apply?{policyApplyAdmissionToken:before.fencingToken}:{}),...(repeated?{payloadDeliveryToken:before.fencingToken}:{})}}).where(eq(s.agentJobs.id,"job"));
         await db.update(s.runs).set({status:apply?"applying":"planning"}).where(eq(s.runs.id,"run"));
         await db.update(s.workspaces).set({locked:apply,lockOwnerType:apply?"agent-run":null,lockOwnerId:apply?"run":null}).where(eq(s.workspaces.id,"ws"));
       }
@@ -790,7 +790,7 @@ ${nativeAgentFixture}
     const { spyOn }=await import("bun:test");
     await claim("run","job");
     const before=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
-    await db.update(s.agentJobs).set({phase:"apply",result:{nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,policyApplyAdmissionToken:before.fencingToken}}).where(eq(s.agentJobs.id,"job"));
+    await db.update(s.agentJobs).set({phase:"apply",result:{payloadDeliveryTrackingToken:before.result.payloadDeliveryTrackingToken,nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,policyApplyAdmissionToken:before.fencingToken}}).where(eq(s.agentJobs.id,"job"));
     await db.update(s.runs).set({status:"applying"}).where(eq(s.runs.id,"run"));
     await db.update(s.workspaces).set({locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"}).where(eq(s.workspaces.id,"ws"));
     let pause, resume;
@@ -821,3 +821,157 @@ ${nativeAgentFixture}
   `);
   expect(result).toEqual({ statuses: [200, 503], locked: true, recovery: true, delivery: 1, fence: 1 });
 }, 30_000);
+
+for (const delivered of [false, true]) {
+  test(`cancellation during native payload construction preserves only possible delivery (${delivered})`, async () => {
+    const result = await runAgentApiScript(String.raw`
+${nativeAgentFixture}
+      const { spyOn }=await import("bun:test");
+      const { cancelAgentJobsForRun, recoverStaleAgentJobs }=await import("./src/lib/agent-jobs.ts");
+      await claim("run","job");
+      const before=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+      await db.update(s.agentJobs).set({phase:"apply",result:{nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,policyApplyAdmissionToken:before.fencingToken,payloadDeliveryTrackingToken:before.result.payloadDeliveryTrackingToken,...(${delivered}?{payloadDeliveryToken:before.fencingToken}:{})}}).where(eq(s.agentJobs.id,"job"));
+      await db.update(s.runs).set({status:"applying"}).where(eq(s.runs.id,"run"));
+      await db.update(s.workspaces).set({locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"}).where(eq(s.workspaces.id,"ws"));
+      // Cancel after real native preparation, before the HTTP payload is built
+      // and marked. The same agent remains live throughout this interleaving.
+      const find=db.query.organizations.findFirst.bind(db.query.organizations);
+      let canceled=false;
+      const read=spyOn(db.query.organizations,"findFirst").mockImplementation(async (...args)=>{
+        const duringBuild=new Error().stack.includes("buildClaimedJobPayload");
+        const row=await find(...args);
+        if(duringBuild){
+          read.mockRestore();canceled=true;
+          await db.update(s.runs).set({status:"canceled"}).where(eq(s.runs.id,"run"));
+          await cancelAgentJobsForRun("run");
+        }
+        return row;
+      });
+      const response=await call("/api/agent/jobs");
+      read.mockRestore();
+      const immediate=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+      const tokens=await db.query.runTokens.findMany({where:eq(s.runTokens.runId,"run")});
+      await cancelAgentJobsForRun("run");
+      await recoverStaleAgentJobs(Date.now());
+      const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+      const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+      const run=await db.query.runs.findFirst({where:eq(s.runs.id,"run")});
+      console.log(JSON.stringify({canceled,http:response.status,immediate:immediate.locked,locked:workspace.locked,job:job.status,run:run.status,delivery:job.result.payloadDeliveryToken??null,tracking:job.result.payloadDeliveryTrackingToken,fence:job.fencingToken,activeTokens:tokens.filter(token=>token.revokedAt===null).length}));
+    `);
+    expect(result).toEqual({
+      canceled: true,
+      http: 503,
+      immediate: delivered,
+      locked: delivered,
+      job: "canceled",
+      run: "canceled",
+      delivery: delivered ? 1 : null,
+      tracking: 1,
+      fence: 1,
+      activeTokens: 0,
+    });
+  }, 30_000);
+}
+
+test("v2 agent polling records possible native delivery before returning a job", async () => {
+  const result = await runAgentApiScript(String.raw`
+${nativeAgentFixture}
+    const { recoverStaleAgentJobs }=await import("./src/lib/agent-jobs.ts");
+    await claim("run","job");
+    const before=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+    await db.update(s.agentJobs).set({phase:"apply",result:{nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,policyApplyAdmissionToken:before.fencingToken,payloadDeliveryTrackingToken:before.result.payloadDeliveryTrackingToken}}).where(eq(s.agentJobs.id,"job"));
+    await db.update(s.runs).set({status:"applying"}).where(eq(s.runs.id,"run"));
+    await db.update(s.workspaces).set({locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"}).where(eq(s.workspaces.id,"ws"));
+    const response=await call("/api/v2/agents/agent/jobs/poll","POST");
+    await db.update(s.agents).set({lastPingAt:1}).where(eq(s.agents.id,"agent"));
+    await recoverStaleAgentJobs(Date.now());
+    const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+    const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+    console.log(JSON.stringify({http:response.status,job:job.status,delivery:job.result.payloadDeliveryToken,tracking:job.result.payloadDeliveryTrackingToken,recovery:job.result.nativeRecoveryRequired,locked:workspace.locked}));
+  `);
+  expect(result).toEqual({ http: 200, job: "errored", delivery: 1, tracking: 1, recovery: true, locked: true });
+}, 30_000);
+
+for (const delivery of ["undelivered", "possible", "older"]) {
+  test(`removing native policy scope cannot downgrade a resumed native apply (${delivery})`, async () => {
+    const result = await runAgentApiScript(String.raw`
+${nativeAgentFixture}
+      await claim("run","job");
+      const before=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+      await db.update(s.agentJobs).set({phase:"apply",result:{nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,policyApplyAdmissionToken:before.fencingToken,...(${JSON.stringify(delivery)}!=="older"?{payloadDeliveryTrackingToken:before.fencingToken}:{}),...(${JSON.stringify(delivery)}==="possible"?{payloadDeliveryToken:before.fencingToken}:{})}}).where(eq(s.agentJobs.id,"job"));
+      await db.update(s.runs).set({status:"applying"}).where(eq(s.runs.id,"run"));
+      await db.update(s.workspaces).set({locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"}).where(eq(s.workspaces.id,"ws"));
+      await db.delete(s.policySetWorkspaces).where(eq(s.policySetWorkspaces.policySetId,"set"));
+      // No network fallback is allowed to turn the native claim into a legacy
+      // payload. A regressed downgrade sees a deterministic release failure.
+      globalThis.fetch=async()=>new Response(null,{status:503});
+      const response=await call("/api/agent/jobs");
+      const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+      const run=await db.query.runs.findFirst({where:eq(s.runs.id,"run")});
+      const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+      const tokens=await db.query.runTokens.findMany({where:eq(s.runTokens.runId,"run")});
+      console.log(JSON.stringify({http:response.status,job:job.status,run:run.status,owner:job.agentId,fence:job.fencingToken,locked:workspace.locked,recovery:job.result.nativeRecoveryRequired===true,activeTokens:tokens.filter(token=>token.revokedAt===null).length,error:job.errorMessage}));
+    `);
+    expect(result).toMatchObject({
+      http: 204,
+      job: "errored",
+      run: "errored",
+      owner: "agent",
+      fence: 1,
+      locked: delivery !== "undelivered",
+      recovery: delivery !== "undelivered",
+      activeTokens: 0,
+    });
+    expect(result["error"]).toContain("Native policy configuration changed");
+  }, 30_000);
+}
+
+for (const protocol of ["modern", "v2"]) {
+  for (const delivery of ["undelivered", "possible", "older"]) {
+    test(`${protocol} handoff rejects a stale legacy snapshot of a current native apply (${delivery})`, async () => {
+      const result = await runAgentApiScript(String.raw`
+${nativeAgentFixture}
+        const { spyOn }=await import("bun:test");
+        await claim("run","job");
+        const before=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+        const result={policyApplyAdmissionToken:before.fencingToken,...(${JSON.stringify(delivery)}!=="older"?{payloadDeliveryTrackingToken:before.fencingToken}:{})};
+        await db.update(s.agentJobs).set({phase:"apply",result}).where(eq(s.agentJobs.id,"job"));
+        await db.update(s.runs).set({status:"applying"}).where(eq(s.runs.id,"run"));
+        await db.update(s.workspaces).set({locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"}).where(eq(s.workspaces.id,"ws"));
+        let interleaved=false;
+        const find=db.query.workspaces.findFirst.bind(db.query.workspaces);
+        const read=spyOn(db.query.workspaces,"findFirst").mockImplementation(async(...args)=>{
+          const preparing=new Error().stack.includes("claimedJobDetails");
+          const row=await find(...args);
+          if(preparing){
+            read.mockRestore();interleaved=true;
+            // The claim snapshot is already loaded. Another preparation writes
+            // its native identity before scope removal makes this one legacy.
+            await db.update(s.agentJobs).set({result:{...result,nativePolicyEvaluationId:before.result.nativePolicyEvaluationId,...(${JSON.stringify(delivery)}==="possible"?{payloadDeliveryToken:before.fencingToken}:{})}}).where(eq(s.agentJobs.id,"job"));
+            await db.delete(s.policySetWorkspaces).where(eq(s.policySetWorkspaces.policySetId,"set"));
+          }
+          return row;
+        });
+        globalThis.fetch=async()=>new Response("a".repeat(64)+"  terraform_1.17.1_linux_amd64.zip\n"+"a".repeat(64)+"  terraform_1.17.1_linux_arm64.zip\n");
+        const response=await call(${JSON.stringify(protocol)}==="modern"?"/api/agent/jobs":"/api/v2/agents/agent/jobs/poll",${JSON.stringify(protocol)}==="modern"?"GET":"POST");
+        read.mockRestore();
+        const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+        const run=await db.query.runs.findFirst({where:eq(s.runs.id,"run")});
+        const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+        const tokens=await db.query.runTokens.findMany({where:eq(s.runTokens.runId,"run")});
+        console.log(JSON.stringify({interleaved,http:response.status,job:job.status,run:run.status,owner:job.agentId,fence:job.fencingToken,locked:workspace.locked,recovery:job.result.nativeRecoveryRequired===true,activeTokens:tokens.filter(token=>token.revokedAt===null).length}));
+      `);
+      expect(result).toEqual({
+        interleaved: true,
+        http: 503,
+        job: "errored",
+        run: "errored",
+        owner: "agent",
+        fence: 1,
+        locked: delivery !== "undelivered",
+        recovery: delivery !== "undelivered",
+        activeTokens: 0,
+      });
+    }, 30_000);
+  }
+}

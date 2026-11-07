@@ -39,6 +39,8 @@ import {
   findClaimedAgentJob,
   isAgentResultValid,
   MAX_AGENT_RESULT_BYTES,
+  markAgentJobPayloadDelivered,
+  failAgentJobDelivery,
   parseAgentFencingToken,
   type AgentJobCompletion,
   type ClaimedAgentJob,
@@ -1483,7 +1485,15 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 204;
       return {};
     }
-    return { data: agentJobResource(job) };
+    const data = agentJobResource(job);
+    try {
+      await markAgentJobPayloadDelivered(job.job, job.nativePolicy != null);
+    } catch {
+      await failAgentJobDelivery(job.job, "Agent payload preparation changed before delivery");
+      (set as { status: number }).status = 503;
+      return { errors: [{ status: "503", title: "Agent payload unavailable" }] };
+    }
+    return { data };
   })
   .post("/api/v2/agents/:agent_id/stack-jobs/poll", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params["agent_id"] ?? "";
