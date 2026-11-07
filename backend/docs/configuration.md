@@ -265,6 +265,16 @@ Simulation hooks for the test suite. They bypass real IaC execution and must nev
 | `SIMULATED_STACK_PLAN_CHANGES` | off | Simulated stack plans report changes. |
 | `SIMULATED_STACK_DEFERRED` | off | Simulated stack plans report deferred changes. |
 
+## Browser test runtime
+
+These variables belong to the browser test harness, not the application deployment. The browser test commands and operational profile own Chrome startup and cleanup; native readiness has a 30-second bound, while WebView handshakes retain their 10-second bound.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BUN_CHROME_PATH` | executable search path | Optional Chrome executable for the browser test runner. CI selects its installed Chrome explicitly. |
+| `TERRENCE_TEST_BROWSER_ROOT` | system temporary directory | Internal parent-owned root for unique nested browser profiles. The runner sets it for child tests so cancellation also removes nested profiles. |
+| `TERRENCE_TEST_CHROME_URL` | assigned by the runner | Internal DevTools endpoint passed to child WebViews. Each cold-start probe creates its own Chrome process and endpoint. |
+
 ## Operator scripts
 
 Environment for the helper scripts under `backend/scripts` and `frontend/scripts`.
