@@ -70,7 +70,7 @@ func TestSandboxCommandHasNoHostEnvironmentOrPrivateDescriptors(t *testing.T) {
 	defer os.Chmod(root, 0700)
 	binary := filepath.Join(base, "plugin")
 	runner := filepath.Join(base, "runner")
-	c := Config{SchemaVersion: 1, PluginPath: binary, PluginSHA256: immutableFile(t, binary, "plugin"), LandlockRunnerPath: runner, LandlockRunnerSHA256: immutableFile(t, runner, "#!/bin/sh\nprintf '6\\n'\n"), PolicyReadRoots: []string{root}, TemporaryDirectory: base}
+	c := Config{SchemaVersion: 1, PluginPath: binary, PluginSHA256: immutableFile(t, binary, "plugin"), LandlockRunnerPath: runner, LandlockRunnerSHA256: immutableFile(t, runner, "#!/bin/sh\nprintf '6\\n'\n"), PolicyReadRoots: []string{root}, TemporaryDirectory: base, RunContext: &RunContext{Host: "terrence.example", Organization: "test-org", Token: "trusted-run-secret"}}
 	t.Setenv("SUPERVISOR_MAC_KEY", "not-in-child")
 	t.Setenv("TFPOLICY_JOURNAL_FD", "3")
 	t.Setenv("PLUGIN_CLIENT_CERT", "upstream-only")
@@ -86,10 +86,32 @@ func TestSandboxCommandHasNoHostEnvironmentOrPrivateDescriptors(t *testing.T) {
 		t.Fatal("host env leaked")
 	}
 	args := strings.Join(cmd.Args, "\n")
+	if strings.Contains(args+strings.Join(cmd.Env, "\n"), c.RunContext.Token) {
+		t.Fatal("run credential entered child launch")
+	}
 	if !strings.Contains(args, "--rw="+tmp) || !strings.Contains(args, "--ro="+root) || strings.Contains(args, "--ro=/proc") {
 		t.Fatal(args)
 	}
 	if cmd.SysProcAttr.Setpgid || cmd.SysProcAttr.Pdeathsig == 0 {
 		t.Fatal("child escaped supervisor process group contract")
+	}
+}
+
+func TestRunContextRejectsInvalidIdentityWithoutEchoingCredentials(t *testing.T) {
+	for _, c := range []RunContext{
+		{Host: "https://example.com", Organization: "org", Token: "secret"},
+		{Host: "example.com/path", Organization: "org", Token: "secret"},
+		{Host: "user@example.com", Organization: "org", Token: "secret"},
+		{Host: "example.com", Organization: "../org", Token: "secret"},
+		{Host: "example.com", Organization: "org", Token: "secret\nAuthorization: bad"},
+		{Host: "example.com", Organization: "org"},
+	} {
+		err := c.validate()
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatal("invalid context accepted or credential echoed")
+		}
+	}
+	if err := (&RunContext{Host: "localhost:8443", Organization: "test-org", Token: "secret"}).validate(); err != nil {
+		t.Fatal(err)
 	}
 }

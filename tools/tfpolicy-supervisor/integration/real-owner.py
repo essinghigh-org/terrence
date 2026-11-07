@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Local-only BYOB acceptance through the protected owner, never production activation.
+
+Requires already prepared non-root/zero-capability execution and a delegated
+cgroup. Uses only terraform_data and an isolated real Terrence API/database.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import ssl
+import subprocess
+import tempfile
+import time
+import urllib.request
+
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def private_json(path, value):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        json.dump(value, stream)
+
+
+def pending_resource(private):
+    for path in private.glob('r-*/journal'):
+        pending = set()
+        try:
+            for line in path.read_bytes().splitlines():
+                row = json.loads(line)
+                if row['method'] == 'EvaluateResource':
+                    if row['phase'] == 'begin':
+                        pending.add(row['id'])
+                    else:
+                        pending.discard(row['id'])
+        except (ValueError, KeyError):
+            continue
+        if pending:
+            return True
+    return False
+
+
+def kill_owned_plugin(cgroup_root, plugin):
+    for group in cgroup_root.glob('tfpolicy-*'):
+        try:
+            pids = (group/'cgroup.procs').read_text().split()
+        except FileNotFoundError:
+            continue
+        for text in pids:
+            pid = int(text)
+            descriptor = None
+            try:
+                descriptor = os.pidfd_open(pid)
+                if os.readlink(f'/proc/{pid}/exe') == str(plugin):
+                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                    return True
+            except (ProcessLookupError, FileNotFoundError):
+                pass
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+    return False
+
+
+def stage(args, config, output, private, interrupt=None):
+    output.mkdir(mode=0o700)
+    config_path = output/'owner-config.json'
+    private_json(config_path, config)
+    child = subprocess.Popen([str(args.owner), 'execute', '--config', str(config_path)],
+                             env={'PATH': '/usr/bin:/bin'}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    exercised = interrupt is None
+    try:
+        until = time.monotonic()+40
+        while child.poll() is None and time.monotonic()<until:
+            if not exercised and pending_resource(private):
+                if interrupt == 'cancel':
+                    child.send_signal(signal.SIGTERM)
+                    exercised = True
+                else:
+                    exercised = kill_owned_plugin(Path(config['cgroupRoot']), args.plugin)
+            time.sleep(.002)
+        stdout, stderr = child.communicate(timeout=10)
+        (output/'owner.stdout').write_bytes(stdout)
+        (output/'owner.stderr').write_bytes(stderr)
+        result = json.loads(stdout)
+        if not exercised:
+            raise RuntimeError('negative control never reached an in-flight native resource RPC')
+        directory = Path(result.get('directory', ''))
+        if directory.is_relative_to(private) and directory.is_dir():
+            for name in ['stdout', 'stderr', 'audit', 'journal', 'journal.status.json', 'plan.json']:
+                path = directory/name
+                if path.is_file():
+                    shutil.copyfile(path, output/name)
+            if (directory/'recorder.json').exists():
+                raise RuntimeError('private recorder credential configuration was retained')
+        if not result.get('cgroupEmpty'):
+            raise RuntimeError('owner did not prove empty process-tree cleanup')
+        return child.returncode, result
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=12)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=5)
+        config_path.unlink(missing_ok=True)
+
+
+def matrix(args, runtime, context):
+    rows = []
+    for mode in ['allow', 'filtered', 'advisory', 'override', 'deny', 'unknown', 'setup-error', 'missing', 'crash', 'cancel']:
+        output = args.output/mode
+        output.mkdir(mode=0o700)
+        with tempfile.TemporaryDirectory(prefix='tfpr-', dir='/tmp') as temporary:
+            root = Path(temporary)
+            work, policy, private = [root/name for name in ['w', 'p', 's']]
+            for path in [work, policy, private]:
+                path.mkdir(mode=0o700)
+            count = ' count = 1000\n' if mode in ['crash', 'cancel'] else ''
+            (work/'main.tf').write_text('resource "terraform_data" "proof" {\n'+count+' input = "local-only"\n}\n')
+            condition = 'attrs.input == "local-only"'
+            if mode == 'deny':
+                condition = 'attrs.input == "forbidden"'
+            if mode == 'unknown':
+                condition = 'attrs.id == "never"'
+            if mode == 'setup-error':
+                condition = 'attrs.input =='
+            enforcement = 'advisory' if mode == 'advisory' else 'mandatory_overridable' if mode == 'override' else 'mandatory'
+            if mode in ['advisory', 'override']:
+                condition = 'attrs.input == "forbidden"'
+            source = 'policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\n'
+            source += 'resource_policy "terraform_data" "proof" {\n enforcement_level = "'+enforcement+'"\n'
+            if mode == 'filtered':
+                source += ' filter = false\n'
+            source += ' enforce {\n condition = '+condition+'\n error_message = "local acceptance denial"\n }\n}\n'
+            policy_file = policy/'proof.policy.hcl'
+            policy_file.write_text(source)
+            policy_file.chmod(0o400)
+            policy.chmod(0o500)
+            config = {'schemaVersion': 1, 'runtime': runtime, 'runId': context['runId'],
+                      'workspaceId': context['workspaceId'], 'command': 'init', 'workDirectory': str(work),
+                      'privateParent': str(private), 'cgroupRoot': args.cgroup_root,
+                      'policyRoots': [str(policy)], 'environment': {}, 'arguments': [],
+                      'runContext': context['runContext'], 'timeoutSeconds': 30,
+                      'receiptKey': os.urandom(32).hex(), 'evaluationId': 'eval-'+mode,
+                      'policyFingerprint': digest(policy_file)}
+            if mode == 'missing':
+                config['runtime'] = {**runtime, 'plugin': {**runtime['plugin'], 'path': str(private/'missing-plugin')}}
+            if mode == 'override':
+                config['overrides'] = [{'file': str(policy_file), 'address': 'resource_policy.terraform_data.proof'}]
+            try:
+                code, initialized = stage(args, config, output/'init', private)
+                if mode in ['setup-error', 'missing']:
+                    if code == 0 or initialized['verified']:
+                        raise RuntimeError('invalid policy Setup authorized execution')
+                else:
+                    if code != 0 or not initialized['verified'] or not initialized['evidence']['allows']:
+                        raise RuntimeError('real plugin strict initialization failed')
+                    config['command'] = 'plan'
+                    code, planned = stage(args, config, output/'plan', private,
+                                          'crash' if mode == 'crash' else 'cancel' if mode == 'cancel' else None)
+                    if mode in ['allow', 'filtered', 'advisory', 'override']:
+                        if code != 0 or not planned['verified'] or not planned['evidence']['allows']:
+                            raise RuntimeError('real positive control failed owner verification')
+                        if mode != 'filtered' and not planned['evidence']['policies']:
+                            raise RuntimeError('positive control did not evaluate a named policy')
+                        config['command'] = 'apply'
+                        config['savedPlan'] = {'path': str(Path(planned['directory'])/'tfplan'), 'sha256': planned['planSha256']}
+                        config['planReceipt'] = planned['receipt']
+                        code, applied = stage(args, config, output/'apply', private)
+                        if code != 0 or not applied['verified'] or not applied['evidence']['allows']:
+                            raise RuntimeError('real saved-plan apply failed owner verification')
+                        state = json.loads((work/'terraform.tfstate').read_text())
+                        if not any(r.get('instances') for r in state.get('resources', [])):
+                            raise RuntimeError('positive apply did not preserve managed state')
+                    else:
+                        if code == 0 or planned['evidence']['allows']:
+                            raise RuntimeError('negative native control authorized execution')
+                        if mode == 'deny' and not planned['verified']:
+                            raise RuntimeError('known denial lost its verified policy disposition')
+                        if mode == 'unknown' and not any(json.loads(line).get('result') == 'unknown' for line in (output/'plan/audit').read_bytes().splitlines()):
+                            raise RuntimeError('unknown control did not evaluate a required unknown policy')
+                        if mode == 'cancel' and not planned['cancelled']:
+                            raise RuntimeError('cancellation was not recorded')
+                        if (work/'terraform.tfstate').exists():
+                            raise RuntimeError('negative plan unexpectedly wrote managed state')
+                rows.append({'case': mode, 'passed': True})
+            finally:
+                policy.chmod(0o700)
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for key in ['owner', 'profile', 'plugin', 'output', 'repository']:
+        parser.add_argument('--'+key, type=Path, required=True)
+    parser.add_argument('--plugin-sha256', required=True)
+    parser.add_argument('--cgroup-root', required=True)
+    parser.add_argument('--hosted-worker', action='store_true', help='exercise production worker plan/apply and persisted policy gates')
+    parser.add_argument('--plugin-archive', type=Path, help='original operator ZIP, required for hosted catalog identity')
+    args = parser.parse_args()
+    if os.getuid() == 0 or args.output.exists() or digest(args.plugin) != args.plugin_sha256:
+        raise RuntimeError('non-root execution, new output and an independently pinned BYOB executable are required')
+    args.output.mkdir(mode=0o700)
+    api = args.output/'api'
+    api.mkdir(mode=0o700)
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                    '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+                    '-addext', 'basicConstraints=critical,CA:TRUE', '-keyout', str(api/'server.key'),
+                    '-out', str(api/'server.crt')], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (api/'server.key').chmod(0o600)
+    (api/'server.crt').chmod(0o400)
+    runtime = json.loads(args.profile.read_text())['runtime']
+    runtime['plugin'] = {'path': str(args.plugin), 'sha256': args.plugin_sha256}
+    runtime['entitlementCA'] = {'path': str(api/'server.crt'), 'sha256': digest(api/'server.crt')}
+    env = {'PATH': '/usr/bin:/bin', 'HOME': str(api), 'DATABASE_URL': 'file:'+str(api/'test.db'),
+           'STORAGE_DIR': str(api/'storage'), 'NODE_ENV': 'test', 'TERRENCE_DISABLE_WORKER': '1',
+           'TERRENCE_ALLOWED_HOSTS': 'localhost,127.0.0.1'}
+    if args.hosted_worker:
+        if args.plugin_archive is None:
+            raise RuntimeError('hosted acceptance requires the operator archive identity')
+        with tempfile.TemporaryDirectory(prefix='tfpw-', dir='/tmp') as private:
+            profile = {'schemaVersion': 1, 'owner': {'path': str(args.owner), 'sha256': digest(args.owner)},
+                       'runtime': runtime, 'pluginVersion': '0.5.0', 'catalogSha256': digest(args.plugin_archive),
+                       'cgroupRoot': args.cgroup_root, 'privateParent': private}
+            path = api/'profile.json'
+            private_json(path, profile)
+            path.chmod(0o400)
+            env.update({'TERRENCE_TFPOLICY_RUNTIME_PROFILE': str(path),
+                        'TERRENCE_RUN_CGROUP_ROOT': args.cgroup_root,
+                        'TERRENCE_LANDLOCK_RUNNER': runtime['runner']['path']})
+            child = subprocess.run(['bun', str(args.repository/'backend/tests/compat/tfpolicy-owner/worker.ts'), str(api)],
+                                   env=env, cwd=args.repository, timeout=110)
+            if child.returncode != 0:
+                raise RuntimeError('hosted worker acceptance failed')
+            summary = json.loads((api/'summary.json').read_text())
+            private_json(args.output/'summary.json', summary)
+            return
+    log = (api/'server.log').open('wb')
+    server = subprocess.Popen(['bun', str(args.repository/'backend/tests/compat/tfpolicy-owner/entitlement-server.ts'), str(api)],
+                              env=env, cwd=args.repository, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        until = time.monotonic()+30
+        while not (api/'context.json').exists() and time.monotonic()<until:
+            if server.poll() is not None:
+                raise RuntimeError('isolated Terrence API failed; inspect its private server log')
+            time.sleep(.05)
+        context = json.loads((api/'context.json').read_text())
+        request = urllib.request.Request('https://'+context['runContext']['host']+'/api/v2/organizations/'+context['runContext']['organization']+'/entitlement-set',
+                                         headers={'Authorization': 'Bearer '+context['runContext']['token']})
+        with urllib.request.urlopen(request, context=ssl.create_default_context(cafile=str(api/'server.crt')), timeout=5) as response:
+            entitlement = json.load(response)
+        if entitlement['data']['attributes']['tf-policy-enforcement'] is not True:
+            raise RuntimeError('canonical API did not advertise its genuine native policy capability')
+        rows = matrix(args, runtime, context)
+        private_json(args.output/'summary.json', {'realPluginCases': rows, 'productionAdmission': False})
+        print(json.dumps({'realPluginCasesPassed': len(rows), 'productionAdmission': False}))
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
+        log.close()
+        (api/'context.json').unlink(missing_ok=True)
+        stopped = json.loads((api/'stopped.json').read_text()) if (api/'stopped.json').exists() else {}
+        if not stopped.get('tokenRevoked') or not stopped.get('serverStopped'):
+            raise RuntimeError('API shutdown/token revocation was not verified')
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    main()

@@ -35,7 +35,8 @@ patch_sha="$(sha256sum "$patch_file" | awk '{print $1}')"
 (
   cd "$build_root/source"
   go mod verify
-  go test ./internal/command ./internal/terraform ./internal/policy -run 'NativePolicy|Policy' -count=1
+  go test ./internal/command ./internal/terraform ./internal/policy ./internal/backend/local -run 'NativePolicy|Policy' -count=1
+  go test ./internal/plans/planfile -count=1
   CGO_ENABLED=0 go build -trimpath -buildvcs=false \
     -ldflags "-X github.com/hashicorp/terraform/version.dev=no -X github.com/hashicorp/terraform/internal/command.NativePolicyPatchSHA256=$patch_sha" \
     -o "$build_root/result/terraform" .
@@ -45,7 +46,7 @@ go version -m "$build_root/result/terraform" > "$build_root/result/buildinfo.txt
 engine_sha="$(sha256sum "$build_root/result/terraform" | awk '{print $1}')"
 platform="$(go env GOOS)_$(go env GOARCH)"
 cat > "$build_root/result/provenance.json" <<JSON
-{"schemaVersion":1,"contractVersion":1,"sourceCommit":"$source_commit","patchSha256":"$patch_sha","terraformVersion":"1.17.1","platform":"$platform","goVersion":"1.26.10","engineSha256":"$engine_sha","license":"BUSL-1.1","proprietaryRuntimeIncluded":false}
+{"schemaVersion":1,"contractVersion":2,"sourceCommit":"$source_commit","patchSha256":"$patch_sha","terraformVersion":"1.17.1","platform":"$platform","goVersion":"1.26.10","engineSha256":"$engine_sha","license":"BUSL-1.1","proprietaryRuntimeIncluded":false}
 JSON
 chmod 0500 "$build_root/result/terraform"
 chmod 0400 "$build_root/result/LICENSE" "$build_root/result/buildinfo.txt" "$build_root/result/provenance.json"

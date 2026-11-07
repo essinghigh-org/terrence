@@ -11,6 +11,27 @@ index 4e4542b..2fb6f1a 100644
  		"version": func() (cli.Command, error) {
  			return &command.VersionCommand{
  				Meta:              meta,
+diff --git a/internal/backend/backendrun/operation.go b/internal/backend/backendrun/operation.go
+index 83aa75a..c500420 100644
+--- a/internal/backend/backendrun/operation.go
++++ b/internal/backend/backendrun/operation.go
+@@ -5,6 +5,7 @@ package backendrun
+ 
+ import (
+ 	"context"
++	"io"
+ 	"log"
+ 
+ 	svchost "github.com/hashicorp/terraform-svchost"
+@@ -77,6 +78,8 @@ type Operation struct {
+ 	PlanId      string
+ 	PlanRefresh bool   // PlanRefresh will do a refresh before a plan
+ 	PlanOutPath string // PlanOutPath is the path to save the plan
++	// PolicyPlanWriter is supplied only by a strict native CLI owner.
++	PolicyPlanWriter io.Writer
+ 
+ 	// PlanMinimalRefresh will run an initial plan for each resource prior to refreshing:
+ 	//   - If the plan indicates a no-op, then the no-op plan will be returned without refreshing the resource.
 diff --git a/internal/backend/local/backend_apply.go b/internal/backend/local/backend_apply.go
 index b383d5d..453a7e8 100644
 --- a/internal/backend/local/backend_apply.go
@@ -35,6 +56,32 @@ index b383d5d..453a7e8 100644
  		combinedPlanApply = true
  		// Perform the plan
  		log.Printf("[INFO] backend/local: apply calling Plan")
+diff --git a/internal/backend/local/backend_plan.go b/internal/backend/local/backend_plan.go
+index b770515..bf7f616 100644
+--- a/internal/backend/local/backend_plan.go
++++ b/internal/backend/local/backend_plan.go
+@@ -185,13 +185,19 @@ func (b *Local) opPlan(
+ 		}
+ 
+ 		log.Printf("[INFO] backend/local: writing plan output to: %s", path)
+-		err := planfile.Create(path, planfile.CreateArgs{
++		createArgs := planfile.CreateArgs{
+ 			ConfigSnapshot:       configSnap,
+ 			PreviousRunStateFile: prevStateFile,
+ 			StateFile:            plannedStateFile,
+ 			Plan:                 plan,
+ 			DependencyLocks:      op.DependencyLocks,
+-		})
++		}
++		var err error
++		if op.PolicyPlanWriter != nil {
++			err = planfile.CreateToWriter(op.PolicyPlanWriter, createArgs)
++		} else {
++			err = planfile.Create(path, createArgs)
++		}
+ 		if err != nil {
+ 			diags = diags.Append(tfdiags.Sourceless(
+ 				tfdiags.Error,
 diff --git a/internal/command/apply.go b/internal/command/apply.go
 index f5ebbe6..856f0d7 100644
 --- a/internal/command/apply.go
@@ -346,235 +393,6 @@ index d9cf281..16ab846 100644
  	log.Println("[DEBUG] init: policy result for provider", provider.String(), version, "overall", result.Overall)
  	// Init uses diagnostics as the blocking signal because advisory policies
  	// may return deny without any error diagnostics.
-diff --git a/internal/command/plan.go b/internal/command/plan.go
-index 1a752a9..cde37b4 100644
---- a/internal/command/plan.go
-+++ b/internal/command/plan.go
-@@ -20,7 +20,7 @@ type PlanCommand struct {
- 	Meta
- }
- 
--func (c *PlanCommand) Run(rawArgs []string) int {
-+func (c *PlanCommand) Run(rawArgs []string) (exitCode int) {
- 	// Parse and apply global view arguments
- 	common, rawArgs := arguments.ParseView(rawArgs)
- 	c.View.Configure(common)
-@@ -61,6 +61,16 @@ func (c *PlanCommand) Run(rawArgs []string) int {
- 		return 1
- 	}
- 
-+	audit, auditDiags, stopAudit := c.nativePolicyAdmission(args.StrictPolicy, "plan", args.PolicyPaths)
-+	if audit != nil {
-+		defer audit.finish(&exitCode)
-+	}
-+	defer stopAudit()
-+	if auditDiags.HasErrors() {
-+		view.Operation().PolicyDiagnostics(auditDiags)
-+		return 1
-+	}
-+
- 	// Check for user-supplied plugin path
- 	if c.pluginPath, err = c.loadPluginPath(); err != nil {
- 		diags = diags.Append(err)
-@@ -95,6 +105,13 @@ func (c *PlanCommand) Run(rawArgs []string) int {
- 		return 1
- 	}
- 
-+	if audit != nil {
-+		if remote, ok := be.(BackendWithRemoteTerraformVersion); ok && !remote.IsLocalOperations() {
-+			view.Diagnostics(tfdiags.Diagnostics{}.Append(tfdiags.Sourceless(tfdiags.Error, "Unsupported strict policy backend", "Strict policy execution requires local operations under the authenticated run owner.")))
-+			return 1
-+		}
-+	}
-+
- 	// Build the operation request
- 	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, args.Operation, args.OutPath, args.GenerateConfigPath, args.PolicyPaths)
- 	diags = diags.Append(opDiags)
-@@ -115,6 +132,10 @@ func (c *PlanCommand) Run(rawArgs []string) int {
- 		defer stopClient()
- 	}
- 
-+	if audit != nil {
-+		opReq.Hooks = append(opReq.Hooks, audit)
-+	}
-+
- 	// Assign config loader and variables to the operation request
- 	opReq.ConfigLoader = loader
- 	opReq.Variables = c.Meta.VariableValues
-diff --git a/internal/policy/client.go b/internal/policy/client.go
-index d578a0b..5b5f183 100644
---- a/internal/policy/client.go
-+++ b/internal/policy/client.go
-@@ -5,6 +5,8 @@ package policy
- 
- import (
- 	"context"
-+	"crypto/sha256"
-+	"encoding/hex"
- 	"fmt"
- 	"log"
- 	"os"
-@@ -21,6 +23,7 @@ import (
- 	"go.opentelemetry.io/otel/codes"
- 	"go.opentelemetry.io/otel/trace"
- 	"google.golang.org/grpc"
-+	pb "google.golang.org/protobuf/proto"
- 
- 	"github.com/hashicorp/terraform/internal/policy/callback"
- 	"github.com/hashicorp/terraform/internal/policy/proto"
-@@ -324,10 +327,10 @@ func (c *client) EvaluateResource(ctx context.Context, req EvaluationRequest[*pr
- 			Severity: proto.Severity_ERROR,
- 			Summary:  "Failed to evaluate Terraform Policy",
- 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
--		}))
-+		})).withRequestSHA256(request)
- 	}
- 
--	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
-+	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
- }
- 
- func (c *client) EvaluateProvider(ctx context.Context, req EvaluationRequest[*proto.PolicyEvaluateProviderRequest_ProviderMetadata]) EvaluationResponse {
-@@ -361,10 +364,10 @@ func (c *client) EvaluateProvider(ctx context.Context, req EvaluationRequest[*pr
- 			Severity: proto.Severity_ERROR,
- 			Summary:  "Failed to evaluate Terraform Policy",
- 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
--		}))
-+		})).withRequestSHA256(request)
- 	}
- 
--	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
-+	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
- }
- 
- func (c *client) EvaluateModule(ctx context.Context, req EvaluationRequest[*proto.PolicyEvaluateModuleRequest_ModuleMetadata]) EvaluationResponse {
-@@ -399,10 +402,10 @@ func (c *client) EvaluateModule(ctx context.Context, req EvaluationRequest[*prot
- 			Severity: proto.Severity_ERROR,
- 			Summary:  "Failed to evaluate Terraform Policy",
- 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
--		}))
-+		})).withRequestSHA256(request)
- 	}
- 
--	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
-+	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
- }
- 
- func (c *client) Stop() {
-@@ -450,3 +453,15 @@ func (s *policy) GRPCClient(_ context.Context, broker *plugin.GRPCBroker, conn *
- 		callbackRegistry: callback.NewRegistry(),
- 	}, nil
- }
-+
-+func (r EvaluationResponse) withRequestSHA256(request pb.Message) EvaluationResponse {
-+	encoded, err := (pb.MarshalOptions{Deterministic: true}).Marshal(request)
-+	if err != nil {
-+		r.Overall = PolicyErrorResult
-+		r.Diagnostics = append(r.Diagnostics, NewErrorDiagnostic("Invalid policy request", "The native policy request could not be hashed.", PolicyErrorResult))
-+		return r
-+	}
-+	digest := sha256.Sum256(encoded)
-+	r.RequestSHA256 = hex.EncodeToString(digest[:])
-+	return r
-+}
-diff --git a/internal/policy/policy.go b/internal/policy/policy.go
-index 79db12d..e7bf81d 100644
---- a/internal/policy/policy.go
-+++ b/internal/policy/policy.go
-@@ -145,6 +145,8 @@ type (
- 
- 	// EvaluationResponse contains response from a single Evaluate RPC request.
- 	EvaluationResponse struct {
-+		// RequestSHA256 binds native target evidence to the exact transport request.
-+		RequestSHA256 string
- 		// Overall is a result of all enforcements evaluated in a single Evaluate RPC request.
- 		Overall EvaluateResult
- 
-diff --git a/internal/terraform/context_walk.go b/internal/terraform/context_walk.go
-index ce2194f..95c6389 100644
---- a/internal/terraform/context_walk.go
-+++ b/internal/terraform/context_walk.go
-@@ -96,11 +96,24 @@ func (c *Context) walk(graph *Graph, operation walkOperation, opts *graphWalkOpt
- 
- 	walker := c.graphWalker(graph, operation, opts)
- 
-+	if opts.PolicyClient != nil {
-+		auditDiags := policyAuditHooks(c.hooks, func(audit PolicyAuditHook) error {
-+			return audit.PolicyStart(operation.String(), policyGraphMetadataTargets(graph))
-+		})
-+		if auditDiags.HasErrors() {
-+			return walker, auditDiags
-+		}
-+	}
-+
- 	// Watch for a stop so we can call the provider Stop() API.
- 	watchStop, watchWait := c.watchStop(walker)
- 
- 	// Walk the real graph, this will block until it completes
- 	diags := graph.Walk(walker)
-+	if opts.PolicyClient != nil {
-+		failed := diags.HasErrors()
-+		diags = diags.Append(policyAuditHooks(c.hooks, func(audit PolicyAuditHook) error { return audit.PolicyEnd(failed) }))
-+	}
- 
- 	// Close the channel so the watcher stops, and wait for it to return.
- 	close(watchStop)
-diff --git a/internal/terraform/node_policy_eval.go b/internal/terraform/node_policy_eval.go
-index 1d736ae..a38921f 100644
---- a/internal/terraform/node_policy_eval.go
-+++ b/internal/terraform/node_policy_eval.go
-@@ -36,6 +36,15 @@ func (n *nodePolicyEval) DynamicExpand(ctx EvalContext) (*Graph, tfdiags.Diagnos
- 	ctx.Changes().Close()
- 	ctx.State().Close()
- 
-+	auditErr := ctx.Hook(func(h Hook) (HookAction, error) {
-+		if audit, ok := h.(PolicyAuditHook); ok {
-+			return HookActionContinue, audit.PolicyExpect(policyGraph.auditTargets())
-+		}
-+		return HookActionContinue, nil
-+	})
-+	if auditErr != nil {
-+		return nil, tfdiags.Diagnostics{}.Append(auditErr)
-+	}
- 	_, span := tracer().Start(ctx.StopCtx(), "terraform.policy.evaluate")
- 	return policyGraph.evalGraph(span), nil
- }
-diff --git a/internal/terraform/node_policy_resource.go b/internal/terraform/node_policy_resource.go
-index fe1ecea..10ced78 100644
---- a/internal/terraform/node_policy_resource.go
-+++ b/internal/terraform/node_policy_resource.go
-@@ -80,6 +80,7 @@ func (n *nodeResourcePolicy) Execute(ctx EvalContext, operation walkOperation) t
- 	}
- 
- 	result := evaluatePolicies(ctx, n.ResourceAddr, resourceConfig, n.After, n.Before, meta, callbacks)
-+	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "resource", Address: n.ResourceAddr.String(), Operation: n.Action.String()}, result))
- 	if !result.Empty() {
- 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
- 			return h.PolicyResult(n.ResourceAddr.String(), result)
-diff --git a/internal/terraform/node_provider.go b/internal/terraform/node_provider.go
-index 8118f14..26e591c 100644
---- a/internal/terraform/node_provider.go
-+++ b/internal/terraform/node_provider.go
-@@ -248,6 +248,7 @@ func (n *NodeApplyableProvider) EvalPolicy(ctx EvalContext, attrs cty.Value) tfd
- 	}
- 
- 	var diags tfdiags.Diagnostics
-+	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "provider", Address: n.Addr.String()}, result))
- 	if !result.Empty() {
- 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
- 			return h.PolicyResult(n.Addr.String(), result)
-diff --git a/internal/terraform/transform_module_policy.go b/internal/terraform/transform_module_policy.go
-index f928877..72fc16f 100644
---- a/internal/terraform/transform_module_policy.go
-+++ b/internal/terraform/transform_module_policy.go
-@@ -137,6 +137,7 @@ func (n *nodeModulePolicy) Execute(ctx EvalContext, op walkOperation) tfdiags.Di
- 	}
- 
- 	var diags tfdiags.Diagnostics
-+	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "module", Address: addr.String()}, result))
- 	if !result.Empty() {
- 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
- 			return h.PolicyResult(addr.String(), result)
 diff --git a/internal/command/native_policy_admission_test.go b/internal/command/native_policy_admission_test.go
 new file mode 100644
 index 0000000..504fe05
@@ -643,10 +461,10 @@ index 0000000..504fe05
 +}
 diff --git a/internal/command/native_policy_audit.go b/internal/command/native_policy_audit.go
 new file mode 100644
-index 0000000..6c05bb3
+index 0000000..b679c87
 --- /dev/null
 +++ b/internal/command/native_policy_audit.go
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,447 @@
 +// SPDX-License-Identifier: BUSL-1.1
 +
 +package command
@@ -706,6 +524,7 @@ index 0000000..6c05bb3
 +	terraform.NilHook
 +	mu           sync.Mutex
 +	output       io.WriteCloser
++	planOutput   io.WriteCloser
 +	nonce        string
 +	command      string
 +	roots        []string
@@ -778,8 +597,19 @@ index 0000000..6c05bb3
 +			audit.overrides[override] = true
 +		}
 +	}
++	if command == "plan" {
++		planOutput, err := openNativePolicyPlanFD()
++		if err != nil {
++			out.Close()
++			return nil, err
++		}
++		audit.planOutput = planOutput
++	}
 +	if err := audit.write(nativePolicyAuditRecord{Event: "start", Roots: audit.roots, Overrides: audit.overrideList}); err != nil {
 +		out.Close()
++		if audit.planOutput != nil {
++			audit.planOutput.Close()
++		}
 +		return nil, err
 +	}
 +	return audit, nil
@@ -1053,6 +883,9 @@ index 0000000..6c05bb3
 +	if a.active || !a.setup || a.ended == 0 || a.poisoned || a.denied || a.failed {
 +		*exitCode = 1
 +	}
++	if a.planOutput != nil && a.planOutput.Close() != nil {
++		*exitCode = 1
++	}
 +	if err := a.write(nativePolicyAuditRecord{Event: "complete", ExitCode: exitCode, Failed: *exitCode != 0 && *exitCode != 2}); err != nil {
 +		*exitCode = 1
 +	}
@@ -1081,10 +914,10 @@ index 0000000..6c05bb3
 +}
 diff --git a/internal/command/native_policy_audit_fd_linux.go b/internal/command/native_policy_audit_fd_linux.go
 new file mode 100644
-index 0000000..00bc619
+index 0000000..c278f07
 --- /dev/null
 +++ b/internal/command/native_policy_audit_fd_linux.go
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,35 @@
 +// SPDX-License-Identifier: BUSL-1.1
 +
 +package command
@@ -1096,10 +929,16 @@ index 0000000..00bc619
 +)
 +
 +func openNativePolicyAuditFD() (*os.File, error) {
-+	if os.Getenv("TF_POLICY_AUDIT_FD") != "3" {
-+		return nil, errors.New("strict policy requires private descriptor 3")
++	return openNativePolicyPipe("TF_POLICY_AUDIT_FD", "3", 3)
++}
++func openNativePolicyPlanFD() (*os.File, error) {
++	return openNativePolicyPipe("TF_POLICY_PLAN_FD", "4", 4)
++}
++func openNativePolicyPipe(env, expected string, fd uintptr) (*os.File, error) {
++	if os.Getenv(env) != expected {
++		return nil, errors.New("strict policy requires its private output descriptor")
 +	}
-+	file := os.NewFile(3, "native-policy-audit")
++	file := os.NewFile(fd, "native-policy-output")
 +	if file == nil {
 +		return nil, errors.New("native audit descriptor missing")
 +	}
@@ -1111,15 +950,15 @@ index 0000000..00bc619
 +	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
 +		return nil, errors.New("native audit descriptor must be a pipe")
 +	}
-+	unix.CloseOnExec(3)
++	unix.CloseOnExec(int(fd))
 +	return file, nil
 +}
 diff --git a/internal/command/native_policy_audit_fd_unsupported.go b/internal/command/native_policy_audit_fd_unsupported.go
 new file mode 100644
-index 0000000..f9642ee
+index 0000000..7a2bfa3
 --- /dev/null
 +++ b/internal/command/native_policy_audit_fd_unsupported.go
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,17 @@
 +// SPDX-License-Identifier: BUSL-1.1
 +
 +//go:build !linux
@@ -1132,6 +971,9 @@ index 0000000..f9642ee
 +)
 +
 +func openNativePolicyAuditFD() (*os.File, error) {
++	return nil, errors.New("strict native policy execution requires Linux")
++}
++func openNativePolicyPlanFD() (*os.File, error) {
 +	return nil, errors.New("strict native policy execution requires Linux")
 +}
 diff --git a/internal/command/native_policy_audit_test.go b/internal/command/native_policy_audit_test.go
@@ -1352,7 +1194,7 @@ index 0000000..559bb63
 +}
 diff --git a/internal/command/native_policy_contract.go b/internal/command/native_policy_contract.go
 new file mode 100644
-index 0000000..a1fd017
+index 0000000..606f541
 --- /dev/null
 +++ b/internal/command/native_policy_contract.go
 @@ -0,0 +1,40 @@
@@ -1389,13 +1231,360 @@ index 0000000..a1fd017
 +		TerraformVersion string `json:"terraformVersion"`
 +		Platform         string `json:"platform"`
 +		PatchSHA256      string `json:"patchSha256"`
-+	}{1, version.String(), runtime.GOOS + "_" + runtime.GOARCH, NativePolicyPatchSHA256})
++	}{2, version.String(), runtime.GOOS + "_" + runtime.GOARCH, NativePolicyPatchSHA256})
 +	if err != nil {
 +		return 1
 +	}
 +	c.Ui.Output(string(encoded))
 +	return 0
 +}
+diff --git a/internal/command/native_policy_plan_fd_linux_test.go b/internal/command/native_policy_plan_fd_linux_test.go
+new file mode 100644
+index 0000000..e0ddc2a
+--- /dev/null
++++ b/internal/command/native_policy_plan_fd_linux_test.go
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: BUSL-1.1
++
++package command
++
++import (
++	"bytes"
++	"golang.org/x/sys/unix"
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"testing"
++)
++
++func TestNativePolicyPlanPipeDescriptor(t *testing.T) {
++	if mode := os.Getenv("TF_TEST_NATIVE_PLAN_PIPE"); mode != "" {
++		file, err := openNativePolicyPlanFD()
++		if mode != "valid" {
++			if err == nil {
++				os.Exit(1)
++			}
++			os.Exit(0)
++		}
++		if err != nil {
++			os.Exit(2)
++		}
++		flags, err := unix.FcntlInt(file.Fd(), unix.F_GETFD, 0)
++		if err != nil || flags&unix.FD_CLOEXEC == 0 {
++			os.Exit(3)
++		}
++		if _, err = file.Write([]byte("owned-plan-output\n")); err != nil {
++			os.Exit(4)
++		}
++		if file.Close() != nil {
++			os.Exit(5)
++		}
++		os.Exit(0)
++	}
++	for _, mode := range []string{"missing", "read-only", "regular", "valid"} {
++		t.Run(mode, func(t *testing.T) {
++			read, write, err := os.Pipe()
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer read.Close()
++			defer write.Close()
++			null, err := os.Open("/dev/null")
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer null.Close()
++			fd := write
++			if mode == "read-only" {
++				fd = read
++			}
++			if mode == "regular" {
++				fd, err = os.OpenFile(filepath.Join(t.TempDir(), "plan"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer fd.Close()
++			}
++			cmd := exec.Command(os.Args[0], "-test.run=^TestNativePolicyPlanPipeDescriptor$")
++			cmd.Env = []string{"PATH=/usr/bin:/bin", "TF_TEST_NATIVE_PLAN_PIPE=" + mode}
++			if mode != "missing" {
++				cmd.Env = append(cmd.Env, "TF_POLICY_PLAN_FD=4")
++			}
++			cmd.ExtraFiles = []*os.File{null, fd}
++			if output, err := cmd.CombinedOutput(); err != nil {
++				t.Fatalf("protected descriptor control failed: %v %s", err, output)
++			}
++			write.Close()
++			if mode == "valid" {
++				output, err := io.ReadAll(read)
++				if err != nil || !bytes.Equal(output, []byte("owned-plan-output\n")) {
++					t.Fatal("plan stream changed", err)
++				}
++			}
++		})
++	}
++}
+diff --git a/internal/command/plan.go b/internal/command/plan.go
+index 1a752a9..531a371 100644
+--- a/internal/command/plan.go
++++ b/internal/command/plan.go
+@@ -20,7 +20,7 @@ type PlanCommand struct {
+ 	Meta
+ }
+ 
+-func (c *PlanCommand) Run(rawArgs []string) int {
++func (c *PlanCommand) Run(rawArgs []string) (exitCode int) {
+ 	// Parse and apply global view arguments
+ 	common, rawArgs := arguments.ParseView(rawArgs)
+ 	c.View.Configure(common)
+@@ -61,6 +61,16 @@ func (c *PlanCommand) Run(rawArgs []string) int {
+ 		return 1
+ 	}
+ 
++	audit, auditDiags, stopAudit := c.nativePolicyAdmission(args.StrictPolicy, "plan", args.PolicyPaths)
++	if audit != nil {
++		defer audit.finish(&exitCode)
++	}
++	defer stopAudit()
++	if auditDiags.HasErrors() {
++		view.Operation().PolicyDiagnostics(auditDiags)
++		return 1
++	}
++
+ 	// Check for user-supplied plugin path
+ 	if c.pluginPath, err = c.loadPluginPath(); err != nil {
+ 		diags = diags.Append(err)
+@@ -95,6 +105,13 @@ func (c *PlanCommand) Run(rawArgs []string) int {
+ 		return 1
+ 	}
+ 
++	if audit != nil {
++		if remote, ok := be.(BackendWithRemoteTerraformVersion); ok && !remote.IsLocalOperations() {
++			view.Diagnostics(tfdiags.Diagnostics{}.Append(tfdiags.Sourceless(tfdiags.Error, "Unsupported strict policy backend", "Strict policy execution requires local operations under the authenticated run owner.")))
++			return 1
++		}
++	}
++
+ 	// Build the operation request
+ 	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, args.Operation, args.OutPath, args.GenerateConfigPath, args.PolicyPaths)
+ 	diags = diags.Append(opDiags)
+@@ -115,6 +132,10 @@ func (c *PlanCommand) Run(rawArgs []string) int {
+ 		defer stopClient()
+ 	}
+ 
++	if audit != nil {
++		opReq.Hooks = append(opReq.Hooks, audit)
++	}
++
+ 	// Assign config loader and variables to the operation request
+ 	opReq.ConfigLoader = loader
+ 	opReq.Variables = c.Meta.VariableValues
+@@ -184,6 +205,9 @@ func (c *PlanCommand) OperationRequest(
+ 	opReq.Hooks = view.Hooks()
+ 	opReq.PlanRefresh = args.Refresh
+ 	opReq.PlanOutPath = planOutPath
++	if c.policyAudit != nil {
++		opReq.PolicyPlanWriter = c.policyAudit.planOutput
++	}
+ 	opReq.GenerateConfigOut = generateConfigOut
+ 	opReq.Targets = args.Targets
+ 	opReq.ForceReplace = args.ForceReplace
+diff --git a/internal/plans/planfile/writer.go b/internal/plans/planfile/writer.go
+index a4db0b3..0494b48 100644
+--- a/internal/plans/planfile/writer.go
++++ b/internal/plans/planfile/writer.go
+@@ -6,6 +6,7 @@ package planfile
+ import (
+ 	"archive/zip"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"time"
+ 
+@@ -57,9 +58,18 @@ func Create(filename string, args CreateArgs) error {
+ 		return err
+ 	}
+ 	defer f.Close()
++	return CreateToWriter(f, args)
++}
+ 
+-	zw := zip.NewWriter(f)
+-	defer zw.Close()
++// CreateToWriter emits the complete saved-plan archive to an owner-controlled
++// stream without granting filesystem access to policy/provider descendants.
++func CreateToWriter(w io.Writer, args CreateArgs) (retErr error) {
++	zw := zip.NewWriter(w)
++	defer func() {
++		if err := zw.Close(); retErr == nil {
++			retErr = err
++		}
++	}()
+ 
+ 	// tfplan file
+ 	{
+diff --git a/internal/policy/client.go b/internal/policy/client.go
+index d578a0b..5b5f183 100644
+--- a/internal/policy/client.go
++++ b/internal/policy/client.go
+@@ -5,6 +5,8 @@ package policy
+ 
+ import (
+ 	"context"
++	"crypto/sha256"
++	"encoding/hex"
+ 	"fmt"
+ 	"log"
+ 	"os"
+@@ -21,6 +23,7 @@ import (
+ 	"go.opentelemetry.io/otel/codes"
+ 	"go.opentelemetry.io/otel/trace"
+ 	"google.golang.org/grpc"
++	pb "google.golang.org/protobuf/proto"
+ 
+ 	"github.com/hashicorp/terraform/internal/policy/callback"
+ 	"github.com/hashicorp/terraform/internal/policy/proto"
+@@ -324,10 +327,10 @@ func (c *client) EvaluateResource(ctx context.Context, req EvaluationRequest[*pr
+ 			Severity: proto.Severity_ERROR,
+ 			Summary:  "Failed to evaluate Terraform Policy",
+ 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
+-		}))
++		})).withRequestSHA256(request)
+ 	}
+ 
+-	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
++	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
+ }
+ 
+ func (c *client) EvaluateProvider(ctx context.Context, req EvaluationRequest[*proto.PolicyEvaluateProviderRequest_ProviderMetadata]) EvaluationResponse {
+@@ -361,10 +364,10 @@ func (c *client) EvaluateProvider(ctx context.Context, req EvaluationRequest[*pr
+ 			Severity: proto.Severity_ERROR,
+ 			Summary:  "Failed to evaluate Terraform Policy",
+ 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
+-		}))
++		})).withRequestSHA256(request)
+ 	}
+ 
+-	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
++	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
+ }
+ 
+ func (c *client) EvaluateModule(ctx context.Context, req EvaluationRequest[*proto.PolicyEvaluateModuleRequest_ModuleMetadata]) EvaluationResponse {
+@@ -399,10 +402,10 @@ func (c *client) EvaluateModule(ctx context.Context, req EvaluationRequest[*prot
+ 			Severity: proto.Severity_ERROR,
+ 			Summary:  "Failed to evaluate Terraform Policy",
+ 			Detail:   fmt.Sprintf("Failed to evaluate Terraform Policy: %v.", err),
+-		}))
++		})).withRequestSHA256(request)
+ 	}
+ 
+-	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails)
++	return EvaluationFromProtoResponse(response.Result, response.PolicyDetails).withRequestSHA256(request)
+ }
+ 
+ func (c *client) Stop() {
+@@ -450,3 +453,15 @@ func (s *policy) GRPCClient(_ context.Context, broker *plugin.GRPCBroker, conn *
+ 		callbackRegistry: callback.NewRegistry(),
+ 	}, nil
+ }
++
++func (r EvaluationResponse) withRequestSHA256(request pb.Message) EvaluationResponse {
++	encoded, err := (pb.MarshalOptions{Deterministic: true}).Marshal(request)
++	if err != nil {
++		r.Overall = PolicyErrorResult
++		r.Diagnostics = append(r.Diagnostics, NewErrorDiagnostic("Invalid policy request", "The native policy request could not be hashed.", PolicyErrorResult))
++		return r
++	}
++	digest := sha256.Sum256(encoded)
++	r.RequestSHA256 = hex.EncodeToString(digest[:])
++	return r
++}
+diff --git a/internal/policy/policy.go b/internal/policy/policy.go
+index 79db12d..e7bf81d 100644
+--- a/internal/policy/policy.go
++++ b/internal/policy/policy.go
+@@ -145,6 +145,8 @@ type (
+ 
+ 	// EvaluationResponse contains response from a single Evaluate RPC request.
+ 	EvaluationResponse struct {
++		// RequestSHA256 binds native target evidence to the exact transport request.
++		RequestSHA256 string
+ 		// Overall is a result of all enforcements evaluated in a single Evaluate RPC request.
+ 		Overall EvaluateResult
+ 
+diff --git a/internal/terraform/context_walk.go b/internal/terraform/context_walk.go
+index ce2194f..95c6389 100644
+--- a/internal/terraform/context_walk.go
++++ b/internal/terraform/context_walk.go
+@@ -96,11 +96,24 @@ func (c *Context) walk(graph *Graph, operation walkOperation, opts *graphWalkOpt
+ 
+ 	walker := c.graphWalker(graph, operation, opts)
+ 
++	if opts.PolicyClient != nil {
++		auditDiags := policyAuditHooks(c.hooks, func(audit PolicyAuditHook) error {
++			return audit.PolicyStart(operation.String(), policyGraphMetadataTargets(graph))
++		})
++		if auditDiags.HasErrors() {
++			return walker, auditDiags
++		}
++	}
++
+ 	// Watch for a stop so we can call the provider Stop() API.
+ 	watchStop, watchWait := c.watchStop(walker)
+ 
+ 	// Walk the real graph, this will block until it completes
+ 	diags := graph.Walk(walker)
++	if opts.PolicyClient != nil {
++		failed := diags.HasErrors()
++		diags = diags.Append(policyAuditHooks(c.hooks, func(audit PolicyAuditHook) error { return audit.PolicyEnd(failed) }))
++	}
+ 
+ 	// Close the channel so the watcher stops, and wait for it to return.
+ 	close(watchStop)
+diff --git a/internal/terraform/node_policy_eval.go b/internal/terraform/node_policy_eval.go
+index 1d736ae..a38921f 100644
+--- a/internal/terraform/node_policy_eval.go
++++ b/internal/terraform/node_policy_eval.go
+@@ -36,6 +36,15 @@ func (n *nodePolicyEval) DynamicExpand(ctx EvalContext) (*Graph, tfdiags.Diagnos
+ 	ctx.Changes().Close()
+ 	ctx.State().Close()
+ 
++	auditErr := ctx.Hook(func(h Hook) (HookAction, error) {
++		if audit, ok := h.(PolicyAuditHook); ok {
++			return HookActionContinue, audit.PolicyExpect(policyGraph.auditTargets())
++		}
++		return HookActionContinue, nil
++	})
++	if auditErr != nil {
++		return nil, tfdiags.Diagnostics{}.Append(auditErr)
++	}
+ 	_, span := tracer().Start(ctx.StopCtx(), "terraform.policy.evaluate")
+ 	return policyGraph.evalGraph(span), nil
+ }
+diff --git a/internal/terraform/node_policy_resource.go b/internal/terraform/node_policy_resource.go
+index fe1ecea..10ced78 100644
+--- a/internal/terraform/node_policy_resource.go
++++ b/internal/terraform/node_policy_resource.go
+@@ -80,6 +80,7 @@ func (n *nodeResourcePolicy) Execute(ctx EvalContext, operation walkOperation) t
+ 	}
+ 
+ 	result := evaluatePolicies(ctx, n.ResourceAddr, resourceConfig, n.After, n.Before, meta, callbacks)
++	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "resource", Address: n.ResourceAddr.String(), Operation: n.Action.String()}, result))
+ 	if !result.Empty() {
+ 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
+ 			return h.PolicyResult(n.ResourceAddr.String(), result)
+diff --git a/internal/terraform/node_provider.go b/internal/terraform/node_provider.go
+index 8118f14..26e591c 100644
+--- a/internal/terraform/node_provider.go
++++ b/internal/terraform/node_provider.go
+@@ -248,6 +248,7 @@ func (n *NodeApplyableProvider) EvalPolicy(ctx EvalContext, attrs cty.Value) tfd
+ 	}
+ 
+ 	var diags tfdiags.Diagnostics
++	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "provider", Address: n.Addr.String()}, result))
+ 	if !result.Empty() {
+ 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
+ 			return h.PolicyResult(n.Addr.String(), result)
 diff --git a/internal/terraform/policy_audit.go b/internal/terraform/policy_audit.go
 new file mode 100644
 index 0000000..6a702bc
@@ -1493,3 +1682,15 @@ index 0000000..6a702bc
 +	sortPolicyTargets(targets)
 +	return targets
 +}
+diff --git a/internal/terraform/transform_module_policy.go b/internal/terraform/transform_module_policy.go
+index f928877..72fc16f 100644
+--- a/internal/terraform/transform_module_policy.go
++++ b/internal/terraform/transform_module_policy.go
+@@ -137,6 +137,7 @@ func (n *nodeModulePolicy) Execute(ctx EvalContext, op walkOperation) tfdiags.Di
+ 	}
+ 
+ 	var diags tfdiags.Diagnostics
++	diags = diags.Append(policyAuditEvaluated(ctx, PolicyTarget{Kind: "module", Address: addr.String()}, result))
+ 	if !result.Empty() {
+ 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
+ 			return h.PolicyResult(addr.String(), result)

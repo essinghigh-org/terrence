@@ -771,7 +771,20 @@ async function agentDeliveryPolicyError(
   }
   if (workspace === undefined || !agentApplyIsAssociated(job, run, workspace))
     return "Apply blocked: agent claim is not associated with an active run and its workspace lock";
-  return workspacePolicyExecutionError(database, workspace, job.runId);
+  return agentApplyPolicyError(database, workspace, job.runId);
+}
+
+async function agentApplyPolicyError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  workspace: Workspace,
+  runId: string,
+): Promise<string | null> {
+  // Hosted admission never grants a legacy agent a native execution capability.
+  return (
+    (await workspacePolicyPlanningError(database, workspace)) ??
+    workspacePolicyExecutionError(database, workspace, runId)
+  );
 }
 
 /** Apply admission is persisted before returning credentials/artifacts. A retry
@@ -995,7 +1008,7 @@ async function validateCandidateRun(
       ? `${candidate.phase === "plan" ? "Plan" : "Apply"} blocked: workspace no longer exists`
       : candidate.phase === "plan"
         ? await workspacePolicyPlanningError(db, workspace)
-        : await workspacePolicyExecutionError(db, workspace, run.id);
+        : await agentApplyPolicyError(db, workspace, run.id);
   if (policyError !== null) {
     await db
       .update(agentJobs)

@@ -1,49 +1,86 @@
-# Native policy execution handoff
+# Native policy execution
 
-This is an incomplete implementation of #1056. Terrence still rejects native policy execution. Do not remove the hosted or agent guards just because this engine can evaluate policies.
+The draft for #1056 now includes a hosted worker path. It is opt-in through an operator-managed runtime profile. Agents remain blocked. The feature is not ready to merge while the remaining acceptance work below is open.
 
-## What works
+## Implemented
 
-- The plugin 0.5.0 entitlement check requires the JSON:API `tf-policy-enforcement` attribute. Terrence now exposes it through the canonical organization entitlement route; merged PR #1069 contains that compatibility fix.
-- `build.sh` applies the accompanying patch to official Terraform 1.17.1 commit `ff6329e4c2a159b46ec2b73d36bfa3d0ef6560c9`, runs policy tests, and produces an operator-built static Linux executable with provenance and the upstream license. No proprietary binary is included.
-- The opt-in `-strict-policy` path rejects missing owner evidence, startup failures, mandatory denials and unresolved mandatory results. Ordinary upstream CLI behavior is preserved outside this flag. Known direct-apply denials run before resource changes; failures after apply retain actual state.
-- A protected pipe carries Setup, graph target inventories, exact evaluation request digests, policy classifications, phase endings and command exit. It closes on exec before descendants start. Missing, duplicate or unbound evaluations poison completion.
+- Strict Terraform 1.17.1 startup and phase completion, with protected audit and saved-plan pipes closed before provider/plugin execution. A stock engine is rejected.
+- A Linux execution owner that pins the engine, runner, supervisor, shim, recorder and operator-supplied plugin; requires Landlock ABI 6, zero capabilities and a finite delegated cgroup; captures bounded evidence and verifies process-tree cleanup.
+- Genuine run-scoped entitlement context delivered privately through the recorder. Tokens are revoked after each stage. An optional pinned public CA supports private TLS endpoints without disabling certificate validation.
+- Independent managed-resource coverage from the saved plan, correlated with the protected inventory and complete RPC journal. Authenticated plan receipts bind the run, workspace, evaluation generation, policy fingerprint, runtime, source snapshot and exact saved-plan bytes.
+- Native policy archives and selected tool/catalog versions in policy snapshots. Native sources do not create synthetic OPA or Sentinel policy rows.
+- Hosted init/plan and saved-plan apply through the owner. Native results are persisted as policy checks. Mandatory denials block apply; `mandatory_overridable` denials require approval in the same evaluation generation. Existing partial-state and interrupted-apply recovery handling is retained.
+- Unconfigured hosts and all current agents reject native policy work before source/credential handoff. A hosted receipt does not give a legacy agent a native capability.
 
-## Validation performed
+No proprietary plugin or compiled Terraform executable is included. The entitlement compatibility change is already merged in #1069.
 
-The recipe completed with Go 1.26.10. Its policy tests passed in `internal/command`, `internal/terraform` and `internal/policy` (the last package had no matching tests). `git diff --check` passed for the patched upstream source.
+## Operator setup for local qualification
 
-Reference build identity:
+Use Linux with Landlock ABI 6 or later, cgroup v2 delegation with finite memory/PID limits, and a non-root service account with no effective, permitted, inheritable, ambient or bounding capabilities. The supervisor checks these prerequisites; the generic worker's optional sandbox fallback does not satisfy them.
+
+Build the strict engine from official Terraform commit `ff6329e4c2a159b46ec2b73d36bfa3d0ef6560c9` using Go 1.26.10:
+
+```sh
+bash tools/tfpolicy-engine/build.sh /absolute/terraform-checkout /absolute/new-engine-directory
+(cd tools/tfpolicy-supervisor && CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /absolute/runtime/owner ./cmd/tfpolicy-owner)
+(cd tools/tfpolicy-supervisor && CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /absolute/runtime/supervisor ./cmd/tfpolicy-supervisor)
+(cd tools/tfpolicy-supervisor && CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /absolute/runtime/shim ./cmd/tfpolicy-shim)
+bash tools/tfpolicy-recorder/build.sh /absolute/terraform-checkout /absolute/runtime/recorder
+```
+
+Build `landlock-runner` with the repository's existing recipe. Install the licensed operator plugin separately. Make every executable canonical, regular, non-writable and singly linked. Set up a short, service-owned 0700 private parent outside run workspaces; its absolute path must be at most 25 bytes because native transport uses Unix sockets. Give the worker its own delegated cgroup root, with the necessary controllers already enabled by the operator. No host-global cgroup, core-dump or kernel setting is changed by the owner.
+
+Set `TERRENCE_TFPOLICY_RUNTIME_PROFILE` to the canonical path of a read-only JSON file:
+
+```json
+{
+  "schemaVersion": 1,
+  "owner": { "path": "/opt/native/owner", "sha256": "<owner SHA-256>" },
+  "runtime": {
+    "engine": { "path": "/opt/native/terraform", "sha256": "<engine SHA-256>" },
+    "runner": { "path": "/opt/native/landlock-runner", "sha256": "<runner SHA-256>" },
+    "supervisor": { "path": "/opt/native/supervisor", "sha256": "<supervisor SHA-256>" },
+    "shim": { "path": "/opt/native/shim", "sha256": "<shim SHA-256>" },
+    "recorder": { "path": "/opt/native/recorder", "sha256": "<recorder SHA-256>" },
+    "plugin": { "path": "/opt/native/tfpolicy-plugin", "sha256": "<extracted executable SHA-256>" },
+    "patchSha256": "<patch SHA-256 from engine provenance.json>"
+  },
+  "pluginVersion": "0.5.0",
+  "catalogSha256": "<operator ZIP SHA-256 from the enabled catalog row>",
+  "cgroupRoot": "/sys/fs/cgroup/terrence",
+  "privateParent": "/run/tfp"
+}
+```
+
+The catalog/archive digest and executable digest identify different files. The enabled tfpolicy catalog must contain the matching Linux architecture and ZIP digest. Optional `runtime.entitlementCA` has the same path/SHA-256 shape and accepts public certificates only. `PUBLIC_URL` must be the genuine HTTPS Terrence endpoint reachable from the plugin. Set `TERRENCE_RUN_CGROUP_ROOT` to the delegated hierarchy and install the runner through the existing worker configuration.
+
+Use Terraform 1.17.1 workspaces. Attach a ready native policy-set archive whose selected `policyToolVersion` or `.tfpolicy-version` is the installed plugin version. `policiesPath` must contain `.policy.hcl` files. Native parameters, action-only runs, other engine versions, and the deny-network profile are rejected. The profile and binaries must stay identical between plan and apply; changes require a new plan.
+
+Terraform's upstream BUSL-1.1 applies to the patched reference build. Preserve upstream copyright/license notices and review the applicable distribution and commercial-use terms. The build recipe is not a grant to redistribute Terraform or the proprietary plugin. Operators supply their own licensed plugin.
+
+## Validation
+
+The final contract-v2 build used:
 
 ```
 source: ff6329e4c2a159b46ec2b73d36bfa3d0ef6560c9
-patch:  be18eb7f9e17b235b6fb390f637fbaa7f49d9ed71521d8718ac730a1133e3a27
-engine: 927b7a59ebc3961064e1af879c0c69c9c5d30cd4c0c32cbaf9c4379e1d8ace55
+patch:  61607c9d6581c9fd3bafaa62b77d97765f7914b0183ea86b255a57a5f6261d3b
+engine: a65fc4022e9c57fa97ea02a1283c6e7cd32b22bdd2502e24bd0adcf0379f37d3
 plugin: 848def9140e35359779fe5b380231b31301a741118a3c985217cc99cdbaa5e4f
 ```
 
-A private local acceptance harness ran this exact build with the operator-supplied, unmodified plugin 0.5.0 and the real Terrence entitlement route. All 12 behavioral cases passed:
+The recipe's upstream/additional policy tests and full planfile package passed. Supervisor race tests/vet and recorder race tests passed. The related backend run had 70 passing tests, three optional external-engine tests skipped, and no failures. Backend typecheck and the zero-warning lint budget passed.
 
-| Operation | Cases |
-| --- | --- |
-| Plan | allow; valid filter/no match; deny; unresolved mandatory; missing executable; invalid policy Setup |
-| Saved-plan apply | allow, using the byte-identical saved plan |
-| Direct apply | allow; valid filter/no match; deny; missing executable; invalid policy Setup |
+`integration/real-owner.py` runs the unmodified operator binary against the real isolated Terrence API. Ten owner cases passed: allow, filter, advisory, override, mandatory deny, unresolved mandatory, invalid Setup, missing binary, actual plugin termination during a pending resource RPC, and owner cancellation during a pending RPC. Positive saved applies retained state; negative plans made no managed resources. The original protocol fixture separately covers post-apply denial, RPC crash and cancellation retaining state, orphan cleanup, and no-op/refresh-only/replacement/destroy resource coverage. Fixture results do not establish proprietary-plugin post-apply behavior.
 
-Denied and failed direct applies created no managed resource state. Positive applies retained state. Each case used only the built-in `terraform_data` resource, temporary local state, Landlock with tracing/debug syscalls denied, zero process capabilities and a finite owned cgroup. Cleanup verified empty cgroups; API credentials were revoked. Saved-plan JSON inspection used a read-only plan after engine/recorder exit and checked its digest before and after inspection.
+The same harness with `--hosted-worker --plugin-archive /absolute/operator.zip` invokes the production worker and persisted policy gates through `backend/tests/compat/tfpolicy-owner/worker.ts`. Four real-plugin hosted cases passed: allow plan plus saved apply, mandatory deny blocking apply, an approved overridable denial plus saved apply, and a legacy agent blocked from claiming a hosted native plan. The allow/deny cases also rejected a changed snapshot and a forged passed check against a signed denial. State versions and native policy checks were persisted. Tests use only built-in `terraform_data`, isolated local databases/state, a private loopback TLS endpoint and an owned bounded cgroup. Host settings remained unchanged and the test subtree was empty and removed.
 
-These are behavioral observations, not production admission. The private harness and proprietary binary are not repository fixtures. Tests in the patch cover classifications, audit ordering/completeness, pipe failures, and unowned CLI invocation. A previous private prototype additionally demonstrated post-apply denial retaining state; that is not acceptance evidence for this exact final reference build.
+Both harness modes require an already prepared non-root, zero-capability process and its own delegated cgroup. Supply `--owner`, `--profile` (the owner test profile with `runtime`), `--plugin`, `--plugin-sha256`, `--output` (a new private directory), `--repository` and `--cgroup-root`. They do not prepare host privileges or download the plugin.
 
-## Remaining work, in dependency order
+## Remaining before merging #1056
 
-1. **Trusted execution owner.** Build a reusable owner around the existing `tools/tfpolicy-supervisor`, shim and recorder. Pin and verify the actual engine, runner, recorder, shim and BYOB executable; probe the engine contract; reject nonzero capabilities, missing isolation or nonfinite/undelegated cgroups. Gate the engine before execution, own cleanup and cancellation, and drain bounded private evidence before admitting completion. No stock-engine or simulated fallback.
-2. **Entitlement delivery.** The private harness supplied genuine run context through a recorder prototype. The committed recorder forwards native Setup unchanged. Implement protected production delivery of the Terrence host, organization and run-scoped token; keep it out of workspace files, command arguments, public logs and descendants. The source build alone does not provide this delivery path.
-3. **Independent coverage and receipt.** Match protected resource target inventories to the immutable saved plan's resource changes, including no-op, replacement, destroy and refresh-only cases. Graph self-registration cannot detect omission of an entire registration. Join every native request digest to a complete recorder RPC journal, including callback failures. Bind run/workspace, policy snapshot, runtime identity, stage, saved-plan digest, actual exit/output and cleanup/cancellation outcome in an authenticated receipt outside the sandbox. Do not treat an ALLOW journal or an unsigned transport status as admission.
-4. **Policy snapshot and versions.** Ingest native policy-set archives without manufacturing OPA/Sentinel policy rows. Resolve and pin the selected policy-set version, source digest, native tool version and operator executable. Include archive/catalog changes in the policy fingerprint. Review `policy-sync.ts`, policy-set version upload routes, `adminTfpolicyVersions` and `.tfpolicy-version` selection.
-5. **Hosted integration.** Wire strict init/plan and immutable saved-plan apply into `worker.ts`. Consume the receipt in `workspace-policy-gate.ts`, persist native policy results and allowed overrides, and preserve state on post-apply failure or interruption. Source guards must remain until this path is complete.
-6. **Explicitly capable agents.** Extend `agent-protocol.ts` and `agent-jobs.ts` with an explicit verified native capability and snapshot/artifact contract. Legacy agents must continue to reject native policy work before receiving source or credentials. Add matching agent execution and result verification.
-7. **Acceptance and docs.** Add reproducible real-engine tests for RPC failure, in-flight cancellation, omitted/truncated evidence, stage mismatch, stale snapshots, changed saved plans, advisory/override behavior, provider/module policies, and post-apply failures retaining state. Port the successful local cases into that harness. Document operator configuration and runtime readiness only after both hosted and agent paths are verified. Review distribution terms before publishing any linked binary; retain Terraform's BUSL-1.1 notices and require operators to supply their licensed plugin.
-
-Useful existing entry points: `backend/src/worker.ts` (`runPlanInitAndPlan`, `runPlanFinalizeStages`, `runApplyInit`), `backend/src/lib/workspace-policy-gate.ts`, `backend/src/lib/policy-sync.ts`, `backend/src/lib/run-cgroup.ts`, `tools/tfpolicy-supervisor/internal/bootstrap`, and `tools/tfpolicy-recorder`. Existing general cgroup helpers deliberately degrade gracefully; strict native admission must verify prerequisites rather than inherit that fallback.
-
-The engine patch and build recipe are ready for review. #1056 remains open; no runtime is activated by this change.
+1. Explicit native capability negotiation, immutable source/artifact transport, receipt verification and matching execution in `terrence-agent`. Current agents must remain blocked until the complete path is verified. Physical source/runtime paths in current receipts also need an explicit portability contract.
+2. Independent expected provider/module inventories. Resource coverage is independently checked; provider/module inventories currently rely on graph registration. Add provider/module policy acceptance cases before treating this as complete native-policy coverage.
+3. Hosted-worker failure qualification for real-plugin Setup/RPC failure, cancellation, stale or altered artifacts and partial post-apply state. Current real-plugin failures exercise the owner; hosted qualification currently covers allow, deny and override. The fixture's post-apply tests cover the owner, not the entire hosted state publication path.
+4. Recovery/retention qualification across worker death, discarded/deleted runs, HA lease loss and all saved-plan lifecycle cleanup paths. Native artifacts are removed when the existing saved-plan cleanup runs; broader lifecycle qualification remains open.
+5. Deployment packaging/readiness diagnostics and full CI/review for the final integration. Do not merge or close #1056 based only on local acceptance.
