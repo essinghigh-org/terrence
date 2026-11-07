@@ -139,8 +139,16 @@ func TestNativeOwner(t *testing.T) {
 				if allowed && (e != nil || !init.Verified || !init.Evidence.Allows || init.ExitCode != 0) {
 					t.Fatal("pure unknown was not deferred at init", init, e)
 				}
-				if !allowed && (init.Evidence.Allows || init.ExitCode == 0 || !init.CgroupEmpty) {
+				if !allowed && (e != nil || !init.Verified || init.Evidence.Allows || init.ExitCode == 0 || !init.CgroupEmpty) {
 					t.Fatal("mixed required denial/unknown passed init", init, e)
+				}
+				known, unknown := false, false
+				for _, p := range init.Evidence.Policies {
+					known = known || p.Result == "DenyResult"
+					unknown = unknown || p.Result == "UnknownResult"
+				}
+				if !unknown || !allowed && !known {
+					t.Fatal("init fixture did not reach the required policy results", init)
 				}
 				return
 			}

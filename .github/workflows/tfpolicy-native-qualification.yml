@@ -109,7 +109,7 @@ jobs:
           bash tools/tfpolicy-engine/build.sh "$RUNNER_TEMP/terraform-protocol" "$RUNNER_TEMP/strict-engine"
           (cd tools/tfpolicy-supervisor && go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/native-bin/owner" ./cmd/tfpolicy-owner)
           (cd tools/tfpolicy-supervisor && go test -c -o "$RUNNER_TEMP/native-bin/owner-tests" ./internal/execution)
-          chmod 0555 "$RUNNER_TEMP/native-bin/owner" "$RUNNER_TEMP/native-bin/owner-tests"
+          chmod 0555 "$RUNNER_TEMP/native-bin/owner" "$RUNNER_TEMP/native-bin/owner-tests" "$RUNNER_TEMP/native-bin/supervisor" "$RUNNER_TEMP/native-bin/shim"
           python3 - <<'PY'
           import hashlib,json,os
           from pathlib import Path
