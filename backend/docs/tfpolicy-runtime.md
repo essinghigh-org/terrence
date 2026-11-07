@@ -8,6 +8,10 @@ The intended distribution model is an operator-provided **tfpolicy-plugin** exec
 
 Registering a version in the admin catalog, installing a plugin on PATH, or setting Terraform's `TF_POLICY_PLUGIN` environment variable does **not** enable tfpolicy execution in Terrence. Do not remove the enforcement guards to enable it.
 
+## Native API entitlement
+
+The organization entitlement-set response includes `tf-policy-enforcement`, the distinct JSON:API attribute read by tfpolicy-plugin 0.5.0 during native Setup. It follows the site's policy-enforcement entitlement. The generic `policy-enforcement` and `sentinel` attributes do not satisfy that check. This API compatibility field does not enable hosted or agent execution; the execution guards described above still apply.
+
 ## Why simply invoking the plugin is unsafe
 
 Terraform 1.17 promotes native policy flags to general availability. However, Terraform 1.17.1's apply command explicitly logs policy-client initialization errors and continues the apply operation. A missing executable, failed handshake, callback setup failure, or plugin setup error can therefore result in an apply without policy enforcement. A separate successful preflight does not guarantee that the later apply process initializes successfully. Watching logs and killing the process is not a reliable barrier before infrastructure mutation.
