@@ -393,8 +393,17 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build static frontend
         run: cd frontend && bun run build
+      - name: Report browser runtime
+        run: |
+          browser_path="$(command -v google-chrome-stable)"
+          echo "BUN_CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
+          printf 'Browser executable: %s\n' "$browser_path"
       - name: Run browser E2E & accessibility suite (Bun.WebView)
-        run: bun run test:profile -- browser
+        run: |
+          suite_status=0
+          bun run test:profile -- browser || suite_status=$?
+          "$BUN_CHROME_PATH" --version
+          exit "$suite_status"
 
   stock-tfpolicy-protocol:
     name: Stock Terraform policy protocol (test-only)

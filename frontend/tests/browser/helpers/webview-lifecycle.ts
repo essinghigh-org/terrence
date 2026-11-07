@@ -30,33 +30,28 @@ export async function withWebViewDeadline<T>(
   }
 }
 
-/**
- * Only retry the empty browser handshake, before any application is loaded.
- * Bun launches Chrome asynchronously: the first navigation includes cold process
- * startup, not just navigation. Keep that budget separate from app assertions.
- */
+export const WEBVIEW_STARTUP_TITLE = "terrence-browser-startup";
+export const WEBVIEW_STARTUP_URL = `data:text/html,%3Ctitle%3E${WEBVIEW_STARTUP_TITLE}%3C%2Ftitle%3E`;
+
+/** Bound cold process startup separately from application assertions; do not hide failures with retries. */
 export async function startWebView<T extends { close(): void; startupStage?: string }>(
   create: () => T,
   initialize: (page: T) => Promise<void>,
   timeout = 10_000,
 ): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    const page = create();
-    try {
-      await withWebViewDeadline(
-        () => initialize(page),
-        () => `startup handshake${page.startupStage ? ` (${page.startupStage})` : ""}`,
-        timeout,
-        () => {
-          page.close();
-        },
-      );
-      return page;
-    } catch (error) {
-      page.close();
-      const pending = error instanceof Error && error.message.includes("already pending");
-      if (attempt >= 1 || (!(error instanceof WebViewTimeoutError) && !pending)) throw error;
-      console.warn(`[browser] Retrying empty WebView startup after: ${String(error)}`);
-    }
+  const page = create();
+  try {
+    await withWebViewDeadline(
+      () => initialize(page),
+      () => `startup handshake${page.startupStage ? ` (${page.startupStage})` : ""}`,
+      timeout,
+      () => {
+        page.close();
+      },
+    );
+    return page;
+  } catch (error) {
+    page.close();
+    throw error;
   }
 }

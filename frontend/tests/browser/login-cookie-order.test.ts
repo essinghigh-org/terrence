@@ -1,5 +1,6 @@
 import { beforeAll, expect, test } from "bun:test";
 import { join } from "node:path";
+import { chromeBackend } from "./helpers/chrome-backend";
 
 let clientJavascript = "";
 
@@ -78,7 +79,7 @@ test.each(["/users/login", "/users/login/mfa", "/users/login?returnTo=%2Fapp"])(
       },
     });
     const page = new Bun.WebView({
-      backend: { type: "chrome", url: false, argv: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage"] },
+      backend: chromeBackend(),
     });
     const evaluate = async (script: string): Promise<unknown> => page.evaluate(script);
     try {
