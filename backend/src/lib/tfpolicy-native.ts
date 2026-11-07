@@ -555,8 +555,13 @@ async function validateOwnerResult(
   )
     throw new Error("Invalid native owner response");
   await readOwnerLogs(result.directory, onLog);
-  if (!result.verified || !result.cgroupEmpty || result.cancelled)
+  if (!result.verified || !result.cgroupEmpty || result.cancelled) {
+    if (command === "apply")
+      await onLog(
+        "[terrence] Native policy execution failed after apply started. Infrastructure may already have changed. Terrence will attempt to capture actual state; no rollback occurred.",
+      );
     throw new Error(`Native ${command} failed: ${error.trim() || "runtime evidence was incomplete"}`);
+  }
   if (command === "init" && !result.evidence.allows) throw new Error("Native policy initialization denied execution");
 }
 

@@ -1,5 +1,5 @@
 // Opt-in local acceptance using the production worker, API, and operator binary.
-import { appendFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 
@@ -52,8 +52,60 @@ await db.insert(s.adminTfpolicyVersions).values({
   archs: [{ os: "linux", arch: "amd64", url: "https://example.invalid/operator.zip", sha: profile.catalogSha256 }],
 });
 const rows: Record<string, unknown>[] = [];
+const modes = [
+  "allow",
+  "deny",
+  "override",
+  "legacy",
+  "setup-error",
+  "missing",
+  "unknown",
+  "plan-crash",
+  "plan-cancel",
+  "apply-crash",
+  "apply-cancel",
+  "saved-tamper",
+  "stale-policy",
+];
+const selected = process.argv[3]?.split(",") ?? modes;
+if (selected.some((mode) => !modes.includes(mode))) throw new Error("Unknown hosted acceptance case");
+const fullProfile = await Bun.file(process.env["TERRENCE_TFPOLICY_RUNTIME_PROFILE"] ?? "").json();
+async function fault(mode: string): Promise<ReturnType<typeof Bun.spawn> | undefined> {
+  if (!/^(plan|apply)-(crash|cancel)$/.test(mode)) return undefined;
+  const command = mode.startsWith("plan-") ? "plan" : "apply";
+  return Bun.spawn(
+    [
+      "python3",
+      "-I",
+      resolve(import.meta.dir, "../../../../tools/tfpolicy-supervisor/integration/agent-fault.py"),
+      fullProfile.cgroupRoot,
+      fullProfile.privateParent,
+      mode.endsWith("crash") ? fullProfile.runtime.plugin.path : fullProfile.owner.path,
+      mode.endsWith("crash") ? "crash" : "cancel",
+      "--command",
+      command,
+    ],
+    {
+      stdout: Bun.file(join(root, mode, "fault.json")),
+      stderr: Bun.file(join(root, mode, "fault.stderr")),
+      timeout: 55000,
+    },
+  );
+}
+async function verifyFault(child: Awaited<ReturnType<typeof fault>>): Promise<void> {
+  if (child !== undefined && (await child.exited) !== 0)
+    throw new Error("Hosted fault did not reach an in-flight resource RPC");
+}
+async function recordCase(mode: string, runId: string): Promise<void> {
+  rows.push({ mode, passed: true, runId });
+  await writeFile(join(root, "summary.json"), JSON.stringify({ hostedWorkerCases: rows }), { mode: 0o600 });
+}
+async function noManagedState(workspaceId: string): Promise<void> {
+  const state = await db.query.stateVersions.findFirst({ where: eq(s.stateVersions.workspaceId, workspaceId) });
+  if (state !== undefined) throw new Error("Failed admission published managed state");
+}
 try {
-  for (const mode of ["allow", "deny", "override", "legacy"]) {
+  for (const mode of selected) {
     const id = crypto.randomUUID(),
       workspaceId = `ws-${id}`,
       runId = `run-${id}`,
@@ -63,9 +115,13 @@ try {
       policy = join(root, mode, "policy");
     await mkdir(config, { recursive: true, mode: 0o700 });
     await mkdir(policy, { recursive: true, mode: 0o700 });
-    await writeFile(join(config, "main.tf"), 'resource "terraform_data" "proof" { input = "local-only" }\n', {
-      mode: 0o600,
-    });
+    await writeFile(
+      join(config, "main.tf"),
+      /^(plan|apply)-(crash|cancel)$/.test(mode)
+        ? 'resource "terraform_data" "proof" {\n count = 200\n input = "local-only"\n}\n'
+        : 'resource "terraform_data" "proof" { input = "local-only" }\n',
+      { mode: 0o600 },
+    );
     if (mode === "allow") {
       for (const name of ["child", "inner", "empty"]) await mkdir(join(config, name), { mode: 0o700 });
       await appendFile(
@@ -82,9 +138,15 @@ try {
       });
       await writeFile(join(config, "empty/main.tf"), "# Empty local module\n", { mode: 0o600 });
     }
+    const condition =
+      mode === "setup-error"
+        ? "attrs.input =="
+        : mode === "unknown"
+          ? 'attrs.id == "never"'
+          : `attrs.input == "${["deny", "override"].includes(mode) ? "forbidden" : "local-only"}"`;
     await writeFile(
       join(policy, "proof.policy.hcl"),
-      `policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\nresource_policy "terraform_data" "proof" {\n enforcement_level = "${mode === "override" ? "mandatory_overridable" : "mandatory"}"\n enforce {\n condition = attrs.input == "${["allow", "legacy"].includes(mode) ? "local-only" : "forbidden"}"\n error_message = "worker acceptance denial"\n }\n}\n`,
+      `policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\nresource_policy "terraform_data" "proof" {\n enforcement_level = "${mode === "override" ? "mandatory_overridable" : "mandatory"}"\n enforce {\n condition = ${condition}\n error_message = "worker acceptance denial"\n }\n}\n`,
       { mode: 0o600 },
     );
     const archives = [join(root, mode, "config.tar.gz"), join(root, mode, "policy.tar.gz")];
@@ -128,10 +190,43 @@ try {
       savePlan: true,
       createdAt: Date.now(),
     });
-    await executeRun(runId);
+    const planFault = mode.startsWith("plan-") ? await fault(mode) : undefined;
+    const originalProfilePath = process.env["TERRENCE_TFPOLICY_RUNTIME_PROFILE"];
+    if (mode === "missing") {
+      const path = join(root, mode, "missing-profile.json");
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...fullProfile,
+          runtime: {
+            ...fullProfile.runtime,
+            plugin: { ...fullProfile.runtime.plugin, path: join(root, mode, "missing-plugin") },
+          },
+        }),
+        { mode: 0o400 },
+      );
+      process.env["TERRENCE_TFPOLICY_RUNTIME_PROFILE"] = path;
+    }
+    try {
+      await executeRun(runId);
+    } catch (error) {
+      if (!["setup-error", "missing", "unknown", "plan-crash", "plan-cancel"].includes(mode)) throw error;
+      await writeFile(join(root, mode, "failure.txt"), String(error), { mode: 0o600 });
+    } finally {
+      process.env["TERRENCE_TFPOLICY_RUNTIME_PROFILE"] = originalProfilePath;
+    }
+    await verifyFault(planFault);
     const planned = await db.query.runs.findFirst({ where: eq(s.runs.id, runId) });
     const checks = await db.query.policyChecks.findMany({ where: eq(s.policyChecks.runId, runId) });
     await writeFile(join(root, mode, "checks.json"), JSON.stringify(checks, null, 2), { mode: 0o600 });
+    if (["setup-error", "missing", "unknown", "plan-crash", "plan-cancel"].includes(mode)) {
+      if (planned?.status !== "errored") throw new Error(`Hosted failed ${mode} admission: ${planned?.status}`);
+      await noManagedState(workspaceId);
+      if (checks.some((check) => check.result?.["native"] === true && check.status === "passed"))
+        throw new Error("Failed hosted native stage produced passed admission");
+      await recordCase(mode, runId);
+      continue;
+    }
     if (mode === "allow") {
       const native = checks.find((check) => check.result?.["native"] === true);
       const policies = native?.result?.["nativePolicies"];
@@ -194,15 +289,53 @@ try {
         throw new Error("Legacy claim did not fail at native admission");
     }
     if (mode !== "deny" && mode !== "legacy") {
+      if (mode === "saved-tamper") {
+        const path = join(root, "storage", "saved-plans", runId, "tfplan");
+        await chmod(path, 0o600);
+        const { encryptSecret, decryptSecret } = await import("../../../src/lib/secrets");
+        const bytes = Buffer.from(await decryptSecret(await readFile(path, "utf8")), "base64");
+        bytes[0] = (bytes[0] ?? 0) ^ 1;
+        await writeFile(path, await encryptSecret(bytes.toString("base64")), { mode: 0o600 });
+      }
+      if (mode === "stale-policy")
+        await db.update(s.policySets).set({ description: "changed before apply" }).where(eq(s.policySets.id, setId));
       await db.update(s.runs).set({ status: "confirmed" }).where(eq(s.runs.id, runId));
-      await executeApply(runId);
+      const applyFault = mode.startsWith("apply-") ? await fault(mode) : undefined;
+      try {
+        await executeApply(runId);
+      } catch (error) {
+        if (!["apply-crash", "apply-cancel", "saved-tamper", "stale-policy"].includes(mode)) throw error;
+        await writeFile(join(root, mode, "failure.txt"), String(error), { mode: 0o600 });
+      }
+      await verifyFault(applyFault);
       const applied = await db.query.runs.findFirst({ where: eq(s.runs.id, runId) });
       const state = await db.query.stateVersions.findFirst({ where: eq(s.stateVersions.workspaceId, workspaceId) });
-      if (applied?.status !== "applied" || state === undefined)
+      if (["saved-tamper", "stale-policy"].includes(mode)) {
+        if (applied?.status !== "errored")
+          throw new Error(`Changed admission authorized hosted apply: ${applied?.status}`);
+        await noManagedState(workspaceId);
+      } else if (mode.startsWith("apply-")) {
+        if (applied?.status !== "errored" || state === undefined)
+          throw new Error(`Hosted post-apply failure status: ${applied?.status}`);
+        const messages = await db.query.logs.findMany({ where: eq(s.logs.runId, runId) });
+        if (!messages.some((row) => row.phase === "apply" && row.outputText.includes("no rollback occurred")))
+          throw new Error("Hosted native apply failure omitted the post-mutation warning");
+        const { decryptStatePayload } = await import("../../../src/lib/validation");
+        const actual = JSON.parse(decryptStatePayload(state.statePayload ?? ""));
+        const instances = (actual.resources ?? []).flatMap(
+          (resource: { instances?: unknown[] }) => resource.instances ?? [],
+        );
+        if (instances.length !== 200)
+          throw new Error(`Hosted post-apply failure retained ${instances.length}/200 instances`);
+        await writeFile(
+          join(root, mode, "retained-state-summary.json"),
+          JSON.stringify({ instances: instances.length, status: applied.status }),
+          { mode: 0o600 },
+        );
+      } else if (applied?.status !== "applied" || state === undefined)
         throw new Error(`Native saved apply failed: ${applied?.status}`);
     }
-    rows.push({ mode, passed: true, runId });
-    await writeFile(join(root, "summary.json"), JSON.stringify({ hostedWorkerCases: rows }), { mode: 0o600 });
+    await recordCase(mode, runId);
   }
 } finally {
   await server.stop(true);

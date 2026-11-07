@@ -334,8 +334,10 @@ def main():
                 if args.agent_runner is None:
                     raise RuntimeError('native agent acceptance requires its project sandbox helper')
                 command += [str(args.agent_binary), str(args.agent_runner)]
+            if args.hosted_worker and args.cases:
+                command.append(args.cases)
             child = subprocess.run(command,
-                                   env=env, cwd=args.repository, timeout=240 if args.agent_binary is not None else 110)
+                                   env=env, cwd=args.repository, timeout=240)
             if child.returncode != 0:
                 raise RuntimeError('hosted worker or native agent acceptance failed')
             summary = json.loads((api/'summary.json').read_text())

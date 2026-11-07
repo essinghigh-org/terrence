@@ -8,10 +8,10 @@ import signal
 import time
 
 
-def pending_apply(private):
+def pending_stage(private, command):
     for audit in private.glob('r-*/audit'):
         try:
-            if b'"command":"apply"' not in audit.read_bytes():
+            if ('"command":"'+command+'"').encode() not in audit.read_bytes():
                 continue
             pending = set()
             for line in (audit.parent/'journal').read_bytes().splitlines():
@@ -34,6 +34,7 @@ def main():
     parser.add_argument('private', type=Path)
     parser.add_argument('binary', type=Path)
     parser.add_argument('mode', choices=['crash', 'cancel'])
+    parser.add_argument('--command', choices=['plan', 'apply'], default='apply')
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     relative = '/' + str(root.relative_to('/sys/fs/cgroup'))
@@ -42,7 +43,7 @@ def main():
         raise RuntimeError('must already run unprivileged inside the specified delegated subtree')
     until = time.monotonic() + 50
     while time.monotonic() < until:
-        if pending_apply(args.private):
+        if pending_stage(args.private, args.command):
             for current, _, _ in os.walk(root):
                 try:
                     pids = (Path(current)/'cgroup.procs').read_text().split()
@@ -56,7 +57,7 @@ def main():
                         if os.readlink(f'/proc/{pid}/exe') != str(args.binary):
                             continue
                         signal.pidfd_send_signal(descriptor, signal.SIGKILL if args.mode == 'crash' else signal.SIGINT)
-                        print(json.dumps({'interrupted': True, 'pendingApplyResourceRpc': True, 'mode': args.mode}))
+                        print(json.dumps({'interrupted': True, 'pendingResourceRpc': True, 'command': args.command, 'mode': args.mode}))
                         return
                     except (ProcessLookupError, FileNotFoundError):
                         continue
