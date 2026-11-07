@@ -387,6 +387,28 @@ for (const route of routes) {
     summary: `${m.toUpperCase()} ${openApiPath}`,
     responses,
   };
+  if (/^\/api\/agent\/jobs\/\{job_id\}\/native-(policy|result)$/.test(openApiPath)) {
+    operation.description =
+      "Private native-policy transport for the owning authenticated agent with operation.native-policy.v2 and a current job lease. Signed artifact URLs alone do not authorize access. Requires the agent session token, tfc-agent-id header and fencing_token query parameter (or tfc-agent-fencing-token header).";
+    operation.security = [{ agentSessionToken: [] }];
+    operation.parameters = [
+      ...(operation.parameters as Record<string, unknown>[]),
+      { name: "tfc-agent-id", in: "header", required: true, schema: { type: "string" } },
+      { name: "fencing_token", in: "query", schema: { type: "integer", minimum: 1 } },
+      { name: "tfc-agent-fencing-token", in: "header", schema: { type: "integer", minimum: 1 } },
+    ];
+    responses["200"] = {
+      description: m === "get" ? "Private native execution manifest; Cache-Control: no-store" : "Evidence accepted",
+      content: { "application/json": { schema: { type: "object" } } },
+    };
+    responses["409"] = { description: "The job lease is no longer current" };
+    if (m === "put")
+      operation.requestBody = {
+        required: true,
+        description: "Signed receipt and captured evidence; maximum aggregate size 64 MiB",
+        content: { "application/json": { schema: { type: "object" } } },
+      };
+  }
   if (m === "get" && openApiPath === "/api/v2/admin/github-app/manifest/redirect") {
     operation.parameters = [{ name: "state", in: "query", required: true, schema: { type: "string" } }];
     const redirectResponse = responses["200"] as Record<string, unknown> | undefined;
@@ -614,6 +636,7 @@ const document = {
   components: {
     securitySchemes: {
       bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      agentSessionToken: { type: "http", scheme: "bearer" },
       azureDevOpsWebhookBasic: { type: "http", scheme: "basic" },
     },
   },
