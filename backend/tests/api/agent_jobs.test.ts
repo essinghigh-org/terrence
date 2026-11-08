@@ -1987,3 +1987,46 @@ test("canceled native lock sweep releases only tracked undelivered jobs even wit
     after: { undelivered: false, possible: true, recovery: true, older: true },
   });
 });
+
+for (const scenario of ["active", "canceled", "force_canceled", "lost-lease", "native-recovery"]) {
+  test(`delivery failure reports only its committed run status (${scenario})`, async () => {
+    const result = await runAgentProtocolScript(`
+      const { spyOn } = await import("bun:test");
+      const { eq } = await import("drizzle-orm");
+      const { db } = await import("./src/db/index.ts");
+      const s = await import("./src/db/schema.ts");
+      const { failAgentJobDelivery } = await import("./src/lib/agent-jobs.ts");
+      const notifications = await import("./src/lib/notifications.ts");
+      const webhooks = await import("./src/lib/webhooks.ts");
+      const scenario = ${JSON.stringify(scenario)}, native = scenario === "native-recovery";
+      const initialStatus = scenario === "canceled" || scenario === "force_canceled" ? scenario : "applying";
+      await db.insert(s.organizations).values({id:"org",name:"org"});
+      await db.insert(s.agentPools).values({id:"pool",orgId:"org",name:"pool",organizationScoped:true});
+      await db.insert(s.agents).values({id:"agent",agentPoolId:"pool",name:"agent",status:"busy",lastPingAt:Date.now()});
+      await db.insert(s.workspaces).values({id:"ws",orgId:"org",name:"ws",locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"});
+      await db.insert(s.runs).values({id:"run",workspaceId:"ws",agentId:"agent",status:initialStatus,createdAt:Date.now()});
+      await db.insert(s.agentJobs).values({id:"job",runId:"run",agentPoolId:"pool",agentId:"agent",phase:"apply",status:"claimed",fencingToken:7,result:native?{nativePolicyEvaluationId:"eval",payloadDeliveryToken:7}:null});
+      const claimed = await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+      if(scenario === "lost-lease")await db.update(s.agentJobs).set({fencingToken:8}).where(eq(s.agentJobs.id,"job"));
+      const queued = [], vcs = [];
+      spyOn(notifications,"queueRunNotification").mockImplementation((...args)=>{queued.push(args);});
+      spyOn(webhooks,"reportRunVcsStatus").mockImplementation(async (...args)=>{vcs.push(args);});
+      await failAgentJobDelivery(claimed,"payload failed");
+      const run = await db.query.runs.findFirst({where:eq(s.runs.id,"run")});
+      const job = await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+      const workspace = await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
+      console.log(JSON.stringify({queued,vcs,run:run.status,job:job.status,locked:workspace.locked,recovery:job.result?.nativeRecoveryRequired===true}));
+    `);
+    const canceled = scenario === "canceled" || scenario === "force_canceled";
+    const lostLease = scenario === "lost-lease";
+    const status = canceled ? scenario : "errored";
+    expect(result).toEqual({
+      queued: canceled || lostLease ? [] : [["run", "run:errored", "errored"]],
+      vcs: lostLease ? [] : [["run", status]],
+      run: lostLease ? "applying" : status,
+      job: lostLease ? "claimed" : canceled ? "canceled" : "errored",
+      locked: lostLease || scenario === "native-recovery",
+      recovery: scenario === "native-recovery",
+    });
+  });
+}

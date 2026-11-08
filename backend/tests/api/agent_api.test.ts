@@ -795,26 +795,24 @@ ${nativeAgentFixture}
     await db.update(s.workspaces).set({locked:true,lockOwnerType:"agent-run",lockOwnerId:"run"}).where(eq(s.workspaces.id,"ws"));
     let pause, resume;
     const paused=new Promise(resolve=>{pause=resolve;}), resumed=new Promise(resolve=>{resume=resolve;});
-    const find=db.query.agentJobs.findFirst.bind(db.query.agentJobs);
-    // Suspend the former unprotected read after SQL returns. A competing real
-    // HTTP handoff can then record delivery before that snapshot is written.
-    // With atomic preparation there is no such read, so A completes first and
-    // B becomes the failing retry. Either ordering must preserve the same hold.
-    const read=spyOn(db.query.agentJobs,"findFirst").mockImplementation(async (...args)=>{
-      const unprotected=new Error().stack.includes("prepareClaimedNativePolicy");
-      const row=await find(...args);
-      if(unprotected&&row?.id==="job") {read.mockRestore();pause();await resumed;}
-      return row;
+    const transaction=db.transaction.bind(db);
+    // Pause A at the production transaction boundary, after native preparation
+    // has captured its claim. B must actually deliver while A is still pending.
+    // A then reads the current locked row, not the pre-delivery job snapshot.
+    const preparation=spyOn(db,"transaction").mockImplementation(async (...args)=>{
+      if(new Error().stack.includes("prepareClaimedNativePolicy")) {
+        preparation.mockRestore();pause();await resumed;
+      }
+      return transaction(...args);
     });
     const first=call("/api/agent/jobs");
-    const order=await Promise.race([paused.then(()=>"interleaved"),first.then(()=>"serialized")]);
-    let second;
-    if(order==="interleaved")second=await call("/api/agent/jobs");
-    read.mockRestore();
+    await Promise.race([paused,first.then(()=>{throw new Error("Preparation never reached the transaction barrier");})]);
+    const second=await call("/api/agent/jobs");
+    const delivered=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
+    if(second.status!==200||delivered.result.payloadDeliveryToken!==before.fencingToken)throw new Error("Competing request did not deliver before preparation resumed");
     await db.insert(s.workspaceVariables).values({id:"bad-variable",workspaceId:"ws",key:"CORRUPT_SECRET",value:"",valueEncrypted:"enc:v1:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA==:AA==",sensitive:true,category:"env"});
     resume();
     const firstResponse=await first;
-    if(order==="serialized")second=await call("/api/agent/jobs");
     const job=await db.query.agentJobs.findFirst({where:eq(s.agentJobs.id,"job")});
     const workspace=await db.query.workspaces.findFirst({where:eq(s.workspaces.id,"ws")});
     console.log(JSON.stringify({statuses:[firstResponse.status,second.status].sort(),locked:workspace.locked,recovery:job.result.nativeRecoveryRequired,delivery:job.result.payloadDeliveryToken,fence:job.fencingToken}));

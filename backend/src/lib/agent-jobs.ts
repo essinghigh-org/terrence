@@ -1081,7 +1081,7 @@ export async function failAgentJobDeliveryInTransaction(
 
 /** Terminalize an undelivered job; preserve state recovery after a possible native apply handoff. */
 export async function failAgentJobDelivery(job: AgentJob, reason: string): Promise<void> {
-  await db.transaction(async (transaction) => {
+  const runStatus = await db.transaction(async (transaction): Promise<string | null> => {
     const database = transaction as unknown as Database;
     const rows = await database
       .update(agentJobs)
@@ -1096,13 +1096,14 @@ export async function failAgentJobDelivery(job: AgentJob, reason: string): Promi
       )
       .returning();
     const owned = rows[0];
-    if (owned === undefined) return;
+    if (owned === undefined) return null;
     const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
-    await failAgentJobDeliveryInTransaction(database, owned, run, reason);
+    const status = await failAgentJobDeliveryInTransaction(database, owned, run, reason);
     await database.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, job.runId));
     if (job.agentId !== null) await database.update(agents).set({ status: "idle" }).where(eq(agents.id, job.agentId));
+    return status;
   });
-  notifyRunStatus(job.runId, "errored");
+  if (runStatus !== null) notifyRunStatus(job.runId, runStatus);
 }
 
 /** Persist the fence before returning any runnable payload. An uncertain HTTP delivery stays protected. */

@@ -81,11 +81,23 @@ retained. The tests use only built-in `terraform_data`, a temporary database and
 a private loopback TLS API, with no cloud/repository credentials passed to the
 harness. The actual plugin version is used in the runtime, catalog and policy set.
 
+Each lane also builds Terrence agent revision
+`369e5cb7cbf07a0f83e5d996d72bb5a5ce78668b` and its separate state-sandbox
+helper, then runs all six production API/agent cases against the current server
+checkout: allow with saved apply and a zero-addition follow-up plan, mandatory
+denial, authorized override, post-apply plugin crash, owner cancellation, and
+abrupt agent death/restart with fenced recovery. The failure cases require all
+200 local resources to survive. The workflow requires every case to finish and
+records the server head, tested merge checkout, agent revision and executable
+hashes in synthetic provenance. No additional host privileges or settings are
+introduced by this agent test. Update the agent revision deliberately when
+qualifying a new server/agent release pair.
+
 The pinned lane fails the PR workflow on regressions. The latest lane is advisory
 on PRs, but failures fail scheduled weekly and manual runs. Schedules run only
 from the default branch after merge. Branch protection must explicitly require
 `Native tfpolicy (pinned)` if a required check is desired; this workflow does not
-change repository settings. Release provenance and synthetic case summaries are
+change repository settings. Release and agent-build provenance and synthetic case summaries are
 retained, never the proprietary binary/archive, private API/database, tokens,
 TLS keys or raw real-plugin output. A failed run identifies the first incomplete
 case without publishing plugin diagnostics.

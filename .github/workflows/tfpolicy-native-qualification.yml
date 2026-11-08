@@ -210,6 +210,95 @@ jobs:
           if not success:
               raise SystemExit('Real-plugin compatibility failed; see the case summary.')
           PY
+      - name: Set up Rust for the pinned production agent
+        if: steps.facilities.outputs.ready == 'true'
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: stable
+          cache: false
+      - name: Build the exact matching agent and its state sandbox
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          AGENT_REVISION: 369e5cb7cbf07a0f83e5d996d72bb5a5ce78668b
+          SERVER_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/terrence-agent"
+          git -C "$RUNNER_TEMP/terrence-agent" remote add origin https://github.com/essinghigh-org/terrence-agent.git
+          git -C "$RUNNER_TEMP/terrence-agent" fetch --depth=1 origin "$AGENT_REVISION"
+          test "$(git -C "$RUNNER_TEMP/terrence-agent" rev-parse FETCH_HEAD)" = "$AGENT_REVISION"
+          git -C "$RUNNER_TEMP/terrence-agent" checkout --detach FETCH_HEAD
+          cargo build --locked --release --manifest-path "$RUNNER_TEMP/terrence-agent/Cargo.toml" --target-dir "$RUNNER_TEMP/agent-target"
+          sh "$RUNNER_TEMP/terrence-agent/bin/build-landlock-runner.sh"
+          install -m 0555 "$RUNNER_TEMP/agent-target/release/terrence-agent" "$RUNNER_TEMP/native-bin/terrence-agent"
+          install -m 0555 "$RUNNER_TEMP/terrence-agent/bin/landlock-runner" "$RUNNER_TEMP/native-bin/agent-landlock-runner"
+          python3 - <<'PYTHON'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          base = Path(os.environ['RUNNER_TEMP'])
+          def sha256(path):
+              with path.open('rb') as source:
+                  return hashlib.file_digest(source, 'sha256').hexdigest()
+          provenance = {
+              'serverHead': os.environ['SERVER_HEAD'],
+              'serverCheckout': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'agentRevision': os.environ['AGENT_REVISION'],
+              'agentSha256': sha256(base/'native-bin/terrence-agent'),
+              'agentRunnerSha256': sha256(base/'native-bin/agent-landlock-runner'),
+              'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
+          }
+          (base/'native-agent-provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
+          PYTHON
+      - name: Require real-plugin production-agent compatibility
+        if: steps.facilities.outputs.ready == 'true'
+        env:
+          DELEGATED_CGROUP: ${{ steps.isolation.outputs.cgroup_root }}
+          PLUGIN_VERSION: ${{ steps.plugin.outputs.version }}
+          PLUGIN_PATH: ${{ steps.plugin.outputs.plugin }}
+          PLUGIN_SHA256: ${{ steps.plugin.outputs.sha256 }}
+          PLUGIN_ARCHIVE: ${{ steps.plugin.outputs.archive }}
+        run: |
+          set -euo pipefail
+          # Reuse the owned isolation without granting extra host privileges.
+          # The API, agent and plugin inherit no CI or repository credentials.
+          BUN_DIR="$(dirname "$(command -v bun)")"
+          set +e
+          sudo bash -ec 'echo $$ > "$1/launcher/cgroup.procs"; shift; exec setpriv --reuid="$1" --regid="$2" --init-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs env -i "${@:3}"' -- \
+            "$DELEGATED_CGROUP" "$(id -u)" "$(id -g)" "PATH=$BUN_DIR:/usr/bin:/bin" \
+            python3 "$GITHUB_WORKSPACE/tools/tfpolicy-supervisor/integration/real-owner.py" \
+            --owner "$RUNNER_TEMP/native-bin/owner" --profile "$RUNNER_TEMP/native-owner-profile.json" \
+            --plugin "$PLUGIN_PATH" --plugin-sha256 "$PLUGIN_SHA256" --plugin-version "$PLUGIN_VERSION" \
+            --plugin-archive "$PLUGIN_ARCHIVE" --cgroup-root "$DELEGATED_CGROUP" \
+            --repository "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/real-agent-results" \
+            --agent-binary "$RUNNER_TEMP/native-bin/terrence-agent" \
+            --agent-runner "$RUNNER_TEMP/native-bin/agent-landlock-runner" \
+            --cases allow,deny,override,apply-crash,apply-cancel,agent-death \
+            > "$RUNNER_TEMP/real-agent-private.log" 2>&1
+          status=$?
+          set -e
+          HARNESS_STATUS="$status" python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          base = Path(os.environ['RUNNER_TEMP'])
+          path = base/'real-agent-results/api/summary.json'
+          expected = ['allow','deny','override','apply-crash','apply-cancel','agent-death']
+          rows = json.loads(path.read_text())['nativeAgentCases'] if path.exists() else []
+          passed = [row['mode'] for row in rows if row['passed'] is True]
+          assert passed == expected[:len(rows)], 'unexpected agent compatibility case results'
+          success = os.environ['HARNESS_STATUS'] == '0' and passed == expected
+          provenance = json.loads((base/'native-agent-provenance.json').read_text())
+          summary = {'version': os.environ['PLUGIN_VERSION'], **provenance,
+                     'passed': passed, 'success': success,
+                     'firstIncompleteCase': None if passed == expected else expected[len(passed)]}
+          (base/'real-agent-summary.json').write_text(json.dumps(summary, indent=2)+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Official tfpolicy-plugin '+summary['version']+': '+str(len(passed))+'/'+str(len(expected))+' production-agent compatibility cases passed.\n')
+              output.write('Server '+summary['serverHead']+' (checkout '+summary['serverCheckout']+'), agent '+summary['agentRevision']+'.\n')
+              if not success:
+                  output.write('First incomplete case: '+str(summary['firstIncompleteCase'])+'. Raw plugin output remains private on the ephemeral runner.\n')
+          if not success:
+              raise SystemExit('Real-agent compatibility failed; see the case summary.')
+          PYTHON
       - name: Require actual native qualification facilities
         if: steps.facilities.outputs.ready != 'true'
         run: |
@@ -247,5 +336,7 @@ jobs:
             ${{ runner.temp }}/native-owner-results.log
             ${{ runner.temp }}/official-plugin/provenance.json
             ${{ runner.temp }}/real-plugin-summary.json
+            ${{ runner.temp }}/native-agent-provenance.json
+            ${{ runner.temp }}/real-agent-summary.json
           if-no-files-found: error
           retention-days: 7
