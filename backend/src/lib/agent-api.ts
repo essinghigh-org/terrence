@@ -186,6 +186,7 @@ export type AgentJobDetails = Readonly<{
   workspace: DeepReadonly<typeof workspaces.$inferSelect>;
   organizationName: string;
   configuration: DeepReadonly<typeof configurationVersions.$inferSelect> | null;
+  nativePolicy?: boolean;
 }>;
 
 /** Mint a run token for the agent's cloud-protocol calls. */
@@ -229,6 +230,9 @@ export async function buildAgentJobPayload(
     iac_binary: job.iacBinary,
     working_directory: workspace.workingDirectory ?? "",
     parallelism: 10,
+    ...(details.nativePolicy === true
+      ? { native_policy_url: artifactUrl("/native-policy"), native_result_url: artifactUrl("/native-result") }
+      : {}),
     configuration_version_url: configurationUrl,
     filesystem_url: artifactUrl("/filesystem"),
     terraform_url: terraformInfo.url,

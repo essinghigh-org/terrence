@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,14 +16,38 @@ import (
 )
 
 type Config struct {
-	SocketDirectory      string   `json:"socketDirectory"`
-	SchemaVersion        int      `json:"schemaVersion"`
-	PluginPath           string   `json:"pluginPath"`
-	PluginSHA256         string   `json:"pluginSha256"`
-	LandlockRunnerPath   string   `json:"landlockRunnerPath"`
-	LandlockRunnerSHA256 string   `json:"landlockRunnerSha256"`
-	PolicyReadRoots      []string `json:"policyReadRoots"`
-	TemporaryDirectory   string   `json:"temporaryDirectory"`
+	SocketDirectory      string       `json:"socketDirectory"`
+	SchemaVersion        int          `json:"schemaVersion"`
+	PluginPath           string       `json:"pluginPath"`
+	PluginSHA256         string       `json:"pluginSha256"`
+	LandlockRunnerPath   string       `json:"landlockRunnerPath"`
+	LandlockRunnerSHA256 string       `json:"landlockRunnerSha256"`
+	PolicyReadRoots      []string     `json:"policyReadRoots"`
+	TemporaryDirectory   string       `json:"temporaryDirectory"`
+	RunContext           *RunContext  `json:"runContext,omitempty"`
+	EntitlementCA        *Certificate `json:"entitlementCA,omitempty"`
+}
+
+// RunContext is supplied only through the supervisor's private configuration
+// descriptor. It never enters a child environment or the observed RPC journal.
+type RunContext struct {
+	Host         string `json:"host"`
+	Organization string `json:"organization"`
+	Token        string `json:"token"`
+}
+
+func (c *RunContext) validate() error {
+	if c == nil {
+		return nil
+	}
+	u, err := url.Parse("https://" + c.Host)
+	if err != nil || u.Host != c.Host || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || len(c.Host) > 512 || strings.ContainsAny(c.Host, "\x00\r\n\t ") {
+		return errors.New("invalid native policy entitlement host")
+	}
+	if c.Organization == "" || len(c.Organization) > 256 || strings.ContainsAny(c.Organization, "/\\?#\x00\r\n\t ") || c.Token == "" || len(c.Token) > 8192 || strings.ContainsAny(c.Token, "\x00\r\n\t ") {
+		return errors.New("invalid native policy entitlement identity")
+	}
+	return nil
 }
 
 func ReadConfig(r io.Reader) (Config, error) {
@@ -38,6 +63,9 @@ func ReadConfig(r io.Reader) (Config, error) {
 	}
 	if c.SchemaVersion != 1 || len(c.PolicyReadRoots) == 0 || len(c.PolicyReadRoots) > 1000 {
 		return c, errors.New("unsupported recorder configuration")
+	}
+	if err := c.RunContext.validate(); err != nil {
+		return c, err
 	}
 	if err := canonical(c.SocketDirectory); err != nil {
 		return c, err
@@ -125,6 +153,9 @@ func immutableRoot(root string) error {
 // The caller owns cleanup even when go-plugin exits via os.Exit.
 func PrepareCommand(c Config) (*exec.Cmd, string, func(), error) {
 	noop := func() {}
+	if err := c.EntitlementCA.validate(); err != nil {
+		return nil, "", noop, err
+	}
 	if err := pinnedExecutable(c.PluginPath, c.PluginSHA256); err != nil {
 		return nil, "", noop, err
 	}
@@ -162,6 +193,9 @@ func PrepareCommand(c Config) (*exec.Cmd, string, func(), error) {
 		return nil, "", noop, errors.New("plugin temporary directory too long for Unix sockets")
 	}
 	args := []string{"--deny-debug", "--connect-unix=" + tmp, "--rw=" + tmp, "--rx=" + c.PluginPath}
+	if c.EntitlementCA != nil {
+		args = append(args, "--ro="+c.EntitlementCA.Path)
+	}
 	for _, root := range c.PolicyReadRoots {
 		args = append(args, "--ro="+root)
 	}
@@ -185,6 +219,9 @@ func PrepareCommand(c Config) (*exec.Cmd, string, func(), error) {
 	cmd := exec.Command(c.LandlockRunnerPath, args...)
 	cmd.Dir = tmp
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + tmp, "TMPDIR=" + tmp}
+	if c.EntitlementCA != nil {
+		cmd.Env = append(cmd.Env, "SSL_CERT_FILE="+c.EntitlementCA.Path)
+	}
 	// Inherit the supervisor-owned process group so its kill covers every child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	// Deliberately no ExtraFiles: journal/config/executable descriptors never reach BYOB.

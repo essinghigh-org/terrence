@@ -39,6 +39,8 @@ import {
   findClaimedAgentJob,
   isAgentResultValid,
   MAX_AGENT_RESULT_BYTES,
+  markAgentJobPayloadDelivered,
+  failAgentJobDelivery,
   parseAgentFencingToken,
   type AgentJobCompletion,
   type ClaimedAgentJob,
@@ -63,7 +65,7 @@ import {
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS, agentPoolTokenExpiresAt, isAgentPoolTokenActive } from "../lib/agent-token";
-import { AGENT_PROTOCOL_CAPABILITIES, AGENT_PROTOCOL_VERSION } from "../lib/agent-protocol";
+import { LEGACY_AGENT_CAPABILITIES, AGENT_PROTOCOL_VERSION } from "../lib/agent-protocol";
 
 const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
@@ -1321,7 +1323,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
         ipAddress,
         version,
         protocolVersion: AGENT_PROTOCOL_VERSION,
-        capabilities: [...AGENT_PROTOCOL_CAPABILITIES],
+        capabilities: [...LEGACY_AGENT_CAPABILITIES],
         artifactFormats: ["tar.gz", "json", "text"],
         architecture,
         iacBinaries,
@@ -1339,7 +1341,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
             "ip-address": ipAddress,
             version,
             "protocol-version": AGENT_PROTOCOL_VERSION,
-            capabilities: [...AGENT_PROTOCOL_CAPABILITIES],
+            capabilities: [...LEGACY_AGENT_CAPABILITIES],
             "artifact-formats": ["tar.gz", "json", "text"],
             architecture,
             "iac-binaries": iacBinaries,
@@ -1483,7 +1485,15 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 204;
       return {};
     }
-    return { data: agentJobResource(job) };
+    const data = agentJobResource(job);
+    try {
+      await markAgentJobPayloadDelivered(job.job, job.nativePolicy != null);
+    } catch {
+      await failAgentJobDelivery(job.job, "Agent payload preparation changed before delivery");
+      (set as { status: number }).status = 503;
+      return { errors: [{ status: "503", title: "Agent payload unavailable" }] };
+    }
+    return { data };
   })
   .post("/api/v2/agents/:agent_id/stack-jobs/poll", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params["agent_id"] ?? "";

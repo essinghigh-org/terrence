@@ -1,11 +1,9 @@
 # Native Terraform policy bootstrap candidate
 
-**Not enabled. Not an admission authority.** This standalone Linux transport is a
-candidate component for the trusted launcher. Existing Terrence runtime guards
-remain unchanged. Authenticated journal sealing, actual engine exit/stdout
-correlation, snapshot verification, sandbox/cgroup setup, and native integration
-validation are separate prerequisites. Do not advertise BYOB execution as enabled
-by installing these binaries.
+The transport is now used by the opt-in hosted execution owner in this draft.
+See [native execution setup and remaining acceptance work](../tfpolicy-engine/HANDOFF.md).
+Current agents remain blocked. Installing these binaries alone does not configure
+or qualify native execution.
 
 Stock Terraform executes `$TF_POLICY_PLUGIN rpcapi` and supplies its AutoMTLS
 **public** client certificate as `PLUGIN_CLIENT_CERT`. Its private key remains

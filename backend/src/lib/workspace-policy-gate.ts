@@ -6,6 +6,7 @@ import { logs, policies, policyChecks, policySetParameters, policySets } from ".
 import { resolveWorkspacePolicySetIds } from "./policy-set-scope";
 import { getPolicyEnforcementSettings, type PolicyEnforcementSettings } from "./policy-enforcement";
 import { newResourceId } from "./resource-id";
+import { nativePolicySnapshotInfo, nativeAdmissionError, type NativeSnapshotInfo } from "./tfpolicy-native";
 
 type Database = Readonly<typeof db>;
 type Workspace = Readonly<{ id: string; orgId: string }>;
@@ -42,6 +43,7 @@ export type WorkspacePolicySnapshot = {
   parameters: (typeof policySetParameters.$inferSelect)[];
   enforcement: PolicyEnforcementSettings;
   disabledSets: (typeof policySets.$inferSelect)[];
+  nativeInfo?: NativeSnapshotInfo;
 };
 
 export async function loadWorkspacePolicySnapshot(
@@ -69,10 +71,19 @@ export async function loadWorkspacePolicySnapshot(
     set.kind === "opa" ? enforcement.opa : set.kind === "sentinel" ? enforcement.sentinel : true,
   );
   const enabledIds = new Set(enabledSets.map((set) => set.id));
+  const nativeInfo = await nativePolicySnapshotInfo(database, enabledSets);
   // Hash persisted source, tool versions, override permissions, parameters and scope.
   // Never persist the parameter values in a public policy-check result.
   const fingerprint = createHash("sha256")
-    .update(JSON.stringify({ sets, policies: policyRows, parameters, enforcement }))
+    .update(
+      JSON.stringify({
+        sets,
+        policies: policyRows,
+        parameters,
+        enforcement,
+        ...(nativeInfo === undefined ? {} : { nativeInfo }),
+      }),
+    )
     .digest("hex");
   return {
     fingerprint,
@@ -81,13 +92,19 @@ export async function loadWorkspacePolicySnapshot(
     parameters,
     enforcement,
     disabledSets: sets.filter((set) => !enabledIds.has(set.id)),
+    ...(nativeInfo === undefined ? {} : { nativeInfo }),
   };
 }
 
 export type WorkspacePolicyEvaluation = Readonly<{ id: string; snapshot: WorkspacePolicySnapshot }>;
 
-function unsupportedRuntimeError(snapshot: DeepReadonly<WorkspacePolicySnapshot>): string | null {
-  const unsupported = snapshot.sets.find((set) => !["opa", "sentinel"].includes(set.kind));
+function unsupportedRuntimeError(
+  snapshot: DeepReadonly<WorkspacePolicySnapshot>,
+  nativeSupported = false,
+): string | null {
+  const unsupported = snapshot.sets.find(
+    (set) => !["opa", "sentinel"].includes(set.kind) && !(nativeSupported && set.kind === "tfpolicy"),
+  );
   return unsupported === undefined
     ? null
     : `${unsupported.kind} policy set ${unsupported.name} (${unsupported.id}) cannot be evaluated because the ${unsupported.kind} runtime is not supported`;
@@ -100,9 +117,10 @@ export async function workspacePolicyPlanningError(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
   database: Database,
   workspace: Workspace,
+  nativeSupported = false,
 ): Promise<string | null> {
   try {
-    const reason = unsupportedRuntimeError(await loadWorkspacePolicySnapshot(database, workspace));
+    const reason = unsupportedRuntimeError(await loadWorkspacePolicySnapshot(database, workspace), nativeSupported);
     return reason === null ? null : `Plan blocked: ${reason}`;
   } catch (error: unknown) {
     return `Plan blocked: policy configuration could not be verified: ${error instanceof Error ? error.message : "unknown error"}`;
@@ -200,6 +218,10 @@ export async function workspacePolicyExecutionError(
   }
 }
 
+function nativeRuntimeConfigured(snapshot: DeepReadonly<WorkspacePolicySnapshot>, runId: string | undefined): boolean {
+  return runId !== undefined && typeof snapshot.nativeInfo?.profileDigest === "string";
+}
+
 /** Recheck the exact generation at override and immediately before apply. */
 async function workspacePolicyExecutionErrorImpl(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
@@ -209,7 +231,8 @@ async function workspacePolicyExecutionErrorImpl(
   allowOverride = false,
 ): Promise<string | null> {
   const snapshot = await loadWorkspacePolicySnapshot(database, workspace);
-  const unsupported = unsupportedRuntimeError(snapshot);
+  const hasNative = snapshot.sets.some((set) => set.kind === "tfpolicy");
+  const unsupported = unsupportedRuntimeError(snapshot, nativeRuntimeConfigured(snapshot, runId));
   if (unsupported !== null) return `Apply blocked: ${unsupported}`;
   if (runId === undefined) return null;
   const checkpoint = await latestWorkspacePolicyEvaluation(database, runId);
@@ -221,6 +244,10 @@ async function workspacePolicyExecutionErrorImpl(
     return "Apply blocked: policies or enforcement settings changed after evaluation; create a new plan";
   if (checkpoint.status !== "passed")
     return "Apply blocked: policy evaluation is incomplete or errored; create a new plan";
+  if (hasNative) {
+    const reason = await nativeAdmissionError(database, workspace, runId, checkpoint, snapshot, allowOverride);
+    if (reason !== null) return `Apply blocked: ${reason}`;
+  }
   const checks = await database.query.policyChecks.findMany({ where: eq(policyChecks.runId, runId) });
   const currentChecks = checks.filter((check) => check.result?.["policyEvaluationId"] === checkpoint.id);
   for (const policy of snapshot.policies) {
@@ -253,6 +280,14 @@ export async function overridableWorkspacePolicyChecks(
     if (checkId !== undefined && check.id !== checkId) return false;
     if (check.result?.["policyEvaluationId"] !== checkpoint.id || !["failed", "soft_failed"].includes(check.status))
       return false;
+    if (check.result["native"] === true) {
+      const set = snapshot.sets.find((item) => item.id === check.policySetId);
+      return (
+        set?.kind === "tfpolicy" &&
+        check.status === "soft_failed" &&
+        check.result["nativeEnforcement"] === "mandatory_overridable"
+      );
+    }
     const policy = snapshot.policies.find((item) => item.id === check.policyId);
     const set = snapshot.sets.find((item) => item.id === policy?.policySetId);
     return policy !== undefined && policyFailureIsOverridable(policy, set);

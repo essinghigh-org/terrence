@@ -7,6 +7,7 @@ import {
   completeWorkspacePolicyEvaluation,
   policyFailureIsOverridable,
   type WorkspacePolicySnapshot,
+  type WorkspacePolicyEvaluation,
 } from "./workspace-policy-gate";
 import { runConfigurationTrusted } from "./run-trust";
 import { integerSetting } from "./runtime-config";
@@ -21,8 +22,10 @@ import {
   agents,
   configurationVersions,
   logs,
+  organizations,
   policyChecks,
   runs,
+  runTokens,
   stateVersions,
   workspaces,
 } from "../db/schema";
@@ -31,12 +34,25 @@ import { reportRunVcsStatus } from "./webhooks";
 import { planJsonResourceCounts, readPlanJsonArtifact, writePlanJsonArtifact, type PlanJson } from "./plan-json";
 import type { DeepReadonly } from "./utils";
 import { insertStateVersionWithSerialTx } from "./state-serial";
-import { encryptStatePayload } from "./validation";
+import { encryptStatePayload, parseTerraformStatePayload } from "./validation";
 import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./run-status";
 import { captureRecoveryStatePayload } from "./recovery-files";
-import { agentSupportsPhase, effectiveAgentExecutionPolicy, LEGACY_AGENT_CAPABILITIES } from "./agent-protocol";
+import {
+  agentSupportsPhase,
+  agentSupportsCapability,
+  effectiveAgentExecutionPolicy,
+  LEGACY_AGENT_CAPABILITIES,
+  NATIVE_AGENT_CAPABILITY,
+} from "./agent-protocol";
+import { prepareNativeRun, nativePolicyVerdict, type NativeRun } from "./tfpolicy-native";
+import {
+  readNativeAgentCandidate,
+  persistNativeAgentPlan,
+  revokeNativeAgentLease,
+  type NativeCandidate,
+} from "./agent-native-policy";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -197,6 +213,7 @@ export type ClaimedAgentJob = Readonly<{
   inputState: Readonly<typeof stateVersions.$inferSelect> | null;
   planResult: Readonly<Record<string, unknown>> | null;
   policyEvaluation: AgentPolicyEvaluation | null;
+  nativePolicy?: NativeRun | null;
 }>;
 
 type AgentPolicyOutcome = Readonly<{
@@ -234,9 +251,12 @@ function notifyRunStatus(runId: string, status: string): void {
 
 async function getAgentPolicyEvaluation(
   snapshot: DeepReadonly<WorkspacePolicySnapshot>,
+  nativeVerified = false,
 ): Promise<AgentPolicyEvaluation | null> {
   const effectiveSets = snapshot.sets;
-  const unsupportedSets = effectiveSets.filter((set) => set.kind !== "sentinel" || !set.agentEnabled);
+  const unsupportedSets = effectiveSets.filter(
+    (set) => !(nativeVerified && set.kind === "tfpolicy") && (set.kind !== "sentinel" || !set.agentEnabled),
+  );
   const effectivePolicies = snapshot.policies;
   const parameters = snapshot.parameters;
   const policySetsWithPolicies: AgentPolicyEvaluation["policySets"][number][] = [];
@@ -367,6 +387,33 @@ async function recordUnsupportedAgentPolicies(
   }
 }
 
+async function recordNativeAgentPolicies(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  runId: string,
+  checkpointId: string,
+  fingerprint: string,
+  native?: DeepReadonly<NativeCandidate>,
+): Promise<AgentPolicyVerdict | null> {
+  if (native === undefined) return { hardFailed: false, softFailed: false };
+  if (native.context.evaluation.id !== checkpointId || native.context.evaluation.snapshot.fingerprint !== fingerprint)
+    return null;
+  await persistNativeAgentPlan(database, native);
+  return nativePolicyVerdict(database, runId, native.context.evaluation);
+}
+
+async function finishAgentPolicyEvaluation(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  workspace: Workspace,
+  checkpointId: string,
+  fingerprint: string,
+  verdict: AgentPolicyVerdict,
+): Promise<AgentPolicyOutcome> {
+  const unchanged = await completeWorkspacePolicyEvaluation(database, workspace, { id: checkpointId, fingerprint });
+  return { evaluated: true, hardFailed: !unchanged || verdict.hardFailed, softFailed: verdict.softFailed };
+}
+
 async function recordAgentPolicyChecks(
   // Drizzle's transaction/query client is stateful by design.
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -375,20 +422,18 @@ async function recordAgentPolicyChecks(
   runId: string,
   result: Readonly<Record<string, unknown>>,
   now: number,
+  native?: DeepReadonly<NativeCandidate>,
 ): Promise<AgentPolicyOutcome> {
   const checkpoint = await latestWorkspacePolicyEvaluation(database, runId);
   const snapshot = await loadWorkspacePolicySnapshot(database, workspace);
   if (checkpoint?.result?.["fingerprint"] !== snapshot.fingerprint) {
     return { evaluated: true, hardFailed: true, softFailed: false };
   }
-  const evaluation = await getAgentPolicyEvaluation(snapshot);
-  if (evaluation === null) {
-    const unchanged = await completeWorkspacePolicyEvaluation(database, workspace, {
-      id: checkpoint.id,
-      fingerprint: snapshot.fingerprint,
-    });
-    return { evaluated: true, hardFailed: !unchanged, softFailed: false };
-  }
+  const nativeOutcome = await recordNativeAgentPolicies(database, runId, checkpoint.id, snapshot.fingerprint, native);
+  if (nativeOutcome === null) return { evaluated: true, hardFailed: true, softFailed: false };
+  const evaluation = await getAgentPolicyEvaluation(snapshot, native !== undefined);
+  if (evaluation === null)
+    return finishAgentPolicyEvaluation(database, workspace, checkpoint.id, snapshot.fingerprint, nativeOutcome);
 
   if (evaluation.unsupportedSets.length > 0) {
     await recordUnsupportedAgentPolicies(database, runId, checkpoint.id, evaluation.unsupportedSets, now);
@@ -396,8 +441,8 @@ async function recordAgentPolicyChecks(
   }
 
   const reported = agentPolicyResults(result);
-  let hardFailed = false;
-  let softFailed = false;
+  let hardFailed = nativeOutcome.hardFailed;
+  let softFailed = nativeOutcome.softFailed;
   for (const policySet of evaluation.policySets) {
     for (const policy of policySet.policies) {
       const outcome = reported.get(policy.id);
@@ -419,14 +464,10 @@ async function recordAgentPolicyChecks(
       softFailed = softFailed || verdict.softFailed;
     }
   }
-  if (
-    !(await completeWorkspacePolicyEvaluation(database, workspace, {
-      id: checkpoint.id,
-      fingerprint: snapshot.fingerprint,
-    }))
-  )
-    hardFailed = true;
-  return { evaluated: true, hardFailed, softFailed };
+  return finishAgentPolicyEvaluation(database, workspace, checkpoint.id, snapshot.fingerprint, {
+    hardFailed,
+    softFailed,
+  });
 }
 
 type StaleAgentRecoveryHook = (
@@ -446,7 +487,7 @@ class StaleAgentRecoveryRaceError extends Error {
   }
 }
 
-type RecoveredStaleAgentJob = Readonly<{ jobId: string; runId: string; runStatus: string }>;
+type RecoveredStaleAgentJob = Readonly<{ jobId: string; runId: string; runStatus: string; job: AgentJob }>;
 
 function isPostgresRecoveryRace(error: unknown): boolean {
   if (typeof error !== "object" || error === null || !("code" in error)) return false;
@@ -454,14 +495,68 @@ function isPostgresRecoveryRace(error: unknown): boolean {
   return code === "40P01" || code === "40001";
 }
 
-async function recoverOneStaleAgentJob(
+function isNativeApply(job: AgentJob): boolean {
+  return job.phase === "apply" && typeof job.result?.["nativePolicyEvaluationId"] === "string";
+}
+
+function nativeApplyWasAdmitted(job: AgentJob): boolean {
+  return isNativeApply(job) && job.result?.["policyApplyAdmissionToken"] === job.fencingToken;
+}
+
+/** The marker commits before any runnable payload leaves the server. Its
+ * presence means possible delivery, even if the HTTP response was lost.
+ * Older leases without tracking remain ambiguous and must stay protected. */
+function nativeApplyWasNotDelivered(job: AgentJob): boolean {
+  return (
+    isNativeApply(job) &&
+    job.result?.["payloadDeliveryTrackingToken"] === job.fencingToken &&
+    job.result["nativeRecoveryRequired"] !== true &&
+    job.result["payloadDeliveryToken"] !== job.fencingToken
+  );
+}
+
+function nativeApplyNeedsRecovery(job: AgentJob): boolean {
+  return isNativeApply(job) && job.result?.["nativeStateRecovered"] !== true && !nativeApplyWasNotDelivered(job);
+}
+
+async function holdNativeApplyForRecovery(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
   job: AgentJob,
+  run: AgentRunRow | undefined,
+  reason: string,
+): Promise<string | null> {
+  const canceled = run?.status === "canceled" || run?.status === "force_canceled";
+  const runStatus = canceled ? run.status : "errored";
+  const held = await database
+    .update(agentJobs)
+    .set({
+      status: canceled ? "canceled" : "errored",
+      completedAt: Date.now(),
+      errorMessage: reason,
+      result: { ...job.result, nativeRecoveryRequired: true },
+    })
+    .where(and(eq(agentJobs.id, job.id), eq(agentJobs.fencingToken, job.fencingToken), eq(agentJobs.status, "claimed")))
+    .returning({ id: agentJobs.id });
+  if (held.length === 0) return null;
+  if (run !== undefined && !canceled)
+    await database
+      .update(runs)
+      .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
+      .where(and(eq(runs.id, run.id), inArray(runs.status, ["applying", "apply_queued"])));
+  return runStatus;
+}
+
+function agentPhaseRunStatuses(phase: string): readonly [string, string] {
+  return phase === "plan" ? ["planning", "plan_queued"] : ["applying", "apply_queued"];
+}
+
+async function recoverOneStaleAgentJob(
+  snapshot: AgentJob,
   now: number,
   afterRunQueued: StaleAgentRecoveryHook | undefined,
 ): Promise<RecoveredStaleAgentJob | null> {
-  const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
-  const queuedRunStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
-  const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
+  const owner = snapshot.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, snapshot.agentId);
 
   return db.transaction(async (transaction): Promise<RecoveredStaleAgentJob | null> => {
     const database = transaction as unknown as Database;
@@ -470,10 +565,21 @@ async function recoverOneStaleAgentJob(
     // run-first visible state transition that closes the failover race.
     const lockedJobs = await database
       .update(agentJobs)
-      .set({ agentId: job.agentId })
-      .where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed"), owner))
-      .returning({ id: agentJobs.id });
-    if (lockedJobs.length === 0) return null;
+      .set({ agentId: snapshot.agentId })
+      .where(
+        and(
+          eq(agentJobs.id, snapshot.id),
+          eq(agentJobs.status, "claimed"),
+          eq(agentJobs.fencingToken, snapshot.fencingToken),
+          owner,
+        ),
+      )
+      .returning();
+    const job = lockedJobs[0];
+    if (job === undefined) return null;
+    // Admission may have committed after the sweep read its candidate list.
+    // Decide recovery from the locked lease, never from that earlier snapshot.
+    const [expectedRunStatus, queuedRunStatus] = agentPhaseRunStatuses(job.phase);
 
     const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     if (run === undefined) {
@@ -484,6 +590,11 @@ async function recoverOneStaleAgentJob(
       return null;
     }
 
+    if (isNativeApply(job)) {
+      const runStatus = await failAgentJobDeliveryInTransaction(database, job, run, "Native agent lease expired");
+      await database.update(runTokens).set({ revokedAt: now }).where(eq(runTokens.runId, job.runId));
+      return runStatus === null ? null : { jobId: job.id, runId: job.runId, runStatus, job };
+    }
     if (run.status === expectedRunStatus) {
       const updatedRuns = await database
         .update(runs)
@@ -548,7 +659,7 @@ async function recoverOneStaleAgentJob(
           ),
         );
     }
-    return { jobId: job.id, runId: job.runId, runStatus: queuedRunStatus };
+    return { jobId: job.id, runId: job.runId, runStatus: queuedRunStatus, job };
   });
 }
 
@@ -591,7 +702,12 @@ export async function recoverStaleAgentJobs(
   for (const job of staleJobs) {
     try {
       const recovered = await recoverOneStaleAgentJob(job, now, afterRunQueued);
-      if (recovered !== null) recoveredJobs.push(recovered);
+      if (recovered !== null) {
+        recoveredJobs.push(recovered);
+        const lease = recovered.job;
+        if (typeof lease.result?.["nativePolicyEvaluationId"] === "string")
+          await revokeNativeAgentLease(lease.runId, lease.result["nativePolicyEvaluationId"], lease);
+      }
     } catch (error: unknown) {
       if (error instanceof StaleAgentRecoveryRaceError || isPostgresRecoveryRace(error)) continue;
       throw error;
@@ -646,11 +762,16 @@ async function releaseCanceledRunLocks(now = Date.now()): Promise<void> {
     // Active jobs are the main sweep's business (or a mid-cancel window).
     if (activeJob !== undefined) continue;
     const outstanding = await db.query.agentJobs.findMany({
-      where: and(eq(agentJobs.runId, run.id), eq(agentJobs.status, "canceled")),
-      columns: { agentId: true },
+      where: and(eq(agentJobs.runId, run.id), inArray(agentJobs.status, ["canceled", "errored"])),
     });
+    if (outstanding.some(nativeApplyNeedsRecovery)) continue;
     const agentIds = [
-      ...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null)),
+      ...new Set(
+        outstanding
+          .filter((job) => !nativeApplyWasNotDelivered(job))
+          .map((job): string | null => job.agentId)
+          .filter((id): id is string => id !== null),
+      ),
     ];
     if (await hasLiveAgent(agentIds, cutoff)) continue;
     await db
@@ -684,12 +805,21 @@ export async function isLiveRunLock(
   if (run === undefined) return false;
   if (!isTerminalRunStatus(run.status)) return true;
   if (lockOwnerType !== "agent-run") return false;
+  const recovery = await db.query.agentJobs.findMany({
+    where: and(eq(agentJobs.runId, lockOwnerId), eq(agentJobs.status, "errored")),
+  });
+  if (recovery.some((job) => job.result?.["nativeRecoveryRequired"] === true)) return true;
   const outstanding = await db.query.agentJobs.findMany({
     where: and(eq(agentJobs.runId, lockOwnerId), eq(agentJobs.status, "canceled")),
-    columns: { agentId: true },
   });
+  if (outstanding.some(nativeApplyNeedsRecovery)) return true;
   const agentIds = [
-    ...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null)),
+    ...new Set(
+      outstanding
+        .filter((job) => !nativeApplyWasNotDelivered(job))
+        .map((job): string | null => job.agentId)
+        .filter((id): id is string => id !== null),
+    ),
   ];
   return hasLiveAgent(agentIds, Date.now() - configuredHeartbeatTimeoutMs());
 }
@@ -752,6 +882,16 @@ function agentApplyIsAssociated(
   );
 }
 
+async function jobSupportsNativePolicy(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  job: AgentJob,
+): Promise<boolean> {
+  if (job.agentId === null) return false;
+  const agent = await database.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
+  return agent !== undefined && agentSupportsCapability(agent, NATIVE_AGENT_CAPABILITY);
+}
+
 async function agentDeliveryPolicyError(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
   database: Database,
@@ -767,11 +907,25 @@ async function agentDeliveryPolicyError(
       run.workspaceId !== workspace.id
     )
       return "Plan blocked: agent claim is not associated with an active run and its workspace";
-    return workspacePolicyPlanningError(database, workspace);
+    return workspacePolicyPlanningError(database, workspace, await jobSupportsNativePolicy(database, job));
   }
   if (workspace === undefined || !agentApplyIsAssociated(job, run, workspace))
     return "Apply blocked: agent claim is not associated with an active run and its workspace lock";
-  return workspacePolicyExecutionError(database, workspace, job.runId);
+  return agentApplyPolicyError(database, workspace, job.runId, await jobSupportsNativePolicy(database, job));
+}
+
+async function agentApplyPolicyError(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  workspace: Workspace,
+  runId: string,
+  nativeSupported = false,
+): Promise<string | null> {
+  // Hosted admission never grants a legacy agent a native execution capability.
+  return (
+    (await workspacePolicyPlanningError(database, workspace, nativeSupported)) ??
+    workspacePolicyExecutionError(database, workspace, runId)
+  );
 }
 
 /** Apply admission is persisted before returning credentials/artifacts. A retry
@@ -842,7 +996,9 @@ async function agentDispatchPolicyEvaluation(
   job: AgentJob,
   run: DeepReadonly<typeof runs.$inferSelect>,
   workspace: Workspace,
-): Promise<Readonly<{ evaluation: AgentPolicyEvaluation | null }> | undefined> {
+): Promise<
+  Readonly<{ evaluation: AgentPolicyEvaluation | null; nativeEvaluation: WorkspacePolicyEvaluation }> | undefined
+> {
   const dispatchKey = `${job.id}:${job.fencingToken}`;
   const previous = await latestWorkspacePolicyEvaluation(db, run.id);
   const evaluation =
@@ -853,19 +1009,175 @@ async function agentDispatchPolicyEvaluation(
     previous?.result?.["dispatchKey"] === dispatchKey &&
     previous.result["fingerprint"] !== evaluation.snapshot.fingerprint
   ) {
-    await db
-      .update(agentJobs)
-      .set({
-        status: "errored",
-        completedAt: Date.now(),
-        errorMessage: "Policies changed after agent dispatch; create a new plan",
-      })
-      .where(and(eq(agentJobs.id, job.id), eq(agentJobs.fencingToken, job.fencingToken)));
-    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, run.id));
-    notifyRunStatus(run.id, "errored");
+    await failAgentJobDelivery(job, "Policies changed after agent dispatch; create a new plan");
     return undefined;
   }
-  return { evaluation: await getAgentPolicyEvaluation(evaluation.snapshot) };
+  return {
+    evaluation: await getAgentPolicyEvaluation(evaluation.snapshot, await jobSupportsNativePolicy(db, job)),
+    nativeEvaluation: evaluation,
+  };
+}
+
+function rejectNativePolicyDowngrade(job: AgentJob): void {
+  if (typeof job.result?.["nativePolicyEvaluationId"] === "string")
+    throw new Error("Native policy configuration changed after agent dispatch; create a new plan");
+}
+
+async function prepareAgentNativePolicy(
+  job: AgentJob,
+  run: DeepReadonly<typeof runs.$inferSelect>,
+  workspace: Workspace,
+  evaluation?: DeepReadonly<WorkspacePolicyEvaluation>,
+): Promise<NativeRun | null> {
+  const snapshot = evaluation?.snapshot ?? (await loadWorkspacePolicySnapshot(db, workspace));
+  if (!snapshot.sets.some((set) => set.kind === "tfpolicy")) {
+    rejectNativePolicyDowngrade(job);
+    return null;
+  }
+  if (!(await jobSupportsNativePolicy(db, job))) throw new Error("Agent did not negotiate native policy execution");
+  const checkpoint = evaluation ?? (await latestWorkspacePolicyEvaluation(db, run.id));
+  if (
+    checkpoint === undefined ||
+    ("result" in checkpoint && checkpoint.result?.["fingerprint"] !== snapshot.fingerprint)
+  )
+    throw new Error("Native agent evaluation is missing or stale");
+  const organization = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+  if (organization === undefined) throw new Error("Native agent organization disappeared");
+  return prepareNativeRun(
+    { id: checkpoint.id, snapshot },
+    run.id,
+    workspace,
+    organization.name,
+    job.iacBinary,
+    run.terraformVersion ?? workspace.terraformVersion ?? organization.defaultTerraformVersion ?? "latest",
+    false,
+  );
+}
+
+/** The caller must hold the current lease's row lock. */
+export async function failAgentJobDeliveryInTransaction(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  job: AgentJob,
+  run: AgentRunRow | undefined,
+  reason: string,
+): Promise<string | null> {
+  if (nativeApplyNeedsRecovery(job))
+    return holdNativeApplyForRecovery(database, job, run, `${reason}; state recovery is required`);
+  const canceled = run?.status === "canceled" || run?.status === "force_canceled";
+  await database
+    .update(agentJobs)
+    .set({ status: canceled ? "canceled" : "errored", completedAt: Date.now(), errorMessage: reason })
+    .where(eq(agentJobs.id, job.id));
+  if (run !== undefined) {
+    await database
+      .update(runs)
+      .set({ status: "errored", statusTimestamps: timestampsWithStatus(run.statusTimestamps, "errored") })
+      .where(and(eq(runs.id, run.id), inArray(runs.status, ["plan_queued", "planning", "apply_queued", "applying"])));
+    await releaseApplyWorkspaceLock(database, job, run);
+  }
+  return canceled ? run.status : "errored";
+}
+
+/** Terminalize an undelivered job; preserve state recovery after a possible native apply handoff. */
+export async function failAgentJobDelivery(job: AgentJob, reason: string): Promise<void> {
+  const runStatus = await db.transaction(async (transaction): Promise<string | null> => {
+    const database = transaction as unknown as Database;
+    const rows = await database
+      .update(agentJobs)
+      .set({ status: "claimed" })
+      .where(
+        and(
+          eq(agentJobs.id, job.id),
+          eq(agentJobs.status, "claimed"),
+          eq(agentJobs.fencingToken, job.fencingToken),
+          job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId),
+        ),
+      )
+      .returning();
+    const owned = rows[0];
+    if (owned === undefined) return null;
+    const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+    const status = await failAgentJobDeliveryInTransaction(database, owned, run, reason);
+    await database.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, job.runId));
+    if (job.agentId !== null) await database.update(agents).set({ status: "idle" }).where(eq(agents.id, job.agentId));
+    return status;
+  });
+  if (runStatus !== null) notifyRunStatus(job.runId, runStatus);
+}
+
+/** Persist the fence before returning any runnable payload. An uncertain HTTP delivery stays protected. */
+export async function markAgentJobPayloadDelivered(job: AgentJob, nativePolicy: boolean): Promise<void> {
+  await db.transaction(async (transaction) => {
+    const database = transaction as unknown as Database;
+    const rows = await database
+      .update(agentJobs)
+      .set({ status: "claimed" })
+      .where(
+        and(
+          eq(agentJobs.id, job.id),
+          eq(agentJobs.status, "claimed"),
+          eq(agentJobs.fencingToken, job.fencingToken),
+          job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId),
+        ),
+      )
+      .returning();
+    const owned = rows[0];
+    if (owned === undefined) throw new Error("Agent lease changed before payload delivery");
+    if (nativePolicy !== (typeof owned.result?.["nativePolicyEvaluationId"] === "string"))
+      throw new Error("Agent native execution mode changed before payload delivery");
+    await database
+      .update(agentJobs)
+      .set({ result: { ...owned.result, payloadDeliveryToken: job.fencingToken } })
+      .where(eq(agentJobs.id, job.id));
+  });
+}
+
+async function prepareClaimedNativePolicy(
+  job: AgentJob,
+  run: DeepReadonly<typeof runs.$inferSelect>,
+  workspace: Workspace,
+  evaluation?: DeepReadonly<WorkspacePolicyEvaluation>,
+): Promise<NativeRun | null | undefined> {
+  let nativePolicy: NativeRun | null;
+  try {
+    nativePolicy = await prepareAgentNativePolicy(job, run, workspace, evaluation);
+  } catch (error: unknown) {
+    await failAgentJobDelivery(
+      job,
+      `Native policy preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+  if (nativePolicy !== null) {
+    const evaluationId = nativePolicy.evaluation.id;
+    const recorded = await db.transaction(async (transaction): Promise<boolean> => {
+      const database = transaction as unknown as Database;
+      const rows = await database
+        .update(agentJobs)
+        .set({ status: "claimed" })
+        .where(
+          and(
+            eq(agentJobs.id, job.id),
+            eq(agentJobs.fencingToken, job.fencingToken),
+            eq(agentJobs.status, "claimed"),
+            job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId),
+          ),
+        )
+        .returning();
+      const current = rows[0];
+      if (current === undefined) return false;
+      // A concurrent handoff may already have recorded possible delivery.
+      // Merge under the same lease lock so preparation cannot erase that fence.
+      await database
+        .update(agentJobs)
+        .set({ result: { ...current.result, nativePolicyEvaluationId: evaluationId } })
+        .where(eq(agentJobs.id, job.id));
+      return true;
+    });
+    if (!recorded) return undefined;
+  }
+  return nativePolicy;
 }
 
 async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undefined> {
@@ -895,9 +1207,13 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
   if (workspace === undefined) return undefined;
   if (!(await admitAgentJobDelivery(job, workspace))) return undefined;
   const dispatch =
-    job.phase === "plan" ? await agentDispatchPolicyEvaluation(job, run, workspace) : { evaluation: null };
+    job.phase === "plan"
+      ? await agentDispatchPolicyEvaluation(job, run, workspace)
+      : { evaluation: null, nativeEvaluation: undefined };
   if (dispatch === undefined) return undefined;
   const policyEvaluation = dispatch.evaluation;
+  const nativePolicy = await prepareClaimedNativePolicy(job, run, workspace, dispatch.nativeEvaluation);
+  if (nativePolicy === undefined) return undefined;
   return {
     job,
     run,
@@ -906,6 +1222,7 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
     inputState: inputState ?? null,
     planResult: planJob?.result ?? null,
     policyEvaluation,
+    nativePolicy,
   };
 }
 
@@ -944,20 +1261,26 @@ async function findCandidateJob(
 }
 
 async function tryClaimCandidate(candidate: AgentJobRow, agent: Agent): Promise<AgentJobRow | undefined> {
-  const now = Date.now();
-  const claimed = await db
-    .update(agentJobs)
-    .set({
-      agentId: agent.id,
-      status: "claimed",
-      claimedAt: now,
-      fencingToken: sql`${agentJobs.fencingToken} + 1`,
-    })
-    .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued")))
-    .returning();
-  const claimedJob = claimed[0];
-  if (claimedJob !== undefined) return claimedJob;
-  return undefined;
+  return db.transaction(async (transaction) => {
+    const database = transaction as unknown as Database;
+    const claimed = await database
+      .update(agentJobs)
+      .set({
+        agentId: agent.id,
+        status: "claimed",
+        claimedAt: Date.now(),
+        fencingToken: sql`${agentJobs.fencingToken} + 1`,
+      })
+      .where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued")))
+      .returning();
+    const job = claimed[0];
+    if (job === undefined) return undefined;
+    // Establish non-delivery before exposing the lease to either poll route.
+    // Never add tracking retroactively to an already claimed, older lease.
+    const result = { ...job.result, payloadDeliveryTrackingToken: job.fencingToken };
+    await database.update(agentJobs).set({ result }).where(eq(agentJobs.id, job.id));
+    return { ...job, result };
+  });
 }
 
 async function validateCandidateRun(
@@ -994,8 +1317,8 @@ async function validateCandidateRun(
     workspace === undefined
       ? `${candidate.phase === "plan" ? "Plan" : "Apply"} blocked: workspace no longer exists`
       : candidate.phase === "plan"
-        ? await workspacePolicyPlanningError(db, workspace)
-        : await workspacePolicyExecutionError(db, workspace, run.id);
+        ? await workspacePolicyPlanningError(db, workspace, await jobSupportsNativePolicy(db, candidate))
+        : await agentApplyPolicyError(db, workspace, run.id, await jobSupportsNativePolicy(db, candidate));
   if (policyError !== null) {
     await db
       .update(agentJobs)
@@ -1100,7 +1423,7 @@ export async function claimAgentJob(
       });
       return raced === undefined ? undefined : await claimedJobDetails(raced);
     }
-    const validation = await validateCandidateRun(candidate);
+    const validation = await validateCandidateRun(claimedJob);
     if (validation === null) continue;
     const { run, expectedRunStatus, nextRunStatus } = validation;
     const claimedAt = Date.now();
@@ -1117,9 +1440,9 @@ export async function claimAgentJob(
 
 export async function cancelAgentJobsForRun(runId: string): Promise<void> {
   const now = Date.now();
-  // Claimed jobs are returned so the caller knows whether anything may still
-  // be running remotely: the agent only learns of the cancel on its next
-  // status poll.
+  await db.update(runTokens).set({ revokedAt: now }).where(eq(runTokens.runId, runId));
+  // The canceled row is serialized with payload delivery. Read its current
+  // marker: an undelivered native apply cannot run, even with a live agent.
   const claimedJobs = await db
     .update(agentJobs)
     .set({
@@ -1128,7 +1451,7 @@ export async function cancelAgentJobsForRun(runId: string): Promise<void> {
       errorMessage: "Run canceled",
     })
     .where(and(eq(agentJobs.runId, runId), eq(agentJobs.status, "claimed")))
-    .returning({ id: agentJobs.id });
+    .returning();
   await db
     .update(agentJobs)
     .set({
@@ -1141,9 +1464,13 @@ export async function cancelAgentJobsForRun(runId: string): Promise<void> {
   // workspace lock now would hand a second apply the workspace while the
   // first agent may still write. Hold the lock until the agent acknowledges
   // (terminal completion for the canceled job) or its heartbeat lease
-  // expires (the stale-job sweep releases it). Nothing claimed: nothing runs
-  // remotely, so the lock can go immediately.
-  if (claimedJobs.length === 0) {
+  // expires (the stale-job sweep releases it). Native applies with no delivery
+  // marker or recovery hold cannot have started and need no acknowledgment.
+  if (claimedJobs.every(nativeApplyWasNotDelivered)) {
+    const terminalJobs = await db.query.agentJobs.findMany({
+      where: and(eq(agentJobs.runId, runId), inArray(agentJobs.status, ["canceled", "errored"])),
+    });
+    if (terminalJobs.some(nativeApplyNeedsRecovery)) return;
     await db
       .update(workspaces)
       .set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null })
@@ -1381,7 +1708,11 @@ async function validateAgentCompletion(
 ): Promise<boolean> {
   const reason = invalidCompletionReason(job, run, completion, expectedRunStatus);
   if (reason === undefined) return true;
-  await requeueInvalidCompletion(database, agentId, job, run, expectedRunStatus, reason);
+  if (nativeApplyWasAdmitted(job)) {
+    await holdNativeApplyForRecovery(database, job, run, `${reason}; native state recovery is required`);
+  } else {
+    await requeueInvalidCompletion(database, agentId, job, run, expectedRunStatus, reason);
+  }
   return false;
 }
 
@@ -1398,6 +1729,18 @@ async function prepareAgentCompletion(
   const structuredPlanCounts =
     job.phase === "plan" && effectivePlanJson !== undefined ? planJsonResourceCounts(effectivePlanJson) : undefined;
   return { structuredPlanCounts, now: Date.now() };
+}
+
+const SERVER_AGENT_RESULT_KEYS = new Set([
+  "nativePolicyEvaluationId",
+  "nativeRecoveryRequired",
+  "nativeStateRecovered",
+  "policyApplyAdmissionToken",
+  "payloadDeliveryToken",
+  "payloadDeliveryTrackingToken",
+]);
+function agentOwnedCompletionResult(result: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(result).filter(([key]) => !SERVER_AGENT_RESULT_KEYS.has(key)));
 }
 
 async function persistAgentJobCompletion(
@@ -1417,7 +1760,15 @@ async function persistAgentJobCompletion(
     .update(agentJobs)
     .set({
       status: jobStatus,
-      result: { ...completion.result },
+      result: {
+        ...job.result,
+        ...agentOwnedCompletionResult(completion.result),
+        ...(job.phase === "apply" &&
+        typeof job.result?.["nativePolicyEvaluationId"] === "string" &&
+        completion.statePayload !== null
+          ? { nativeStateRecovered: true }
+          : {}),
+      },
       errorMessage: completion.errorMessage,
       completedAt: now,
     })
@@ -1473,6 +1824,7 @@ async function determineCompletionOutcome(
   completion: AgentJobCompletion,
   now: number,
   applyGateReason: string | null,
+  native?: DeepReadonly<NativeCandidate>,
 ): Promise<CompletionOutcome> {
   if (completion.status !== "completed") {
     return { policyOutcome: UNEVALUATED_POLICY_OUTCOME, runStatus: "errored" };
@@ -1484,7 +1836,7 @@ async function determineCompletionOutcome(
     where: eq(workspaces.id, run.workspaceId),
   });
   if (workspace === undefined) throw new Error("Agent workspace disappeared during completion");
-  const policyOutcome = await recordAgentPolicyChecks(database, workspace, run.id, completion.result, now);
+  const policyOutcome = await recordAgentPolicyChecks(database, workspace, run.id, completion.result, now, native);
   const runStatus = resolvePlanStatus(policyOutcome, run);
   if (runStatus === "apply_queued" && applyGateReason !== null) {
     return { policyOutcome, runStatus: "planned" };
@@ -1643,6 +1995,7 @@ async function acknowledgeCanceledAgentJob(
   agentId: string,
   jobId: string,
   fencingToken: number,
+  completion: AgentJobCompletion,
 ): Promise<CompletionResult | undefined> {
   const job = await database.query.agentJobs.findFirst({
     where: and(
@@ -1655,6 +2008,74 @@ async function acknowledgeCanceledAgentJob(
   if (job === undefined) return undefined;
   const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
   if (run === undefined || (run.status !== "canceled" && run.status !== "force_canceled")) return undefined;
+  if (job.phase === "apply" && typeof job.result?.["nativePolicyEvaluationId"] === "string") {
+    if (parseTerraformStatePayload(completion.statePayload) === null) return undefined;
+    if (job.result["nativeStateRecovered"] !== true)
+      await persistApplyStateVersion(database, job, run, completion, Date.now());
+    await database
+      .update(agentJobs)
+      .set({ result: { ...job.result, nativeRecoveryRequired: false, nativeStateRecovered: true } })
+      .where(eq(agentJobs.id, job.id));
+  }
+  await releaseApplyWorkspaceLock(database, job, run);
+  await database.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
+  return { job, runStatus: run.status };
+}
+
+async function acknowledgeFinishedNativeJob(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  agentId: string,
+  jobId: string,
+  fencingToken: number,
+): Promise<CompletionResult | undefined> {
+  const job = await database.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.id, jobId),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
+      inArray(agentJobs.status, ["completed", "errored", "canceled"]),
+    ),
+  });
+  if (
+    typeof job?.result?.["nativePolicyEvaluationId"] !== "string" ||
+    job.result["nativeRecoveryRequired"] === true ||
+    (job.phase === "apply" && job.result["nativeStateRecovered"] !== true)
+  )
+    return undefined;
+  const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+  return run === undefined ? undefined : { job, runStatus: run.status };
+}
+
+async function acknowledgeNativeRecovery(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  agentId: string,
+  jobId: string,
+  fencingToken: number,
+  completion: AgentJobCompletion,
+): Promise<CompletionResult | undefined> {
+  const job = await database.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.id, jobId),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
+      eq(agentJobs.status, "errored"),
+      eq(agentJobs.phase, "apply"),
+    ),
+  });
+  if (job?.result?.["nativeRecoveryRequired"] !== true || parseTerraformStatePayload(completion.statePayload) === null)
+    return undefined;
+  const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+  // Cancellation commits the run before its separate job update. It can win
+  // after the recovery hold read the run, leaving an errored job on a canceled
+  // run. Recover the same fenced state without undoing that terminal decision.
+  if (run === undefined || !["errored", "canceled", "force_canceled"].includes(run.status)) return undefined;
+  await persistApplyStateVersion(database, job, run, completion, Date.now());
+  await database
+    .update(agentJobs)
+    .set({ result: { ...job.result, nativeRecoveryRequired: false, nativeStateRecovered: true } })
+    .where(eq(agentJobs.id, job.id));
   await releaseApplyWorkspaceLock(database, job, run);
   await database.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
   return { job, runStatus: run.status };
@@ -1670,17 +2091,60 @@ async function canceledApplyRecoveryRunId(
       eq(agentJobs.id, jobId),
       eq(agentJobs.agentId, agentId),
       eq(agentJobs.fencingToken, fencingToken),
-      eq(agentJobs.status, "canceled"),
+      inArray(agentJobs.status, ["claimed", "canceled", "errored"]),
       eq(agentJobs.phase, "apply"),
     ),
-    columns: { runId: true },
   });
-  if (job === undefined) return null;
+  if (
+    job === undefined ||
+    (job.status === "claimed" && !nativeApplyWasAdmitted(job)) ||
+    (job.status === "errored" && job.result?.["nativeRecoveryRequired"] !== true)
+  )
+    return null;
   const run = await db.query.runs.findFirst({
-    where: and(eq(runs.id, job.runId), inArray(runs.status, ["canceled", "force_canceled"])),
+    where: and(
+      eq(runs.id, job.runId),
+      inArray(runs.status, [
+        "canceled",
+        "force_canceled",
+        ...(job.result?.["nativeRecoveryRequired"] === true ? ["errored"] : []),
+      ]),
+    ),
     columns: { id: true },
   });
   return run?.id ?? null;
+}
+
+async function validateNativeCompletionState(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Drizzle clients are stateful.
+  database: Database,
+  job: AgentJob,
+  run: AgentRunRow | undefined,
+  completion: AgentJobCompletion,
+  native?: DeepReadonly<NativeCandidate>,
+): Promise<AgentJobCompletion | null> {
+  if (nativeApplyWasAdmitted(job) && parseTerraformStatePayload(completion.statePayload) === null) {
+    await holdNativeApplyForRecovery(
+      database,
+      job,
+      run,
+      "Native apply returned without valid Terraform state; recovery is required",
+    );
+    return null;
+  }
+  if (native === undefined || run === undefined) return completion;
+  const workspace = await database.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+  const snapshot = workspace === undefined ? undefined : await loadWorkspacePolicySnapshot(database, workspace);
+  const checkpoint = await latestWorkspacePolicyEvaluation(database, run.id);
+  return snapshot?.fingerprint === native.context.evaluation.snapshot.fingerprint &&
+    checkpoint?.id === native.context.evaluation.id
+    ? completion
+    : {
+        ...completion,
+        status: "errored",
+        planJson: null,
+        errorMessage: "Policies changed during native agent execution; state retained",
+      };
 }
 
 async function completeAgentJobInTransaction(
@@ -1692,31 +2156,52 @@ async function completeAgentJobInTransaction(
   fencingToken: number,
   completion: AgentJobCompletion,
   applyGateReason: string | null,
+  native?: DeepReadonly<NativeCandidate>,
 ): Promise<CompletionResult | undefined> {
-  const job = await database.query.agentJobs.findFirst({
-    where: and(
-      eq(agentJobs.id, jobId),
-      eq(agentJobs.agentId, agentId),
-      eq(agentJobs.fencingToken, fencingToken),
-      eq(agentJobs.status, "claimed"),
-    ),
-  });
+  // Serialize completion, cancellation and recovery on the same fenced job
+  // before interpreting either its metadata or the run's status.
+  const rows = await database
+    .update(agentJobs)
+    .set({ agentId })
+    .where(and(eq(agentJobs.id, jobId), eq(agentJobs.agentId, agentId), eq(agentJobs.fencingToken, fencingToken)))
+    .returning();
+  const job = rows[0];
+  if (job === undefined) return undefined;
   // Issue #617: a claimed job that was canceled out from under the agent
   // cannot complete normally, but its terminal report IS the acknowledgment
   // that the remote run stopped: release the run-owned apply lock the cancel
   // held, free the agent, and ack without touching the (already terminal)
   // run. Anything else is still a fencing conflict.
-  if (job === undefined) {
-    return acknowledgeCanceledAgentJob(database, agentId, jobId, fencingToken);
+  if (job.status !== "claimed") {
+    return (
+      (await acknowledgeFinishedNativeJob(database, agentId, jobId, fencingToken)) ??
+      (await acknowledgeNativeRecovery(database, agentId, jobId, fencingToken, completion)) ??
+      acknowledgeCanceledAgentJob(database, agentId, jobId, fencingToken, completion)
+    );
   }
   const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+  if (nativeApplyWasAdmitted(job) && (run?.status === "canceled" || run?.status === "force_canceled")) {
+    await holdNativeApplyForRecovery(database, job, run, "Canceled native apply requires returned state");
+    return acknowledgeCanceledAgentJob(database, agentId, jobId, fencingToken, completion);
+  }
   const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
+  const fencedCompletion = await validateNativeCompletionState(database, job, run, completion, native);
+  if (fencedCompletion === null) return undefined;
+  completion = fencedCompletion;
   if (!(await validateAgentCompletion(database, agentId, job, run, completion, expectedRunStatus))) return undefined;
   if (run === undefined) return undefined;
   const preparation = await prepareAgentCompletion(job, run, completion);
   const updatedJob = await persistAgentJobCompletion(database, agentId, job, completion, preparation.now);
   if (updatedJob === undefined) return undefined;
-  const outcome = await determineCompletionOutcome(database, job, run, completion, preparation.now, applyGateReason);
+  const outcome = await determineCompletionOutcome(
+    database,
+    job,
+    run,
+    completion,
+    preparation.now,
+    applyGateReason,
+    native,
+  );
   await persistRunCompletion(
     database,
     job,
@@ -1765,30 +2250,78 @@ async function captureCanceledApplyStateBeforeAcknowledgment(
   }
 }
 
+async function verifyNativeCompletion(
+  job: AgentJob | undefined,
+  completion: AgentJobCompletion,
+): Promise<Readonly<{ completion: AgentJobCompletion; native: NativeCandidate | undefined }>> {
+  if (job === undefined || completion.status !== "completed") return { completion, native: undefined };
+  try {
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+    const workspace =
+      run === undefined
+        ? undefined
+        : await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    if (run === undefined || workspace === undefined) return { completion, native: undefined };
+    const context = await prepareAgentNativePolicy(job, run, workspace);
+    if (context === null) {
+      if (typeof job.result?.["nativePolicyEvaluationId"] === "string")
+        throw new Error("Native policy scope changed during execution; returned state retained");
+      return { completion, native: undefined };
+    }
+    const native = await readNativeAgentCandidate(context, job);
+    if (job.phase === "apply" && (native.payload["allows"] !== true || native.payload["exitCode"] !== 0))
+      throw new Error("Native apply policy verification failed; returned state retained");
+    return {
+      native,
+      completion:
+        job.phase === "plan" ? { ...completion, planJson: JSON.parse(native.planJson) as PlanJson } : completion,
+    };
+  } catch (error: unknown) {
+    return {
+      native: undefined,
+      completion: {
+        ...completion,
+        status: "errored",
+        planJson: null,
+        errorMessage: error instanceof Error ? error.message : "Native execution evidence is missing or invalid",
+      },
+    };
+  }
+}
+
 export async function completeAgentJob(
   agentId: string,
   jobId: string,
   fencingToken: number,
   completion: AgentJobCompletion,
 ): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> {
-  const claimedJob =
-    completion.status === "completed"
-      ? await db.query.agentJobs.findFirst({
-          where: and(
-            eq(agentJobs.id, jobId),
-            eq(agentJobs.agentId, agentId),
-            eq(agentJobs.fencingToken, fencingToken),
-            eq(agentJobs.status, "claimed"),
-          ),
-          columns: { phase: true },
-        })
-      : undefined;
+  const claimedJob = await db.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.id, jobId),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
+      eq(agentJobs.status, "claimed"),
+    ),
+  });
+  const verified = await verifyNativeCompletion(claimedJob, completion);
+  completion = verified.completion;
+  const native = verified.native;
   if (completion.statePayload !== null) {
     // Durable filesystem capture happens before the DB transaction so the
     // transaction never blocks unrelated statements on fsync/read-back I/O.
     // The transaction below repeats the exact canceled-job fencing checks
     // before releasing the workspace lock or acknowledging the agent.
-    await captureCanceledApplyStateBeforeAcknowledgment(agentId, jobId, fencingToken, completion.statePayload);
+    if (
+      claimedJob !== undefined &&
+      nativeApplyWasAdmitted(claimedJob) &&
+      parseTerraformStatePayload(completion.statePayload) === null
+    ) {
+      // Preserve invalid returned bytes for diagnosis, but never publish them
+      // as usable state or acknowledge that remote state can be discarded.
+      await captureRecoveryStatePayload(storageDir, claimedJob.runId, completion.statePayload);
+    } else {
+      await captureCanceledApplyStateBeforeAcknowledgment(agentId, jobId, fencingToken, completion.statePayload);
+    }
   }
 
   const applyGateReason =
@@ -1806,8 +2339,11 @@ export async function completeAgentJob(
         fencingToken,
         completion,
         applyGateReason,
+        native,
       ),
   );
+  if (typeof claimedJob?.result?.["nativePolicyEvaluationId"] === "string")
+    await revokeNativeAgentLease(claimedJob.runId, claimedJob.result["nativePolicyEvaluationId"], claimedJob);
   if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
   return outcome;
 }
