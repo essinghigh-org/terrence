@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, readdir, realpath, stat, writeFile } from 
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { createHmac } from "node:crypto";
+import { retainsNativeApplyRecovery, type NativeApplyJournalEntry } from "./agent-recovery";
 
 const root = resolve(process.argv[2] ?? ""),
   binary = resolve(process.argv[3] ?? ""),
@@ -205,6 +206,21 @@ async function agent(mode: string, phase: string): Promise<void> {
       await Bun.sleep(100);
     }
     if (!empty) throw new Error("Native execution outlived its dead agent");
+    const originalEntries: NativeApplyJournalEntry[] = await Promise.all(
+      (await readdir(join(data, "journal")))
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => Bun.file(join(data, "journal", name)).json()),
+    );
+    const original = originalEntries.find(
+      (entry) => entry.state === "executing" && entry.manifest.native_policy && entry.manifest.phase === "apply",
+    )?.manifest;
+    if (
+      original === undefined ||
+      typeof original.work_dir !== "string" ||
+      !Number.isSafeInteger(original.fencing_token) ||
+      original.fencing_token < 1
+    )
+      throw new Error("Killed native apply did not retain its original execution identity");
     const restarted = Bun.spawn([binary], {
       env: environment,
       stdout: Bun.file(join(root, mode, "restart.stdout")),
@@ -219,15 +235,11 @@ async function agent(mode: string, phase: string): Promise<void> {
             .filter((name) => name.endsWith(".json"))
             .map((name) => Bun.file(join(data, "journal", name)).json()),
         );
-        if (
-          entries.some(
-            (entry) =>
-              entry.state === "completion_pending" &&
-              entry.retain_work_dir === true &&
-              entry.manifest.work_dir &&
-              entry.completion?.error?.includes("no rollback occurred"),
-          )
-        ) {
+        // Missing state receives an explicit stale-lease rejection. The agent
+        // durably quarantines that completion; pending may last less than a poll.
+        if (entries.some((entry) => retainsNativeApplyRecovery(entry, original))) {
+          if (!(await stat(original.work_dir)).isDirectory())
+            throw new Error("Agent restart removed its retained recovery directory");
           retained = true;
           break;
         }

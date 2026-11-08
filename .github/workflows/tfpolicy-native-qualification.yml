@@ -214,7 +214,7 @@ jobs:
         if: steps.facilities.outputs.ready == 'true'
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
-          toolchain: stable
+          toolchain: "1.99.1"
           cache: false
       - name: Build the exact matching agent and its state sandbox
         if: steps.facilities.outputs.ready == 'true'
