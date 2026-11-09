@@ -73,20 +73,22 @@ SHA256SUMS signature against the pinned HashiCorp primary-key fingerprint before
 extracting the executable. Changed signing keys, unexpected archive contents,
 missing builds and checksum failures fail closed.
 
-Each lane keeps the existing fixture qualification and runs eight real-plugin
+Each lane keeps the existing fixture qualification and runs twelve real-plugin
 hosted-worker cases: allow with saved apply, auto-apply, mandatory denial, approved
 override, post-apply plugin crash, cancellation, abrupt worker death, and forced
-cancellation. The failure cases check that all 200 actual local resources are
+cancellation, managed exact/latest selection with saved apply, and missing/malformed
+managed source-version rejection. The post-apply failure cases check that all 200 actual local resources are
 retained. The tests use only built-in `terraform_data`, a temporary database and
 a private loopback TLS API, with no cloud/repository credentials passed to the
 harness. The actual plugin version is used in the runtime, catalog and policy set.
 
 Each lane also builds Terrence agent revision
 `369e5cb7cbf07a0f83e5d996d72bb5a5ce78668b` with Rust 1.99.1 and its separate state-sandbox
-helper, then runs all six production API/agent cases against the current server
+helper, then runs all eight production API/agent cases against the current server
 checkout: allow with saved apply and a zero-addition follow-up plan, mandatory
 denial, a simulated approved override, post-apply plugin crash, owner cancellation, and
-abrupt agent death/restart with fenced recovery. The override case seeds an
+abrupt agent death/restart with fenced recovery, and managed exact/latest selection
+with saved apply. The override case seeds an
 approved policy check directly; it verifies execution after approval, not the
 approval authorization path. The failure cases require all
 200 local resources to survive. The workflow requires every case to finish and

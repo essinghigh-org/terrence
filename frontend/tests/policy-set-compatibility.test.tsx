@@ -9,7 +9,13 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
-function fixture(kind: string, logic: "any" | "all" | null = "any", canManage = true, failPatch = false): string[] {
+function fixture(
+  kind: string,
+  logic: "any" | "all" | null = "any",
+  canManage = true,
+  failPatch = false,
+  version = "1.17.0",
+): string[] {
   const patches: string[] = [];
   let matchingLogic = logic;
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -40,7 +46,7 @@ function fixture(kind: string, logic: "any" | "all" | null = "any", canManage = 
         attributes: {
           name: "Guardrails",
           kind,
-          "policy-tool-version": "1.17.0",
+          "policy-tool-version": version,
           "tag-selector-matching-logic": matchingLogic,
           "tag-selectors": [{ "tag-key": "production", "tag-value": null, "is-exclude": false }],
         },
@@ -80,6 +86,14 @@ test("tfpolicy keeps its identity and cannot open the Sentinel editor", async ()
   expect(view.getByText("Configured version: 1.17.0")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Add policy" })).toBeNull();
   expect(view.queryByText(/Sentinel policies checked/)).toBeNull();
+});
+
+test("managed native selection explains its required source file and immutable pin", async () => {
+  fixture("tfpolicy", "any", true, false, "managed");
+  const view = page();
+  expect(await view.findByText(/Managed selection requires a repository-root .tfpolicy-version file/)).toBeTruthy();
+  expect(view.getByText(/The resolved version must match the installed plugin pin/)).toBeTruthy();
+  expect(view.getByText("Configured version: managed")).toBeTruthy();
 });
 
 test("unknown policy kinds are not silently treated as Sentinel", async () => {

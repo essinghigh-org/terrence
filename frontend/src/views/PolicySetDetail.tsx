@@ -143,6 +143,12 @@ function PolicyEngineNotice({ policySet }: Readonly<{ policySet: PolicySet }>): 
           : "This policy set's configuration is stored for API compatibility. Terrence cannot evaluate these policies; affected runs are blocked rather than treated as passing."}
       </p>
       {native && <p>This page does not verify runtime readiness. Native policy-set parameters are unsupported.</p>}
+      {native && policySet.attributes["policy-tool-version"] === "managed" && (
+        <p>
+          Managed selection requires a repository-root .tfpolicy-version file containing an exact version or latest. The
+          resolved version must match the installed plugin pin.
+        </p>
+      )}
       <p>The Sentinel and OPA policy editors do not apply.</p>
       <p>Configured version: {policySet.attributes["policy-tool-version"] ?? "Not specified"}</p>
       {native && (

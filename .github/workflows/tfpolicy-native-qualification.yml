@@ -184,7 +184,7 @@ jobs:
             --plugin "$PLUGIN_PATH" --plugin-sha256 "$PLUGIN_SHA256" --plugin-version "$PLUGIN_VERSION" \
             --plugin-archive "$PLUGIN_ARCHIVE" --cgroup-root "$DELEGATED_CGROUP" \
             --repository "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/real-plugin-results" \
-            --hosted-worker --cases allow,auto-apply,deny,override,apply-crash,apply-cancel,worker-death,apply-force \
+            --hosted-worker --cases allow,auto-apply,deny,override,apply-crash,apply-cancel,worker-death,apply-force,managed-exact,managed-latest,managed-missing,managed-malformed \
             > "$RUNNER_TEMP/real-plugin-private.log" 2>&1
           status=$?
           set -e
@@ -195,7 +195,7 @@ jobs:
           from pathlib import Path
           base = Path(os.environ['RUNNER_TEMP'])
           path = base/'real-plugin-results/api/summary.json'
-          expected = ['allow','auto-apply','deny','override','apply-crash','apply-cancel','worker-death','apply-force']
+          expected = ['allow','auto-apply','deny','override','apply-crash','apply-cancel','worker-death','apply-force','managed-exact','managed-latest','managed-missing','managed-malformed']
           rows = json.loads(path.read_text())['hostedWorkerCases'] if path.exists() else []
           passed = [r['mode'] for r in rows if r['passed'] is True]
           assert passed == expected[:len(rows)], 'unexpected compatibility case results'
@@ -272,7 +272,7 @@ jobs:
             --repository "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/real-agent-results" \
             --agent-binary "$RUNNER_TEMP/native-bin/terrence-agent" \
             --agent-runner "$RUNNER_TEMP/native-bin/agent-landlock-runner" \
-            --cases allow,deny,override,apply-crash,apply-cancel,agent-death \
+            --cases allow,deny,override,apply-crash,apply-cancel,agent-death,managed-exact,managed-latest \
             > "$RUNNER_TEMP/real-agent-private.log" 2>&1
           status=$?
           set -e
@@ -281,7 +281,7 @@ jobs:
           from pathlib import Path
           base = Path(os.environ['RUNNER_TEMP'])
           path = base/'real-agent-results/api/summary.json'
-          expected = ['allow','deny','override','apply-crash','apply-cancel','agent-death']
+          expected = ['allow','deny','override','apply-crash','apply-cancel','agent-death','managed-exact','managed-latest']
           rows = json.loads(path.read_text())['nativeAgentCases'] if path.exists() else []
           passed = [row['mode'] for row in rows if row['passed'] is True]
           assert passed == expected[:len(rows)], 'unexpected agent compatibility case results'

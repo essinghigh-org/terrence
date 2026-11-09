@@ -276,7 +276,16 @@ async function queue(runId: string, workspaceId: string, cvId: string, phase: st
   });
 }
 try {
-  const modes = ["allow", "deny", "override", "apply-crash", "apply-cancel", "agent-death"];
+  const modes = [
+    "allow",
+    "managed-exact",
+    "managed-latest",
+    "deny",
+    "override",
+    "apply-crash",
+    "apply-cancel",
+    "agent-death",
+  ];
   const selected = process.argv[5]?.split(",") ?? modes;
   if (selected.some((mode) => !modes.includes(mode))) throw new Error("Unknown native agent acceptance case");
   for (const mode of selected) {
@@ -296,9 +305,17 @@ try {
     await writeFile(join(config, "main.tf"), configuration, { mode: 0o600 });
     await writeFile(
       join(policy, "proof.policy.hcl"),
-      `policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\nresource_policy "terraform_data" "proof" {\n enforcement_level = "${mode === "override" ? "mandatory_overridable" : "mandatory"}"\n enforce {\n condition = attrs.input == "${mode === "allow" || mode.startsWith("apply-") || mode === "agent-death" ? "local-only" : "forbidden"}"\n error_message = "agent acceptance denial"\n }\n}\nprovider_policy "terraform" "source" {\n enforce {\n condition = meta.source == "terraform.io/builtin/terraform"\n }\n}\n`,
+      `policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\nresource_policy "terraform_data" "proof" {\n enforcement_level = "${mode === "override" ? "mandatory_overridable" : "mandatory"}"\n enforce {\n condition = attrs.input == "${mode === "allow" || mode.startsWith("managed-") || mode.startsWith("apply-") || mode === "agent-death" ? "local-only" : "forbidden"}"\n error_message = "agent acceptance denial"\n }\n}\nprovider_policy "terraform" "source" {\n enforce {\n condition = meta.source == "terraform.io/builtin/terraform"\n }\n}\n`,
       { mode: 0o600 },
     );
+    if (mode.startsWith("managed-"))
+      await writeFile(
+        join(policy, ".tfpolicy-version"),
+        mode === "managed-latest" ? "latest\n" : `${profile.pluginVersion}\n`,
+        {
+          mode: 0o600,
+        },
+      );
     const archives = [join(root, mode, "config.tar.gz"), join(root, mode, "policy.tar.gz")];
     for (const [index, source] of [config, policy].entries()) {
       const child = Bun.spawn(["tar", "-czf", archives[index] ?? "", "-C", source, "."], {
@@ -320,9 +337,13 @@ try {
     await db
       .insert(s.configurationVersions)
       .values({ id: cvId, workspaceId, status: "uploaded", archivePath: archives[0] });
-    await db
-      .insert(s.policySets)
-      .values({ id: setId, orgId, name: `agent-${mode}`, kind: "tfpolicy", policyToolVersion: profile.pluginVersion });
+    await db.insert(s.policySets).values({
+      id: setId,
+      orgId,
+      name: `agent-${mode}`,
+      kind: "tfpolicy",
+      policyToolVersion: mode.startsWith("managed-") ? "managed" : profile.pluginVersion,
+    });
     await db.insert(s.policySetWorkspaces).values({ id: `psw-${id}`, policySetId: setId, workspaceId });
     await db
       .insert(s.policySetVersions)

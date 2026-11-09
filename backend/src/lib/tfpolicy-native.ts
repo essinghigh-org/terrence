@@ -273,20 +273,46 @@ async function extractSource(
   return { repository, root };
 }
 
+function sourceVersionIsValid(version: string): boolean {
+  if (version === "latest") return true;
+  const separator = version.indexOf("-");
+  const core = (separator === -1 ? version : version.slice(0, separator)).split(".");
+  const numeric = (part: string): boolean => /^[0-9]+$/.test(part) && (part.length === 1 || !part.startsWith("0"));
+  if (core.length !== 3 || !core.every(numeric)) return false;
+  if (separator === -1) return true;
+  // Validate each identifier independently. No nested or overlapping regex
+  // quantifiers: total work is linear in the already bounded source file.
+  return version
+    .slice(separator + 1)
+    .split(".")
+    .every((part) => /^[0-9A-Za-z-]+$/.test(part) && (!/^[0-9]+$/.test(part) || numeric(part)));
+}
+
 async function validateSourceVersion(
   repository: string,
   selectedVersion: string | null,
   latest: string | undefined,
   pluginVersion: string,
 ): Promise<void> {
-  let fileVersion: string | undefined;
-  try {
-    fileVersion = (await boundedFile(join(repository, ".tfpolicy-version"), 1024)).toString("utf8").trim();
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  // API/UI selection and source-managed selection are mutually exclusive.
+  // Only managed reads the repository-root file; policies-path does not move it.
+  let requested = selectedVersion ?? "latest";
+  if (requested === "managed") {
+    try {
+      const value = (await boundedFile(join(repository, ".tfpolicy-version"), 1024)).toString("utf8");
+      // One exact version (or latest), with an optional final LF/CRLF. Reject
+      // ranges, recursive managed, comments, blank lines and ambiguous input.
+      requested = value.endsWith("\r\n") ? value.slice(0, -2) : value.endsWith("\n") ? value.slice(0, -1) : value;
+      if (!sourceVersionIsValid(requested))
+        throw new Error("Native managed policy version file must contain one exact version or latest");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new Error("Native managed policy selection requires a repository-root .tfpolicy-version file");
+      throw error;
+    }
   }
-  const selected = selectedVersion === "latest" || selectedVersion === null ? (fileVersion ?? latest) : selectedVersion;
-  if (selected !== pluginVersion || (fileVersion !== undefined && fileVersion !== pluginVersion))
+  const selected = requested === "latest" ? latest : requested;
+  if (selected !== pluginVersion)
     throw new Error("Native policy tool selection differs from the installed pinned plugin");
 }
 

@@ -15,8 +15,9 @@ The stock-engine harness described here is one qualification layer. The same CI
 workflow separately builds the strict reference engine, requires a non-skipped
 `TestNativeOwner` admission matrix, and runs `real-owner.py` with the official
 tfpolicy-plugin against the production hosted worker and matching Terrence agent.
-The `pinned` and `latest` lanes each require eight hosted-worker cases and six
-production-agent cases. See [native execution qualification](../../tfpolicy-engine/HANDOFF.md#official-plugin-ci)
+The `pinned` and `latest` lanes each require twelve hosted-worker cases and eight
+production-agent cases, including managed exact/latest source-version selection
+and hosted rejection of missing/malformed version files. See [native execution qualification](../../tfpolicy-engine/HANDOFF.md#official-plugin-ci)
 for version pins, evidence, limitations and operator setup.
 
 Stock transport results still report `admitted: false`. Neither this fixture nor
