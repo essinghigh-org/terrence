@@ -9,6 +9,19 @@ tests qualify transport/isolation/lifecycle behavior, not real tfpolicy licensin
 or policy-language semantics. Native callback RPC forwarding has separate recorder
 unit tests; this fixture does not exercise an evaluation-time callback.
 
+## Relationship to production qualification
+
+The stock-engine harness described here is one qualification layer. The same CI
+workflow separately builds the strict reference engine, requires a non-skipped
+`TestNativeOwner` admission matrix, and runs `real-owner.py` with the official
+tfpolicy-plugin against the production hosted worker and matching Terrence agent.
+The `pinned` and `latest` lanes each require eight hosted-worker cases and six
+production-agent cases. See [native execution qualification](../../tfpolicy-engine/HANDOFF.md#official-plugin-ci)
+for version pins, evidence, limitations and operator setup.
+
+Stock transport results still report `admitted: false`. Neither this fixture nor
+the transport status alone signs a production receipt or authorizes an apply.
+
 ## Requirements and truthful reporting
 
 - Native Linux with Landlock ABI >=6, pathname AF_UNIX and trusted host procfs.

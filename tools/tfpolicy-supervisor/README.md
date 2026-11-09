@@ -1,9 +1,10 @@
-# Native Terraform policy bootstrap candidate
+# Native Terraform policy transport
 
-The transport is now used by the opt-in hosted execution owner in this draft.
-See [native execution setup and remaining acceptance work](../tfpolicy-engine/HANDOFF.md).
-Current agents remain blocked. Installing these binaries alone does not configure
-or qualify native execution.
+The transport is used by the opt-in native execution owner for hosted runs and
+matching agents advertising `operation.native-policy.v2`.
+See [native execution setup, qualification and recovery](../tfpolicy-engine/HANDOFF.md).
+Legacy agents remain blocked. Installing these binaries alone does not configure
+or qualify native execution, and transport success alone does not authorize apply.
 
 Stock Terraform executes `$TF_POLICY_PLUGIN rpcapi` and supplies its AutoMTLS
 **public** client certificate as `PLUGIN_CLIENT_CERT`. Its private key remains
@@ -150,6 +151,7 @@ and vet. Non-Linux builds explicitly reject bootstrap operation.
 
 ## Native integration qualification
 
-See [integration/README.md](integration/README.md) for the gated stock Terraform
-matrix and prerequisite-only GitHub workflow. A missing facility is reported as
-not run, never a live qualification pass.
+See [integration/README.md](integration/README.md) for the stock Terraform
+transport matrix and its relationship to strict-owner and real-plugin hosted/agent
+qualification. A missing facility is reported as not run, never a live
+qualification pass.
