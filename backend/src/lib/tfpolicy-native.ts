@@ -279,14 +279,29 @@ async function validateSourceVersion(
   latest: string | undefined,
   pluginVersion: string,
 ): Promise<void> {
-  let fileVersion: string | undefined;
-  try {
-    fileVersion = (await boundedFile(join(repository, ".tfpolicy-version"), 1024)).toString("utf8").trim();
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  // API/UI selection and source-managed selection are mutually exclusive.
+  // Only managed reads the repository-root file; policies-path does not move it.
+  let requested = selectedVersion ?? "latest";
+  if (requested === "managed") {
+    try {
+      const value = (await boundedFile(join(repository, ".tfpolicy-version"), 1024)).toString("utf8");
+      // One exact version (or latest), with an optional final LF/CRLF. Reject
+      // ranges, recursive managed, comments, blank lines and ambiguous input.
+      if (
+        !/^(?:latest|(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?)(?:\r?\n)?$/.test(
+          value,
+        )
+      )
+        throw new Error("Native managed policy version file must contain one exact version or latest");
+      requested = value.replace(/\r?\n$/, "");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new Error("Native managed policy selection requires a repository-root .tfpolicy-version file");
+      throw error;
+    }
   }
-  const selected = selectedVersion === "latest" || selectedVersion === null ? (fileVersion ?? latest) : selectedVersion;
-  if (selected !== pluginVersion || (fileVersion !== undefined && fileVersion !== pluginVersion))
+  const selected = requested === "latest" ? latest : requested;
+  if (selected !== pluginVersion)
     throw new Error("Native policy tool selection differs from the installed pinned plugin");
 }
 

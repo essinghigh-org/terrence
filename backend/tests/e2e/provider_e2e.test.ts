@@ -111,6 +111,7 @@ const EXPECTED_STATE_ADDRESSES = [
   "tfe_policy.policy",
   "tfe_sentinel_policy.spolicy",
   "tfe_policy_set.ps",
+  "tfe_policy_set.native_managed",
   "tfe_policy_set.tag_scoped",
   "tfe_workspace_policy_set.ws_ps",
   "tfe_project_policy_set.project_ps",
@@ -986,6 +987,13 @@ resource "tfe_policy_set" "ps" {
   organization = tfe_organization.org.name
   name         = "pe2e-ps-${suffix}"
   policy_ids   = [tfe_policy.policy.id]
+}
+
+resource "tfe_policy_set" "native_managed" {
+  organization        = tfe_organization.org.name
+  name                = "pe2e-native-managed-${suffix}"
+  kind                = "tfpolicy"
+  policy_tool_version = "managed"
 }
 
 resource "tfe_workspace_policy_set" "ws_ps" {
@@ -1895,6 +1903,44 @@ describe("tfe provider e2e", () => {
             ]);
           }
 
+          lifecycleStage = "native managed policy set version lifecycle";
+          const nativeSets = await api(
+            backend.port,
+            "GET",
+            `/api/v2/organizations/pe2e-org-${suffix}/policy-sets`,
+            undefined,
+            auth.token,
+          );
+          expect(nativeSets.status).toBe(200);
+          const nativeSet = listData(nativeSets.json, "native managed policy set").find(
+            (item) => (item["attributes"] as Record<string, unknown>)["name"] === `pe2e-native-managed-${suffix}`,
+          );
+          expect(nativeSet).toBeDefined();
+          const nativeSetId = nativeSet!["id"] as string;
+          expect((nativeSet!["attributes"] as Record<string, unknown>)["policy-tool-version"]).toBe("managed");
+          for (const selection of ["latest", `0.1.0-pe2e-${suffix}`, "managed"]) {
+            await writeFile(
+              join(cfgDir, "main.tf"),
+              mainTf(suffix, auth.username).replace(
+                'policy_tool_version = "managed"',
+                `policy_tool_version = "${selection}"`,
+              ),
+            );
+            cliOk(
+              await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv),
+              `native policy ${selection} apply`,
+            );
+            cliOk(
+              await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], cfgDir, cliEnv),
+              `native policy ${selection} convergence`,
+            );
+            const current = await api(backend.port, "GET", `/api/v2/policy-sets/${nativeSetId}`, undefined, auth.token);
+            expect(current.status).toBe(200);
+            expect(current.json["data"].id).toBe(nativeSetId);
+            expect(current.json["data"].attributes.kind).toBe("tfpolicy");
+            expect(current.json["data"].attributes["policy-tool-version"]).toBe(selection);
+          }
+
           lifecycleStage = "irreversible workspace HYOK metadata lifecycle";
           const workspaceHyokPath = `/api/v2/organizations/pe2e-org-${suffix}/workspaces/pe2e-ws-${suffix}`;
           const enabledWorkspace = await api(backend.port, "GET", workspaceHyokPath, undefined, auth.token);
@@ -1993,6 +2039,31 @@ describe("tfe provider e2e", () => {
           cliOk(
             await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv),
             "import convergence",
+          );
+
+          lifecycleStage = "minimal native managed policy set import";
+          await writeFile(
+            join(importDir, "native.tf"),
+            `resource "tfe_policy_set" "native_imported" {
+  organization = "pe2e-org-${suffix}"
+  name = "pe2e-native-managed-${suffix}"
+  kind = "tfpolicy"
+  policy_tool_version = "managed"
+}
+`,
+          );
+          cliOk(
+            await cli(
+              bin,
+              ["import", "-input=false", "-no-color", "tfe_policy_set.native_imported", nativeSetId],
+              importDir,
+              cliEnv,
+            ),
+            "native managed policy set import",
+          );
+          cliOk(
+            await cli(bin, ["plan", "-detailed-exitcode", "-input=false", "-no-color"], importDir, cliEnv),
+            "native managed policy set import convergence",
           );
 
           lifecycleStage = "minimal workspace HYOK import";
@@ -2498,6 +2569,9 @@ data "tfe_no_code_module" "d_ncm" {
           cliOk(emptyState, "state after destroy");
           expect(emptyState.out.trim()).toBe("");
           await assertAdminProviderDestroyed(backend.port, auth.token, originalAdminSettings, tfpolicyId);
+          expect(
+            (await api(backend.port, "GET", `/api/v2/policy-sets/${nativeSetId}`, undefined, auth.token)).status,
+          ).toBe(404);
           const version = await cli(bin, ["version", "-json"], cfgDir, cliEnv);
           cliOk(version, "version evidence");
           const versionInfo = JSON.parse(version.out) as { terraform_version: string };
@@ -2559,7 +2633,11 @@ data "tfe_no_code_module" "d_ncm" {
               familyEvidence("variable-set-optional-transitions", ["update", "clear-optional", "restore-optional"]),
               familyEvidence("teams-and-projects-lifecycle"),
               familyEvidence("team-import-minimal", ["import-minimal", "no-op-plan-after-import"]),
-              familyEvidence("policies-lifecycle"),
+              familyEvidence("policies-lifecycle", [
+                "native-managed-version-transitions",
+                "import-minimal",
+                "no-op-plan-after-import",
+              ]),
               familyEvidence("notifications-lifecycle"),
               familyEvidence("registry-lifecycle"),
               familyEvidence("admin-provider-lifecycle", [

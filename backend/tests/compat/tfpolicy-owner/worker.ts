@@ -63,6 +63,10 @@ const rows: Record<string, unknown>[] = [];
 const modes = [
   "allow",
   "auto-apply",
+  "managed-exact",
+  "managed-latest",
+  "managed-missing",
+  "managed-malformed",
   "deny",
   "override",
   "legacy",
@@ -160,6 +164,16 @@ try {
       `policy {\n required_providers {\n terraform = { source = "terraform.io/builtin/terraform" }\n }\n}\nresource_policy "terraform_data" "proof" {\n enforcement_level = "${mode === "override" ? "mandatory_overridable" : "mandatory"}"\n enforce {\n condition = ${condition}\n error_message = "worker acceptance denial"\n }\n}\n`,
       { mode: 0o600 },
     );
+    if (["managed-exact", "managed-latest", "managed-malformed"].includes(mode))
+      await writeFile(
+        join(policy, ".tfpolicy-version"),
+        mode === "managed-latest"
+          ? "latest\n"
+          : mode === "managed-malformed"
+            ? `${profile.pluginVersion}\nlatest\n`
+            : `${profile.pluginVersion}\n`,
+        { mode: 0o600 },
+      );
     const archives = [join(root, mode, "config.tar.gz"), join(root, mode, "policy.tar.gz")];
     if (mode === "allow")
       await appendFile(
@@ -185,9 +199,13 @@ try {
     await db
       .insert(s.configurationVersions)
       .values({ id: cvId, workspaceId, status: "uploaded", archivePath: archives[0] });
-    await db
-      .insert(s.policySets)
-      .values({ id: setId, orgId, name: `worker-${mode}`, kind: "tfpolicy", policyToolVersion: profile.pluginVersion });
+    await db.insert(s.policySets).values({
+      id: setId,
+      orgId,
+      name: `worker-${mode}`,
+      kind: "tfpolicy",
+      policyToolVersion: mode.startsWith("managed-") ? "managed" : profile.pluginVersion,
+    });
     await db.insert(s.policySetWorkspaces).values({ id: `psw-${id}`, policySetId: setId, workspaceId });
     await db
       .insert(s.policySetVersions)
@@ -222,7 +240,18 @@ try {
     try {
       await executeRun(runId);
     } catch (error) {
-      if (!["setup-error", "missing", "unknown", "plan-crash", "plan-cancel"].includes(mode)) throw error;
+      if (
+        ![
+          "setup-error",
+          "missing",
+          "unknown",
+          "plan-crash",
+          "plan-cancel",
+          "managed-missing",
+          "managed-malformed",
+        ].includes(mode)
+      )
+        throw error;
       await writeFile(join(root, mode, "failure.txt"), String(error), { mode: 0o600 });
     } finally {
       process.env["TERRENCE_TFPOLICY_RUNTIME_PROFILE"] = originalProfilePath;
@@ -231,7 +260,17 @@ try {
     const planned = await db.query.runs.findFirst({ where: eq(s.runs.id, runId) });
     const checks = await db.query.policyChecks.findMany({ where: eq(s.policyChecks.runId, runId) });
     await writeFile(join(root, mode, "checks.json"), JSON.stringify(checks, null, 2), { mode: 0o600 });
-    if (["setup-error", "missing", "unknown", "plan-crash", "plan-cancel"].includes(mode)) {
+    if (
+      [
+        "setup-error",
+        "missing",
+        "unknown",
+        "plan-crash",
+        "plan-cancel",
+        "managed-missing",
+        "managed-malformed",
+      ].includes(mode)
+    ) {
       if (planned?.status !== "errored") throw new Error(`Hosted failed ${mode} admission: ${planned?.status}`);
       await noManagedState(workspaceId);
       if (checks.some((check) => check.result?.["native"] === true && check.status === "passed"))
