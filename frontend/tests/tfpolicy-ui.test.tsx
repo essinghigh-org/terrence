@@ -120,11 +120,18 @@ test("catalog edits complete metadata, clears deprecation and protects official 
     });
   }) as typeof fetch;
   const view = render(<TfpolicyVersionsAdmin />);
+  expect(view.getByText(/Hosted runs and capable agents require/)).toBeTruthy();
+  expect(view.getByText(/Unconfigured hosts, legacy agents and Stack deployments remain blocked/)).toBeTruthy();
+  expect(view.queryByText(/tfpolicy execution is unsupported/)).toBeNull();
+  expect(view.getByRole("link", { name: "Native runtime setup and limits" }).getAttribute("href")).toBe(
+    "/app/docs/tfpolicy-runtime",
+  );
   await waitFor((): void => {
     expect(view.getByRole("button", { name: "Edit tfpolicy 0.2.0" })).toBeTruthy();
   });
   expect((view.getByRole("button", { name: "Delete tfpolicy 0.2.0" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(view.getByRole("button", { name: "Edit tfpolicy 0.2.0" }));
+  expect(await view.findByText(/Saving catalog metadata does not install or configure a native runtime/)).toBeTruthy();
   fireEvent.click(view.getByRole("checkbox", { name: "Deprecated" }));
   fireEvent.click(view.getByRole("button", { name: "Save tfpolicy version" }));
   await waitFor((): void => {

@@ -20,20 +20,28 @@ retry contract](retry-contract).
 
 The provider surface is refreshed from the provider schema and verified by provider end-to-end tests. A schema entry is not considered compatible merely because the server accepts a request: supported resources and data sources must perform their provider operations successfully.
 
-## Terraform policy (`tfpolicy`) limitation
+## Terraform policy (`tfpolicy`) support and limits
 
 The policy-set API accepts `kind = "tfpolicy"`, preserves policy-tool versions, and
 rejects `agent_enabled` and `overridable`, matching the provider's configuration
-contract. This is **metadata compatibility, not Terraform policy execution
-support**. Terraform policy archive ingestion and its execution engine are not
-implemented yet. Individually managed Sentinel/OPA policy resources cannot be
-used to populate Terraform policy sets.
+contract. Native execution is opt-in for hosted runs and matching agents that
+advertise `operation.native-policy.v2`. It requires an operator-managed runtime
+profile, the strict Terraform 1.17.1 reference engine, a separately supplied
+licensed plugin, matching catalog pins and the required Linux isolation.
+Native source archives feed init, plan and saved-plan apply. Individually managed
+Sentinel/OPA policy resources cannot populate Terraform policy sets.
 
-An applicable Terraform policy set blocks hosted and agent runs from applying,
-even if it has no individual policy records. The run records an `unreachable`
-policy check explaining that execution is unsupported; it cannot be overridden.
-Do not attach a Terraform policy set to a workspace expecting it to evaluate or
-approve a plan until execution support is implemented and tested.
+Mandatory denials block apply. A `mandatory_overridable` denial requires approval
+for the current evaluation; runtime errors and incomplete evidence cannot be
+overridden. Apply-time failures can occur after resources change, so retained
+state and fenced recovery are required rather than assuming rollback.
+
+Unconfigured hosts, legacy agents, OpenTofu, stock or other Terraform versions,
+and Stack deployments remain blocked when a native policy set applies. Native
+policy-set parameters, targeted plans, action-only runs and deny-network
+execution are unsupported. API/schema coverage does not establish execution
+support for these cases. See [Terraform policy runtime status](tfpolicy-runtime)
+for configuration, qualification evidence and the remaining limits.
 
 ## Not a goal
 

@@ -128,16 +128,28 @@ function hasSupportedPolicyEditor(kind: string): kind is "opa" | "sentinel" {
 function PolicyEngineNotice({ policySet }: Readonly<{ policySet: PolicySet }>): React.JSX.Element | null {
   const kind = policySet.attributes.kind ?? "sentinel";
   if (hasSupportedPolicyEditor(kind)) return null;
+  const native = kind === "tfpolicy";
   return (
-    <div role="alert" className="rounded-md border border-destructive p-4 text-sm">
+    <div
+      role={native ? "note" : "alert"}
+      className={cn("rounded-md border p-4 text-sm", !native && "border-destructive")}
+    >
       <p className="font-medium">
-        {kind === "tfpolicy" ? "Terraform policy execution is not supported" : "Unsupported policy engine"}
+        {native ? "Terraform policy requires a configured native runtime" : "Unsupported policy engine"}
       </p>
       <p>
-        This policy set's configuration is stored for API compatibility. Terrence cannot evaluate these policies;
-        affected runs are blocked rather than treated as passing. The Sentinel and OPA policy editors do not apply.
+        {native
+          ? "Native execution is opt-in for hosted runs and capable agents. It requires a pinned strict Terraform 1.17.1 runtime, an operator-supplied plugin and a ready policy archive. Unconfigured hosts, legacy agents and Stack deployments remain blocked."
+          : "This policy set's configuration is stored for API compatibility. Terrence cannot evaluate these policies; affected runs are blocked rather than treated as passing."}
       </p>
+      {native && <p>This page does not verify runtime readiness. Native policy-set parameters are unsupported.</p>}
+      <p>The Sentinel and OPA policy editors do not apply.</p>
       <p>Configured version: {policySet.attributes["policy-tool-version"] ?? "Not specified"}</p>
+      {native && (
+        <Link to="/app/docs/tfpolicy-runtime" className="underline underline-offset-4">
+          Native runtime setup and limits
+        </Link>
+      )}
     </div>
   );
 }

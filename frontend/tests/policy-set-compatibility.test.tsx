@@ -67,7 +67,15 @@ function page(section: "policies" | "tags" = "policies"): ReturnType<typeof rend
 test("tfpolicy keeps its identity and cannot open the Sentinel editor", async () => {
   fixture("tfpolicy");
   const view = page();
-  await view.findByText("Terraform policy execution is not supported");
+  await view.findByText("Terraform policy requires a configured native runtime");
+  expect(view.getByText(/This page does not verify runtime readiness/)).toBeTruthy();
+  expect(view.getByText(/Native policy-set parameters are unsupported/)).toBeTruthy();
+  expect(view.getByRole("note").textContent).toContain(
+    "Unconfigured hosts, legacy agents and Stack deployments remain blocked",
+  );
+  expect(view.getByRole("link", { name: "Native runtime setup and limits" }).getAttribute("href")).toBe(
+    "/app/docs/tfpolicy-runtime",
+  );
   expect(view.getByText("TFPOLICY")).toBeTruthy();
   expect(view.getByText("Configured version: 1.17.0")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Add policy" })).toBeNull();
@@ -78,6 +86,8 @@ test("unknown policy kinds are not silently treated as Sentinel", async () => {
   fixture("future-engine");
   const view = page();
   await view.findByText("Unsupported policy engine");
+  expect(view.getByRole("alert").textContent).toContain("Terrence cannot evaluate these policies");
+  expect(view.queryByRole("link", { name: "Native runtime setup and limits" })).toBeNull();
   expect(view.queryByRole("button", { name: "Add policy" })).toBeNull();
 });
 

@@ -265,9 +265,14 @@ export function TfpolicyVersionsAdmin(): React.JSX.Element {
       <CardHeader variant="section">
         <CardTitle>tfpolicy version catalog</CardTitle>
         <CardDescription>
-          Register binary metadata for provider compatibility. tfpolicy execution is unsupported: applicable policies
-          block runs and Stack deployments. Catalog registration or enabling a version does not enable an executor.
+          Register binary metadata for provider compatibility and pinned native execution. Hosted runs and capable
+          agents require a separately configured strict runtime and matching operator-supplied plugin. Unconfigured
+          hosts, legacy agents and Stack deployments remain blocked. Catalog registration or enabling a version alone
+          does not configure an executor.
         </CardDescription>
+        <a href="/app/docs/tfpolicy-runtime" className="text-sm underline underline-offset-4">
+          Native runtime setup and limits
+        </a>
       </CardHeader>
       <CardContent className="space-y-4">
         <Button
@@ -376,8 +381,8 @@ export function TfpolicyVersionsAdmin(): React.JSX.Element {
             <DialogHeader>
               <DialogTitle>{editing === null ? "Register tfpolicy version" : "Edit tfpolicy version"}</DialogTitle>
               <DialogDescription>
-                Catalog metadata only. Saving does not enable tfpolicy execution. Editing replaces the complete list of
-                architecture binaries.
+                Saving catalog metadata does not install or configure a native runtime. The selected version must match
+                the operator's runtime pins. Editing replaces the complete list of architecture binaries.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={save} className="space-y-4">

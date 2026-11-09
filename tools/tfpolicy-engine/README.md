@@ -2,7 +2,8 @@
 
 This source build adds `-strict-policy` to pinned Terraform 1.17.1. It is a prerequisite for native policy execution, not an activation switch for Terrence. Hosted and agent guards remain enabled until their execution owner verifies the complete contract.
 
-See [HANDOFF.md](HANDOFF.md) for verified results and the remaining integration work.
+See [HANDOFF.md](HANDOFF.md) for hosted and capable-agent setup, qualification results,
+unsupported cases and recovery procedures.
 
 Run `GOTOOLCHAIN=go1.26.10 build.sh /absolute/terraform/git /absolute/new-output-directory` on Linux. The script archives official commit `ff6329e4c2a159b46ec2b73d36bfa3d0ef6560c9`, applies the local patch, verifies Go dependencies, runs policy regressions, and builds a static executable. It records the source commit, patch and executable SHA-256, compiler, architecture, and build information. It includes Terraform's BUSL-1.1 license. Original and modified Terraform remain subject to that license; this recipe grants no additional rights. No proprietary tfpolicy-plugin is downloaded or bundled.
 
