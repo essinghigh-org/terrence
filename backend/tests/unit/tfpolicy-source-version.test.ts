@@ -193,6 +193,18 @@ describe("native source version admission", () => {
       file === undefined ? "requires a repository-root" : "one exact version",
     );
   });
+  test("rejects bounded adversarial prerelease input without ambiguous regex backtracking", async () => {
+    // Below the 1024-byte file bound. This shape triggered CodeQL's warning
+    // about the former nested regex; only exercise the replacement parser.
+    const file = `0.0.0-0.${"--.".repeat(300)}!`;
+    expect(prepare(await fixture([{ file }]))).rejects.toThrow("one exact version");
+  });
+  test.each(["0.4.0-alpha.1", "0.4.0-0.a-1", "0.4.0---", "0.4.0-01a"])(
+    "valid prerelease %j reaches immutable version-pin validation",
+    async (file) => {
+      expect(prepare(await fixture([{ file }]))).rejects.toThrow("installed pinned plugin");
+    },
+  );
   test("managed latest uses only enabled stable non-deprecated catalog entries", async () => {
     const catalog = [
       catalogRow(),
