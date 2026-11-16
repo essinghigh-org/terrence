@@ -642,7 +642,12 @@ describe("Admin Operations API contract", () => {
   });
 
   it("gives a site admin full access without an organization membership", async () => {
-    const list = await request("/api/v2/organizations", "GET", undefined, unscopedAdminToken);
+    const list = await request(
+      `/api/v2/organizations?q[name]=${encodeURIComponent(isolatedOrgName)}`,
+      "GET",
+      undefined,
+      unscopedAdminToken,
+    );
     expect(list.status).toBe(200);
     expect(
       (await list.json()).data.some((organization: { id: string }) => organization.id === isolatedOrgName),
