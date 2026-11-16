@@ -1544,6 +1544,7 @@ function stateOutputsTf(suffix: string, scimMapping = ""): string {
   organization = "pe2e-org-${suffix}"
 }
 output "run_output_value" { value = data.tfe_outputs.d_out.nonsensitive_values["probe_output"] }
+output "run_output_hostname" { value = data.tfe_outputs.d_out.hostname }
 ${scimMapping}
 `;
 }
@@ -1850,6 +1851,27 @@ describe("tfe provider e2e", () => {
 
           lifecycleStage = "initial provider apply";
           cliOk(await cli(bin, ["init", "-input=false", "-no-color"], cfgDir, cliEnv), "init");
+          lifecycleStage = "empty SAML certificate plan rejection";
+          const invalidCertPath = join(cfgDir, "invalid-cert.tf");
+          try {
+            for (const cert of ["", "   ", "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"]) {
+              await writeFile(
+                invalidCertPath,
+                `resource "tfe_saml_idp_certificate" "invalid" {
+  display_name = "pe2e-invalid-idp"
+  cert = ${JSON.stringify(cert)}
+}
+`,
+              );
+              const rejected = await cli(bin, ["plan", "-input=false", "-no-color"], cfgDir, cliEnv);
+              expect(rejected.code).toBe(1);
+              expect(rejected.out + rejected.err).toContain("Invalid cert");
+              expect(rejected.out + rejected.err).toContain("has no body");
+            }
+          } finally {
+            await rm(invalidCertPath, { force: true });
+          }
+          lifecycleStage = "initial provider apply";
           cliOk(await cli(bin, ["plan", "-input=false", "-no-color"], cfgDir, cliEnv), "plan");
           const apply = await cli(bin, ["apply", "-auto-approve", "-input=false", "-no-color"], cfgDir, cliEnv);
           cliOk(apply, "apply");
@@ -2487,6 +2509,7 @@ data "tfe_no_code_module" "d_ncm" {
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
           expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
+          expect(o2["run_output_hostname"]!.value).toBe(`127.0.0.1:${proxy.port}`);
           expect(o2["ds_audit2"]?.value).toBe(true);
           expect(o2["ds_rgs2"]?.value).toBe(true);
           {
